@@ -1,0 +1,26 @@
+[package]
+name = "harness-rules"
+version.workspace = true
+edition.workspace = true
+description = "Rule loading and evaluation for the Harness agent orchestration layer"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+harness-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+glob = { workspace = true }
+regex = { workspace = true }
+tokio = { workspace = true, features = ["process"] }
+chrono = { workspace = true }
+shlex = { workspace = true }
+starlark = { workspace = true }
+toml = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

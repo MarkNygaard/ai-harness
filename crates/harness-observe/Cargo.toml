@@ -1,0 +1,31 @@
+[package]
+name = "harness-observe"
+version.workspace = true
+edition.workspace = true
+description = "Observability (logging, tracing, metrics) for the Harness agent orchestration layer"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+harness-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+opentelemetry = { workspace = true }
+opentelemetry_sdk = { workspace = true }
+opentelemetry-otlp = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+criterion = "0.5"
+
+[[bench]]
+name = "event_store_bench"
+harness = false

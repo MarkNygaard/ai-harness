@@ -1,0 +1,116 @@
+# Harness example configuration — copy to config/default.toml and edit as needed.
+# Start the server with: harness serve --config config/default.toml
+#
+# REQUIRED ENVIRONMENT VARIABLES (set in shell before starting the server):
+#
+#   GITHUB_TOKEN=ghp_...
+#       Personal access token with repo + read:org scope. Required for
+#       GitHub integration (webhooks, auto-review, issue/PR tasks).
+#
+#   GITHUB_WEBHOOK_SECRET=...
+#       HMAC secret matching the value set in GitHub repo → Settings → Webhooks.
+#       Required only when receiving inbound webhook events.
+
+[server]
+transport = "http"
+http_addr = "127.0.0.1:9800"
+database_url = "postgres://harness:harness@localhost:5432/harness"
+# Harness opens separate Postgres pools per logical store. The default is
+# intentionally conservative; local Postgres can usually use a higher budget.
+# database_pool_max_connections = 16
+# database_pool_acquire_timeout_secs = 60
+# Absolute path required — the server does not expand `~`.
+# Default on Linux:  ~/.local/share/harness
+# Default on macOS:  ~/Library/Application Support/harness
+data_dir = "/home/yourname/.local/share/harness"
+project_root = "."
+
+[concurrency]
+# High-reasoning agent runs can stay silent for several minutes while thinking.
+# Increase this when using gpt-5.5/xhigh for background workflow runtime jobs.
+# stall_timeout_secs = 3600
+
+[agents]
+default_agent = "codex"
+# Optional: preferred routing order for complex/critical tasks.
+complexity_preferred_agents = ["codex"]
+sandbox_mode = "danger-full-access"
+
+[agents.claude]
+cli_path = "claude"
+default_model = "sonnet"
+
+[agents.codex]
+cli_path = "codex"
+default_model = "gpt-5.5"
+reasoning_effort = "xhigh"
+
+[agents.anthropic_api]
+base_url = "https://api.anthropic.com"
+default_model = "claude-sonnet-4-20250514"
+# Maximum tokens the Anthropic API may return per request. Default: 4096.
+max_tokens = 4096
+
+[agents.review]
+enabled = true
+reviewer_agent = "codex"
+max_rounds = 3
+# Hosted GitHub review bots are advisory. Leave this disabled unless you
+# explicitly want Harness to post /gemini review and wait for hosted bot output.
+review_bot_auto_trigger = false
+fallback_chain = ["gemini", "codex"]
+silence_rounds_threshold = 3
+silence_min_minutes_after_commit = 30
+
+[gc]
+max_drafts_per_run = 5
+budget_per_signal_usd = 0.50
+total_budget_usd = 5.0
+
+[gc.signal_thresholds]
+repeated_warn_min = 10
+chronic_block_min = 5
+hot_file_edits_min = 20
+slow_op_threshold_ms = 5000
+slow_op_count_min = 10
+escalation_ratio = 1.5
+violation_min = 5
+
+[rules]
+discovery_paths = []
+
+[observe]
+session_renewal_secs = 1800
+log_retention_days = 90
+
+[otel]
+environment = "development"
+exporter = "disabled"
+# endpoint = "http://127.0.0.1:4318"
+
+[review]
+enabled = false
+# Run a review immediately on server startup. Default: false.
+# run_on_startup = true
+# Override interval in seconds (takes precedence over interval_hours).
+# interval_secs = 300
+# interval_hours = 24
+# agent = "codex"
+# strategy = "single" # or "cross" for dual-review + synthesis
+# timeout_secs = 10800
+# max_concurrent_tasks = 2
+
+# [intake.github]
+# enabled = true
+# poll_interval_secs = 300
+# planner_agent = "codex"
+# sprint_timeout_secs = 10800
+# retry_backoff_base_secs = 15
+# retry_backoff_max_secs = 120
+
+# Register projects below (can also pass --project-root / --project on CLI).
+# [[projects]]
+# name = "my-project"
+# root = "/path/to/my-project"
+# default = true
+# max_concurrent = 2

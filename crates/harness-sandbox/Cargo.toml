@@ -1,0 +1,14 @@
+[package]
+name = "harness-sandbox"
+version.workspace = true
+edition.workspace = true
+description = "Sandbox and isolation primitives for the Harness agent orchestration layer"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+harness-core = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
