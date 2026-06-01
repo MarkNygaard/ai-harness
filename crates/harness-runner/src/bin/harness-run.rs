@@ -14,14 +14,23 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use harness_core::config::agents::SandboxMode;
 use harness_core::config::HarnessConfig;
 use harness_dag::{parse_workflow, run_workflow, NodeStatus, RunStatus, Usage, VarContext};
+use harness_persist::RunStore;
 use harness_runner::{
     build_agent_registry, sanitize_branch_component, CodeAgentRunner, EchoAgent, LocalRunner,
     PromptAgent, Worktree,
 };
+
+fn now_millis() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0)
+}
 
 struct Args {
     workflow: PathBuf,
@@ -36,6 +45,8 @@ struct Args {
     config: Option<PathBuf>,
     /// Run inside an isolated git worktree of the workspace (removed after).
     worktree: bool,
+    /// Postgres URL to persist the run to (else `$HARNESS_DATABASE_URL`).
+    database_url: Option<String>,
 }
 
 /// Load a [`HarnessConfig`] from a TOML file, rebasing relative paths to its dir.
@@ -71,6 +82,7 @@ fn parse_args() -> Result<Args, String> {
     let mut sandbox = SandboxMode::DangerFullAccess;
     let mut config: Option<PathBuf> = None;
     let mut worktree = false;
+    let mut database_url: Option<String> = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -96,10 +108,13 @@ fn parse_args() -> Result<Args, String> {
             "--worktree" => {
                 worktree = true;
             }
+            "--database-url" => {
+                database_url = Some(it.next().ok_or("--database-url needs a value")?);
+            }
             "-h" | "--help" => {
                 return Err("usage: harness-run <workflow.yaml> [--workspace <dir>] \
                      [--base-branch <name>] [--args <text>] [--real] [--sandbox <mode>] \
-                     [--config <file>] [--worktree]"
+                     [--config <file>] [--worktree] [--database-url <url>]"
                     .into());
             }
             other if other.starts_with('-') => {
@@ -127,6 +142,7 @@ fn parse_args() -> Result<Args, String> {
         sandbox,
         config,
         worktree,
+        database_url,
     })
 }
 
@@ -211,6 +227,26 @@ async fn run() -> Result<ExitCode, String> {
         .map_err(|e| format!("run failed: {e}"))?;
 
     print_report(&report);
+
+    // Optional persistence to Postgres (flag or $HARNESS_DATABASE_URL).
+    let db_url = args
+        .database_url
+        .clone()
+        .or_else(|| std::env::var("HARNESS_DATABASE_URL").ok());
+    if let Some(url) = db_url {
+        let run_id = format!(
+            "{}-{}",
+            sanitize_branch_component(&workflow.name),
+            now_millis()
+        );
+        match RunStore::connect(&url).await {
+            Ok(store) => match store.record_run(&run_id, None, &report).await {
+                Ok(()) => println!("\n✔ persisted run `{run_id}`"),
+                Err(e) => eprintln!("\n⚠ persist failed: {e}"),
+            },
+            Err(e) => eprintln!("\n⚠ persist connect failed: {e}"),
+        }
+    }
 
     Ok(match report.status {
         RunStatus::Completed => ExitCode::SUCCESS,

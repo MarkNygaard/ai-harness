@@ -1,0 +1,16 @@
+[package]
+name = "harness-persist"
+version.workspace = true
+edition.workspace = true
+description = "Postgres persistence for Harness workflow runs and per-node records"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+harness-dag = { workspace = true }
+sqlx = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
