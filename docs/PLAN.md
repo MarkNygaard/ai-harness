@@ -245,23 +245,71 @@ workflow.provider ?? config.default`.
 
 ### 7.1 Claude — reuse majiayu (CLI + Anthropic API adapters). ✅ exists.
 ### 7.2 Codex — reuse majiayu (Codex CLI adapter). ✅ exists.
-### 7.3 Pi / Kimi-for-Coding — **new adapter, design note.**
-Archon invokes Pi as an **in-process JS SDK** (`@mariozechner/pi-coding-agent`).
-That SDK is JavaScript-only — we cannot link it from Rust. Two options:
+### 7.3 Pi / Kimi-for-Coding — **CLI subprocess (decided).**
+Archon invokes Pi as an in-process JS SDK (`@mariozechner/pi-coding-agent`),
+which Rust can't link. Verified against the author's local **`oh-my-pi`** (`omp`,
+a fork of Pi) and the upstream **pi.dev** docs: the Pi family ships a **headless
+CLI**, so we shell out to it like the Claude/Codex CLI adapters — **no Node
+sidecar needed.** Concretely (omp):
 
-- **(Preferred) Pi CLI subprocess adapter** — invoke the `pi` CLI the same way
-  majiayu's Claude/Codex CLI adapters shell out, parsing its streaming output.
-  Auth from `~/.pi/agent/auth.json` / env. Fits the runner-pod model (the `pi`
-  binary is baked into the runner image). Model ref format `<pi-provider>/<model>`
-  (e.g. `kimi-coding/kimi-for-coding`), exactly as in the author's workflow.
-- **(Fallback) Node sidecar** — a tiny Bun/Node service in the runner pod that
-  wraps the Pi SDK and speaks a small JSON protocol to the Rust process. Only if
-  the CLI lacks needed streaming/控制 features.
+- **Headless run:** `omp -p "<prompt>" --mode json --model kimi-code/<model>`
+  (also `--mode rpc` for a bidirectional JSONL protocol; upstream `pi` has the
+  equivalent JSON event-stream + RPC modes).
+- **Output:** newline-delimited JSON events (`AgentSessionEvent`); the final
+  `agent_end` carries the result + telemetry.
+- **Usage:** `SessionStats.tokens { input, output, cacheRead, cacheWrite, total }`
+  + `cost` — so Pi nodes get **full token fidelity incl. cache** (§10.1), unlike
+  the Codex CLI.
+- **Model/provider:** `--model kimi-code/<model>` (fuzzy "kimi"); auth via
+  `/login` (Kimi OAuth, stored in `~/.omp/agent.db`) or `MOONSHOT_API_KEY`.
+- **Session resume:** `--resume <id>`, and `--mode json` emits a `SessionHeader`
+  with `id` as its first line. **This closes the session-threading gap for Pi
+  nodes** — we capture the id and pass `--resume` to thread `context: shared`,
+  which the Claude/Codex `CodeAgent` wrapping (§7.1/7.2) can't yet do. (Same
+  trick — the CLIs' own `--resume` — is the likely path to close it for
+  Claude/Codex later.)
 
-Decision pending verification of the `pi` CLI's streaming capabilities (Phase 3).
+The adapter is parameterized by binary name so it works with the `omp` fork
+(recommended — matches the author's Kimi subscription) or upstream `pi`. The
+binary is baked into the runner image. The Rust crates in `oh-my-pi`
+(`pi-shell`, `pi-ast`, `pi-natives`, …) are in-process **tooling** natives
+(N-API), not an agent-loop API — confirming CLI subprocess over linking.
 
 ### 7.4 Concurrency: per-provider semaphores (Pi/Minimax has no SDK throttling) —
 port Archon's semaphore cap into the adapter config.
+
+### 7.5 omp extensions — what to adopt for our Pi node
+If we standardize on **omp** as the Pi binary, it brings a large extension
+surface. Triage for our use (Pi as the headless implement/review agent in
+k8s idea→PR runs):
+
+- **Adopt (enable; they raise edit/PR quality):** `hashline` content-hash edits
+  (robust patches, ~60% fewer edit tokens), **LSP-on-write** (rename/diagnostics —
+  needs language servers in the runner image), in-process **native search**
+  (rg/glob/find/brush, fewer deps), **`omp commit`** (atomic splits + validated
+  conventional-commit messages — fits PR-finalize), **`conflict://`** resolution
+  (fits rebase/merge workflows), **GitHub-as-filesystem** (`pr://`/`issue://` reads
+  for review/feedback nodes), and **native `AGENTS.md` ingestion** (omp already
+  reads our repos' `AGENTS.md`/`CLAUDE.md`). Optionally **`/review`** (P0–P3
+  verdict subagents) inside a self-review node, and **TTSR** stream-rule guardrails
+  fed from `.omp/rules`.
+- **Reference, don't adopt — we already own it:** the **`swarm-extension`** YAML
+  multi-agent DAG (waves/topo-sort, parallel/sequential/pipeline, cycle detection,
+  per-agent model) *is* `harness-dag`. Orchestration stays in Rust (k8s scheduling,
+  durable Postgres state, multi-provider, observability); swarm is design
+  validation + a porting reference, not a runtime dependency. First-class
+  `task` subagents likewise overlap our fan-out — available inside a node, not at
+  the orchestration layer.
+- **Skip for headless k8s (interactive/heavy/niche):** ACP editor mode, the
+  browser/Slack driver (Chromium weight), the DAP debugger, Python/JS eval
+  kernels, and web_search/arXiv reading — enable per-project only if a workflow
+  needs them.
+- **Needs care:** **Hindsight memory** (`retain`/`recall`, project mental model)
+  is valuable but stateful — in ephemeral pods it must persist on the per-node
+  warm-cache PVC or a backend (§8/§12.3). And omp's per-repo `.omp/{commands,
+  rules,skills,hooks}` overlaps our `.harness/commands` + DAG `command` nodes —
+  decide one config home so projects don't maintain two (likely: orchestration in
+  `.harness`, in-node agent behavior via `.omp/rules`+`skills`).
 
 ---
 
@@ -427,8 +475,10 @@ Postgres container. The docker-compose Postgres stays for local dev only.
 
 ## 12. Open questions / risks
 
-1. **Pi CLI capability** — does the `pi` CLI expose the streaming + tool-control
-   the SDK does? Determines §7.3 CLI-vs-sidecar. *Verify early (Phase 3).*
+1. **Pi CLI capability** — ✅ *resolved* (§7.3): the Pi family (`omp` fork /
+   upstream `pi`) ships a headless CLI with JSON event streaming, token usage
+   (incl. cache), Kimi model selection, and session resume → CLI subprocess, no
+   sidecar. Pi nodes can thread `context: shared` via `--resume`.
 2. **Linear filter semantics** — which exact Linear query (label? state? a saved
    view?) should trigger runs, and what write-back is wanted (status transition vs
    comment only)? *Need author input before Phase 5.*

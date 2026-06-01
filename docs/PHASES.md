@@ -66,10 +66,12 @@ See [PLAN.md](PLAN.md) for the architecture these phases implement.
   registers Claude/Codex/(Anthropic API) from `HarnessConfig`; `harness-run --real
   [--sandbox <mode>]` now drives the workflow with `CodeAgentRunner` instead of
   `EchoAgent`. (Echo remains the default for dependency-free demos.)
-- [ ] **Remaining `LocalRunner` gaps:** `script` runtimes (bun/uv), `until_bash`,
-  a git worktree per run, richer config loading (`--config <file>` vs the current
-  `HarnessConfig::default()`), and folding `harness-run` into the main `harness`
-  CLI as `harness run`.
+- [x] **`script` runtimes** (`bun` for TS/JS via temp file; `uv run --with <dep>`
+  for Python) and **loop `until_bash`** (exit 0 = converge, run through the
+  runner's Bash path — no new trait method). Tested (bun script + until_bash loop).
+- [ ] **Remaining `LocalRunner`/run-level gaps:** a git worktree per run,
+  richer config loading (`--config <file>` vs the current `HarnessConfig::default()`),
+  and folding `harness-run` into the main `harness` CLI as `harness run`.
 - [~] Run-level wiring: `EchoAgent` (built-in dev `PromptAgent`) + a
   `harness-run <workflow.yaml>` binary that builds the `VarContext`
   (`$ARTIFACTS_DIR`/`$BASE_BRANCH`/…), drives `run_workflow` via `LocalRunner`,
@@ -124,12 +126,18 @@ down per step and per model.
 
 **Goal:** the author's provider mix (Claude + Kimi/Pi + Codex) works in one DAG.
 
-- [ ] **Spike first:** verify the `pi` CLI's streaming + tool-control **and
-  whether it reports token usage** (for the per-model breakdown). Decide CLI
-  adapter vs Node sidecar (PLAN §7.3).
-- [ ] Implement the chosen Pi adapter behind the `Provider` trait; model ref
-  `kimi-coding/kimi-for-coding`; auth from `~/.pi/agent/auth.json`/env;
-  per-provider concurrency semaphore.
+- [x] **Spike done** (PLAN §7.3): the Pi family ships a headless CLI (`omp -p
+  --mode json` / RPC) with JSONL events, token usage incl. cache, Kimi model
+  selection, and `--resume` session ids → **CLI subprocess, no sidecar**;
+  standardize on the **`omp`** fork.
+- [ ] Implement the Pi adapter (a session-aware `PromptAgent`): `omp -p --mode
+  json --model kimi-code/<model>`, parse `agent_end` + `SessionStats`, thread
+  `context: shared` via captured `SessionHeader.id` + `--resume`; per-provider
+  concurrency semaphore.
+- [ ] **Runner image / Pi config (PLAN §7.5):** bake `omp` + language servers;
+  enable the adopt-list extensions (hashline edit, LSP-on-write, native search,
+  `omp commit`, `conflict://`, `pr://` reads, `AGENTS.md` ingestion); skip
+  ACP/browser/DAP/eval for headless. Decide `.omp` vs `.harness` config home.
 - [ ] Confirm Codex + Claude adapters still select per-node.
 
 **Exit:** a workflow with a Claude node, a Pi/Kimi node, and a Codex node all run
@@ -238,12 +246,17 @@ on ai-harness instead of Archon.
   SOPS/age + local-path). ai-harness deploys as a Flux app; uses CNPG for
   Postgres. Storage is node-local (no RWX) → **free scheduling + per-node
   `hostPath` warm cache** (no pinning); cap concurrency (no autoscaler).
-- **Pi adapter shape unknown** until the Phase 3 spike (CLI vs Node sidecar).
-- **Session-resume gap:** majiayu's `CodeAgent::execute(AgentRequest)→AgentResponse`
-  has **no session id** in/out, but the DAG driver threads sessions for
-  `context: shared`. The `PromptAgent` seam (`harness-runner`) is session-aware;
-  wiring the real adapter must either extend `CodeAgent` with resume or thread
-  sessions another way. Decide when wiring the real agent.
+- **Pi adapter = `omp` CLI subprocess** (resolved; PLAN §7.3). `omp -p --mode
+  json --model kimi-code/<model>`, usage incl. cache, `--resume` sessions.
+- **omp extensions triage (PLAN §7.5):** adopt tool-level wins (hashline edit,
+  LSP-on-write, native search, `omp commit`, `conflict://`, `pr://`, `AGENTS.md`).
+  **`swarm-extension` = our `harness-dag`** — reference/validation, NOT adopted
+  (we own orchestration in Rust). Skip ACP/browser/DAP/eval headless. Memory
+  (Hindsight) needs PVC persistence; resolve `.omp` vs `.harness` config home.
+- **Session-resume gap:** the DAG driver threads sessions for `context: shared`,
+  but majiayu's `CodeAgent` (Claude/Codex via `CodeAgentRunner`) has **no session
+  id** — currently fresh-per-node. **Pi via `omp --resume` closes it for Pi
+  nodes**; the same CLI-`--resume` trick is the likely fix for Claude/Codex.
 - **LocalRunner gaps to close:** `script` (bun/uv) and `until_bash` are stubbed
   (script returns an explicit "unsupported" error for now).
 - **UI design source = `home-ops-agent`** (`C:\Users\Mark\Github\home-ops-agent`):

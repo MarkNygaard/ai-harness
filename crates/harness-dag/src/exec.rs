@@ -615,6 +615,47 @@ async fn run_loop<R: NodeRunner>(
                     converged = true;
                     break;
                 }
+                // Optional secondary completion check: a shell command whose
+                // exit 0 ends the loop. Run via the runner's Bash path so it
+                // executes in the same environment (no extra trait method).
+                if let Some(until_bash) = &cfg.until_bash {
+                    let rendered = match substitute(until_bash, &iter_vars) {
+                        Ok(r) => r,
+                        Err(e) => {
+                            return NodeRunResult {
+                                run: failed_run(node, provider, model, e.to_string()),
+                                session: None,
+                                cancel: None,
+                            }
+                        }
+                    };
+                    let bash_req = NodeRequest {
+                        node_id: &node.id,
+                        provider,
+                        model,
+                        context: node.context,
+                        session: None,
+                        iteration: i,
+                        body: NodeBody::Bash(rendered),
+                        timeout: node.timeout,
+                        vars: &iter_vars,
+                    };
+                    match runner.execute(bash_req).await {
+                        Ok(check) => {
+                            if check.success {
+                                converged = true;
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            return NodeRunResult {
+                                run: failed_run(node, provider, model, e.to_string()),
+                                session: None,
+                                cancel: None,
+                            }
+                        }
+                    }
+                }
             }
             Err(e) => {
                 return NodeRunResult {

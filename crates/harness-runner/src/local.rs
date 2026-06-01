@@ -10,7 +10,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use harness_dag::{substitute, NodeBody, NodeOutput, NodeRequest, NodeRunner, RunnerError, Usage};
+use harness_dag::{
+    substitute, NodeBody, NodeOutput, NodeRequest, NodeRunner, RunnerError, ScriptRuntime, Usage,
+};
 use tokio::process::Command;
 
 use crate::{PromptAgent, PromptRequest};
@@ -70,15 +72,17 @@ impl LocalRunner {
         self
     }
 
-    /// Run a shell script in the workspace, returning its captured output.
-    async fn run_bash(
+    /// Spawn `program` with `args` in the workspace and capture its output.
+    /// `label` names the node kind for error/timeout messages.
+    async fn run_process(
         &self,
-        script: &str,
+        program: &str,
+        args: &[&str],
+        label: &str,
         timeout: Option<u64>,
     ) -> Result<NodeOutput, RunnerError> {
-        let mut cmd = Command::new(&self.shell.program);
-        cmd.arg(&self.shell.command_flag)
-            .arg(script)
+        let mut cmd = Command::new(program);
+        cmd.args(args)
             .current_dir(&self.workspace)
             .kill_on_drop(true);
 
@@ -88,12 +92,12 @@ impl LocalRunner {
                 Ok(res) => res,
                 Err(_) => {
                     // The dropped future kills the child (kill_on_drop).
-                    return Err(RunnerError(format!("bash node timed out after {ms}ms")));
+                    return Err(RunnerError(format!("{label} timed out after {ms}ms")));
                 }
             },
             None => fut.await,
         }
-        .map_err(|e| RunnerError(format!("failed to spawn shell: {e}")))?;
+        .map_err(|e| RunnerError(format!("failed to spawn {label} (`{program}`): {e}")))?;
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -114,6 +118,68 @@ impl LocalRunner {
             success,
             usage: Usage::default(),
         })
+    }
+
+    /// Run a `bash` body through the platform shell in the workspace.
+    async fn run_bash(
+        &self,
+        script: &str,
+        timeout: Option<u64>,
+    ) -> Result<NodeOutput, RunnerError> {
+        self.run_process(
+            self.shell.program.as_str(),
+            &[self.shell.command_flag.as_str(), script],
+            "bash node",
+            timeout,
+        )
+        .await
+    }
+
+    /// Run a `script` body via its runtime (`bun` for TS/JS, `uv` for Python).
+    /// The script text is written to a temp file in the workspace so relative
+    /// paths resolve there. `uv` injects each dependency with `--with`; `bun`
+    /// dependency auto-install is not yet supported (deps must be resolvable
+    /// from the workspace).
+    async fn run_script(
+        &self,
+        script: &str,
+        runtime: ScriptRuntime,
+        deps: &[String],
+        timeout: Option<u64>,
+    ) -> Result<NodeOutput, RunnerError> {
+        use std::io::Write as _;
+
+        let suffix = match runtime {
+            ScriptRuntime::Bun => ".ts",
+            ScriptRuntime::Uv => ".py",
+        };
+        let mut file = tempfile::Builder::new()
+            .prefix("harness-script-")
+            .suffix(suffix)
+            .tempfile_in(&self.workspace)
+            .map_err(|e| RunnerError(format!("failed to create temp script file: {e}")))?;
+        file.write_all(script.as_bytes())
+            .map_err(|e| RunnerError(format!("failed to write temp script: {e}")))?;
+        let path = file.path().to_string_lossy().to_string();
+
+        let result = match runtime {
+            ScriptRuntime::Bun => {
+                self.run_process("bun", &[path.as_str()], "bun script", timeout)
+                    .await
+            }
+            ScriptRuntime::Uv => {
+                let mut args: Vec<&str> = vec!["run"];
+                for dep in deps {
+                    args.push("--with");
+                    args.push(dep.as_str());
+                }
+                args.push(path.as_str());
+                self.run_process("uv", &args, "uv script", timeout).await
+            }
+        };
+        // Keep the temp file alive until execution finishes, then clean up.
+        drop(file);
+        result
     }
 
     /// Resolve a `command` name to its markdown body. Names are validated to
@@ -178,9 +244,14 @@ impl NodeRunner for LocalRunner {
                     .map_err(|e| RunnerError(format!("command `{name}`: {e}")))?;
                 self.run_prompt(rendered, &req).await
             }
-            NodeBody::Script { .. } => Err(RunnerError(
-                "script nodes are not yet supported by LocalRunner".into(),
-            )),
+            NodeBody::Script {
+                script,
+                runtime,
+                deps,
+            } => {
+                // Script text is already variable-substituted by the driver.
+                self.run_script(script, *runtime, deps, req.timeout).await
+            }
         }
     }
 }
@@ -402,21 +473,51 @@ nodes:
     }
 
     #[tokio::test]
-    async fn script_node_is_unsupported_for_now() {
+    async fn script_runs_via_bun() {
         let dir = TempDir::new().unwrap();
         let (runner, _agent) = runner_at(dir.path(), vec![]);
         let vars = VarContext::new();
-        let err = runner
+        let out = runner
             .execute(request(
                 NodeBody::Script {
-                    script: "print(1)".into(),
-                    runtime: harness_dag::ScriptRuntime::Uv,
+                    script: "console.log('hi from bun script')".into(),
+                    runtime: ScriptRuntime::Bun,
                     deps: vec![],
                 },
                 &vars,
             ))
             .await
-            .unwrap_err();
-        assert!(err.0.contains("not yet supported"));
+            .unwrap();
+        assert!(out.success, "got: {:?}", out.text);
+        assert!(
+            out.text.contains("hi from bun script"),
+            "got: {:?}",
+            out.text
+        );
+    }
+
+    #[tokio::test]
+    async fn loop_until_bash_converges() {
+        // The agent never emits the signal, but `until_bash: exit 0` ends the
+        // loop on the first iteration.
+        let dir = TempDir::new().unwrap();
+        let (runner, _agent) = runner_at(dir.path(), vec![]);
+        let yaml = r#"
+name: ub
+nodes:
+  - id: poll
+    loop:
+      prompt: "keep polling"
+      until: NEVER_EMITTED
+      max_iterations: 5
+      until_bash: "exit 0"
+"#;
+        let wf = harness_dag::parse_workflow(yaml).unwrap();
+        let report = harness_dag::run_workflow(&wf, &runner, &VarContext::new())
+            .await
+            .unwrap();
+        let poll = report.node("poll").unwrap();
+        assert_eq!(poll.converged, Some(true));
+        assert_eq!(poll.iterations, 1);
     }
 }
