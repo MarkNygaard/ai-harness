@@ -313,7 +313,40 @@ which is exactly the friction the author wants gone.
 
 ## 10. Web UI
 
-Base: majiayu's React + Vite + Tailwind app — but **not** its task view.
+Base: majiayu's React + Vite + Tailwind app — but **not** its task view, and
+re-skinned to the author's house style (below).
+
+### 10.0 Visual language & styling
+Adopt the design system from the author's `home-ops-agent` web app (a Next.js +
+**shadcn/ui** app) so ai-harness matches its look. The system is
+framework-agnostic (CSS variables + Tailwind + shadcn), so it ports cleanly into
+our Vite app:
+
+- **Theme tokens:** copy the OKLCH token set from
+  `home-ops-agent/web/src/app/globals.css` — neutral grayscale base, light+dark
+  via CSS vars, `--radius: 0.625rem`, and the signature **orange accent**
+  (`--accent-orange: oklch(0.6137 0.0737 67.86)` + `-light`/`-foreground`).
+- **Fonts:** Geist (sans) + Geist Mono.
+- **Components:** shadcn/ui primitives (cards, tooltip, dialog, badge, sidebar),
+  thin scrollbars, dark mode default.
+
+### Per-task view IS that task's executed workflow
+Each task/run renders the **actual DAG it ran** as the primary view — not a
+generic board (the fixed Kanban below is removed). Different tasks run different
+workflows, so each task's screen reflects its own graph.
+
+**Replace the fixed Kanban board.** majiayu's `Active.tsx` is a hardcoded board
+with a fixed `COLUMNS` set (Pending → Implementing → Planning → Review → Feedback
+→ Ready → Blocked) wired to its single `github_issue_pr` pipeline; tasks are
+cards that move between those columns. ai-harness runs **arbitrary, per-task
+DAGs**, so a fixed column set cannot represent them and is removed.
+
+**Reference implementation:** `home-ops-agent/web/src/components/dashboard/
+agent-flow.tsx` already renders a workflow as **React Flow + Dagre auto-layout**
+(LR direction, no manual coordinates), with custom circle+icon nodes, an
+orange-accent gradient ring for emphasis, animated accent edges for the active
+path, labeled branch edges, and shadcn `Tooltip`s. We mirror this, driven by our
+`RunReport` instead of a hardcoded pipeline.
 
 **Replace the fixed Kanban board.** majiayu's `Active.tsx` is a hardcoded board
 with a fixed `COLUMNS` set (Pending → Implementing → Planning → Review → Feedback
@@ -325,13 +358,24 @@ DAGs**, so a fixed column set cannot represent them and is removed.
 **actual DAG it ran** as the primary view — not a generic board. Different tasks
 run different workflows, so each task's screen reflects its own graph.
 
-- **Per-task workflow graph** (recommend [React Flow](https://reactflow.dev)):
-  render *that run's* DAG as a node graph with a **live overlay** — nodes color by
-  state (pending/running/done/failed/skipped/cancelled), edges follow
-  `depends_on`, loops show iteration count; click a node for its streamed output,
-  provider/model, tokens, cost. This is both the "nice visual flows" the author
-  wants and the live status for the task. (Backed by `RunReport` from
-  `harness-dag`, which already carries per-node status/usage/iterations.)
+- **Per-task workflow graph** (React Flow + Dagre, per §10.0): render *that run's*
+  DAG with a **live overlay** — nodes color by state
+  (pending/running/done/failed/skipped/cancelled), edges follow `depends_on`,
+  loops show iteration count. Specifically (author's asks):
+  - **Active step** — the currently-running node is emphasized with the
+    orange-accent gradient ring + an animated incoming edge (the same treatment
+    `agent-flow.tsx` uses for the active path), plus a subtle pulse.
+  - **Elapsed time** — the running node shows a live "running 2m14s" badge
+    (ticks client-side from the node's `started_at`); finished nodes show their
+    final duration.
+  - **Hover for details** — hovering a step opens a shadcn `Tooltip`/`HoverCard`
+    with that step's detail: status, provider/model, tokens + cost, iteration
+    count (for loops), start time + duration, and an output snippet. Click pins
+    it open / expands the full streamed output.
+  This is both the "nice visual flows" the author wants and the live task status.
+  Backed by `RunReport` from `harness-dag` (per-node status/usage/iterations);
+  the live timer needs per-node `started_at`/`ended_at` timestamps, which we add
+  when persisting `run_nodes` (§11) and stream over WS.
 - **Runs list** (replaces the board): a flat, filterable list/table of runs
   (workflow, project, status, timing, cost) — *not* fixed-stage columns. Click a
   run → its workflow graph. Live updates over WS.
@@ -365,8 +409,10 @@ A first-class requirement (the author wants a Factory-style task overview). Mech
 ## 11. Persistence
 
 Postgres (majiayu already requires it). Extend the schema with: `workflow_runs`,
-`run_nodes` (per-node state/output/session + token usage: `input`, `output`,
-`cache_read`, `cache_write`, `cost_usd`, plus `provider`/`model` for rollups),
+`run_nodes` (per-node state/output/session + `started_at`/`ended_at` timestamps
+for durations + the live "running 2m14s" badge and the §10.1 waterfall + token
+usage: `input`, `output`, `cache_read`, `cache_write`, `cost_usd`, plus
+`provider`/`model` for rollups),
 `node_invocations` (per-invocation usage for loop/multi-call drill-down),
 `projects` (+ toolchain spec), `linear_sources` (filter + cron + cursor),
 `toolchain_specs`, and a `model_prices` table feeding cost derivation (§10.1).

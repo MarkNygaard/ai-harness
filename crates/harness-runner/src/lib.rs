@@ -16,8 +16,10 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use harness_dag::Usage;
 
+mod code_agent;
 mod local;
 
+pub use code_agent::CodeAgentRunner;
 pub use local::{LocalRunner, Shell};
 
 /// A request to run an AI prompt against a working directory.

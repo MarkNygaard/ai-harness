@@ -55,10 +55,16 @@ See [PLAN.md](PLAN.md) for the architecture these phases implement.
 - [~] `LocalRunner` (`harness-runner`) impl of `NodeRunner`: real `bash`
   subprocess (workspace cwd, timeout via `kill_on_drop`, exit-code → success),
   `.harness/commands/` resolution + path-traversal guard + `$VAR` substitution,
-  and `prompt`/loop dispatch via a session-aware `PromptAgent` seam. 8 tests incl.
-  a driver+runner end-to-end. **Remaining:** wire a real agent backend (majiayu
-  `CodeAgent`) behind `PromptAgent` (+ the session-resume gap), `script` runtimes
-  (bun/uv), `until_bash`, and a git worktree per run.
+  and `prompt`/loop dispatch via a session-aware `PromptAgent` seam.
+- [x] **Real agent backend**: `CodeAgentRunner` (`PromptAgent`) wraps majiayu's
+  `AgentRegistry` — resolves `provider` → registered `CodeAgent` (Claude/Codex/
+  Anthropic API), runs `CodeAgent::execute`, maps output + `TokenUsage`. 13 tests
+  in `harness-runner`. **Session gap addressed as fresh-per-node** (documented):
+  `CodeAgent` has no session resume, so `context: shared` doesn't thread through
+  it yet — closing it needs a trait extension (tracked in Reminders).
+- [ ] **Remaining `LocalRunner` gaps:** `script` runtimes (bun/uv), `until_bash`,
+  a git worktree per run, and building the `AgentRegistry` from config so the
+  `harness-run` CLI can use `CodeAgentRunner` instead of `EchoAgent`.
 - [~] Run-level wiring: `EchoAgent` (built-in dev `PromptAgent`) + a
   `harness-run <workflow.yaml>` binary that builds the `VarContext`
   (`$ARTIFACTS_DIR`/`$BASE_BRANCH`/…), drives `run_workflow` via `LocalRunner`,
@@ -80,12 +86,22 @@ completion locally and its run/node state is queryable.
 
 - [ ] `POST /runs`, `GET /runs/:id`, `GET /runs`, WS `/runs/:id/stream` in
   `harness-server` (reuse majiayu's task/WS plumbing).
+- [ ] **Re-skin to the `home-ops-agent` design system** (PLAN §10.0): port its
+  OKLCH theme tokens (`globals.css`), orange accent, Geist/Geist Mono, shadcn/ui
+  primitives into our Vite app. Reference its
+  `web/src/components/dashboard/agent-flow.tsx` (React Flow + Dagre) as the graph
+  template.
 - [ ] **Remove the fixed Kanban** (`Active.tsx` + hardcoded `COLUMNS`/`TaskCard`,
   tied to the single `github_issue_pr` pipeline).
-- [ ] Web: **per-task workflow graph** (React Flow) as the primary task view —
-  render *that run's* actual DAG with a live overlay (node state colors, edges
-  from `depends_on`, loop iteration counts, click-node → streamed output +
-  provider/model/cost). Backed by `RunReport`.
+- [ ] Web: **per-task workflow graph** (React Flow + Dagre) as the primary task
+  view — render *that run's* actual DAG with a live overlay: node state colors,
+  edges from `depends_on`, loop iteration counts. Author's asks (PLAN §10):
+  **active step** = orange gradient ring + animated incoming edge + pulse;
+  **elapsed-time badge** ("running 2m14s", client-ticked from `started_at`);
+  **hover → tooltip** with status/provider/model/tokens/cost/duration + output
+  snippet; click pins/expands. Backed by `RunReport` + per-node timestamps.
+- [ ] Add per-node `started_at`/`ended_at` to the executor/`RunReport` +
+  `run_nodes` (needed for the elapsed-time badge and the §10.1 waterfall).
 - [ ] Web: **Runs list** — flat, filterable list (workflow/project/status/timing),
   *not* fixed-stage columns; click a run → its graph. Live updates over WS.
 - [ ] **Token capture:** adapters return `Usage` per invocation; persist on
@@ -225,6 +241,13 @@ on ai-harness instead of Archon.
   sessions another way. Decide when wiring the real agent.
 - **LocalRunner gaps to close:** `script` (bun/uv) and `until_bash` are stubbed
   (script returns an explicit "unsupported" error for now).
+- **UI design source = `home-ops-agent`** (`C:\Users\Mark\Github\home-ops-agent`):
+  shadcn/ui + Tailwind v4 OKLCH theme, orange accent, Geist fonts; its
+  `web/src/components/dashboard/agent-flow.tsx` (React Flow + Dagre) is the
+  per-task-graph template. Its hardcoded agent pipelines (PR-review modes, alert
+  triage) are reference for graph shape. Adopt in Phase 2.
+- **Per-node timestamps**: add `started_at`/`ended_at` to the executor/RunReport
+  + `run_nodes` for the live elapsed-time badge and the §10.1 waterfall.
 
 ---
 
