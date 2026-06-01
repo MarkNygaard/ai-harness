@@ -59,9 +59,12 @@ See [PLAN.md](PLAN.md) for the architecture these phases implement.
   a driver+runner end-to-end. **Remaining:** wire a real agent backend (majiayu
   `CodeAgent`) behind `PromptAgent` (+ the session-resume gap), `script` runtimes
   (bun/uv), `until_bash`, and a git worktree per run.
-- [ ] `RunExecutor` (run-level): create worktree, build `VarContext`
-  (`$ARTIFACTS_DIR`/`$BASE_BRANCH`/…), call `run_workflow`; a `harness run
-  <workflow>` CLI to execute end-to-end and print the `RunReport`.
+- [~] Run-level wiring: `EchoAgent` (built-in dev `PromptAgent`) + a
+  `harness-run <workflow.yaml>` binary that builds the `VarContext`
+  (`$ARTIFACTS_DIR`/`$BASE_BRANCH`/…), drives `run_workflow` via `LocalRunner`,
+  and prints a per-node `RunReport` summary. Demo: `examples/hello.yaml` runs
+  end-to-end (parallel layer + join). **Remaining:** real git worktree per run,
+  and fold into the main `harness` CLI as `harness run` (once real agents land).
 - [ ] Persist `workflow_runs` + `run_nodes` (+ `node_invocations`) to Postgres
   (state, output, session, usage/cost).
 

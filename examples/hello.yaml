@@ -1,0 +1,24 @@
+name: hello-demo
+description: A tiny demo workflow for `harness-run` (bash + echo-agent prompts).
+provider: claude
+model: sonnet
+
+nodes:
+  - id: greet
+    bash: "echo hello from bash"
+
+  # Two nodes depending on `greet` run in parallel (same topological layer).
+  - id: plan
+    depends_on: [greet]
+    provider: claude
+    model: opus
+    prompt: "Plan the work in $ARTIFACTS_DIR targeting branch $BASE_BRANCH"
+
+  - id: lint
+    depends_on: [greet]
+    bash: "echo running lint"
+
+  # Joins the parallel layer.
+  - id: summarize
+    depends_on: [plan, lint]
+    prompt: "Summarize plan and lint results"

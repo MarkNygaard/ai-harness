@@ -55,3 +55,53 @@ pub struct AgentError(pub String);
 pub trait PromptAgent: Send + Sync {
     async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError>;
 }
+
+/// A trivial built-in [`PromptAgent`] for local development and demos.
+///
+/// It echoes the prompt back as output and threads a synthetic session id — no
+/// real model is invoked, and token usage is left unknown (`None`) rather than
+/// faked. Useful for exercising the DAG driver + [`LocalRunner`] end-to-end
+/// before real agent adapters are wired in.
+pub struct EchoAgent;
+
+#[async_trait]
+impl PromptAgent for EchoAgent {
+    async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
+        let session = req
+            .session
+            .or_else(|| Some(format!("echo-session-{}", req.iteration)));
+        Ok(PromptResult {
+            text: format!(
+                "[echo:{}] {}",
+                req.provider.as_deref().unwrap_or("default"),
+                req.prompt
+            ),
+            session,
+            usage: Usage::default(),
+            success: true,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn echo_agent_echoes_and_threads_session() {
+        let out = EchoAgent
+            .run(PromptRequest {
+                provider: Some("claude".into()),
+                model: None,
+                prompt: "hello".into(),
+                cwd: PathBuf::from("."),
+                session: None,
+                iteration: 1,
+            })
+            .await
+            .unwrap();
+        assert_eq!(out.text, "[echo:claude] hello");
+        assert!(out.success);
+        assert_eq!(out.session.as_deref(), Some("echo-session-1"));
+    }
+}
