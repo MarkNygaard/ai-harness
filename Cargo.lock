@@ -1376,6 +1376,7 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "harness-dag",
+ "serde",
  "sqlx",
  "thiserror 2.0.18",
  "tokio",
@@ -1452,11 +1453,14 @@ dependencies = [
  "futures",
  "harness-agents",
  "harness-core",
+ "harness-dag",
  "harness-exec",
  "harness-gc",
  "harness-observe",
+ "harness-persist",
  "harness-protocol",
  "harness-rules",
+ "harness-runner",
  "harness-skills",
  "harness-workflow",
  "hmac",
@@ -3998,6 +4002,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

@@ -10,8 +10,49 @@
 //! plane / server can reuse it. Schema is created on connect via idempotent
 //! `CREATE TABLE IF NOT EXISTS`; a richer migration story can replace this later.
 
+use chrono::{DateTime, Utc};
 use harness_dag::{NodeStatus, RunReport, RunStatus};
+use serde::Serialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
+
+/// A run row for listing (matches `harness_workflow_runs`).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct RunSummary {
+    pub id: String,
+    pub workflow_name: String,
+    pub status: String,
+    pub project: Option<String>,
+    pub node_count: i32,
+    pub recorded_at: DateTime<Utc>,
+}
+
+/// A persisted per-node row (matches `harness_run_nodes`).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PersistedNode {
+    pub node_id: String,
+    pub ordinal: i32,
+    pub status: String,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub output: String,
+    pub iterations: i32,
+    pub converged: Option<bool>,
+    pub note: Option<String>,
+    pub input_tokens: Option<i64>,
+    pub output_tokens: Option<i64>,
+    pub cache_read: Option<i64>,
+    pub cache_write: Option<i64>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<DateTime<Utc>>,
+}
+
+/// A run plus its node rows, for the run-detail endpoint.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunDetail {
+    #[serde(flatten)]
+    pub run: RunSummary,
+    pub nodes: Vec<PersistedNode>,
+}
 
 /// Error from a persistence operation.
 #[derive(Debug, thiserror::Error)]
@@ -165,6 +206,43 @@ impl RunStore {
                 .await?;
         Ok(row.0)
     }
+
+    /// List the most recently recorded runs (newest first).
+    pub async fn list_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
+        let rows = sqlx::query_as::<_, RunSummary>(
+            "SELECT id, workflow_name, status, project, node_count, recorded_at
+             FROM harness_workflow_runs
+             ORDER BY recorded_at DESC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Fetch a run plus its node rows (ordered by declaration order).
+    pub async fn get_run(&self, run_id: &str) -> Result<Option<RunDetail>, PersistError> {
+        let run = sqlx::query_as::<_, RunSummary>(
+            "SELECT id, workflow_name, status, project, node_count, recorded_at
+             FROM harness_workflow_runs WHERE id = $1",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some(run) = run else {
+            return Ok(None);
+        };
+        let nodes = sqlx::query_as::<_, PersistedNode>(
+            "SELECT node_id, ordinal, status, provider, model, output, iterations, converged,
+                    note, input_tokens, output_tokens, cache_read, cache_write, started_at, ended_at
+             FROM harness_run_nodes WHERE run_id = $1 ORDER BY ordinal",
+        )
+        .bind(run_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(Some(RunDetail { run, nodes }))
+    }
 }
 
 fn run_status_str(s: RunStatus) -> &'static str {
@@ -265,5 +343,17 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(store.node_count(&run_id).await.unwrap(), 2);
+
+        // list_runs includes it; get_run returns ordered node detail.
+        let listed = store.list_runs(50).await.unwrap();
+        assert!(listed.iter().any(|r| r.id == run_id && r.node_count == 2));
+        let detail = store.get_run(&run_id).await.unwrap().expect("detail");
+        assert_eq!(detail.run.status, "completed");
+        assert_eq!(detail.nodes.len(), 2);
+        assert_eq!(detail.nodes[0].node_id, "build");
+        assert_eq!(detail.nodes[0].input_tokens, Some(100));
+        assert_eq!(detail.nodes[1].node_id, "review");
+        assert_eq!(detail.nodes[1].status, "skipped");
+        assert!(store.get_run("does-not-exist").await.unwrap().is_none());
     }
 }
