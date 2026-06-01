@@ -16,6 +16,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
@@ -143,6 +144,14 @@ pub struct NodeRun {
     pub converged: Option<bool>,
     /// Human-readable note (skip reason, error, cancel reason).
     pub note: Option<String>,
+    /// When the node started executing (`None` for skipped/cancelled nodes that
+    /// never ran). Drives the UI elapsed-time badge and the task-overview
+    /// waterfall.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<DateTime<Utc>>,
+    /// When the node finished executing (`None` if it never ran).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at: Option<DateTime<Utc>>,
 }
 
 /// The result of driving a workflow to completion.
@@ -295,6 +304,8 @@ fn skipped_run(node: &Node, note: String, status: NodeStatus) -> NodeRunResult {
             iterations: 0,
             converged: None,
             note: Some(note),
+            started_at: None,
+            ended_at: None,
         },
         session: None,
         cancel: None,
@@ -336,7 +347,8 @@ async fn execute_node<R: NodeRunner>(
     let provider = node.provider.as_deref().or(wf_provider);
     let model = node.model.as_deref().or(wf_model);
 
-    match &node.kind {
+    let started = Utc::now();
+    let mut result = match &node.kind {
         NodeKind::Cancel(reason) => NodeRunResult {
             run: NodeRun {
                 id: node.id.clone(),
@@ -348,6 +360,8 @@ async fn execute_node<R: NodeRunner>(
                 iterations: 1,
                 converged: None,
                 note: Some(format!("cancel: {reason}")),
+                started_at: None,
+                ended_at: None,
             },
             session: None,
             cancel: Some(reason.clone()),
@@ -432,7 +446,11 @@ async fn execute_node<R: NodeRunner>(
         NodeKind::Loop(cfg) => {
             run_loop(runner, node, provider, model, vars, incoming_session, cfg).await
         }
-    }
+    };
+    // Stamp execution timing once, here, for every body kind.
+    result.run.started_at = Some(started);
+    result.run.ended_at = Some(Utc::now());
+    result
 }
 
 /// Substitute a node's inline text, then run it once through the runner.
@@ -515,6 +533,8 @@ async fn execute_body<R: NodeRunner>(
                     iterations: iteration,
                     converged: None,
                     note: None,
+                    started_at: None,
+                    ended_at: None,
                 },
                 session: out.session,
                 cancel: None,
@@ -714,6 +734,8 @@ fn loop_run(
         iterations,
         converged: Some(converged),
         note,
+        started_at: None,
+        ended_at: None,
     }
 }
 
@@ -728,6 +750,8 @@ fn failed_run(node: &Node, provider: Option<&str>, model: Option<&str>, note: St
         iterations: 1,
         converged: None,
         note: Some(note),
+        started_at: None,
+        ended_at: None,
     }
 }
 
@@ -747,6 +771,8 @@ fn skipped_run_inline(
         iterations: 0,
         converged: None,
         note: Some(note),
+        started_at: None,
+        ended_at: None,
     }
 }
 

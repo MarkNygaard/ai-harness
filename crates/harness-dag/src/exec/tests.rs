@@ -332,3 +332,32 @@ nodes:
     assert_eq!(report.status, RunStatus::Completed);
     assert_eq!(runner.calls_for("a")[0].body, "prompt:write to /run/7");
 }
+
+#[tokio::test]
+async fn records_timestamps_for_executed_but_not_skipped_nodes() {
+    let yaml = r#"
+name: ts
+nodes:
+  - id: a
+    bash: "boom"
+  - id: b
+    depends_on: [a]
+    prompt: "after"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new().respond("a", fail("err"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    // `a` ran (even though it failed) → timestamps set, ended >= started.
+    let a = report.node("a").unwrap();
+    let (start, end) = (a.started_at.unwrap(), a.ended_at.unwrap());
+    assert!(
+        end >= start,
+        "ended_at {end} should be >= started_at {start}"
+    );
+
+    // `b` was skipped (a failed) → it never ran, so no timing.
+    let b = report.node("b").unwrap();
+    assert_eq!(b.status, NodeStatus::Skipped);
+    assert!(b.started_at.is_none() && b.ended_at.is_none());
+}
