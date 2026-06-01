@@ -75,8 +75,11 @@ See [PLAN.md](PLAN.md) for the architecture these phases implement.
   documented), mirroring majiayu's `WorkspaceManager`.
 - [x] **`--config <file>`**: `harness-run --config <toml>` loads `HarnessConfig`
   (toml + `rebase_relative_paths`) for the real-agent registry, vs the default.
-- [ ] **Remaining:** fold `harness-run` into the main `harness` CLI as
-  `harness run` (heavier — pulls in `harness-cli`).
+- [x] **Folded into the main CLI as `harness run`**: extracted the run lifecycle
+  into a shared `harness_runner::execute_run`/`RunOptions` (used by both the
+  standalone `harness-run` bin and the new `harness run` subcommand);
+  `harness run <wf.yaml> [--real --worktree --database-url …]`. Verified
+  end-to-end (echo + persisted to local Postgres).
 - [~] Run-level wiring: `EchoAgent` (built-in dev `PromptAgent`) + a
   `harness-run <workflow.yaml>` binary that builds the `VarContext`
   (`$ARTIFACTS_DIR`/`$BASE_BRANCH`/…), drives `run_workflow` via `LocalRunner`,
