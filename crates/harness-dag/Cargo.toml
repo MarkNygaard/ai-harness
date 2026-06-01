@@ -1,0 +1,19 @@
+[package]
+name = "harness-dag"
+version.workspace = true
+edition.workspace = true
+description = "Workflow DAG model, YAML loader, topological scheduling, and template-variable substitution for the Harness orchestration layer"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+tokio = { workspace = true }

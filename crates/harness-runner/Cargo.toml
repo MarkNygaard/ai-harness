@@ -1,0 +1,16 @@
+[package]
+name = "harness-runner"
+version.workspace = true
+edition.workspace = true
+description = "Concrete node-execution backends for the Harness DAG driver (local subprocess/worktree runner; Kubernetes runner later)"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+harness-dag = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

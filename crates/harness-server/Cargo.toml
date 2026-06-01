@@ -1,0 +1,45 @@
+[package]
+name = "harness-server"
+version.workspace = true
+edition.workspace = true
+description = "HTTP server, task runner, and workflow runtime for the Harness agent orchestration layer"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+harness-core = { workspace = true }
+harness-protocol = { workspace = true }
+harness-agents = { workspace = true }
+harness-workflow = { workspace = true }
+harness-gc = { workspace = true }
+harness-rules = { workspace = true }
+harness-skills = { workspace = true }
+harness-observe = { workspace = true }
+harness-exec = { workspace = true }
+tokio = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+dashmap = { workspace = true }
+uuid = { workspace = true }
+sqlx = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+async-trait = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+subtle = { workspace = true }
+reqwest = { workspace = true }
+tempfile = { workspace = true }
+sysinfo = { workspace = true }
+regex = { workspace = true }
+
+[dev-dependencies]
+http-body-util = "0.1"
+tokio-tungstenite = "0.26"
