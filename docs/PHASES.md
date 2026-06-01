@@ -231,9 +231,11 @@ on ai-harness instead of Archon.
 
 ## Reminders / carried-over tasks
 
-- **First commit is deferred** (user request) until we're further along — likely
-  after the Phase 1 executor lands, so the first commit is a coherent
-  "seeded + adapted + DAG + executor" state.
+- **Branch `feat/seed-dag-engine` → PR #1** open against `main`; **CI fully green**
+  (clippy `-D warnings`, check, test-with-Postgres, web, disabled-modules). Ready
+  to squash-merge on the author's go.
+- **Inherited-warnings cleanup: not needed** — the harness-sandbox/harness-agents
+  warnings were Windows-only `cfg(unix)` artifacts; Linux CI is clean.
 - **Verify `harness serve` boots + `/health`** against local Postgres (Phase 0
   exit item still open).
 - **Web build is stub-only in dev** here (bun not producing a real bundle); the
