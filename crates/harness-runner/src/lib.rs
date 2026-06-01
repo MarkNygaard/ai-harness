@@ -18,9 +18,11 @@ use harness_dag::Usage;
 
 mod code_agent;
 mod local;
+mod registry;
 
 pub use code_agent::CodeAgentRunner;
 pub use local::{LocalRunner, Shell};
+pub use registry::build_agent_registry;
 
 /// A request to run an AI prompt against a working directory.
 #[derive(Debug, Clone)]

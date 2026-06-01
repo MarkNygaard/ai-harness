@@ -14,14 +14,32 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use harness_core::config::agents::SandboxMode;
+use harness_core::config::HarnessConfig;
 use harness_dag::{parse_workflow, run_workflow, NodeStatus, RunStatus, Usage, VarContext};
-use harness_runner::{EchoAgent, LocalRunner};
+use harness_runner::{build_agent_registry, CodeAgentRunner, EchoAgent, LocalRunner, PromptAgent};
 
 struct Args {
     workflow: PathBuf,
     workspace: PathBuf,
     base_branch: String,
     arguments: String,
+    /// Use real agents (Claude/Codex) instead of the built-in echo agent.
+    real: bool,
+    /// Sandbox mode for real CLI agents.
+    sandbox: SandboxMode,
+}
+
+fn parse_sandbox(value: &str) -> Result<SandboxMode, String> {
+    match value {
+        "read-only" => Ok(SandboxMode::ReadOnly),
+        "read-only-with-network" => Ok(SandboxMode::ReadOnlyWithNetwork),
+        "workspace-write" => Ok(SandboxMode::WorkspaceWrite),
+        "danger-full-access" => Ok(SandboxMode::DangerFullAccess),
+        other => Err(format!(
+            "unknown --sandbox `{other}` (expected read-only, read-only-with-network, workspace-write, danger-full-access)"
+        )),
+    }
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -29,6 +47,8 @@ fn parse_args() -> Result<Args, String> {
     let mut workspace: Option<PathBuf> = None;
     let mut base_branch = "main".to_string();
     let mut arguments = String::new();
+    let mut real = false;
+    let mut sandbox = SandboxMode::DangerFullAccess;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -42,9 +62,15 @@ fn parse_args() -> Result<Args, String> {
             "--args" => {
                 arguments = it.next().ok_or("--args needs a value")?;
             }
+            "--real" => {
+                real = true;
+            }
+            "--sandbox" => {
+                sandbox = parse_sandbox(&it.next().ok_or("--sandbox needs a value")?)?;
+            }
             "-h" | "--help" => {
                 return Err("usage: harness-run <workflow.yaml> [--workspace <dir>] \
-                     [--base-branch <name>] [--args <text>]"
+                     [--base-branch <name>] [--args <text>] [--real] [--sandbox <mode>]"
                     .into());
             }
             other if other.starts_with('-') => {
@@ -68,6 +94,8 @@ fn parse_args() -> Result<Args, String> {
         workspace,
         base_branch,
         arguments,
+        real,
+        sandbox,
     })
 }
 
@@ -103,12 +131,20 @@ async fn run() -> Result<ExitCode, String> {
         .set("ARGUMENTS", args.arguments.clone())
         .set("USER_MESSAGE", args.arguments.clone());
 
-    let runner = LocalRunner::new(args.workspace.clone(), command_dirs, Arc::new(EchoAgent));
+    let agent: Arc<dyn PromptAgent> = if args.real {
+        let config = HarnessConfig::default();
+        let registry = Arc::new(build_agent_registry(&config, args.sandbox));
+        Arc::new(CodeAgentRunner::new(registry))
+    } else {
+        Arc::new(EchoAgent)
+    };
+    let runner = LocalRunner::new(args.workspace.clone(), command_dirs, agent);
 
     println!(
-        "▶ running workflow `{}` in {}\n",
+        "▶ running workflow `{}` in {} ({} agent)\n",
         workflow.name,
-        args.workspace.display()
+        args.workspace.display(),
+        if args.real { "real" } else { "echo" }
     );
 
     let report = run_workflow(&workflow, &runner, &vars)

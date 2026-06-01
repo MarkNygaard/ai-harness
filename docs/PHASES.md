@@ -62,9 +62,14 @@ See [PLAN.md](PLAN.md) for the architecture these phases implement.
   in `harness-runner`. **Session gap addressed as fresh-per-node** (documented):
   `CodeAgent` has no session resume, so `context: shared` doesn't thread through
   it yet — closing it needs a trait extension (tracked in Reminders).
+- [x] **Config-built registry + real-agent run:** `build_agent_registry(config)`
+  registers Claude/Codex/(Anthropic API) from `HarnessConfig`; `harness-run --real
+  [--sandbox <mode>]` now drives the workflow with `CodeAgentRunner` instead of
+  `EchoAgent`. (Echo remains the default for dependency-free demos.)
 - [ ] **Remaining `LocalRunner` gaps:** `script` runtimes (bun/uv), `until_bash`,
-  a git worktree per run, and building the `AgentRegistry` from config so the
-  `harness-run` CLI can use `CodeAgentRunner` instead of `EchoAgent`.
+  a git worktree per run, richer config loading (`--config <file>` vs the current
+  `HarnessConfig::default()`), and folding `harness-run` into the main `harness`
+  CLI as `harness run`.
 - [~] Run-level wiring: `EchoAgent` (built-in dev `PromptAgent`) + a
   `harness-run <workflow.yaml>` binary that builds the `VarContext`
   (`$ARTIFACTS_DIR`/`$BASE_BRANCH`/…), drives `run_workflow` via `LocalRunner`,
