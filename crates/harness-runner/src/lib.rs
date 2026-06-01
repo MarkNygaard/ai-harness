@@ -19,10 +19,12 @@ use harness_dag::Usage;
 mod code_agent;
 mod local;
 mod registry;
+mod worktree;
 
 pub use code_agent::CodeAgentRunner;
 pub use local::{LocalRunner, Shell};
 pub use registry::build_agent_registry;
+pub use worktree::{sanitize_branch_component, Worktree, WorktreeError};
 
 /// A request to run an AI prompt against a working directory.
 #[derive(Debug, Clone)]

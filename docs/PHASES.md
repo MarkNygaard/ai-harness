@@ -69,9 +69,14 @@ See [PLAN.md](PLAN.md) for the architecture these phases implement.
 - [x] **`script` runtimes** (`bun` for TS/JS via temp file; `uv run --with <dep>`
   for Python) and **loop `until_bash`** (exit 0 = converge, run through the
   runner's Bash path — no new trait method). Tested (bun script + until_bash loop).
-- [ ] **Remaining `LocalRunner`/run-level gaps:** a git worktree per run,
-  richer config loading (`--config <file>` vs the current `HarnessConfig::default()`),
-  and folding `harness-run` into the main `harness` CLI as `harness run`.
+- [x] **Git worktree per run** (`harness-runner::Worktree`): `harness-run
+  --worktree` runs in an isolated `git worktree add -b` checkout (HEAD), removed
+  on drop. The one deliberate `git`-subprocess exception (run infrastructure,
+  documented), mirroring majiayu's `WorkspaceManager`.
+- [x] **`--config <file>`**: `harness-run --config <toml>` loads `HarnessConfig`
+  (toml + `rebase_relative_paths`) for the real-agent registry, vs the default.
+- [ ] **Remaining:** fold `harness-run` into the main `harness` CLI as
+  `harness run` (heavier — pulls in `harness-cli`).
 - [~] Run-level wiring: `EchoAgent` (built-in dev `PromptAgent`) + a
   `harness-run <workflow.yaml>` binary that builds the `VarContext`
   (`$ARTIFACTS_DIR`/`$BASE_BRANCH`/…), drives `run_workflow` via `LocalRunner`,
