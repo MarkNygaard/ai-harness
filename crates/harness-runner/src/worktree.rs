@@ -1,0 +1,170 @@
+//! Per-run git worktree isolation.
+//!
+//! A [`Worktree`] checks out an isolated copy of a repo on its own branch so a
+//! workflow run's edits never touch the user's working tree, and parallel runs
+//! don't collide. It is removed on `Drop` (best-effort).
+//!
+//! NOTE: this is the **one** place harness code shells out to `git`. Worktree
+//! management is run *infrastructure* — the same deliberate exception majiayu's
+//! `WorkspaceManager` makes (`harness-server/src/workspace.rs`). The "no
+//! `Command::new(git)` in harness crates" rule (AGENTS.md) is about *agent*-
+//! delegated git (commits, PRs); the agent still does all of that itself.
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+/// Error from a git worktree operation.
+#[derive(Debug, thiserror::Error)]
+#[error("worktree error: {0}")]
+pub struct WorktreeError(pub String);
+
+/// An isolated git worktree, removed on drop.
+pub struct Worktree {
+    repo: PathBuf,
+    /// The checked-out worktree directory (use this as the run's workspace).
+    pub path: PathBuf,
+    /// The branch created for this worktree.
+    pub branch: String,
+}
+
+impl Worktree {
+    /// Create a worktree of `repo` at `base_ref` on a new branch `branch`,
+    /// checked out at `dest` (which must not already exist).
+    pub fn create(
+        repo: &Path,
+        base_ref: &str,
+        branch: &str,
+        dest: &Path,
+    ) -> Result<Self, WorktreeError> {
+        run_git(
+            repo,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                branch,
+                &dest.to_string_lossy(),
+                base_ref,
+            ],
+        )?;
+        Ok(Self {
+            repo: repo.to_path_buf(),
+            path: dest.to_path_buf(),
+            branch: branch.to_string(),
+        })
+    }
+
+    /// Remove the worktree (force, discarding any uncommitted changes) and
+    /// prune git's metadata. Idempotent-ish: errors are returned, not panicked.
+    pub fn remove(&self) -> Result<(), WorktreeError> {
+        run_git(
+            &self.repo,
+            &[
+                "worktree",
+                "remove",
+                "--force",
+                &self.path.to_string_lossy(),
+            ],
+        )?;
+        Ok(())
+    }
+}
+
+impl Drop for Worktree {
+    fn drop(&mut self) {
+        // Best-effort cleanup; ignore errors (e.g. already removed).
+        let _ = self.remove();
+    }
+}
+
+fn run_git(repo: &Path, args: &[&str]) -> Result<String, WorktreeError> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .map_err(|e| WorktreeError(format!("failed to spawn git: {e}")))?;
+    if !output.status.success() {
+        return Err(WorktreeError(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+/// Replace characters that are awkward in branch names / paths.
+pub fn sanitize_branch_component(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn init_repo(dir: &Path) {
+        // Minimal repo with one commit so HEAD is valid.
+        let run = |args: &[&str]| {
+            let ok = Command::new("git")
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .output()
+                .expect("git")
+                .status
+                .success();
+            assert!(ok, "git {args:?} failed");
+        };
+        run(&["init", "-q"]);
+        run(&["config", "user.email", "t@example.com"]);
+        run(&["config", "user.name", "t"]);
+        std::fs::write(dir.join("file.txt"), "hello").unwrap();
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "init"]);
+    }
+
+    #[test]
+    fn creates_and_removes_worktree() {
+        let repo = TempDir::new().unwrap();
+        init_repo(repo.path());
+        let dest = repo.path().join("wt-a");
+
+        {
+            let wt = Worktree::create(repo.path(), "HEAD", "harness-run/test", &dest).unwrap();
+            assert!(wt.path.exists(), "worktree dir should exist");
+            assert!(
+                wt.path.join("file.txt").exists(),
+                "checked-out content present"
+            );
+        } // dropped here → removed
+
+        assert!(!dest.exists(), "worktree dir should be removed on drop");
+    }
+
+    #[test]
+    fn explicit_remove_then_drop_is_safe() {
+        let repo = TempDir::new().unwrap();
+        init_repo(repo.path());
+        let dest = repo.path().join("wt-b");
+        let wt = Worktree::create(repo.path(), "HEAD", "harness-run/test2", &dest).unwrap();
+        wt.remove().unwrap();
+        assert!(!dest.exists());
+        // Drop will best-effort remove again; must not panic.
+        drop(wt);
+    }
+
+    #[test]
+    fn sanitizes_branch_components() {
+        assert_eq!(sanitize_branch_component("idea-to/pr v2"), "idea-to-pr-v2");
+    }
+}
