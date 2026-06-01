@@ -22,7 +22,7 @@ use std::path::PathBuf;
 /// | List projects            | `GET  /projects` |
 /// | Dashboard API            | `GET  /api/dashboard` |
 ///
-/// See `docs/api-contract.md` for the full transport role description.
+/// See `docs/reference/api-contract.md` for the full transport role description.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "method", content = "params", rename_all = "snake_case")]
 pub enum Method {

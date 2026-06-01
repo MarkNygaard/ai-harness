@@ -4,7 +4,7 @@
 //! opened* ([`Backend`] → [`StoreHandle`]), so the rest of the system can
 //! construct stores through one seam instead of calling `PgStoreContext` /
 //! `pg_schema_for_path` directly. Part of the storage-layer redesign
-//! (`docs/rfc-storage-layer-redesign.md`).
+//! (`docs/reference/rfc-storage-layer-redesign.md`).
 //!
 //! Two backends:
 //!   - [`PostgresBackend`] — durable, shared orchestration state. Resolves a

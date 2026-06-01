@@ -5,7 +5,7 @@ use serde_json::json;
 
 #[test]
 fn identity_contract_doc_covers_runtime_submission_api_surface() {
-    let doc = include_str!("../../../docs/runtime-submission-identity-contract.md");
+    let doc = include_str!("../../../docs/reference/runtime-submission-identity-contract.md");
     for required in [
         "workflow_id",
         "submission_id",

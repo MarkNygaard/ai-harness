@@ -6,7 +6,7 @@
 //! part of the operator-facing control plane and are exclusively served by the
 //! HTTP REST routes defined in `http.rs`.
 //!
-//! See `docs/api-contract.md` for the full transport role description.
+//! See `docs/reference/api-contract.md` for the full transport role description.
 
 use crate::handlers;
 use crate::http::AppState;

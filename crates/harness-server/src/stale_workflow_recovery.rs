@@ -18,7 +18,7 @@
 //!
 //! This is a defensive recovery layer, not a correctness fix. The right long-
 //! term answer is removing the `repo_backlog` state machine entirely (see
-//! `docs/stateless-repo-backlog-poll-spec.md`). Until that lands, this tick
+//! `docs/reference/stateless-repo-backlog-poll-spec.md`). Until that lands, this tick
 //! prevents single-incident state drift from snowballing into hours of zero
 //! intake throughput.
 
