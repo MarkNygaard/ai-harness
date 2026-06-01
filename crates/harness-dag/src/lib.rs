@@ -36,8 +36,8 @@ pub mod vars;
 
 pub use error::DagError;
 pub use exec::{
-    run_workflow, NodeBody, NodeOutput, NodeRequest, NodeRun, NodeRunner, NodeStatus, RunReport,
-    RunStatus, RunnerError, Usage,
+    run_workflow, run_workflow_streaming, NodeBody, NodeOutput, NodeRequest, NodeRun, NodeRunner,
+    NodeStatus, RunEvent, RunReport, RunStatus, RunnerError, Usage,
 };
 pub use graph::topological_layers;
 pub use model::{
