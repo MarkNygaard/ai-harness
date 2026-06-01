@@ -86,6 +86,33 @@ pub enum Command {
         actor: Option<String>,
     },
 
+    /// Run a workflow DAG locally (`.yaml`) and print a per-node summary
+    Run {
+        /// Path to the workflow YAML
+        workflow: PathBuf,
+        /// Workspace directory (defaults to the current directory)
+        #[arg(long)]
+        workspace: Option<PathBuf>,
+        /// Base branch exposed as `$BASE_BRANCH` and used for worktree isolation
+        #[arg(long, default_value = "main")]
+        base_branch: String,
+        /// Free-form text exposed as `$ARGUMENTS` / `$USER_MESSAGE`
+        #[arg(long, default_value = "")]
+        args: String,
+        /// Use real agents (Claude/Codex) instead of the built-in echo agent
+        #[arg(long)]
+        real: bool,
+        /// Sandbox mode for real CLI agents
+        #[arg(long, default_value = "danger-full-access")]
+        sandbox: String,
+        /// Run inside an isolated git worktree of the workspace (removed after)
+        #[arg(long)]
+        worktree: bool,
+        /// Postgres URL to persist the run (else `$HARNESS_DATABASE_URL`)
+        #[arg(long)]
+        database_url: Option<String>,
+    },
+
     /// GC Agent commands
     Gc {
         #[command(subcommand)]
@@ -659,6 +686,40 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 actor,
             )
             .await?;
+        }
+
+        Command::Run {
+            workflow,
+            workspace,
+            base_branch,
+            args,
+            real,
+            sandbox,
+            worktree,
+            database_url,
+        } => {
+            let sandbox =
+                harness_runner::parse_sandbox(&sandbox).map_err(|e| anyhow::anyhow!(e))?;
+            let workspace = workspace
+                .or_else(|| std::env::current_dir().ok())
+                .ok_or_else(|| anyhow::anyhow!("could not determine workspace directory"))?;
+            let opts = harness_runner::RunOptions {
+                workflow,
+                workspace,
+                base_branch,
+                arguments: args,
+                real,
+                sandbox,
+                config: cli.config.clone(),
+                worktree,
+                database_url,
+            };
+            let report = harness_runner::execute_run(opts)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            if !matches!(report.status, harness_dag::RunStatus::Completed) {
+                anyhow::bail!("run finished with status {:?}", report.status);
+            }
         }
 
         Command::Gc { cmd } => {

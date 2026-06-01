@@ -21,6 +21,8 @@ harness-rules = { workspace = true }
 harness-skills = { workspace = true }
 harness-exec = { workspace = true }
 harness-observe = { workspace = true }
+harness-runner = { workspace = true }
+harness-dag = { workspace = true }
 tokio = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
