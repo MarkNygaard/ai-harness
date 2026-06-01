@@ -10,6 +10,7 @@ repository.workspace = true
 harness-dag = { workspace = true }
 harness-core = { workspace = true }
 harness-agents = { workspace = true }
+harness-persist = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }

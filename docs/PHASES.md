@@ -83,8 +83,13 @@ See [PLAN.md](PLAN.md) for the architecture these phases implement.
   and prints a per-node `RunReport` summary. Demo: `examples/hello.yaml` runs
   end-to-end (parallel layer + join). **Remaining:** real git worktree per run,
   and fold into the main `harness` CLI as `harness run` (once real agents land).
-- [ ] Persist `workflow_runs` + `run_nodes` (+ `node_invocations`) to Postgres
-  (state, output, session, usage/cost).
+- [x] **Persist runs** — new `harness-persist` crate (`RunStore`): idempotent
+  Postgres schema (`harness_workflow_runs` + `harness_run_nodes` with status,
+  provider/model, token usage, iterations, converged, note, `started_at`/
+  `ended_at`); records a `RunReport` in one transaction. Wired into `harness-run`
+  via `--database-url`/`$HARNESS_DATABASE_URL`. Depends only on `harness-dag`+`sqlx`
+  so the server can reuse it. (`node_invocations` loop-drill-down deferred; SQL
+  validated on the CI Postgres job — Docker wasn't running locally.)
 
 **Exit:** a 3-node sample workflow (bash → claude prompt → loop) runs to
 completion locally and its run/node state is queryable.

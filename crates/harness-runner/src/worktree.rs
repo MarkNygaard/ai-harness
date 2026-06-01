@@ -55,7 +55,8 @@ impl Worktree {
     }
 
     /// Remove the worktree (force, discarding any uncommitted changes) and
-    /// prune git's metadata. Idempotent-ish: errors are returned, not panicked.
+    /// delete the branch it created. Idempotent-ish: errors are returned, not
+    /// panicked.
     pub fn remove(&self) -> Result<(), WorktreeError> {
         run_git(
             &self.repo,
@@ -66,6 +67,9 @@ impl Worktree {
                 &self.path.to_string_lossy(),
             ],
         )?;
+        // `git worktree remove` leaves the branch behind; delete it too so
+        // repeated runs don't accumulate `harness-run/*` branches. Best-effort.
+        let _ = run_git(&self.repo, &["branch", "-D", &self.branch]);
         Ok(())
     }
 }
@@ -159,6 +163,21 @@ mod tests {
         let wt = Worktree::create(repo.path(), "HEAD", "harness-run/test2", &dest).unwrap();
         wt.remove().unwrap();
         assert!(!dest.exists());
+        // The branch should be deleted too (no accumulation across runs).
+        let branches = String::from_utf8(
+            Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(["branch", "--list", "harness-run/test2"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap();
+        assert!(
+            branches.trim().is_empty(),
+            "branch should be gone: {branches:?}"
+        );
         // Drop will best-effort remove again; must not panic.
         drop(wt);
     }
