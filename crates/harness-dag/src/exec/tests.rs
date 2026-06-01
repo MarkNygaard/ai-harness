@@ -361,3 +361,55 @@ nodes:
     assert_eq!(b.status, NodeStatus::Skipped);
     assert!(b.started_at.is_none() && b.ended_at.is_none());
 }
+
+#[tokio::test]
+async fn streams_run_and_node_events() {
+    use futures::StreamExt as _;
+
+    let yaml = r#"
+name: ev
+nodes:
+  - id: a
+    bash: "x"
+  - id: b
+    depends_on: [a]
+    prompt: "y"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new();
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let report = run_workflow_streaming(&wf, &runner, &empty_vars(), Some(&tx))
+        .await
+        .unwrap();
+    drop(tx); // close the stream so collect terminates
+    let events: Vec<RunEvent> = rx.collect().await;
+
+    assert!(matches!(
+        events.first(),
+        Some(RunEvent::RunStarted { total_nodes: 2, .. })
+    ));
+    assert!(matches!(
+        events.last(),
+        Some(RunEvent::RunFinished {
+            status: RunStatus::Completed
+        })
+    ));
+
+    // Both nodes emit a NodeStarted (in dependency order) and a NodeFinished.
+    let started: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            RunEvent::NodeStarted { node_id, .. } => Some(node_id.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, vec!["a", "b"]);
+    let finished = events
+        .iter()
+        .filter(
+            |e| matches!(e, RunEvent::NodeFinished { node } if node.status == NodeStatus::Success),
+        )
+        .count();
+    assert_eq!(finished, 2);
+    assert_eq!(report.status, RunStatus::Completed);
+}

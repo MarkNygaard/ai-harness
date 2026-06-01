@@ -17,6 +17,7 @@ use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use futures::channel::mpsc::UnboundedSender;
 use futures::future::join_all;
 use serde::{Deserialize, Serialize};
 
@@ -169,6 +170,38 @@ impl RunReport {
     }
 }
 
+/// A live event emitted while a run executes (for WS streaming + the UI's live
+/// graph overlay). Serialized with a `type` tag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum RunEvent {
+    /// The run has started; `total_nodes` is the DAG's node count.
+    RunStarted {
+        workflow: String,
+        total_nodes: usize,
+    },
+    /// A node began executing (it is now "running").
+    NodeStarted {
+        node_id: String,
+        provider: Option<String>,
+        model: Option<String>,
+    },
+    /// A node reached a terminal state (success/failed/skipped/cancelled).
+    NodeFinished { node: NodeRun },
+    /// The run reached a terminal state.
+    RunFinished { status: RunStatus },
+}
+
+/// Sink for [`RunEvent`]s. `None` disables streaming.
+type Events<'a> = Option<&'a UnboundedSender<RunEvent>>;
+
+fn emit(events: Events<'_>, event: RunEvent) {
+    if let Some(tx) = events {
+        // Receiver dropped (client disconnected) is not fatal to the run.
+        let _ = tx.unbounded_send(event);
+    }
+}
+
 /// Internal per-node execution result, carrying the record plus driver-relevant
 /// side outputs (session to thread forward, cancellation request).
 struct NodeRunResult {
@@ -186,7 +219,25 @@ pub async fn run_workflow<R: NodeRunner>(
     runner: &R,
     vars: &VarContext,
 ) -> Result<RunReport, DagError> {
+    run_workflow_streaming(workflow, runner, vars, None).await
+}
+
+/// Like [`run_workflow`], but emits [`RunEvent`]s to `events` as the run
+/// progresses (run + node start/finish). Pass `None` to disable streaming.
+pub async fn run_workflow_streaming<R: NodeRunner>(
+    workflow: &Workflow,
+    runner: &R,
+    vars: &VarContext,
+    events: Events<'_>,
+) -> Result<RunReport, DagError> {
     let layers = topological_layers(workflow)?;
+    emit(
+        events,
+        RunEvent::RunStarted {
+            workflow: workflow.name.clone(),
+            total_nodes: workflow.nodes.len(),
+        },
+    );
     let wf_provider = workflow.provider.as_deref();
     let wf_model = workflow.model.as_deref();
 
@@ -201,29 +252,25 @@ pub async fn run_workflow<R: NodeRunner>(
         for &idx in layer {
             let node = &workflow.nodes[idx];
             if let Some(reason) = &cancelled {
-                finalize(
-                    &mut statuses,
-                    &mut runs,
-                    skipped_run(
-                        node,
-                        format!("run cancelled: {reason}"),
-                        NodeStatus::Cancelled,
-                    )
-                    .run,
-                );
+                let run = skipped_run(
+                    node,
+                    format!("run cancelled: {reason}"),
+                    NodeStatus::Cancelled,
+                )
+                .run;
+                emit(events, RunEvent::NodeFinished { node: run.clone() });
+                finalize(&mut statuses, &mut runs, run);
             } else if trigger_satisfied(node, &statuses) {
                 to_run.push(idx);
             } else {
-                finalize(
-                    &mut statuses,
-                    &mut runs,
-                    skipped_run(
-                        node,
-                        "dependencies not satisfied (trigger_rule)".to_string(),
-                        NodeStatus::Skipped,
-                    )
-                    .run,
-                );
+                let run = skipped_run(
+                    node,
+                    "dependencies not satisfied (trigger_rule)".to_string(),
+                    NodeStatus::Skipped,
+                )
+                .run;
+                emit(events, RunEvent::NodeFinished { node: run.clone() });
+                finalize(&mut statuses, &mut runs, run);
             }
         }
 
@@ -241,7 +288,7 @@ pub async fn run_workflow<R: NodeRunner>(
             } else {
                 None
             };
-            execute_node(runner, node, wf_provider, wf_model, vars, incoming)
+            execute_node(runner, node, wf_provider, wf_model, vars, incoming, events)
         });
         let results = join_all(futures).await;
 
@@ -275,6 +322,8 @@ pub async fn run_workflow<R: NodeRunner>(
     } else {
         RunStatus::Completed
     };
+
+    emit(events, RunEvent::RunFinished { status });
 
     Ok(RunReport {
         workflow: workflow.name.clone(),
@@ -343,9 +392,18 @@ async fn execute_node<R: NodeRunner>(
     wf_model: Option<&str>,
     vars: &VarContext,
     incoming_session: Option<String>,
+    events: Events<'_>,
 ) -> NodeRunResult {
     let provider = node.provider.as_deref().or(wf_provider);
     let model = node.model.as_deref().or(wf_model);
+    emit(
+        events,
+        RunEvent::NodeStarted {
+            node_id: node.id.clone(),
+            provider: provider.map(str::to_string),
+            model: model.map(str::to_string),
+        },
+    );
 
     let started = Utc::now();
     let mut result = match &node.kind {
@@ -450,6 +508,12 @@ async fn execute_node<R: NodeRunner>(
     // Stamp execution timing once, here, for every body kind.
     result.run.started_at = Some(started);
     result.run.ended_at = Some(Utc::now());
+    emit(
+        events,
+        RunEvent::NodeFinished {
+            node: result.run.clone(),
+        },
+    );
     result
 }
 
