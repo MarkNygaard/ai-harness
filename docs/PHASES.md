@@ -308,14 +308,44 @@ and the issue gets a comment linking the run + resulting PR.
   caches via the per-node `hostPath` mount (`CARGO_HOME`/`PNPM_STORE_DIR`/…).
 - [ ] UI: **Toolchains panel** (catalog pick + custom setup + "Test provisioning"
   streams logs from a throwaway pod). **No image rebuild to add a toolchain.**
+- [ ] **Credentials & secrets — fully UI-managed, no cluster access required.**
+  The author must be able to connect every provider **from the UI** — *not* by
+  editing Helm values, hand-writing SOPS secrets, or `kubectl exec`-ing in to run
+  `claude login` / `codex login` by hand. Pieces:
+  - **Auth broker** (control plane): per provider, spawns the *official* CLI login
+    so usage attributes to the **normal subscription** (we run Anthropic's `claude`
+    / OpenAI's `codex` binaries — the allowed path — never a hand-rolled OAuth
+    client or a third-party token bucket). Captures the resulting credential
+    **files** (`~/.claude/.credentials.json`, `~/.codex/auth.json`) — which carry
+    refresh tokens, so they self-renew — not a bare long-lived token.
+  - **Browser-authorize UX:** UI shows a "Connect Claude" / "Connect Codex" button
+    → the official consent page opens → click Authorize. Likely lands as
+    *authorize-URL + paste-the-returned-code* (those CLI logins use a `localhost`
+    callback built for a local CLI+browser; a server deployment can't catch that
+    redirect). ⚠️ **Verify per CLI** whether `claude login` / `codex login` expose
+    a headless/manual-code variant; if one is localhost-only, fall back to
+    local-login-then-import for that provider. Kimi stays a simple API key / `omp`
+    login.
+  - **Runtime store, not GitOps:** the control plane keeps these in an
+    **encrypted, app-managed store** (encrypted Postgres rows, or a k8s `Secret`
+    the control plane writes/rotates via the API) — added/rotated live from the UI
+    with **no redeploy and no Flux/SOPS commit**. Per-project or global scope.
+  - **Pod materialization:** the runner bootstrap writes the creds into
+    `~/.claude` / `~/.codex` (+ `MOONSHOT_API_KEY`) before node 1; **credential
+    health** indicator in the UI (expiry / last-refreshed / revoked).
 - [ ] **Flux deployment** (matches `home-ops`): `kubernetes/apps/<ns>/ai-harness/
   {app,cluster}` with a `HelmRelease`/kustomize base, a **CloudNativePG** `Cluster`
-  (not our own Postgres), **Envoy Gateway** `HTTPRoute` + cert-manager TLS, and
-  **SOPS+age** Secrets for provider/Linear/GitHub tokens.
+  (not our own Postgres), **Envoy Gateway** `HTTPRoute` + cert-manager TLS. Note:
+  **SOPS+age** Secrets cover only *bootstrap/infra* secrets (DB creds, the app's
+  own signing keys) — **agent/provider credentials are the UI-managed runtime
+  store above**, deliberately *not* GitOps-managed so connecting a provider never
+  needs a cluster login or a commit.
 
-**Exit:** from a clean cluster, register a project, set its toolchains in the UI,
+**Exit:** from a clean cluster, register a project, **connect Claude + Codex +
+Kimi entirely from the UI** (browser-authorize, no `kubectl`/SOPS), set toolchains,
 trigger the flagship workflow from Linear, and watch it provision toolchains +
-run to a PR — entirely in-cluster, no hand-built wrapper image.
+run to a PR — entirely in-cluster, no hand-built wrapper image, no hand-managed
+secrets.
 
 > Cluster is now mapped (PLAN §14). Remaining author inputs: target namespace,
 > internal-vs-external exposure, and the warm-cache storage choice (recommend
