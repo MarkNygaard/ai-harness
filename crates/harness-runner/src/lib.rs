@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use harness_dag::Usage;
 
 mod code_agent;
+pub mod defaults;
 mod dispatch;
 mod local;
 mod pi;
@@ -25,6 +26,7 @@ mod run;
 mod worktree;
 
 pub use code_agent::CodeAgentRunner;
+pub use defaults::{default_command, default_workflow, resolve_workflow_source, DEFAULT_WORKFLOW};
 pub use dispatch::DispatchAgent;
 pub use local::{LocalRunner, Shell};
 pub use pi::{parse_omp_stream, ParsedOmp, PiAgent};

@@ -662,6 +662,11 @@ async fn run_loop<R: NodeRunner>(
         };
     }
 
+    // A loop block may declare its own provider/model; prefer those over the
+    // node/workflow defaults for every iteration (and the recorded NodeRun).
+    let provider = cfg.provider.as_deref().or(provider);
+    let model = cfg.model.as_deref().or(model);
+
     let mut usage = Usage::default();
     let mut last_text = String::new();
     let mut session = incoming_session;

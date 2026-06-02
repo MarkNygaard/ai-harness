@@ -83,7 +83,7 @@ function RunRow({ run }: { run: RunSummary }) {
 function NewRunForm() {
   const navigate = useNavigate();
   const create = useCreateRun();
-  const [workflow, setWorkflow] = useState("examples/hello.yaml");
+  const [workflow, setWorkflow] = useState("idea-to-pr-with-kimi-coding-and-codex");
   const [args, setArgs] = useState("");
   const [real, setReal] = useState(false);
 
@@ -100,11 +100,13 @@ function NewRunForm() {
       <CardContent className="py-4">
         <form onSubmit={submit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Workflow path</label>
+            <label className="text-xs font-medium text-muted-foreground">
+              Workflow (bundled name or path)
+            </label>
             <input
               value={workflow}
               onChange={(e) => setWorkflow(e.target.value)}
-              placeholder="examples/hello.yaml"
+              placeholder="idea-to-pr-with-kimi-coding-and-codex"
               className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
           </div>

@@ -195,8 +195,12 @@ impl LocalRunner {
                     .map_err(|e| RunnerError(format!("failed to read command `{name}`: {e}")));
             }
         }
+        // Fall back to a bundled default command (project dirs shadow these).
+        if let Some(body) = crate::defaults::default_command(name) {
+            return Ok(body.to_string());
+        }
         Err(RunnerError(format!(
-            "command `{name}` not found in {} command dir(s)",
+            "command `{name}` not found in {} command dir(s) or bundled defaults",
             self.command_dirs.len()
         )))
     }
