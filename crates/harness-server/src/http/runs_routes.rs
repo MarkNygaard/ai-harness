@@ -25,7 +25,8 @@ use harness_agents::registry::AgentRegistry;
 use harness_dag::{parse_workflow, run_workflow_streaming, RunEvent, VarContext};
 use harness_persist::RunStore;
 use harness_runner::{
-    sanitize_branch_component, CodeAgentRunner, EchoAgent, LocalRunner, PromptAgent,
+    sanitize_branch_component, CodeAgentRunner, DispatchAgent, EchoAgent, LocalRunner, PiAgent,
+    PromptAgent,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex, OnceCell};
@@ -205,7 +206,9 @@ async fn execute_run_task(
     let command_dirs = vec![workspace.join(".harness").join("commands")];
 
     let agent: Arc<dyn PromptAgent> = if real {
-        Arc::new(CodeAgentRunner::new(state.agent_registry.clone()))
+        // `provider: pi` → omp-backed session-aware agent; others → CodeAgent registry.
+        let code = Arc::new(CodeAgentRunner::new(state.agent_registry.clone()));
+        Arc::new(DispatchAgent::new(Arc::new(PiAgent::from_env()), code))
     } else {
         Arc::new(EchoAgent)
     };
