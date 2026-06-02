@@ -2,7 +2,7 @@ use axum::{
     extract::DefaultBodyLimit,
     middleware,
     routing::{get, post},
-    Router,
+    Extension, Router,
 };
 use std::sync::Arc;
 
@@ -10,11 +10,27 @@ use super::{
     auth, get_issue_workflow_by_issue, get_issue_workflow_by_pr, get_project_workflow_by_project,
     get_task, get_task_artifacts, get_task_prompts, get_task_proof, get_workflow_runtime_tree,
     github_webhook, handle_rpc, health_check, ingest_signal, intake_status, list_tasks,
-    password_reset, project_queue_stats, state::AppState, stream_task_sse, task_mutation_routes,
-    task_routes,
+    password_reset, project_queue_stats, runs_routes, state::AppState, stream_task_sse,
+    task_mutation_routes, task_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
+    // Self-contained state for the runs API (attached as an Extension so it
+    // doesn't entangle AppState). Echo runs need no real agents; real runs use
+    // a registry built from config. Store connects lazily on first use.
+    let runs_state = {
+        let config = &state.core.server.config;
+        let db_url = config.server.database_url.clone();
+        let agent_registry = Arc::new(harness_runner::build_agent_registry(
+            config,
+            harness_core::config::agents::SandboxMode::DangerFullAccess,
+        ));
+        Arc::new(runs_routes::RunsState::new(
+            db_url,
+            agent_registry,
+            state.core.project_root.clone(),
+        ))
+    };
     Router::new()
         .route("/", get(crate::dashboard::index))
         .route("/overview", get(crate::overview::index))
@@ -137,6 +153,14 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/auth/reset-password", post(password_reset))
         .route("/reconcile", post(crate::handlers::reconcile::handle))
+        // ── Runs API (harness-dag execution model) ──────────────────────────
+        .route(
+            "/runs",
+            post(runs_routes::create_run).get(runs_routes::list_runs),
+        )
+        .route("/runs/{id}", get(runs_routes::get_run))
+        .route("/runs/{id}/stream", get(runs_routes::stream_run))
+        .layer(Extension(runs_state))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth::api_auth_middleware,

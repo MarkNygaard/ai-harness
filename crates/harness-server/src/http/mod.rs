@@ -23,6 +23,7 @@ pub(crate) mod http_router;
 pub(crate) mod init;
 pub(crate) mod misc_routes;
 pub(crate) mod rate_limit;
+pub(crate) mod runs_routes;
 pub(crate) mod sse_routes;
 pub(crate) mod state;
 pub(crate) mod task_mutation_routes;

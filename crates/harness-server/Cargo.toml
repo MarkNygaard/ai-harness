@@ -16,6 +16,9 @@ harness-rules = { workspace = true }
 harness-skills = { workspace = true }
 harness-observe = { workspace = true }
 harness-exec = { workspace = true }
+harness-dag = { workspace = true }
+harness-runner = { workspace = true }
+harness-persist = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
@@ -30,7 +33,7 @@ uuid = { workspace = true }
 sqlx = { workspace = true }
 chrono = { workspace = true }
 futures = { workspace = true }
-tokio-stream = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
 async-trait = { workspace = true }
 hmac = { workspace = true }
 sha2 = { workspace = true }

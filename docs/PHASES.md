@@ -100,12 +100,19 @@ completion locally and its run/node state is queryable.
 
 ---
 
-## Phase 2 — Control-plane API + live UI graph — ⬜ not started
+## Phase 2 — Control-plane API + live UI graph — 🔨 in progress
 
 **Goal:** submit a run from the UI and watch it execute as a graph.
 
-- [ ] `POST /runs`, `GET /runs/:id`, `GET /runs`, WS `/runs/:id/stream` in
-  `harness-server` (reuse majiayu's task/WS plumbing).
+- [x] **Control-plane API** (`harness-server/src/http/runs_routes.rs`, attached via
+  an axum `Extension` to avoid entangling `AppState`): `POST /runs` (submit →
+  background `run_workflow_streaming` via `LocalRunner` + echo/real agent),
+  `GET /runs` + `GET /runs/{id}` (from `harness-persist`), and **`GET
+  /runs/{id}/stream`** = **SSE** of live `RunEvent`s (matches the existing
+  `/tasks/{id}/stream` pattern; futures-channel→broadcast bridge). `harness-persist`
+  gained `list_runs`/`get_run` (+ `RunSummary`/`RunDetail`, DB-tested).
+  *Follow-ups:* runs persist on completion (404 until done — live via SSE); add a
+  `running` status + insert-on-start; HTTP integration tests (server fixture, CI).
 - [ ] **Re-skin to the `home-ops-agent` design system** (PLAN §10.0): port its
   OKLCH theme tokens (`globals.css`), orange accent, Geist/Geist Mono, shadcn/ui
   primitives into our Vite app. Reference its
