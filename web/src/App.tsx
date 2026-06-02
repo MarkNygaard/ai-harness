@@ -4,6 +4,8 @@ import { Route, Routes, useLocation } from "react-router-dom";
 import { Dashboard } from "./routes/Dashboard";
 import { Overview } from "./routes/Overview";
 import { Worktrees } from "./routes/Worktrees";
+import { RunsPage } from "./routes/runs/RunsPage";
+import { RunDetailPage } from "./routes/runs/RunDetailPage";
 import { PaletteProvider } from "./lib/palette";
 import { TokenPrompt } from "./components/TokenPrompt";
 
@@ -46,7 +48,9 @@ export function App() {
       <PaletteProvider>
         <ScrollToHash />
         <Routes>
-          <Route path="/" element={<Dashboard />} />
+          <Route path="/" element={<RunsPage />} />
+          <Route path="/runs/:id" element={<RunDetailPage />} />
+          <Route path="/tasks" element={<Dashboard />} />
           <Route path="/overview" element={<Overview />} />
           <Route path="/worktrees" element={<Worktrees />} />
         </Routes>
