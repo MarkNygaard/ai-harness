@@ -1,11 +1,11 @@
 //! Control-plane API for workflow **runs** (the `harness-dag` execution model),
 //! distinct from the legacy `tasks` surface.
 //!
-//! - `POST /runs`        — submit a workflow file; executes it in a background
-//!                         task and returns a `run_id`.
-//! - `GET  /runs`        — list recent runs (from `harness-persist`).
-//! - `GET  /runs/{id}`   — run detail + per-node rows.
-//! - `GET  /runs/{id}/stream` — SSE stream of live `RunEvent`s while it runs.
+//! - `POST /runs` — submit a workflow file; executes it in a background task and
+//!   returns a `run_id`.
+//! - `GET /runs` — list recent runs (from `harness-persist`).
+//! - `GET /runs/{id}` — run detail + per-node rows.
+//! - `GET /runs/{id}/stream` — SSE stream of live `RunEvent`s while it runs.
 //!
 //! State is attached as an axum `Extension` (a self-contained `RunsState`) so it
 //! doesn't entangle the large shared `AppState`.
