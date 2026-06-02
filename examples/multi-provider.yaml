@@ -1,0 +1,39 @@
+name: multi-provider-demo
+description: >
+  Demonstrates one DAG fanning across three agent backends — Claude, Pi/Kimi
+  (via the `omp` CLI), and Codex — each on its declared provider/model. Run with
+  real agents: `harness run examples/multi-provider.yaml --real`. With the echo
+  agent (no `--real`) it exercises the graph without invoking any model.
+provider: claude
+model: sonnet
+
+nodes:
+  - id: scaffold
+    bash: "echo scaffolding workspace"
+
+  # Pi/Kimi node: provider `pi` routes to the omp-backed, session-aware agent.
+  # `model` is passed to `omp --model` (a bare name is prefixed `kimi-code/`).
+  - id: implement
+    depends_on: [scaffold]
+    provider: pi
+    model: kimi-code/kimi-k2.5
+    prompt: "Implement the change described in $USER_MESSAGE under $ARTIFACTS_DIR."
+
+  # Codex node, running in parallel with the Claude review below.
+  - id: codex_pass
+    depends_on: [implement]
+    provider: codex
+    model: gpt-5-codex
+    prompt: "Review the implementation for correctness and tighten it."
+
+  # Claude review node (parallel layer with codex_pass).
+  - id: claude_review
+    depends_on: [implement]
+    provider: claude
+    model: opus
+    prompt: "Review the implementation for clarity and risks."
+
+  # Joins both reviews; runs on the workflow default provider/model (Claude).
+  - id: signoff
+    depends_on: [codex_pass, claude_review]
+    prompt: "Synthesize the Codex and Claude reviews into a final sign-off."

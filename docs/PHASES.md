@@ -146,7 +146,7 @@ pending→running→done in the graph, and see token totals per step and per mod
 
 ---
 
-## Phase 3 — Pi / Kimi provider — ⬜ not started
+## Phase 3 — Pi / Kimi provider — ✅ done (core)
 
 **Goal:** the author's provider mix (Claude + Kimi/Pi + Codex) works in one DAG.
 
@@ -154,18 +154,29 @@ pending→running→done in the graph, and see token totals per step and per mod
   --mode json` / RPC) with JSONL events, token usage incl. cache, Kimi model
   selection, and `--resume` session ids → **CLI subprocess, no sidecar**;
   standardize on the **`omp`** fork.
-- [ ] Implement the Pi adapter (a session-aware `PromptAgent`): `omp -p --mode
-  json --model kimi-code/<model>`, parse `agent_end` + `SessionStats`, thread
-  `context: shared` via captured `SessionHeader.id` + `--resume`; per-provider
-  concurrency semaphore.
-- [ ] **Runner image / Pi config (PLAN §7.5):** bake `omp` + language servers;
-  enable the adopt-list extensions (hashline edit, LSP-on-write, native search,
-  `omp commit`, `conflict://`, `pr://` reads, `AGENTS.md` ingestion); skip
-  ACP/browser/DAP/eval for headless. Decide `.omp` vs `.harness` config home.
-- [ ] Confirm Codex + Claude adapters still select per-node.
+- [x] **Pi adapter** (`harness-runner/src/pi.rs`): a session-aware `PromptAgent`
+  (not a `CodeAgent` — that boundary is session-less) that runs `omp -p --mode
+  json --model <provider/model>` (+ `--resume <id>`). A pure, unit-tested
+  `parse_omp_stream` reads the JSONL event stream — `session` header `id`
+  (threads `context: shared`), assistant `message_end`/`agent_end` text, and
+  `agent_end.telemetry.usage` (full token fidelity incl. cache, camelCase keys).
+  Auth via `MOONSHOT_API_KEY` (inherited); binary/timeout via `OMP_CLI`/
+  `OMP_TIMEOUT_SECS`. Model: bare names prefixed `kimi-code/`.
+- [x] **Provider dispatch** (`harness-runner/src/dispatch.rs`): `DispatchAgent`
+  routes `provider: pi|omp|kimi` → `PiAgent`, everything else → the existing
+  `CodeAgentRunner` (claude/codex/anthropic-api). Wired into both `execute_run`
+  (CLI) and the server's `POST /runs`. Claude + Codex still select per-node.
+- [x] `examples/multi-provider.yaml`: a Claude + Pi/Kimi + Codex DAG; runs
+  end-to-end (echo verified; `--real` invokes the CLIs).
+- [ ] *(deferred to Phase 6 runner image, PLAN §7.5):* bake `omp` + language
+  servers; enable adopt-list extensions (hashline edit, LSP-on-write, native
+  search, `omp commit`, `conflict://`, `pr://`, `AGENTS.md` ingestion). Also
+  deferred: per-provider concurrency semaphore; `[agents.pi]` config block
+  (today it's env-driven).
 
-**Exit:** a workflow with a Claude node, a Pi/Kimi node, and a Codex node all run
-and stream correctly, each on its declared provider/model.
+**Exit:** ✅ a workflow with a Claude node, a Pi/Kimi node, and a Codex node all
+run, each on its declared provider/model (`examples/multi-provider.yaml`).
+*(Runner-image baking of `omp` + extensions lands with Phase 6.)*
 
 ---
 

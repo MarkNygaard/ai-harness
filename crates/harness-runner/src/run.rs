@@ -18,8 +18,8 @@ use harness_dag::{
 use harness_persist::RunStore;
 
 use crate::{
-    build_agent_registry, sanitize_branch_component, CodeAgentRunner, EchoAgent, LocalRunner,
-    PromptAgent, Worktree,
+    build_agent_registry, sanitize_branch_component, CodeAgentRunner, DispatchAgent, EchoAgent,
+    LocalRunner, PiAgent, PromptAgent, Worktree,
 };
 
 /// Options for executing a single workflow run.
@@ -118,7 +118,10 @@ pub async fn execute_run(opts: RunOptions) -> Result<RunReport, String> {
             None => HarnessConfig::default(),
         };
         let registry = Arc::new(build_agent_registry(&config, opts.sandbox));
-        Arc::new(CodeAgentRunner::new(registry))
+        // Route `provider: pi` to the omp-backed session-aware agent; everything
+        // else goes through the CodeAgent registry (claude/codex/anthropic-api).
+        let code = Arc::new(CodeAgentRunner::new(registry));
+        Arc::new(DispatchAgent::new(Arc::new(PiAgent::from_env()), code))
     } else {
         Arc::new(EchoAgent)
     };

@@ -17,13 +17,17 @@ use async_trait::async_trait;
 use harness_dag::Usage;
 
 mod code_agent;
+mod dispatch;
 mod local;
+mod pi;
 mod registry;
 mod run;
 mod worktree;
 
 pub use code_agent::CodeAgentRunner;
+pub use dispatch::DispatchAgent;
 pub use local::{LocalRunner, Shell};
+pub use pi::{parse_omp_stream, ParsedOmp, PiAgent};
 pub use registry::build_agent_registry;
 pub use run::{execute_run, parse_sandbox, print_report, RunOptions};
 pub use worktree::{sanitize_branch_component, Worktree, WorktreeError};
