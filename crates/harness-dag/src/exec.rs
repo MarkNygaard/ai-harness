@@ -155,12 +155,25 @@ pub struct NodeRun {
     pub ended_at: Option<DateTime<Utc>>,
 }
 
+/// The static shape of one DAG node: its id and the nodes it depends on. The
+/// run's *topology* (graph edges) — separate from per-node execution results —
+/// so the UI can render the actual workflow graph, live and historical.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeMeta {
+    pub id: String,
+    pub depends_on: Vec<String>,
+}
+
 /// The result of driving a workflow to completion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RunReport {
     pub workflow: String,
     pub status: RunStatus,
     pub nodes: Vec<NodeRun>,
+    /// Static DAG topology (one entry per declared node), so consumers can draw
+    /// the graph without re-parsing the workflow. Defaulted for back-compat.
+    #[serde(default)]
+    pub graph: Vec<NodeMeta>,
 }
 
 impl RunReport {
@@ -175,10 +188,13 @@ impl RunReport {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RunEvent {
-    /// The run has started; `total_nodes` is the DAG's node count.
+    /// The run has started; `total_nodes` is the DAG's node count and `nodes`
+    /// carries the static topology so the UI can draw the graph immediately.
     RunStarted {
         workflow: String,
         total_nodes: usize,
+        #[serde(default)]
+        nodes: Vec<NodeMeta>,
     },
     /// A node began executing (it is now "running").
     NodeStarted {
@@ -231,11 +247,20 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
     events: Events<'_>,
 ) -> Result<RunReport, DagError> {
     let layers = topological_layers(workflow)?;
+    let graph: Vec<NodeMeta> = workflow
+        .nodes
+        .iter()
+        .map(|n| NodeMeta {
+            id: n.id.clone(),
+            depends_on: n.depends_on.clone(),
+        })
+        .collect();
     emit(
         events,
         RunEvent::RunStarted {
             workflow: workflow.name.clone(),
             total_nodes: workflow.nodes.len(),
+            nodes: graph.clone(),
         },
     );
     let wf_provider = workflow.provider.as_deref();
@@ -329,6 +354,7 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
         workflow: workflow.name.clone(),
         status,
         nodes,
+        graph,
     })
 }
 

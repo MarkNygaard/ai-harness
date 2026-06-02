@@ -11,9 +11,10 @@
 //! `CREATE TABLE IF NOT EXISTS`; a richer migration story can replace this later.
 
 use chrono::{DateTime, Utc};
-use harness_dag::{NodeStatus, RunReport, RunStatus};
+use harness_dag::{NodeMeta, NodeStatus, RunReport, RunStatus};
 use serde::Serialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
+use sqlx::types::Json;
 
 /// A run row for listing (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -52,6 +53,9 @@ pub struct RunDetail {
     #[serde(flatten)]
     pub run: RunSummary,
     pub nodes: Vec<PersistedNode>,
+    /// Static DAG topology (edges), so the UI can draw the graph for a
+    /// historical run without re-parsing the workflow.
+    pub graph: Vec<NodeMeta>,
 }
 
 /// Error from a persistence operation.
@@ -68,8 +72,14 @@ CREATE TABLE IF NOT EXISTS harness_workflow_runs (
     status        text NOT NULL,
     project       text,
     node_count    int  NOT NULL DEFAULT 0,
+    graph         jsonb NOT NULL DEFAULT '[]'::jsonb,
     recorded_at   timestamptz NOT NULL DEFAULT now()
 )";
+
+/// Bring older `harness_workflow_runs` tables (created before the topology
+/// column existed) up to date. Idempotent.
+const ALTER_RUNS_GRAPH: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS graph jsonb NOT NULL DEFAULT '[]'::jsonb";
 
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
@@ -117,6 +127,7 @@ impl RunStore {
     /// Create the tables if they don't exist.
     pub async fn migrate(&self) -> Result<(), PersistError> {
         sqlx::query(CREATE_RUNS).execute(&self.pool).await?;
+        sqlx::query(ALTER_RUNS_GRAPH).execute(&self.pool).await?;
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
         Ok(())
     }
@@ -132,13 +143,14 @@ impl RunStore {
         let mut tx = self.pool.begin().await?;
 
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, status, project, node_count, recorded_at)
-             VALUES ($1, $2, $3, $4, $5, now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, status, project, node_count, graph, recorded_at)
+             VALUES ($1, $2, $3, $4, $5, $6, now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 status        = excluded.status,
                 project       = excluded.project,
                 node_count    = excluded.node_count,
+                graph         = excluded.graph,
                 recorded_at   = now()",
         )
         .bind(run_id)
@@ -146,6 +158,7 @@ impl RunStore {
         .bind(run_status_str(report.status))
         .bind(project)
         .bind(report.nodes.len() as i32)
+        .bind(Json(&report.graph))
         .execute(&mut *tx)
         .await?;
 
@@ -233,6 +246,11 @@ impl RunStore {
         let Some(run) = run else {
             return Ok(None);
         };
+        let graph: (Json<Vec<NodeMeta>>,) =
+            sqlx::query_as("SELECT graph FROM harness_workflow_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_one(&self.pool)
+                .await?;
         let nodes = sqlx::query_as::<_, PersistedNode>(
             "SELECT node_id, ordinal, status, provider, model, output, iterations, converged,
                     note, input_tokens, output_tokens, cache_read, cache_write, started_at, ended_at
@@ -241,7 +259,11 @@ impl RunStore {
         .bind(run_id)
         .fetch_all(&self.pool)
         .await?;
-        Ok(Some(RunDetail { run, nodes }))
+        Ok(Some(RunDetail {
+            run,
+            nodes,
+            graph: graph.0 .0,
+        }))
     }
 }
 
@@ -277,6 +299,16 @@ mod tests {
         RunReport {
             workflow: "demo".into(),
             status: RunStatus::Completed,
+            graph: vec![
+                harness_dag::NodeMeta {
+                    id: "build".into(),
+                    depends_on: vec![],
+                },
+                harness_dag::NodeMeta {
+                    id: "review".into(),
+                    depends_on: vec!["build".into()],
+                },
+            ],
             nodes: vec![
                 NodeRun {
                     id: "build".into(),
@@ -354,6 +386,10 @@ mod tests {
         assert_eq!(detail.nodes[0].input_tokens, Some(100));
         assert_eq!(detail.nodes[1].node_id, "review");
         assert_eq!(detail.nodes[1].status, "skipped");
+        // Topology round-trips: review depends on build.
+        assert_eq!(detail.graph.len(), 2);
+        assert_eq!(detail.graph[1].id, "review");
+        assert_eq!(detail.graph[1].depends_on, vec!["build".to_string()]);
         assert!(store.get_run("does-not-exist").await.unwrap().is_none());
     }
 }

@@ -1,0 +1,121 @@
+/**
+ * Types for the control-plane **runs** API (harness-dag execution model).
+ * Mirrors the Rust DTOs in `harness-persist` and the `RunEvent` enum in
+ * `harness-dag` (serde `tag = "type"`, snake_case).
+ */
+
+/**
+ * Terminal node status, plus two derived live states (`pending` = declared but
+ * not yet started, `running` = executing) that the graph uses before a node is
+ * persisted. Neither live state is ever stored.
+ */
+export type NodeStatus =
+  | "pending"
+  | "running"
+  | "success"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+/** Terminal run status (+ derived live "running"). */
+export type RunStatus = "running" | "completed" | "failed" | "cancelled";
+
+/** Per-invocation token usage; counters a provider doesn't report are null. */
+export interface Usage {
+  input: number | null;
+  output: number | null;
+  cache_read: number | null;
+  cache_write: number | null;
+}
+
+/** Static DAG topology entry: a node id and what it depends on. */
+export interface NodeMeta {
+  id: string;
+  depends_on: string[];
+}
+
+/** A run row for the list view (matches `RunSummary`). */
+export interface RunSummary {
+  id: string;
+  workflow_name: string;
+  status: RunStatus;
+  project: string | null;
+  node_count: number;
+  recorded_at: string;
+}
+
+/** A persisted per-node row (matches `PersistedNode`). */
+export interface PersistedNode {
+  node_id: string;
+  ordinal: number;
+  status: NodeStatus;
+  provider: string | null;
+  model: string | null;
+  output: string;
+  iterations: number;
+  converged: boolean | null;
+  note: string | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  cache_read: number | null;
+  cache_write: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+}
+
+/** A run plus its node rows and topology (matches `RunDetail`). */
+export interface RunDetail extends RunSummary {
+  nodes: PersistedNode[];
+  graph: NodeMeta[];
+}
+
+/** Per-node execution record carried in `node_finished` events (`NodeRun`). */
+export interface NodeRun {
+  id: string;
+  status: NodeStatus;
+  provider: string | null;
+  model: string | null;
+  output: string;
+  usage: Usage;
+  iterations: number;
+  converged: boolean | null;
+  note: string | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+}
+
+/** Live run events (SSE). Discriminated on `type`. */
+export type RunEvent =
+  | { type: "run_started"; workflow: string; total_nodes: number; nodes: NodeMeta[] }
+  | { type: "node_started"; node_id: string; provider: string | null; model: string | null }
+  | { type: "node_finished"; node: NodeRun }
+  | { type: "run_finished"; status: RunStatus };
+
+export interface CreateRunRequest {
+  workflow: string;
+  args?: string;
+  real?: boolean;
+  base_branch?: string | null;
+}
+
+export interface CreateRunResponse {
+  run_id: string;
+}
+
+/**
+ * A unified, render-ready view of a single node: topology (depends_on) merged
+ * with the latest known status, timing, provider/model and token usage. Built
+ * by the graph from either a persisted `RunDetail` or accumulated live events.
+ */
+export interface NodeView {
+  id: string;
+  depends_on: string[];
+  status: NodeStatus;
+  provider: string | null;
+  model: string | null;
+  iterations: number;
+  usage: Usage;
+  note: string | null;
+  output: string;
+  started_at: string | null;
+  ended_at: string | null;
+}

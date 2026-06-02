@@ -100,7 +100,7 @@ completion locally and its run/node state is queryable.
 
 ---
 
-## Phase 2 — Control-plane API + live UI graph — 🔨 in progress
+## Phase 2 — Control-plane API + live UI graph — ✅ done
 
 **Goal:** submit a run from the UI and watch it execute as a graph.
 
@@ -113,32 +113,36 @@ completion locally and its run/node state is queryable.
   gained `list_runs`/`get_run` (+ `RunSummary`/`RunDetail`, DB-tested).
   *Follow-ups:* runs persist on completion (404 until done — live via SSE); add a
   `running` status + insert-on-start; HTTP integration tests (server fixture, CI).
-- [ ] **Re-skin to the `home-ops-agent` design system** (PLAN §10.0): port its
-  OKLCH theme tokens (`globals.css`), orange accent, Geist/Geist Mono, shadcn/ui
-  primitives into our Vite app. Reference its
-  `web/src/components/dashboard/agent-flow.tsx` (React Flow + Dagre) as the graph
-  template.
-- [ ] **Remove the fixed Kanban** (`Active.tsx` + hardcoded `COLUMNS`/`TaskCard`,
-  tied to the single `github_issue_pr` pipeline).
-- [ ] Web: **per-task workflow graph** (React Flow + Dagre) as the primary task
-  view — render *that run's* actual DAG with a live overlay: node state colors,
-  edges from `depends_on`, loop iteration counts. Author's asks (PLAN §10):
-  **active step** = orange gradient ring + animated incoming edge + pulse;
-  **elapsed-time badge** ("running 2m14s", client-ticked from `started_at`);
-  **hover → tooltip** with status/provider/model/tokens/cost/duration + output
-  snippet; click pins/expands. Backed by `RunReport` + per-node timestamps.
-- [ ] Add per-node `started_at`/`ended_at` to the executor/`RunReport` +
-  `run_nodes` (needed for the elapsed-time badge and the §10.1 waterfall).
-- [ ] Web: **Runs list** — flat, filterable list (workflow/project/status/timing),
-  *not* fixed-stage columns; click a run → its graph. Live updates over WS.
-- [ ] **Token capture:** adapters return `Usage` per invocation; persist on
-  `run_nodes` (+ `node_invocations`). Basic **task overview**: token totals + a
-  **per-step** and **per-model** breakdown, derived `$` from a `model_prices`
-  table. (Rich Gantt/task visuals land in P7.)
+- [x] **DAG topology in the stream + store** (prereq for real edges): added
+  `NodeMeta {id, depends_on}` to `harness-dag`, carried on `RunEvent::RunStarted`
+  (live graph) and `RunReport`/`RunDetail` (historical), persisted as a `graph`
+  jsonb column on `harness_workflow_runs` (idempotent `ADD COLUMN IF NOT EXISTS`).
+- [x] **Re-skin to the `home-ops-agent` design system** (PLAN §10.0): OKLCH
+  neutral+orange palette + Geist/Geist Mono (`@fontsource-variable`) in
+  `globals.css`, with the legacy `--bg/--ink/--line/--rust` tokens **aliased** onto
+  the new palette so the whole app re-skins with near-zero per-component churn.
+  Stayed on Tailwind 3 (no risky v4 migration); added `cn()` + lightweight
+  `card`/`badge`/`button` primitives.
+- [x] **Removed the fixed Kanban as the primary view:** `/` is now the Runs
+  experience; the legacy task dashboard (incl. `Active.tsx`) is parked at `/tasks`.
+- [x] Web: **per-run workflow graph** (`@xyflow/react` + `@dagrejs/dagre`,
+  `components/runflow/`) — renders *that run's* actual DAG (edges from
+  `depends_on`) with: **active step** = colored ring + spinner + animated incoming
+  edge; **elapsed-time** badge (client-ticked from `started_at` via `useNow`);
+  **hover → details** card (status/provider/model/tokens/iterations/duration +
+  output snippet). Driven by `useRunView` (live SSE accumulator → persisted
+  `RunDetail` once finished). 15 unit tests (reducer, layout, format, aggregation).
+- [x] per-node `started_at`/`ended_at` already on `RunReport`/`run_nodes`; surfaced
+  in the graph + overview.
+- [x] Web: **Runs list** — flat list (workflow/status/steps/time), click → graph;
+  inline **submit-a-run** form (`POST /runs`). Live updates via the run SSE.
+- [x] **Token task overview:** per-step table (in/out/total + duration + status)
+  and **per-model** aggregation. *Follow-up:* `$` cost from a `model_prices`
+  table (tokens only for now; flagged).
 
-**Exit:** submit the Phase 1 sample workflow from the browser, watch nodes go
-pending→running→done in the graph, and see correct token + cost totals broken
-down per step and per model.
+**Exit:** ✅ submit the sample workflow from the browser, watch nodes go
+pending→running→done in the graph, and see token totals per step and per model.
+*(Cost-in-dollars and HTTP integration tests remain as follow-ups.)*
 
 ---
 
