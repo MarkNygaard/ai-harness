@@ -11,7 +11,7 @@
 //! doesn't entangle the large shared `AppState`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -97,21 +97,6 @@ fn now_millis() -> u128 {
         .unwrap_or(0)
 }
 
-/// Resolve a workflow path within the project root (no escaping).
-fn resolve_workflow(project_root: &Path, workflow: &str) -> Result<PathBuf, String> {
-    let candidate = project_root.join(workflow);
-    let root = project_root
-        .canonicalize()
-        .map_err(|e| format!("bad project root: {e}"))?;
-    let path = candidate
-        .canonicalize()
-        .map_err(|e| format!("workflow not found: {e}"))?;
-    if !path.starts_with(&root) {
-        return Err("workflow path escapes project root".into());
-    }
-    Ok(path)
-}
-
 /// `GET /runs` — list recent runs.
 pub async fn list_runs(Extension(state): Extension<Arc<RunsState>>) -> Response {
     let store = match state.store().await {
@@ -145,14 +130,13 @@ pub async fn create_run(
     Extension(state): Extension<Arc<RunsState>>,
     Json(req): Json<CreateRunRequest>,
 ) -> Response {
-    let path = match resolve_workflow(&state.project_root, &req.workflow) {
-        Ok(p) => p,
-        Err(e) => return err(StatusCode::BAD_REQUEST, e),
-    };
-    let yaml = match std::fs::read_to_string(&path) {
-        Ok(y) => y,
-        Err(e) => return err(StatusCode::BAD_REQUEST, format!("read workflow: {e}")),
-    };
+    // `workflow` is a path or a bare name (project `.harness/workflows` then a
+    // bundled default); empty uses the default pipeline.
+    let (yaml, _label) =
+        match harness_runner::resolve_workflow_source(&req.workflow, &state.project_root) {
+            Ok(v) => v,
+            Err(e) => return err(StatusCode::BAD_REQUEST, e),
+        };
     let workflow = match parse_workflow(&yaml) {
         Ok(w) => w,
         Err(e) => return err(StatusCode::BAD_REQUEST, format!("invalid workflow: {e}")),

@@ -86,10 +86,13 @@ pub enum Command {
         actor: Option<String>,
     },
 
-    /// Run a workflow DAG locally (`.yaml`) and print a per-node summary
+    /// Run a workflow DAG locally and print a per-node summary. The workflow may
+    /// be a path to a YAML file or a bundled/project workflow name; omit it to run
+    /// the default pipeline.
     Run {
-        /// Path to the workflow YAML
-        workflow: PathBuf,
+        /// Workflow: a `.yaml` path, or a bundled/project workflow name
+        /// (defaults to the bundled standard pipeline)
+        workflow: Option<PathBuf>,
         /// Workspace directory (defaults to the current directory)
         #[arg(long)]
         workspace: Option<PathBuf>,
@@ -704,7 +707,8 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 .or_else(|| std::env::current_dir().ok())
                 .ok_or_else(|| anyhow::anyhow!("could not determine workspace directory"))?;
             let opts = harness_runner::RunOptions {
-                workflow,
+                workflow: workflow
+                    .unwrap_or_else(|| PathBuf::from(harness_runner::DEFAULT_WORKFLOW)),
                 workspace,
                 base_branch,
                 arguments: args,

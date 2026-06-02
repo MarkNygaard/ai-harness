@@ -180,20 +180,65 @@ run, each on its declared provider/model (`examples/multi-provider.yaml`).
 
 ---
 
-## Phase 4 — Archon import + author's pipeline parity — ⬜ not started
+## Phase 4 — Bundled default pipeline (kimi + codex) — ✅ done
 
-**Goal:** the real `idea-to-pr-with-kimi-coding-and-codex` workflow runs.
+**Goal:** ai-harness **ships the author's `idea-to-pr-with-kimi-coding-and-codex`
+pipeline as a built-in default**, runnable by name, and uses it as the standard
+workflow for new runs — the way Archon ships `.archon/workflows/defaults/`.
+(Reframed from a generic "archon-import": the formats already align, so we bundle
+*this* pipeline + its commands rather than build a translator.)
 
-- [ ] `harness archon-import <path>`: map Archon YAML → our format; copy bundled
-  `command` markdown (`archon-plan-setup`, `archon-implement-tasks`,
-  `archon-validate`, `archon-finalize-pr`, …) into `harness` defaults.
-- [ ] Port `$BASE_BRANCH` auto-detection, the lockfile-detection install bash
-  node (becomes the default toolchain `setup` recipe in Phase 6), PR
-  finalize/verify nodes, the kimi self-review loop, codex pass, sonnet sign-off.
-- [ ] Per-node `maxBudgetUsd` + per-run cost ceiling.
+- [x] **Bundled from `MarkNygaard/niles`** (the author's battle-tested version): the
+  workflow YAML + its 5 referenced command markdowns, **de-prefixed** (`plan-setup`,
+  `confirm-plan`, `implement-tasks`, `validate`, `finalize-pr`), compiled into the
+  binary under `harness-runner/defaults/{workflows,commands}` via `include_str!`
+  (`harness-runner/src/defaults.rs`). (niles has no `commands/` dir — it uses
+  Archon's stock command library; sourced those from the local Archon defaults.)
+- [x] **Engine gap closed:** `LoopConfig` gained `provider`/`model`; the loop runner
+  prefers loop-level over node/workflow (the kimi self-review + final-verify loops
+  declare them *inside* `loop:`). New dag test covers it.
+- [x] **Name-based resolution + project override:** `resolve_workflow_source` takes
+  a path **or** a bare name → project `.harness/workflows/<name>.yaml` → bundled
+  default; `LocalRunner::resolve_command` falls back to bundled commands after the
+  project dirs. Wired into `execute_run`, the `harness run` CLI (workflow now
+  optional), and the server's `POST /runs`.
+- [x] **Made it the default:** `DEFAULT_WORKFLOW` is used when no workflow is named
+  (CLI omitted / empty request); the UI submit form defaults to it.
+- [ ] *Deferred:* per-node `maxBudgetUsd` + per-run cost ceiling; a live real PR run
+  (`gh`/creds/the `/simplify` pi extension) → Phase 6.
 
-**Exit:** the author's flagship workflow runs locally end-to-end and opens a PR
-with the same shape it produces in Archon today.
+**Exit:** ✅ `harness run idea-to-pr-with-kimi-coding-and-codex` (or no arg)
+resolves the bundled workflow + commands and executes every node, each on its
+declared provider/model — echo-verified end-to-end (the prompt + the `plan-setup`/
+`confirm-plan` *command* nodes resolve from the bundle). The real PR-opening run
+lands with the Phase 6 runner image (`gh`/creds/toolchains).
+
+---
+
+## Phase 4.5 — Visual workflow editor (React Flow builder) — ⬜ not started
+
+**Goal:** build/edit workflows in the UI from tested building blocks — set
+provider/model per step in a properties panel — instead of hand-writing YAML.
+Confirmed: the **free MIT `@xyflow/react`** core is enough; **no React Flow Pro
+($149/mo) needed** — Pro is only pre-built example source + support + badge
+removal. The editor is the *inverse* of the Phase 2 run-graph, so it reuses those
+node components + the Dagre layout.
+
+- [ ] **Palette of building blocks** = our node kinds (`prompt`, `bash`, `command`,
+  `loop`, `script`); drag onto the canvas, connect edges (= `depends_on`),
+  select/delete/reorder.
+- [ ] **Per-node properties panel:** provider + model, `context`, `trigger_rule`,
+  `timeout`, the body (prompt text / command name / bash), and loop config
+  (`until`, `max_iterations`, `provider`/`model`).
+- [ ] **Round-trip on the DAG model:** serialize the canvas → `Workflow` YAML/JSON
+  via the same serde types; validate with `parse_workflow` (cycle/unknown-dep
+  errors surfaced inline); load existing workflows (bundled defaults + project)
+  back into the editor.
+- [ ] Save to a project's `.harness/workflows/<name>.yaml`; "Run" submits via
+  `POST /runs`.
+
+**Exit:** build the kimi+codex pipeline from scratch in the UI, save it, and run
+it — without touching a YAML file.
 
 ---
 
@@ -255,7 +300,6 @@ run to a PR — entirely in-cluster, no hand-built wrapper image.
 - [ ] **Rich task overview** (Factory-style, PLAN §10.1): time waterfall /
   milestone Gantt of the DAG, token panels by type/step/model, per-run cost
   dashboards, loop per-iteration token bars.
-- [ ] Visual **workflow editor** (build/edit DAGs in the UI, export YAML).
 - [ ] Re-enable optional majiayu features if wanted (policy rules, skills, GC).
 - [ ] Docs: operator runbook, workflow-authoring guide, Archon-migration guide.
 

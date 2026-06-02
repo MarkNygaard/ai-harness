@@ -72,8 +72,10 @@ fn load_config_file(path: &Path) -> Result<HarnessConfig, String> {
 
 /// Execute a workflow run end-to-end and return its report.
 pub async fn execute_run(opts: RunOptions) -> Result<RunReport, String> {
-    let yaml = std::fs::read_to_string(&opts.workflow)
-        .map_err(|e| format!("failed to read {}: {e}", opts.workflow.display()))?;
+    // The workflow may be a file path or a bare name (project `.harness/workflows`
+    // then a bundled default); an empty value uses the default pipeline.
+    let workflow_ref = opts.workflow.to_string_lossy();
+    let (yaml, _label) = crate::defaults::resolve_workflow_source(&workflow_ref, &opts.workspace)?;
     let workflow = parse_workflow(&yaml).map_err(|e| format!("invalid workflow: {e}"))?;
 
     // Optional isolation in a fresh git worktree (removed when the guard drops).

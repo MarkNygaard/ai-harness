@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use harness_dag::RunStatus;
-use harness_runner::{execute_run, parse_sandbox, RunOptions};
+use harness_runner::{execute_run, parse_sandbox, RunOptions, DEFAULT_WORKFLOW};
 
 fn parse_args() -> Result<RunOptions, String> {
     let mut workflow: Option<PathBuf> = None;
@@ -57,7 +57,8 @@ fn parse_args() -> Result<RunOptions, String> {
         }
     }
 
-    let workflow = workflow.ok_or("missing <workflow.yaml> argument")?;
+    // Omitting the workflow runs the bundled default pipeline (resolved by name).
+    let workflow = workflow.unwrap_or_else(|| PathBuf::from(DEFAULT_WORKFLOW));
     let workspace = workspace
         .or_else(|| std::env::current_dir().ok())
         .ok_or("could not determine workspace directory")?;

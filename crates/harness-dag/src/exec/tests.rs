@@ -16,6 +16,8 @@ struct Recorded {
     session: Option<String>,
     iteration: u32,
     body: String,
+    provider: Option<String>,
+    model: Option<String>,
 }
 
 /// In-memory runner. Per-node it pops scripted outputs in order; when a node's
@@ -90,6 +92,8 @@ impl NodeRunner for MockRunner {
             session: req.session.clone(),
             iteration: req.iteration,
             body,
+            provider: req.provider.map(str::to_string),
+            model: req.model.map(str::to_string),
         });
         let out = self
             .responses
@@ -226,6 +230,36 @@ nodes:
     assert_eq!(runner.calls_for("review").len(), 3);
     // Iterations are numbered.
     assert_eq!(runner.calls_for("review")[2].iteration, 3);
+}
+
+#[tokio::test]
+async fn loop_block_provider_model_override_node_and_workflow() {
+    // Workflow default is claude/sonnet; the loop block declares pi/kimi — the
+    // loop body (and the recorded NodeRun) must use the loop-level provider/model.
+    let yaml = r#"
+name: looped
+provider: claude
+model: sonnet
+nodes:
+  - id: review
+    loop:
+      provider: pi
+      model: kimi-coding/kimi-for-coding
+      prompt: "review pass"
+      until: REVIEW_CLEAN
+      max_iterations: 3
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new().respond("review", ok("done <promise>REVIEW_CLEAN</promise>"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    let review = report.node("review").unwrap();
+    assert_eq!(review.provider.as_deref(), Some("pi"));
+    assert_eq!(review.model.as_deref(), Some("kimi-coding/kimi-for-coding"));
+
+    let call = &runner.calls_for("review")[0];
+    assert_eq!(call.provider.as_deref(), Some("pi"));
+    assert_eq!(call.model.as_deref(), Some("kimi-coding/kimi-for-coding"));
 }
 
 #[tokio::test]

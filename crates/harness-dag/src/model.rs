@@ -61,6 +61,13 @@ pub struct LoopConfig {
     pub until: String,
     /// Hard cap on iterations.
     pub max_iterations: u32,
+    /// Provider for the loop body, overriding the node/workflow provider when set.
+    /// Archon-style workflows declare provider/model *inside* the `loop:` block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
+    /// Model for the loop body, overriding the node/workflow model when set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Start each iteration with a fresh session instead of reusing the loop's.
     #[serde(default)]
     pub fresh_context: bool,
