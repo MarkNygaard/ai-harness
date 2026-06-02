@@ -236,9 +236,41 @@ node components + the Dagre layout.
   back into the editor.
 - [ ] Save to a project's `.harness/workflows/<name>.yaml`; "Run" submits via
   `POST /runs`.
+- [ ] **Extract a shared *authoring core*** (catalog of node kinds + provider/model
+  + commands; `validate` via `parse_workflow`; `save`/`resolve`) so the editor and
+  the Phase 4.6 MCP server are two front-ends to one implementation, never drifting.
 
 **Exit:** build the kimi+codex pipeline from scratch in the UI, save it, and run
 it — without touching a YAML file.
+
+---
+
+## Phase 4.6 — MCP workflow-authoring server — ⬜ not started
+
+**Goal:** let people build/edit workflows *with their AI* (Claude, etc.) over MCP
+— no UI required. The `Workflow` model is the single source of truth, so this is a
+**second front-end to the Phase 4.5 authoring core**, not a parallel implementation.
+Enabler: an MCP server already exists in the tree (`harness-cli/src/cmd/
+mcp_server.rs`, from the majiayu seed) — this **adds a workflow-authoring toolset**
+to it (the existing methods target the legacy task model).
+
+- [ ] **Catalog tools** (the legal building blocks): `list_node_kinds`,
+  `list_providers_models`, `list_commands` (bundled + project) — so the AI knows
+  what it can use, matching the editor's palette.
+- [ ] **Read tools:** `list_workflows`, `get_workflow <name>` (bundled + project)
+  — learn from / edit the existing default.
+- [ ] **`validate_workflow <yaml>`** → structured `parse_workflow` errors (cycle,
+  unknown dep, body exclusivity, missing loop signal). The build→validate→fix loop
+  that lets an AI converge on a valid DAG.
+- [ ] **`save_workflow <name> <yaml>`** → project `.harness/workflows/`; **`dry_run
+  <name>`** → echo-agent topology preview (no models burned).
+- [ ] **`start_run <name> <args>`** → trigger a real run (the PLAN §Phase 5
+  `run/start` idea; shared with the Linear/manual triggers).
+
+**Exit:** from an MCP-connected assistant, describe a change in natural language
+("add a 3-iteration security-review loop after the codex pass on sonnet") and have
+the AI edit → validate → dry-run → save the workflow, then start a run — entirely
+over MCP.
 
 ---
 
