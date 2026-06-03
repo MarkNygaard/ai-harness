@@ -6,6 +6,7 @@ import { Overview } from "./routes/Overview";
 import { Worktrees } from "./routes/Worktrees";
 import { RunsPage } from "./routes/runs/RunsPage";
 import { RunDetailPage } from "./routes/runs/RunDetailPage";
+import { WorkflowEditor } from "./routes/editor/WorkflowEditor";
 import { PaletteProvider } from "./lib/palette";
 import { TokenPrompt } from "./components/TokenPrompt";
 
@@ -50,6 +51,8 @@ export function App() {
         <Routes>
           <Route path="/" element={<RunsPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
+          <Route path="/editor" element={<WorkflowEditor />} />
+          <Route path="/editor/:name" element={<WorkflowEditor />} />
           <Route path="/tasks" element={<Dashboard />} />
           <Route path="/overview" element={<Overview />} />
           <Route path="/worktrees" element={<Worktrees />} />

@@ -3,7 +3,7 @@ import { Sidebar, type SidebarSection } from "@/components/Sidebar";
 import { TopBar } from "@/components/TopBar";
 import { PaletteFab } from "@/components/PaletteFab";
 
-export type NavKey = "runs" | "overview" | "worktrees" | "tasks";
+export type NavKey = "runs" | "editor" | "overview" | "worktrees" | "tasks";
 
 function sections(active: NavKey): SidebarSection[] {
   const item = (id: NavKey, label: string, href: string) => ({
@@ -15,7 +15,11 @@ function sections(active: NavKey): SidebarSection[] {
   return [
     {
       label: "Operations",
-      items: [item("runs", "Runs", "/"), item("tasks", "Tasks", "/tasks")],
+      items: [
+        item("runs", "Runs", "/"),
+        item("editor", "Editor", "/editor"),
+        item("tasks", "Tasks", "/tasks"),
+      ],
     },
     {
       label: "System",
