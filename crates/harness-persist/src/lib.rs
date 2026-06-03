@@ -16,6 +16,9 @@ use serde::Serialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
 
+mod credentials;
+pub use credentials::{CredentialStore, ProviderCredential};
+
 /// A run row for listing (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunSummary {
@@ -63,6 +66,10 @@ pub struct RunDetail {
 pub enum PersistError {
     #[error("database error: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("credential encryption error: {0}")]
+    Crypto(String),
+    #[error("bad secret key: {0}")]
+    BadKey(String),
 }
 
 const CREATE_RUNS: &str = "

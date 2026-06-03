@@ -139,11 +139,17 @@ metadata:
 stringData:
   # CNPG role/db created below. Use the CNPG-generated password.
   HARNESS_DATABASE_URL: postgresql://ai-harness:<password>@postgres-rw.database.svc.cluster.local:5432/ai-harness
+  # 32 random bytes, base64. Encrypts UI-entered provider credentials at rest.
+  # Generate: `openssl rand -base64 32`. Keep it stable — rotating it makes
+  # previously stored credentials undecryptable (just re-enter them in the UI).
+  HARNESS_SECRET_KEY: <base64-of-32-random-bytes>
   # Optional: gate the API/UI behind a bearer token.
   HARNESS_API_TOKEN: <random-token>
 ```
 **No provider tokens here** — Claude/Codex/Kimi credentials are entered in the
-harness UI (encrypted at rest in Postgres) once the UI credentials feature ships.
+harness **UI** (encrypted at rest in Postgres under `HARNESS_SECRET_KEY`). The
+only secrets in SOPS are the DB URL, this encryption key, and an optional API
+token — all infra, never provider tokens.
 
 ### `app/kustomization.yaml` — list the resources above (copy archon's).
 

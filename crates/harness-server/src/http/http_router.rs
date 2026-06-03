@@ -7,11 +7,11 @@ use axum::{
 use std::sync::Arc;
 
 use super::{
-    auth, get_issue_workflow_by_issue, get_issue_workflow_by_pr, get_project_workflow_by_project,
-    get_task, get_task_artifacts, get_task_prompts, get_task_proof, get_workflow_runtime_tree,
-    github_webhook, handle_rpc, health_check, ingest_signal, intake_status, list_tasks,
-    password_reset, project_queue_stats, runs_routes, state::AppState, stream_task_sse,
-    task_mutation_routes, task_routes, workflows_routes,
+    auth, credentials_routes, get_issue_workflow_by_issue, get_issue_workflow_by_pr,
+    get_project_workflow_by_project, get_task, get_task_artifacts, get_task_prompts,
+    get_task_proof, get_workflow_runtime_tree, github_webhook, handle_rpc, health_check,
+    ingest_signal, intake_status, list_tasks, password_reset, project_queue_stats, runs_routes,
+    state::AppState, stream_task_sse, task_mutation_routes, task_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -25,10 +25,22 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             config,
             harness_core::config::agents::SandboxMode::DangerFullAccess,
         ));
+        // Credential-encryption key for UI-entered provider creds. Absent =>
+        // the credentials API is disabled (503) and nothing is materialized.
+        let secret_key = std::env::var("HARNESS_SECRET_KEY").ok().and_then(|b64| {
+            match harness_persist::CredentialStore::key_from_base64(&b64) {
+                Ok(k) => Some(k),
+                Err(e) => {
+                    tracing::warn!("ignoring invalid HARNESS_SECRET_KEY: {e}");
+                    None
+                }
+            }
+        });
         Arc::new(runs_routes::RunsState::new(
             db_url,
             agent_registry,
             state.core.project_root.clone(),
+            secret_key,
         ))
     };
     Router::new()
@@ -174,6 +186,16 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/authoring/validate",
             post(workflows_routes::validate_workflow),
+        )
+        // ── Provider credentials (UI-managed, encrypted at rest) ────────────
+        .route(
+            "/api/credentials",
+            get(credentials_routes::list_credentials),
+        )
+        .route(
+            "/api/credentials/{provider}",
+            axum::routing::put(credentials_routes::set_credential)
+                .delete(credentials_routes::delete_credential),
         )
         // SPA fallback: serve the React shell for client-side routes
         // (`/runs/{id}`, `/editor`, …) so deep links / refreshes work.
