@@ -1,0 +1,15 @@
+# Build artifacts + deps are rebuilt inside the image.
+target/
+**/target/
+**/node_modules/
+web/dist/
+sdk/typescript/dist/
+
+# VCS / local / CI noise.
+.git/
+.github/
+.claude/
+*.log
+
+# Docs/examples not needed to build the binary.
+docs/
