@@ -102,6 +102,10 @@ tokio-stream = "0.1"
 hmac = "0.12"
 sha2 = "0.10"
 subtle = "2"
+# Credential encryption-at-rest (AES-256-GCM).
+aes-gcm = "0.10"
+base64 = "0.22"
+rand = "0.8"
 
 # HTTP client (for Anthropic API)
 reqwest = { version = "0.12", features = ["json", "stream"] }

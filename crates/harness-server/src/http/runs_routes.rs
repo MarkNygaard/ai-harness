@@ -37,7 +37,10 @@ pub struct RunsState {
     db_url: Option<String>,
     store: OnceCell<RunStore>,
     agent_registry: Arc<AgentRegistry>,
-    project_root: PathBuf,
+    pub(crate) project_root: PathBuf,
+    /// AES key for the credential store (from `HARNESS_SECRET_KEY`), if set.
+    secret_key: Option<[u8; 32]>,
+    cred_store: OnceCell<harness_persist::CredentialStore>,
     /// Live runs → broadcast of their events (present only while executing).
     live: Mutex<HashMap<String, broadcast::Sender<RunEvent>>>,
 }
@@ -47,12 +50,15 @@ impl RunsState {
         db_url: Option<String>,
         agent_registry: Arc<AgentRegistry>,
         project_root: PathBuf,
+        secret_key: Option<[u8; 32]>,
     ) -> Self {
         Self {
             db_url,
             store: OnceCell::new(),
             agent_registry,
             project_root,
+            secret_key,
+            cred_store: OnceCell::new(),
             live: Mutex::new(HashMap::new()),
         }
     }
@@ -65,6 +71,25 @@ impl RunsState {
             .ok_or("no database configured (set server.database_url)")?;
         self.store
             .get_or_try_init(|| async { RunStore::connect(url).await.map_err(|e| e.to_string()) })
+            .await
+    }
+
+    /// Lazily connect the encrypted credential store. Requires both a database
+    /// and `HARNESS_SECRET_KEY`.
+    pub(crate) async fn cred_store(&self) -> Result<&harness_persist::CredentialStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        let key = self
+            .secret_key
+            .ok_or("credentials disabled (set HARNESS_SECRET_KEY)")?;
+        self.cred_store
+            .get_or_try_init(|| async {
+                harness_persist::CredentialStore::connect(url, key)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
             .await
     }
 }
@@ -190,6 +215,13 @@ async fn execute_run_task(
     let command_dirs = vec![workspace.join(".harness").join("commands")];
 
     let agent: Arc<dyn PromptAgent> = if real {
+        // Materialize UI-entered provider credentials into the agent environment
+        // (files in $HOME for claude/codex, env vars for tokens/Kimi) before the
+        // CLIs run. Best-effort: a missing store/key just means no creds injected.
+        match state.cred_store().await {
+            Ok(store) => crate::http::credentials_routes::materialize(store).await,
+            Err(e) => tracing::info!("credentials not materialized: {e}"),
+        }
         // `provider: pi` → omp-backed session-aware agent; others → CodeAgent registry.
         let code = Arc::new(CodeAgentRunner::new(state.agent_registry.clone()));
         Arc::new(DispatchAgent::new(Arc::new(PiAgent::from_env()), code))
