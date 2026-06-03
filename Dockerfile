@@ -35,7 +35,7 @@ FROM debian:bookworm-slim AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl git bash xz-utils \
+        ca-certificates curl git bash xz-utils unzip \
     && rm -rf /var/lib/apt/lists/*
 
 # Node (Claude Code + Codex CLIs are npm packages).
