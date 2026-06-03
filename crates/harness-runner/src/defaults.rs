@@ -54,6 +54,11 @@ pub fn list_default_workflows() -> Vec<&'static str> {
     WORKFLOWS.iter().map(|(n, _)| *n).collect()
 }
 
+/// Names of all bundled commands (for the authoring catalog).
+pub fn default_command_names() -> Vec<&'static str> {
+    COMMANDS.iter().map(|(n, _)| *n).collect()
+}
+
 /// Resolve a workflow reference (a filesystem path **or** a bare name) to its
 /// YAML source, project-first.
 ///

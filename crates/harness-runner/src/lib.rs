@@ -16,6 +16,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use harness_dag::Usage;
 
+pub mod authoring;
 mod code_agent;
 pub mod defaults;
 mod dispatch;

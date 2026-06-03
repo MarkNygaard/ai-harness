@@ -11,7 +11,7 @@ use super::{
     get_task, get_task_artifacts, get_task_prompts, get_task_proof, get_workflow_runtime_tree,
     github_webhook, handle_rpc, health_check, ingest_signal, intake_status, list_tasks,
     password_reset, project_queue_stats, runs_routes, state::AppState, stream_task_sse,
-    task_mutation_routes, task_routes,
+    task_mutation_routes, task_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -160,6 +160,20 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/runs/{id}", get(runs_routes::get_run))
         .route("/runs/{id}/stream", get(runs_routes::stream_run))
+        // ── Workflow authoring API (visual editor + MCP) ────────────────────
+        .route("/api/authoring/catalog", get(workflows_routes::get_catalog))
+        .route(
+            "/api/authoring/workflows",
+            get(workflows_routes::list_workflows).post(workflows_routes::save_workflow),
+        )
+        .route(
+            "/api/authoring/workflows/{name}",
+            get(workflows_routes::get_workflow),
+        )
+        .route(
+            "/api/authoring/validate",
+            post(workflows_routes::validate_workflow),
+        )
         .layer(Extension(runs_state))
         .layer(middleware::from_fn_with_state(
             state.clone(),
