@@ -215,44 +215,42 @@ lands with the Phase 6 runner image (`gh`/creds/toolchains).
 
 ---
 
-## Phase 4.5 — Visual workflow editor (React Flow builder) — ⬜ not started
+## Phase 4.5 — Visual workflow editor (React Flow builder) — ✅ done
 
 **Goal:** build/edit workflows in the UI from tested building blocks — set
 provider/model per step in a properties drawer — instead of hand-writing YAML.
-Confirmed: the **free MIT `@xyflow/react`** core is enough; **no React Flow Pro
-($149/mo) needed** — every affordance below (palette drag-in, mid-edge insert,
-per-node toolbars via `NodeToolbar`) is free-tier. A **dedicated builder screen**
-(palette + canvas + properties drawer), *distinct* from the read-only task
-run-graph but sharing its node components + Dagre — build mode vs monitor mode.
+Built on the **free MIT `@xyflow/react`** core (no React Flow Pro). A dedicated
+builder screen (palette + canvas + drawer), distinct from the read-only run-graph
+but sharing node components + Dagre.
 
-- [ ] **Dedicated builder layout:** left **palette**, center **canvas**, right
-  **properties drawer** (opens on node-click), plus zoom/fit. Separate screen from
-  the run-graph; shared rendering primitives.
-- [ ] **Palette = our real node kinds** (friendly-labeled, 1:1 with DAG kinds, so
-  the canvas *is* the workflow — no lossy translation): **Agent step** (`prompt`),
-  **Command** (bundled/project `.md`), **Shell** (`bash`), **Loop**, **Script**
-  (bun/uv). Drag onto canvas; **mid-edge `+`** to insert between nodes; per-node
-  **configure + delete**. **No run controls in the editor** — execution stays on
-  the Runs page (build vs run are separate).
-- [ ] **Branch/join = pure topology:** fan-out = multiple edges from a node;
-  fan-in = a node with multiple parents; its `trigger_rule`
-  (`all_success`/`one_success`/…) is set in the drawer. No special node types.
-- [ ] **Properties drawer:** provider + model, `context`, `trigger_rule`,
-  `timeout`, the body (prompt text / command name / bash), and loop config
-  (`until`, `max_iterations`, `provider`/`model`).
-- [ ] **Round-trip on the DAG model:** serialize the canvas → `Workflow` YAML/JSON
-  via the same serde types; validate with `parse_workflow` (cycle/unknown-dep/body
-  errors surfaced inline); load existing workflows (bundled defaults + project)
-  back into the editor to edit.
-- [ ] **Save, don't run:** primary action **saves** to a project's
-  `.harness/workflows/<name>.yaml` (optional "open in Runs" hand-off). Running a
-  workflow is the Runs page's job (`POST /runs`) — the editor never executes.
-- [ ] **Extract a shared *authoring core*** (catalog of node kinds + provider/model
-  + commands; `validate` via `parse_workflow`; `save`/`resolve`) so the editor and
-  the Phase 4.6 MCP server are two front-ends to one implementation, never drifting.
+- [x] **Shared authoring core** (`harness-runner/src/authoring.rs`, PR #13):
+  `validate_workflow` (parse + cycle check → structural errors), `list`/`get`/
+  `save` (project shadows bundled; save refuses invalid + unsafe names), and a
+  `catalog` (node kinds, provider/model hints, commands). Exposed at
+  `/api/authoring/*`. The editor **and** the Phase 4.6 MCP server share it.
+- [x] **Builder layout** (`web/src/routes/editor/WorkflowEditor.tsx`, PR #14):
+  left palette, center canvas, right properties drawer; "Tidy" re-runs Dagre.
+  Routes `/editor` + `/editor/:name`; "Editor" in the sidebar nav.
+- [x] **Palette = real node kinds** (Agent step / Command / Shell / Loop / Script),
+  click or drag onto the canvas; 1:1 with the DAG. Per-node configure + delete.
+  **No run controls** — execution stays on the Runs page.
+- [x] **Branch/join = pure topology:** connect edges (= `depends_on`); the joining
+  node's `trigger_rule` is set in the drawer. No special node types.
+- [x] **Properties drawer:** id, kind (switchable), body (prompt / bash / command
+  w/ catalog autocomplete / script+runtime / loop), provider+model (catalog
+  hints), context, trigger_rule, timeout. Renaming a node rewrites its edges.
+- [x] **Round-trip on the DAG model** via js-yaml (`lib/workflow-yaml.ts`): canvas
+  ⇄ `EditorWorkflow` ⇄ YAML; live validation against `/api/authoring/validate`;
+  **Save** writes to `.harness/workflows/<name>.yaml`. Loads bundled + project
+  (saving a bundled one creates a project copy). 16 unit tests across the two PRs.
+- [ ] *Follow-ups:* mid-edge **`+` insert** (v1 = palette-add + drag-connect +
+  delete); persisted node positions (re-laid out via Dagre on load today); HTTP
+  integration tests for `/api/authoring/*` (Linux/CI-only fixture); a web CI job
+  (web is currently verified locally — tsc + 159 vitest + build — not in CI).
 
-**Exit:** build the kimi+codex pipeline from scratch in the editor, save it, then
-run it from the Runs page — without touching a YAML file.
+**Exit:** ✅ build a workflow from scratch in the editor — palette → connect →
+configure provider/model per step → live-validate → save to `.harness/workflows`
+— then run it from the Runs page, without touching a YAML file.
 
 ---
 
