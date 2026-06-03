@@ -1,11 +1,11 @@
 /**
  * Data layer for the control-plane **runs** API.
  *
- * - `useRuns()`        — poll `GET /runs` for the list view.
- * - `useRunDetail(id)` — `GET /runs/{id}` (404s until a run finishes, since runs
- *                        persist on completion; we poll so it appears when ready).
- * - `useCreateRun()`   — `POST /runs`.
- * - `useRunStream()`   — low-level SSE reader of `GET /runs/{id}/stream`.
+ * - `useRuns()`        — poll `GET /api/runs` for the list view.
+ * - `useRunDetail(id)` — `GET /api/runs/{id}` (404s until a run finishes, since
+ *                        runs persist on completion; we poll so it appears).
+ * - `useCreateRun()`   — `POST /api/runs`.
+ * - `useRunStream()`   — low-level SSE reader of `GET /api/runs/{id}/stream`.
  * - `useRunView(id)`   — the combined, render-ready view: persisted detail when
  *                        available, otherwise the live accumulator fed by SSE.
  */
@@ -28,7 +28,7 @@ const EMPTY_USAGE = { input: null, output: null, cache_read: null, cache_write: 
 export function useRuns() {
   return useQuery<RunSummary[], Error>({
     queryKey: ["runs"],
-    queryFn: ({ signal }) => apiJson<RunSummary[]>("/runs", { signal }),
+    queryFn: ({ signal }) => apiJson<RunSummary[]>("/api/runs", { signal }),
     refetchInterval: 5_000,
   });
 }
@@ -36,7 +36,7 @@ export function useRuns() {
 export function useRunDetail(id: string | null, live: boolean) {
   return useQuery<RunDetail, Error>({
     queryKey: ["run", id],
-    queryFn: ({ signal }) => apiJson<RunDetail>(`/runs/${id}`, { signal }),
+    queryFn: ({ signal }) => apiJson<RunDetail>(`/api/runs/${id}`, { signal }),
     enabled: !!id,
     // While a run may still be executing, poll so the persisted detail appears
     // as soon as it finishes; a missing run simply 404s until then.
@@ -49,7 +49,7 @@ export function useCreateRun() {
   const qc = useQueryClient();
   return useMutation<CreateRunResponse, Error, CreateRunRequest>({
     mutationFn: (body) =>
-      apiJson<CreateRunResponse>("/runs", {
+      apiJson<CreateRunResponse>("/api/runs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -83,7 +83,7 @@ export function useRunStream(
 
     (async () => {
       try {
-        const resp = await apiFetch(`/runs/${id}/stream`, {
+        const resp = await apiFetch(`/api/runs/${id}/stream`, {
           signal: controller.signal,
           headers: { Accept: "text/event-stream" },
         });

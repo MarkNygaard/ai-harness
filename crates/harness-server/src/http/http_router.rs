@@ -154,12 +154,13 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/auth/reset-password", post(password_reset))
         .route("/reconcile", post(crate::handlers::reconcile::handle))
         // ── Runs API (harness-dag execution model) ──────────────────────────
+        // Under /api so the SPA can own `/runs/{id}` as a client route.
         .route(
-            "/runs",
+            "/api/runs",
             post(runs_routes::create_run).get(runs_routes::list_runs),
         )
-        .route("/runs/{id}", get(runs_routes::get_run))
-        .route("/runs/{id}/stream", get(runs_routes::stream_run))
+        .route("/api/runs/{id}", get(runs_routes::get_run))
+        .route("/api/runs/{id}/stream", get(runs_routes::stream_run))
         // ── Workflow authoring API (visual editor + MCP) ────────────────────
         .route("/api/authoring/catalog", get(workflows_routes::get_catalog))
         .route(
@@ -174,6 +175,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/authoring/validate",
             post(workflows_routes::validate_workflow),
         )
+        // SPA fallback: serve the React shell for client-side routes
+        // (`/runs/{id}`, `/editor`, …) so deep links / refreshes work.
+        .fallback(crate::dashboard::spa_fallback)
         .layer(Extension(runs_state))
         .layer(middleware::from_fn_with_state(
             state.clone(),
