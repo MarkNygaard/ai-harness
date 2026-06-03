@@ -254,32 +254,31 @@ configure provider/model per step → live-validate → save to `.harness/workfl
 
 ---
 
-## Phase 4.6 — MCP workflow-authoring server — ⬜ not started
+## Phase 4.6 — MCP workflow-authoring server — ✅ done (core)
 
 **Goal:** let people build/edit workflows *with their AI* (Claude, etc.) over MCP
-— no UI required. The `Workflow` model is the single source of truth, so this is a
-**second front-end to the Phase 4.5 authoring core**, not a parallel implementation.
-Enabler: an MCP server already exists in the tree (`harness-cli/src/cmd/
-mcp_server.rs`, from the majiayu seed) — this **adds a workflow-authoring toolset**
-to it (the existing methods target the legacy task model).
+— no UI required. A **second front-end to the Phase 4.5 authoring core**, added to
+the existing MCP server (`harness-cli/src/cmd/mcp_server.rs`) so both behave
+identically.
 
-- [ ] **Catalog tools** (the legal building blocks): `list_node_kinds`,
-  `list_providers_models`, `list_commands` (bundled + project) — so the AI knows
-  what it can use, matching the editor's palette.
-- [ ] **Read tools:** `list_workflows`, `get_workflow <name>` (bundled + project)
-  — learn from / edit the existing default.
-- [ ] **`validate_workflow <yaml>`** → structured `parse_workflow` errors (cycle,
-  unknown dep, body exclusivity, missing loop signal). The build→validate→fix loop
-  that lets an AI converge on a valid DAG.
-- [ ] **`save_workflow <name> <yaml>`** → project `.harness/workflows/`; **`dry_run
-  <name>`** → echo-agent topology preview (no models burned).
-- [ ] **`start_run <name> <args>`** → trigger a real run (the PLAN §Phase 5
-  `run/start` idea; shared with the Linear/manual triggers).
+- [x] **Catalog tool** `workflow_catalog` — node kinds, provider/model hints,
+  commands (bundled + project), context modes, trigger rules: the legal building
+  blocks, matching the editor's palette.
+- [x] **Read tools** `workflow_list`, `workflow_get <name>` (bundled + project) —
+  learn from / edit the existing default.
+- [x] **`workflow_validate <yaml>`** → structured `parse_workflow` + cycle errors
+  (unknown dep, body exclusivity, …). The build→validate→fix loop. The *tool*
+  succeeds even when the workflow is invalid (the result reports it), so an AI can
+  iterate.
+- [x] **`workflow_save <name> <yaml>`** → validate-then-save to project
+  `.harness/workflows/` (refuses invalid + unsafe names).
+- [x] MCP tests (tool list + validate good/bad + catalog).
+- [ ] *Deferred:* `dry_run` (echo topology preview) and `start_run` — they need run
+  plumbing into the stdio server; folded into the Phase 5 `run/start` trigger work.
 
-**Exit:** from an MCP-connected assistant, describe a change in natural language
-("add a 3-iteration security-review loop after the codex pass on sonnet") and have
-the AI edit → validate → dry-run → save the workflow, then start a run — entirely
-over MCP.
+**Exit:** ✅ from an MCP-connected assistant, read the catalog + default pipeline,
+describe a change in natural language, and have the AI edit → `workflow_validate`
+→ `workflow_save` it. (Triggering the run over MCP lands with Phase 5.)
 
 ---
 

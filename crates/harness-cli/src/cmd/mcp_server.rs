@@ -193,6 +193,14 @@ impl McpServer {
         match tool_name.as_str() {
             "harness" => self.run_harness_tool(arguments).await,
             "harness-reply" => self.run_harness_reply_tool(arguments).await,
+            // Workflow authoring (Phase 4.6) — build/edit workflows with an AI.
+            // Backed by the same `harness_runner::authoring` core the visual
+            // editor uses, so both front-ends behave identically.
+            "workflow_catalog" => workflow_catalog_tool(arguments),
+            "workflow_list" => workflow_list_tool(arguments),
+            "workflow_get" => workflow_get_tool(arguments),
+            "workflow_validate" => workflow_validate_tool(arguments),
+            "workflow_save" => workflow_save_tool(arguments),
             _ => tool_error_result(format!("unknown tool `{tool_name}`")),
         }
     }
@@ -308,6 +316,122 @@ impl McpServer {
     }
 }
 
+// ── Workflow authoring tools (Phase 4.6) ─────────────────────────────────────
+
+fn to_value_result(v: impl serde::Serialize, text: String) -> Value {
+    match serde_json::to_value(v) {
+        Ok(structured) => tool_success_result(text, structured),
+        Err(e) => tool_error_result(format!("failed to serialize result: {e}")),
+    }
+}
+
+/// `workflow_catalog` — the building blocks (node kinds, provider/model hints,
+/// commands, context modes, trigger rules) an AI may use.
+fn workflow_catalog_tool(arguments: Value) -> Value {
+    let args: ProjectRootArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_catalog` args: {e}")),
+    };
+    let root = match resolve_project_root(args.project_root) {
+        Ok(p) => p,
+        Err(e) => return tool_error_result(e.to_string()),
+    };
+    let catalog = harness_runner::authoring::catalog(&root);
+    let kinds = catalog
+        .node_kinds
+        .iter()
+        .map(|k| k.kind)
+        .collect::<Vec<_>>()
+        .join(", ");
+    to_value_result(
+        &catalog,
+        format!(
+            "node kinds: {kinds}; {} providers; {} commands",
+            catalog.providers.len(),
+            catalog.commands.len()
+        ),
+    )
+}
+
+/// `workflow_list` — workflows available to the project (bundled + project).
+fn workflow_list_tool(arguments: Value) -> Value {
+    let args: ProjectRootArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_list` args: {e}")),
+    };
+    let root = match resolve_project_root(args.project_root) {
+        Ok(p) => p,
+        Err(e) => return tool_error_result(e.to_string()),
+    };
+    let workflows = harness_runner::authoring::list_workflows(&root);
+    let text = workflows
+        .iter()
+        .map(|w| format!("{} ({:?}, {} steps)", w.name, w.source, w.node_count))
+        .collect::<Vec<_>>()
+        .join("\n");
+    to_value_result(&workflows, text)
+}
+
+/// `workflow_get` — a workflow's editable YAML source by name.
+fn workflow_get_tool(arguments: Value) -> Value {
+    let args: WorkflowGetArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_get` args: {e}")),
+    };
+    let root = match resolve_project_root(args.project_root) {
+        Ok(p) => p,
+        Err(e) => return tool_error_result(e.to_string()),
+    };
+    match harness_runner::authoring::get_workflow(&root, &args.name) {
+        Ok(src) => {
+            let text = src.yaml.clone();
+            to_value_result(&src, text)
+        }
+        Err(e) => tool_error_result(e),
+    }
+}
+
+/// `workflow_validate` — validate candidate YAML (parse + cycle check). Returns
+/// the structural error or the node summaries — the build→validate→fix loop.
+fn workflow_validate_tool(arguments: Value) -> Value {
+    let args: WorkflowYamlArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_validate` args: {e}")),
+    };
+    let result = harness_runner::authoring::validate_workflow(&args.yaml);
+    let text = if result.valid {
+        format!("valid: {} step(s)", result.nodes.len())
+    } else {
+        format!(
+            "invalid: {}",
+            result
+                .error
+                .clone()
+                .unwrap_or_else(|| "unknown error".into())
+        )
+    };
+    to_value_result(&result, text)
+}
+
+/// `workflow_save` — validate then save to `.harness/workflows/<name>.yaml`.
+fn workflow_save_tool(arguments: Value) -> Value {
+    let args: WorkflowSaveArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_save` args: {e}")),
+    };
+    let root = match resolve_project_root(args.project_root) {
+        Ok(p) => p,
+        Err(e) => return tool_error_result(e.to_string()),
+    };
+    match harness_runner::authoring::save_workflow(&root, &args.name, &args.yaml) {
+        Ok(()) => tool_success_result(
+            format!("saved workflow `{}`", args.name),
+            json!({ "saved": true, "name": args.name }),
+        ),
+        Err(e) => tool_error_result(e),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ToolCallParams {
@@ -331,6 +455,36 @@ struct HarnessToolArgs {
 struct HarnessReplyToolArgs {
     thread_id: String,
     prompt: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectRootArgs {
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowGetArgs {
+    name: String,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowYamlArgs {
+    yaml: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowSaveArgs {
+    name: String,
+    yaml: String,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
 }
 
 fn mcp_tools() -> Vec<Value> {
@@ -375,6 +529,67 @@ fn mcp_tools() -> Vec<Value> {
                     }
                 },
                 "required": ["thread_id", "prompt"],
+            }
+        }),
+        json!({
+            "name": "workflow_catalog",
+            "description": "List the building blocks available for authoring a workflow: node kinds (agent step, command, shell, loop, script), provider/model hints, available commands, context modes, and trigger rules.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
+                }
+            }
+        }),
+        json!({
+            "name": "workflow_list",
+            "description": "List workflows available to the project (bundled defaults + project .harness/workflows; project shadows bundled).",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
+                }
+            }
+        }),
+        json!({
+            "name": "workflow_get",
+            "description": "Get a workflow's editable YAML source by name (project shadows bundled). Use this to read the default pipeline before editing it.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "description": "Workflow name." },
+                    "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
+                },
+                "required": ["name"],
+            }
+        }),
+        json!({
+            "name": "workflow_validate",
+            "description": "Validate candidate workflow YAML (parse + cycle/dependency/body checks). Returns the first structural error or the node summaries — the build->validate->fix loop. Always validate before saving.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "yaml": { "type": "string", "description": "Candidate workflow YAML." }
+                },
+                "required": ["yaml"],
+            }
+        }),
+        json!({
+            "name": "workflow_save",
+            "description": "Validate then save a workflow to the project's .harness/workflows/<name>.yaml. Refuses invalid workflows and unsafe names.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "description": "Workflow name (file stem)." },
+                    "yaml": { "type": "string", "description": "Workflow YAML to save." },
+                    "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
+                },
+                "required": ["name", "yaml"],
             }
         }),
     ]
@@ -602,7 +817,83 @@ mod tests {
             .iter()
             .filter_map(|t| t.get("name").and_then(Value::as_str))
             .collect::<Vec<_>>();
-        assert_eq!(names, vec!["harness", "harness-reply"]);
+        for expected in [
+            "harness",
+            "harness-reply",
+            "workflow_catalog",
+            "workflow_list",
+            "workflow_get",
+            "workflow_validate",
+            "workflow_save",
+        ] {
+            assert!(names.contains(&expected), "missing tool `{expected}`");
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_validate_and_catalog_tools() {
+        let server = McpServer::new(
+            "mock-default".to_string(),
+            Arc::new(MockExecutor::default()),
+        );
+
+        // A valid workflow: tool succeeds, structured says valid with node summaries.
+        let resp = server
+            .handle_request(make_request(
+                1,
+                "tools/call",
+                json!({
+                    "name": "workflow_validate",
+                    "arguments": { "yaml": "name: d\nnodes:\n  - id: a\n    bash: \"echo hi\"\n" },
+                }),
+            ))
+            .await
+            .expect("respond");
+        let r = extract_result(resp);
+        assert_eq!(r["isError"], Value::Bool(false));
+        assert_eq!(r["structuredContent"]["valid"], Value::Bool(true));
+        assert_eq!(r["structuredContent"]["nodes"][0]["kind"], "bash");
+
+        // An invalid workflow (unknown dep): the *tool* still succeeds, but the
+        // result reports invalid with an error — the build->validate->fix loop.
+        let resp = server
+            .handle_request(make_request(
+                2,
+                "tools/call",
+                json!({
+                    "name": "workflow_validate",
+                    "arguments": { "yaml": "name: d\nnodes:\n  - id: a\n    depends_on: [ghost]\n    bash: \"x\"\n" },
+                }),
+            ))
+            .await
+            .expect("respond");
+        let r = extract_result(resp);
+        assert_eq!(r["isError"], Value::Bool(false));
+        assert_eq!(r["structuredContent"]["valid"], Value::Bool(false));
+
+        // Catalog exposes the building blocks.
+        let tmp = tempfile::tempdir().unwrap();
+        let resp = server
+            .handle_request(make_request(
+                3,
+                "tools/call",
+                json!({
+                    "name": "workflow_catalog",
+                    "arguments": { "project_root": tmp.path().to_string_lossy() },
+                }),
+            ))
+            .await
+            .expect("respond");
+        let r = extract_result(resp);
+        assert_eq!(r["isError"], Value::Bool(false));
+        assert!(
+            r["structuredContent"]["node_kinds"]
+                .as_array()
+                .unwrap()
+                .len()
+                >= 5,
+            "catalog should list node kinds"
+        );
     }
 
     #[tokio::test]
