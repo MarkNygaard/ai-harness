@@ -39,7 +39,7 @@ export function EditorNode({ id, data }: NodeProps) {
         selected ? "border-accent-orange" : "border-border",
       )}
     >
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-border" />
+      <Handle type="target" position={Position.Top} className="!h-2 !w-2 !border-0 !bg-border" />
       <div className="flex items-center gap-2 px-3 py-2">
         <Icon className="h-4 w-4 shrink-0 text-accent-orange" />
         <div className="min-w-0 flex-1">
@@ -74,7 +74,7 @@ export function EditorNode({ id, data }: NodeProps) {
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-border" />
+      <Handle type="source" position={Position.Bottom} className="!h-2 !w-2 !border-0 !bg-border" />
     </div>
   );
 }
