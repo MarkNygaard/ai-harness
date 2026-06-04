@@ -209,27 +209,42 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
   }
 }
 
-/** Build render-ready [`NodeView`]s from a persisted [`RunDetail`]. Pure. */
+/**
+ * Build render-ready [`NodeView`]s from a persisted [`RunDetail`]. Pure.
+ *
+ * Seeds from the full DAG **topology** (`detail.graph`) so every declared step
+ * shows — not-yet-run ones as `pending` — then overlays each persisted node's
+ * status/usage/output. This makes a still-running run (or one triggered
+ * out-of-band, where this client never streamed the `run_started` event) render
+ * the whole graph on load instead of only finished steps. Falls back to the
+ * persisted node rows when no topology is stored (older runs).
+ */
 export function nodesFromDetail(detail: RunDetail): NodeView[] {
-  const deps = new Map(detail.graph.map((g) => [g.id, g.depends_on]));
-  return detail.nodes.map((n) => ({
-    id: n.node_id,
-    depends_on: deps.get(n.node_id) ?? [],
-    status: n.status,
-    provider: n.provider,
-    model: n.model,
-    iterations: n.iterations,
-    usage: {
-      input: n.input_tokens,
-      output: n.output_tokens,
-      cache_read: n.cache_read,
-      cache_write: n.cache_write,
-    },
-    note: n.note,
-    output: n.output,
-    started_at: n.started_at,
-    ended_at: n.ended_at,
-  }));
+  const byId = new Map(detail.nodes.map((n) => [n.node_id, n]));
+  const skeleton = detail.graph.length
+    ? detail.graph.map((g) => ({ id: g.id, depends_on: g.depends_on }))
+    : detail.nodes.map((n) => ({ id: n.node_id, depends_on: [] as string[] }));
+  return skeleton.map(({ id, depends_on }) => {
+    const n = byId.get(id);
+    return {
+      id,
+      depends_on,
+      status: n?.status ?? "pending",
+      provider: n?.provider ?? null,
+      model: n?.model ?? null,
+      iterations: n?.iterations ?? 0,
+      usage: {
+        input: n?.input_tokens ?? null,
+        output: n?.output_tokens ?? null,
+        cache_read: n?.cache_read ?? null,
+        cache_write: n?.cache_write ?? null,
+      },
+      note: n?.note ?? null,
+      output: n?.output ?? "",
+      started_at: n?.started_at ?? null,
+      ended_at: n?.ended_at ?? null,
+    };
+  });
 }
 
 export interface RunView {

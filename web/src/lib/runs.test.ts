@@ -130,4 +130,48 @@ describe("nodesFromDetail", () => {
     expect(views[0].usage.input).toBe(100);
     expect(views[1].status).toBe("skipped");
   });
+
+  it("seeds unfinished steps from the topology as pending", () => {
+    const detail: RunDetail = {
+      id: "r2",
+      workflow_name: "demo",
+      title: null,
+      status: "running",
+      project: "ai-harness",
+      node_count: 3,
+      recorded_at: NOW,
+      graph: [
+        { id: "explore", depends_on: [] },
+        { id: "plan", depends_on: ["explore"] },
+        { id: "implement", depends_on: ["plan"] },
+      ],
+      // Only the first step has finished so far.
+      nodes: [
+        {
+          node_id: "explore",
+          ordinal: 0,
+          status: "success",
+          provider: "claude",
+          model: "sonnet",
+          output: "explored",
+          iterations: 1,
+          converged: null,
+          note: null,
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read: null,
+          cache_write: null,
+          started_at: NOW,
+          ended_at: NOW,
+        },
+      ],
+    };
+    const views = nodesFromDetail(detail);
+    // The whole DAG shows even though only one node has a persisted row.
+    expect(views.map((v) => v.id)).toEqual(["explore", "plan", "implement"]);
+    expect(views[0].status).toBe("success");
+    expect(views[1].status).toBe("pending");
+    expect(views[2].status).toBe("pending");
+    expect(views[2].depends_on).toEqual(["plan"]);
+  });
 });

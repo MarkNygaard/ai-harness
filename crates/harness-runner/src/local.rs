@@ -182,9 +182,12 @@ impl LocalRunner {
         result
     }
 
-    /// Resolve a `command` name to its markdown body. Names are validated to
+    /// Resolve a `command` name to its prompt body. Names are validated to
     /// prevent path traversal; the first matching `<name>.md` across
-    /// `command_dirs` wins.
+    /// `command_dirs` wins. Claude-Code-style YAML frontmatter is stripped — it's
+    /// metadata (description / argument-hint / allowed-tools), not prompt text,
+    /// and its leading `---` would otherwise be mis-parsed by the agent CLIs as a
+    /// command-line option.
     fn resolve_command(&self, name: &str) -> Result<String, RunnerError> {
         validate_command_name(name)?;
         let file = format!("{name}.md");
@@ -192,12 +195,13 @@ impl LocalRunner {
             let path = dir.join(&file);
             if path.is_file() {
                 return std::fs::read_to_string(&path)
+                    .map(|s| strip_frontmatter(&s))
                     .map_err(|e| RunnerError(format!("failed to read command `{name}`: {e}")));
             }
         }
         // Fall back to a bundled default command (project dirs shadow these).
         if let Some(body) = crate::defaults::default_command(name) {
-            return Ok(body.to_string());
+            return Ok(strip_frontmatter(body));
         }
         Err(RunnerError(format!(
             "command `{name}` not found in {} command dir(s) or bundled defaults",
@@ -258,6 +262,34 @@ impl NodeRunner for LocalRunner {
             }
         }
     }
+}
+
+/// Strip a leading YAML frontmatter block (`---` … `---`) from a command body,
+/// returning the prompt text after it. Tolerates a UTF-8 BOM and CRLF. If there
+/// is no well-formed leading frontmatter, the body is returned unchanged.
+fn strip_frontmatter(body: &str) -> String {
+    let s = body.strip_prefix('\u{feff}').unwrap_or(body);
+    let mut lines = s.lines();
+    // Frontmatter must open with `---` on the very first line.
+    if lines.next().map(str::trim_end) != Some("---") {
+        return body.to_string();
+    }
+    let mut rest: Vec<&str> = Vec::new();
+    let mut closed = false;
+    for line in lines {
+        if !closed {
+            if line.trim_end() == "---" {
+                closed = true;
+            }
+            continue;
+        }
+        rest.push(line);
+    }
+    // No closing delimiter → it wasn't frontmatter; keep the original.
+    if !closed {
+        return body.to_string();
+    }
+    rest.join("\n").trim_start().to_string()
 }
 
 /// Reject command names that could escape the command directories.
@@ -418,6 +450,41 @@ mod tests {
             agent.last_prompt.lock().unwrap().as_deref(),
             Some("plan in /run/9 now")
         );
+    }
+
+    #[tokio::test]
+    async fn command_frontmatter_is_stripped_before_dispatch() {
+        let dir = TempDir::new().unwrap();
+        let cmd_dir = dir.path().join("commands");
+        std::fs::create_dir_all(&cmd_dir).unwrap();
+        // Claude-Code-style command: YAML frontmatter then the actual prompt.
+        std::fs::write(
+            cmd_dir.join("plan-setup.md"),
+            "---\ndescription: Setup\nargument-hint: <path>\n---\n\n# Plan Setup\nDo $ARGUMENTS",
+        )
+        .unwrap();
+
+        let (runner, agent) = runner_at(dir.path(), vec![cmd_dir]);
+        let vars = VarContext::new().set("ARGUMENTS", "the thing");
+        let out = runner
+            .execute(request(NodeBody::Command("plan-setup".into()), &vars))
+            .await
+            .unwrap();
+        assert!(out.success);
+        // The dispatched prompt must NOT contain the frontmatter / its `---`.
+        assert_eq!(
+            agent.last_prompt.lock().unwrap().as_deref(),
+            Some("# Plan Setup\nDo the thing")
+        );
+    }
+
+    #[test]
+    fn strip_frontmatter_handles_present_absent_and_unterminated() {
+        assert_eq!(strip_frontmatter("---\na: 1\n---\nbody here"), "body here");
+        // No frontmatter → unchanged.
+        assert_eq!(strip_frontmatter("# Title\ntext"), "# Title\ntext");
+        // Unterminated block → not treated as frontmatter (kept as-is).
+        assert_eq!(strip_frontmatter("---\nstill going"), "---\nstill going");
     }
 
     #[tokio::test]
