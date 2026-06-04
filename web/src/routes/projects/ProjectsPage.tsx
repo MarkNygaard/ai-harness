@@ -66,6 +66,15 @@ function ProjectRow({ project }: { project: Project }) {
               default: {project.default_workflow}
             </div>
           )}
+          {project.toolchains.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {project.toolchains.map((t) => (
+                <Badge key={t} variant="secondary" className="text-[10px]">
+                  {t}
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
         <Button
           variant="ghost"
@@ -91,6 +100,7 @@ function RegisterForm() {
   const [gitUrl, setGitUrl] = useState("");
   const [baseBranch, setBaseBranch] = useState("");
   const [defaultWorkflow, setDefaultWorkflow] = useState("");
+  const [toolchains, setToolchains] = useState("");
   const [warning, setWarning] = useState<string | null>(null);
 
   function submit(e: React.FormEvent) {
@@ -103,6 +113,11 @@ function RegisterForm() {
         // Empty → server auto-detects the repo's default branch (origin/HEAD).
         base_branch: baseBranch.trim() || undefined,
         default_workflow: defaultWorkflow.trim() || null,
+        // Comma/space-separated mise specs → array (server drops blanks too).
+        toolchains: toolchains
+          .split(/[,\s]+/)
+          .map((t) => t.trim())
+          .filter(Boolean),
       },
       {
         onSuccess: (res) => {
@@ -112,6 +127,7 @@ function RegisterForm() {
             setGitUrl("");
             setBaseBranch("");
             setDefaultWorkflow("");
+            setToolchains("");
           }
         },
       },
@@ -165,6 +181,20 @@ function RegisterForm() {
               placeholder="idea-to-pr-with-kimi-coding-and-codex"
               className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              Toolchains (optional)
+            </span>
+            <input
+              value={toolchains}
+              onChange={(e) => setToolchains(e.target.value)}
+              placeholder="rust, node@22, pnpm"
+              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            />
+            <span className="text-[10px] text-muted-foreground">
+              Installed on demand with mise before each run (cached, no image rebuild).
+            </span>
           </label>
           <div className="flex items-center gap-2">
             <Button

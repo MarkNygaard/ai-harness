@@ -17,6 +17,7 @@ export function AppShell({
 }) {
   return (
     <SidebarProvider
+      className="h-svh overflow-hidden"
       style={
         {
           "--sidebar-width": "calc(var(--spacing) * 60)",

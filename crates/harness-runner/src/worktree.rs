@@ -89,7 +89,7 @@ pub fn clone_repo(git_url: &str, dest: &Path, token: Option<&str>) -> Result<(),
     let mut cmd = Command::new("git");
     auth_args(&mut cmd, token);
     cmd.arg("clone").arg(git_url).arg(dest);
-    finish(cmd, "clone")
+    finish(cmd, "git clone")
 }
 
 /// Fetch + prune `repo` from its origin (so a project's checkout has the latest
@@ -99,7 +99,7 @@ pub fn fetch_repo(repo: &Path, token: Option<&str>) -> Result<(), WorktreeError>
     cmd.arg("-C").arg(repo);
     auth_args(&mut cmd, token);
     cmd.args(["fetch", "--prune", "origin"]);
-    finish(cmd, "fetch")
+    finish(cmd, "git fetch")
 }
 
 /// The repo's default branch, detected from `origin/HEAD` (set by `git clone`).
@@ -114,6 +114,35 @@ pub fn default_branch(repo: &Path) -> Option<String> {
     } else {
         Some(branch.to_string())
     }
+}
+
+/// Provision `mise` tool specs globally (e.g. `rust`, `node@22`, `pnpm`) so they
+/// resolve for a run. Installs on demand into mise's data dir — which lives under
+/// `$HOME` (the persistent volume), so installs are cached across runs and need
+/// no image rebuild. No-op for an empty list.
+pub fn provision_toolchains(specs: &[String]) -> Result<(), WorktreeError> {
+    if specs.is_empty() {
+        return Ok(());
+    }
+    let mut cmd = Command::new("mise");
+    cmd.args(["use", "--global", "--yes"]);
+    for s in specs {
+        cmd.arg(s);
+    }
+    finish(cmd, "mise use")
+}
+
+/// mise's shims directory (`$HOME/.local/share/mise/shims`) — prepend to `PATH`
+/// so tools provisioned by [`provision_toolchains`] resolve in node subprocesses.
+pub fn mise_shims_dir() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        PathBuf::from(home)
+            .join(".local")
+            .join("share")
+            .join("mise")
+            .join("shims"),
+    )
 }
 
 /// Inject a transient GitHub HTTPS credential helper that reads the token from
@@ -133,10 +162,10 @@ fn auth_args(cmd: &mut Command, token: Option<&str>) {
 fn finish(mut cmd: Command, what: &str) -> Result<(), WorktreeError> {
     let output = cmd
         .output()
-        .map_err(|e| WorktreeError(format!("failed to spawn git {what}: {e}")))?;
+        .map_err(|e| WorktreeError(format!("failed to spawn {what}: {e}")))?;
     if !output.status.success() {
         return Err(WorktreeError(format!(
-            "git {what} failed: {}",
+            "{what} failed: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }

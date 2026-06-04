@@ -34,7 +34,8 @@ pub use pi::{parse_omp_stream, ParsedOmp, PiAgent};
 pub use registry::build_agent_registry;
 pub use run::{execute_run, parse_sandbox, print_report, RunOptions};
 pub use worktree::{
-    clone_repo, default_branch, fetch_repo, sanitize_branch_component, Worktree, WorktreeError,
+    clone_repo, default_branch, fetch_repo, mise_shims_dir, provision_toolchains,
+    sanitize_branch_component, Worktree, WorktreeError,
 };
 
 /// A request to run an AI prompt against a working directory.

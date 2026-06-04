@@ -269,6 +269,7 @@ pub async fn create_run(
 
     let task_state = state.clone();
     let task_run_id = run_id.clone();
+    let toolchains = project_row.toolchains.clone();
     // `description` is the task spec; fall back to the deprecated `args` alias.
     let description = if req.description.is_empty() {
         req.args
@@ -286,6 +287,7 @@ pub async fn create_run(
             description,
             base_branch,
             project,
+            toolchains,
             btx,
         )
         .await;
@@ -304,6 +306,7 @@ async fn execute_run_task(
     description: String,
     base_branch: String,
     project: String,
+    toolchains: Vec<String>,
     btx: broadcast::Sender<RunEvent>,
 ) {
     // The workspace is an isolated per-run worktree off the project checkout's
@@ -341,6 +344,31 @@ async fn execute_run_task(
     let artifacts = workspace.join(".harness").join("artifacts");
     let _ = std::fs::create_dir_all(&artifacts);
     let command_dirs = vec![workspace.join(".harness").join("commands")];
+
+    // Provision the project's toolchains via mise (cached on the PV — no image
+    // rebuild), then put mise's shims on PATH so cargo/pnpm/etc. resolve for every
+    // node. Best-effort: a failure is logged; the dependent build step will then
+    // surface the missing tool clearly.
+    if !toolchains.is_empty() {
+        let specs = toolchains.clone();
+        match tokio::task::spawn_blocking(move || harness_runner::provision_toolchains(&specs))
+            .await
+        {
+            Ok(Ok(())) => {
+                if let Some(shims) = harness_runner::mise_shims_dir() {
+                    let shims_s = shims.display().to_string();
+                    let path = std::env::var("PATH").unwrap_or_default();
+                    if !path.split(':').any(|p| p == shims_s) {
+                        std::env::set_var("PATH", format!("{shims_s}:{path}"));
+                    }
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(run_id = %run_id, "toolchain provisioning failed: {e}")
+            }
+            Err(e) => tracing::warn!(run_id = %run_id, "toolchain task panicked: {e}"),
+        }
+    }
 
     let agent: Arc<dyn PromptAgent> = if real {
         // Materialize UI-entered provider credentials into the agent environment
@@ -426,7 +454,6 @@ async fn execute_run_task(
                     RunEvent::RunFinished { status } => {
                         let _ = store.finish_run(&persist_run_id, *status).await;
                     }
-                    _ => {}
                 }
             }
             let _ = btx.send(ev);

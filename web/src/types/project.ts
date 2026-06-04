@@ -8,6 +8,8 @@ export interface Project {
   git_url: string;
   base_branch: string;
   default_workflow: string | null;
+  /** mise tool specs provisioned before runs (e.g. "rust", "node@22", "pnpm"). */
+  toolchains: string[];
   created_at: string;
   updated_at: string;
 }
@@ -17,4 +19,5 @@ export interface RegisterProjectRequest {
   git_url: string;
   base_branch?: string;
   default_workflow?: string | null;
+  toolchains?: string[];
 }
