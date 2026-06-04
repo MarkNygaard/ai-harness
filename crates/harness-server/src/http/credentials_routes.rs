@@ -118,10 +118,11 @@ fn write_secret_file(path: PathBuf, contents: &str) {
 /// - **claude**: `oauth_token` → `CLAUDE_CODE_OAUTH_TOKEN`; `credentials_json`
 ///   → `$HOME/.claude/.credentials.json`.
 /// - **codex**: `auth_json` → `$HOME/.codex/auth.json`.
-/// - **pi**: `kimi_api_key` → `KIMI_API_KEY` (the Kimi-for-Coding subscription,
-///   used by `kimi-coding/*` models); `auth_json` → `$HOME/.pi/agent/auth.json`
-///   (the `omp /login` credential); `moonshot_api_key` → `MOONSHOT_API_KEY` (the
-///   per-token Moonshot API, `moonshotai/*`).
+/// - **pi**: `kimi_api_key` → `KIMI_API_KEY` **and** a synthesized
+///   `$HOME/.pi/agent/auth.json` (`{"kimi-coding":{"type":"api_key","key":…}}`)
+///   for the Kimi-for-Coding subscription (`kimi-coding/*`); a verbatim `auth_json`
+///   overrides that (e.g. a non-api-key `omp /login` credential);
+///   `moonshot_api_key` → `MOONSHOT_API_KEY` (per-token Moonshot API, `moonshotai/*`).
 /// - **github**: `token` → `GH_TOKEN` + `GITHUB_TOKEN` (so `gh` + git push work).
 ///
 /// Best-effort: missing providers/fields are skipped. Subprocesses spawned by
@@ -144,12 +145,21 @@ pub async fn materialize(store: &CredentialStore) {
         }
     }
     if let Ok(Some(pi)) = store.get("pi").await {
-        // Kimi-for-Coding subscription (kimi-coding/* models).
-        if let Some(key) = pi.get("kimi_api_key").filter(|v| !v.is_empty()) {
+        // Kimi-for-Coding subscription (kimi-coding/* models). From just the API
+        // key we set KIMI_API_KEY *and* synthesize the standard auth.json that omp
+        // reads — `{"kimi-coding":{"type":"api_key","key":…}}` — so the user only
+        // pastes the key. An explicitly-pasted `auth_json` (e.g. a non-api-key
+        // /login credential) takes precedence.
+        let kimi_key = pi.get("kimi_api_key").filter(|v| !v.is_empty());
+        if let Some(key) = kimi_key {
             std::env::set_var("KIMI_API_KEY", key);
         }
+        let auth_path = home.join(".pi").join("agent").join("auth.json");
         if let Some(json) = pi.get("auth_json").filter(|v| !v.is_empty()) {
-            write_secret_file(home.join(".pi").join("agent").join("auth.json"), json);
+            write_secret_file(auth_path, json);
+        } else if let Some(key) = kimi_key {
+            let auth = serde_json::json!({ "kimi-coding": { "type": "api_key", "key": key } });
+            write_secret_file(auth_path, &auth.to_string());
         }
         // Per-token Moonshot API (moonshotai/* models).
         if let Some(key) = pi.get("moonshot_api_key").filter(|v| !v.is_empty()) {
