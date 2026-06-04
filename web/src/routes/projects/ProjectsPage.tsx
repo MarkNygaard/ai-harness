@@ -178,7 +178,7 @@ function RegisterForm() {
             <input
               value={defaultWorkflow}
               onChange={(e) => setDefaultWorkflow(e.target.value)}
-              placeholder="idea-to-pr-with-kimi-coding-and-codex"
+              placeholder="idea-to-pr"
               className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
           </label>

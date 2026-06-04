@@ -182,7 +182,7 @@ run, each on its declared provider/model (`examples/multi-provider.yaml`).
 
 ## Phase 4 — Bundled default pipeline (kimi + codex) — ✅ done
 
-**Goal:** ai-harness **ships the author's `idea-to-pr-with-kimi-coding-and-codex`
+**Goal:** ai-harness **ships the author's `idea-to-pr`
 pipeline as a built-in default**, runnable by name, and uses it as the standard
 workflow for new runs — the way Archon ships `.archon/workflows/defaults/`.
 (Reframed from a generic "archon-import": the formats already align, so we bundle
@@ -207,7 +207,7 @@ workflow for new runs — the way Archon ships `.archon/workflows/defaults/`.
 - [ ] *Deferred:* per-node `maxBudgetUsd` + per-run cost ceiling; a live real PR run
   (`gh`/creds/the `/simplify` pi extension) → Phase 6.
 
-**Exit:** ✅ `harness run idea-to-pr-with-kimi-coding-and-codex` (or no arg)
+**Exit:** ✅ `harness run idea-to-pr` (or no arg)
 resolves the bundled workflow + commands and executes every node, each on its
 declared provider/model — echo-verified end-to-end (the prompt + the `plan-setup`/
 `confirm-plan` *command* nodes resolve from the bundle). The real PR-opening run

@@ -1,30 +1,15 @@
-name: idea-to-pr-with-kimi-coding-and-codex
+name: idea-to-pr
 description: |
-  Use when: User wants a task implemented end-to-end with Claude
-  planning, Kimi (via Pi, on the Kimi-for-Coding subscription) doing
-  implementation and up to 5 self-review iterations, Codex second-pass
-  review with fixes, and Claude Sonnet 4.6 sign-off at the end.
+  The default pipeline: turn a task (title + description, or a PRD path)
+  into a reviewed PR, end-to-end.
 
-  Differs from idea-to-pr-with-kimi-and-codex (the fallback) in two ways:
-  1. Every Pi node uses `kimi-coding/kimi-for-coding` (flat-rate
-     subscription) instead of `moonshotai/kimi-k2.6` (per-token API) —
-     cutting the per-token cost of the Kimi-heavy middle of the pipeline.
-  2. Planning is split into a cheap Sonnet `explore` node (read-only,
-     writes exploration.md) feeding a lean Opus `create-plan` node
-     (synthesis only, no re-exploration), replacing the bundled
-     create-plan command that explored at Opus rates. Same
-     downstream plan.md contract, so plan-setup / confirm-plan /
-     implement-tasks are unchanged.
+  Flow: Claude plans (a read-only Sonnet `explore` feeding a lean Opus
+  `create-plan`), Kimi (via Pi, on the Kimi-for-Coding subscription)
+  implements and self-reviews up to 5x, Codex does a second-pass review
+  with fixes, and Claude Sonnet signs off — then a final build gate.
 
-  Keep the API workflow as the fallback if the Kimi subscription is
-  unavailable or a PRD-phase-table-driven plan is needed.
-  Triggers: "kimi coding pipeline", "kimi subscription pipeline",
-            "kimi-for-coding pipeline".
-  Input: Feature description in natural language, or path to a PRD file.
-  Output: PR against the project's base branch (auto-detected from
-  `$BASE_BRANCH`), with Claude-planned, Kimi-implemented,
-  Kimi-self-reviewed (up to 5x), Codex-reviewed-and-fixed,
-  Sonnet-reviewed-and-fixed work, plus a verdict comment + PR label.
+  Output: a PR against the project's base branch (auto-detected from
+  `$BASE_BRANCH`), with a verdict comment + PR label.
 
   Project-specific rules — package manager, verify chain, conventional-
   commit scope vocabulary, agent prohibitions (no `--no-verify`, no
@@ -32,7 +17,7 @@ description: |
   and/or `AGENTS.md`. The harness auto-loads those into every agent's
   context. This workflow is provider/orchestration only.
 
-  NOT for: Quick fixes, standalone reviews, plans without implementation.
+  NOT for: standalone reviews, or plans without implementation.
 
 provider: pi
 model: kimi-coding/kimi-for-coding
@@ -109,20 +94,6 @@ nodes:
       After writing plan.md, output a one-line summary and:
       <promise>PLAN-DONE</promise>
 
-  - id: plan-setup
-    command: plan-setup
-    depends_on: [create-plan]
-    provider: claude
-    model: sonnet
-    context: fresh
-
-  - id: confirm-plan
-    command: confirm-plan
-    depends_on: [plan-setup]
-    provider: claude
-    model: sonnet
-    context: fresh
-
   - id: install-deps
     bash: |
       set -euo pipefail
@@ -152,7 +123,7 @@ nodes:
         If this project needs setup, add the command to its CLAUDE.md \
         so downstream agents can run it themselves."
       fi
-    depends_on: [confirm-plan]
+    depends_on: [create-plan]
     timeout: 300000
 
   - id: implement-tasks
@@ -617,7 +588,7 @@ nodes:
       Use `gh pr comment <number> --body "..."` with this shape:
 
       ```
-      ## Workflow complete — `idea-to-pr-with-kimi-coding-and-codex`
+      ## Workflow complete — `idea-to-pr`
 
       **Sonnet verdict**: <archon-approved | archon-request-changes | archon-needs-discussion>
         (see Sonnet 4.6 sign-off comment above for details)
