@@ -24,6 +24,8 @@ pub use credentials::{CredentialStore, ProviderCredential};
 pub struct RunSummary {
     pub id: String,
     pub workflow_name: String,
+    /// Human task name (the trigger title); `None` for older/CLI runs.
+    pub title: Option<String>,
     pub status: String,
     pub project: Option<String>,
     pub node_count: i32,
@@ -76,6 +78,7 @@ const CREATE_RUNS: &str = "
 CREATE TABLE IF NOT EXISTS harness_workflow_runs (
     id            text PRIMARY KEY,
     workflow_name text NOT NULL,
+    title         text,
     status        text NOT NULL,
     project       text,
     node_count    int  NOT NULL DEFAULT 0,
@@ -83,10 +86,11 @@ CREATE TABLE IF NOT EXISTS harness_workflow_runs (
     recorded_at   timestamptz NOT NULL DEFAULT now()
 )";
 
-/// Bring older `harness_workflow_runs` tables (created before the topology
-/// column existed) up to date. Idempotent.
+/// Bring older `harness_workflow_runs` tables up to date. Idempotent.
 const ALTER_RUNS_GRAPH: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS graph jsonb NOT NULL DEFAULT '[]'::jsonb";
+const ALTER_RUNS_TITLE: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS title text";
 
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
@@ -135,6 +139,7 @@ impl RunStore {
     pub async fn migrate(&self) -> Result<(), PersistError> {
         sqlx::query(CREATE_RUNS).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_GRAPH).execute(&self.pool).await?;
+        sqlx::query(ALTER_RUNS_TITLE).execute(&self.pool).await?;
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
         Ok(())
     }
@@ -144,16 +149,19 @@ impl RunStore {
     pub async fn record_run(
         &self,
         run_id: &str,
+        title: Option<&str>,
         project: Option<&str>,
         report: &RunReport,
     ) -> Result<(), PersistError> {
         let mut tx = self.pool.begin().await?;
 
+        // COALESCE keeps a title set at start time if this final write passes None.
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, status, project, node_count, graph, recorded_at)
-             VALUES ($1, $2, $3, $4, $5, $6, now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, status, project, node_count, graph, recorded_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
+                title         = COALESCE(excluded.title, harness_workflow_runs.title),
                 status        = excluded.status,
                 project       = excluded.project,
                 node_count    = excluded.node_count,
@@ -162,6 +170,7 @@ impl RunStore {
         )
         .bind(run_id)
         .bind(&report.workflow)
+        .bind(title)
         .bind(run_status_str(report.status))
         .bind(project)
         .bind(report.nodes.len() as i32)
@@ -211,24 +220,28 @@ impl RunStore {
     /// and its detail endpoint resolves (instead of 404ing) before it finishes.
     /// Idempotent: a re-submit of the same id refreshes the topology but never
     /// clobbers an already-terminal status.
+    #[allow(clippy::too_many_arguments)]
     pub async fn start_run(
         &self,
         run_id: &str,
         workflow: &str,
+        title: Option<&str>,
         project: Option<&str>,
         total_nodes: usize,
         graph: &[NodeMeta],
     ) -> Result<(), PersistError> {
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, status, project, node_count, graph, recorded_at)
-             VALUES ($1, $2, 'running', $3, $4, $5, now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, status, project, node_count, graph, recorded_at)
+             VALUES ($1, $2, $3, 'running', $4, $5, $6, now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
+                title         = COALESCE(excluded.title, harness_workflow_runs.title),
                 node_count    = excluded.node_count,
                 graph         = excluded.graph",
         )
         .bind(run_id)
         .bind(workflow)
+        .bind(title)
         .bind(project)
         .bind(total_nodes as i32)
         .bind(Json(graph))
@@ -315,7 +328,7 @@ impl RunStore {
     /// List the most recently recorded runs (newest first).
     pub async fn list_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, status, project, node_count, recorded_at
+            "SELECT id, workflow_name, title, status, project, node_count, recorded_at
              FROM harness_workflow_runs
              ORDER BY recorded_at DESC
              LIMIT $1",
@@ -329,7 +342,7 @@ impl RunStore {
     /// Fetch a run plus its node rows (ordered by declaration order).
     pub async fn get_run(&self, run_id: &str) -> Result<Option<RunDetail>, PersistError> {
         let run = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, status, project, node_count, recorded_at
+            "SELECT id, workflow_name, title, status, project, node_count, recorded_at
              FROM harness_workflow_runs WHERE id = $1",
         )
         .bind(run_id)
@@ -451,7 +464,7 @@ mod tests {
         let report = sample_report();
 
         store
-            .record_run(&run_id, Some("proj-a"), &report)
+            .record_run(&run_id, Some("My task"), Some("proj-a"), &report)
             .await
             .expect("record");
 
@@ -463,7 +476,7 @@ mod tests {
 
         // Idempotent re-record keeps node count stable.
         store
-            .record_run(&run_id, Some("proj-a"), &report)
+            .record_run(&run_id, Some("My task"), Some("proj-a"), &report)
             .await
             .unwrap();
         assert_eq!(store.node_count(&run_id).await.unwrap(), 2);
@@ -503,6 +516,7 @@ mod tests {
             .start_run(
                 &run_id,
                 &report.workflow,
+                Some("Incremental task"),
                 None,
                 report.nodes.len(),
                 &report.graph,
@@ -515,6 +529,7 @@ mod tests {
             .unwrap()
             .expect("running detail");
         assert_eq!(detail.run.status, "running");
+        assert_eq!(detail.run.title.as_deref(), Some("Incremental task"));
         assert_eq!(detail.run.node_count, 2);
         assert_eq!(detail.graph.len(), 2);
         assert!(detail.nodes.is_empty(), "no nodes finished yet");

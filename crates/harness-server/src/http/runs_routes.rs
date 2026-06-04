@@ -96,8 +96,16 @@ impl RunsState {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateRunRequest {
-    /// Workflow YAML path, relative to the server's project root.
+    /// Workflow path or bundled/project name.
     pub workflow: String,
+    /// Human task title — names the run; exposed to nodes as `$TASK_TITLE`.
+    #[serde(default)]
+    pub title: Option<String>,
+    /// The task spec — the substantive input. Fed to nodes as `$ARGUMENTS` /
+    /// `$USER_MESSAGE` / `$TASK_DESCRIPTION`. May be long.
+    #[serde(default)]
+    pub description: String,
+    /// Deprecated alias for `description` (back-compat).
     #[serde(default)]
     pub args: String,
     #[serde(default)]
@@ -183,13 +191,21 @@ pub async fn create_run(
         .base_branch
         .clone()
         .unwrap_or_else(|| "main".to_string());
+    // `description` is the task spec; fall back to the deprecated `args` alias.
+    let description = if req.description.is_empty() {
+        req.args
+    } else {
+        req.description
+    };
+    let title = req.title.filter(|t| !t.trim().is_empty());
     tokio::spawn(async move {
         execute_run_task(
             task_state,
             task_run_id,
             workflow,
             req.real,
-            req.args,
+            title,
+            description,
             base_branch,
             btx,
         )
@@ -205,7 +221,8 @@ async fn execute_run_task(
     run_id: String,
     workflow: harness_dag::Workflow,
     real: bool,
-    args: String,
+    title: Option<String>,
+    description: String,
     base_branch: String,
     btx: broadcast::Sender<RunEvent>,
 ) {
@@ -230,13 +247,17 @@ async fn execute_run_task(
     };
     let runner = LocalRunner::new(workspace, command_dirs, agent);
 
+    // The task spec feeds `$ARGUMENTS`/`$USER_MESSAGE`/`$TASK_DESCRIPTION`; the
+    // title is exposed separately as `$TASK_TITLE` (option 1).
     let vars = VarContext::new()
         .set("WORKFLOW_ID", run_id.clone())
         .set("ARTIFACTS_DIR", artifacts.display().to_string())
         .set("BASE_BRANCH", base_branch)
         .set("DOCS_DIR", "docs")
-        .set("ARGUMENTS", args.clone())
-        .set("USER_MESSAGE", args);
+        .set("TASK_TITLE", title.clone().unwrap_or_default())
+        .set("TASK_DESCRIPTION", description.clone())
+        .set("ARGUMENTS", description.clone())
+        .set("USER_MESSAGE", description);
 
     // Bridge the driver's futures-channel events → the tokio broadcast, and
     // persist incrementally (run row on start, each node as it finishes, status
@@ -245,6 +266,7 @@ async fn execute_run_task(
     let (tx, mut rx) = futures::channel::mpsc::unbounded::<RunEvent>();
     let persist_state = state.clone();
     let persist_run_id = run_id.clone();
+    let persist_title = title.clone();
     let forwarder = tokio::spawn(async move {
         let mut ordinals: HashMap<String, i32> = HashMap::new();
         while let Some(ev) = rx.next().await {
@@ -259,7 +281,14 @@ async fn execute_run_task(
                             ordinals.insert(n.id.clone(), i as i32);
                         }
                         let _ = store
-                            .start_run(&persist_run_id, workflow, None, *total_nodes, nodes)
+                            .start_run(
+                                &persist_run_id,
+                                workflow,
+                                persist_title.as_deref(),
+                                None,
+                                *total_nodes,
+                                nodes,
+                            )
                             .await;
                     }
                     RunEvent::NodeFinished { node } => {
@@ -283,7 +312,10 @@ async fn execute_run_task(
     // Final authoritative snapshot (reconciles nodes + sets terminal status).
     if let Ok(report) = &report {
         if let Ok(store) = state.store().await {
-            if let Err(e) = store.record_run(&run_id, None, report).await {
+            if let Err(e) = store
+                .record_run(&run_id, title.as_deref(), None, report)
+                .await
+            {
                 tracing::warn!(run_id = %run_id, "failed to persist run: {e}");
             }
         }

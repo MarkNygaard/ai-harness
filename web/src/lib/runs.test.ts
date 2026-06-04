@@ -78,6 +78,7 @@ describe("nodesFromDetail", () => {
     const detail: RunDetail = {
       id: "r1",
       workflow_name: "demo",
+      title: "Demo task",
       status: "completed",
       project: null,
       node_count: 2,

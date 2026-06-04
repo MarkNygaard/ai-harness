@@ -32,7 +32,7 @@ export function RunDetailPage() {
       breadcrumb={[
         { label: "harness" },
         { label: "Runs", href: "/" },
-        { label: run.workflow ?? id ?? "run", current: true },
+        { label: run.title ?? run.workflow ?? id ?? "run", current: true },
       ]}
     >
       <div className="flex h-full flex-col">
@@ -45,8 +45,13 @@ export function RunDetailPage() {
             </span>
           )}
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold">{run.workflow ?? "Workflow"}</div>
-            <div className="truncate font-mono text-[11px] text-muted-foreground">{id}</div>
+            <div className="truncate text-sm font-semibold">
+              {run.title ?? run.workflow ?? "Workflow"}
+            </div>
+            <div className="truncate font-mono text-[11px] text-muted-foreground">
+              {run.title && run.workflow ? `${run.workflow} · ` : ""}
+              {id}
+            </div>
           </div>
           <div className="ml-auto text-xs text-muted-foreground">
             {done}/{run.nodes.length} steps

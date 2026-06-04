@@ -37,6 +37,8 @@ export interface NodeMeta {
 export interface RunSummary {
   id: string;
   workflow_name: string;
+  /** Human task title (the trigger title); null for older/CLI runs. */
+  title: string | null;
   status: RunStatus;
   project: string | null;
   node_count: number;
@@ -92,7 +94,10 @@ export type RunEvent =
 
 export interface CreateRunRequest {
   workflow: string;
-  args?: string;
+  /** Names the task (exposed to nodes as `$TASK_TITLE`). */
+  title?: string;
+  /** The task spec — `$ARGUMENTS` / `$USER_MESSAGE` / `$TASK_DESCRIPTION`. */
+  description?: string;
   real?: boolean;
   base_branch?: string | null;
 }
