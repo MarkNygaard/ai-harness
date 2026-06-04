@@ -451,6 +451,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn records_run_and_reads_back() {
         let Some(url) = db_url() else {
             eprintln!("skipping: HARNESS_DATABASE_URL not set");
@@ -499,6 +500,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn incremental_start_node_finish_round_trip() {
         let Some(url) = db_url() else {
             eprintln!("skipping: HARNESS_DATABASE_URL not set");
