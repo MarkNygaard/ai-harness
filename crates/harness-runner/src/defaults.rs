@@ -10,12 +10,12 @@
 use std::path::Path;
 
 /// The workflow run when a request doesn't name one.
-pub const DEFAULT_WORKFLOW: &str = "idea-to-pr-with-kimi-coding-and-codex";
+pub const DEFAULT_WORKFLOW: &str = "idea-to-pr";
 
 /// Bundled workflows by name.
 const WORKFLOWS: &[(&str, &str)] = &[(
     DEFAULT_WORKFLOW,
-    include_str!("../defaults/workflows/idea-to-pr-with-kimi-coding-and-codex.yaml"),
+    include_str!("../defaults/workflows/idea-to-pr.yaml"),
 )];
 
 /// Bundled command bodies by (de-prefixed) name.

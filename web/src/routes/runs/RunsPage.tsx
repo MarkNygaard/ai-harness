@@ -92,7 +92,7 @@ function NewRunForm() {
   const create = useCreateRun();
   const projects = useProjects();
   const [project, setProject] = useState("");
-  const [workflow, setWorkflow] = useState("idea-to-pr-with-kimi-coding-and-codex");
+  const [workflow, setWorkflow] = useState("idea-to-pr");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [real, setReal] = useState(false);
@@ -155,7 +155,7 @@ function NewRunForm() {
             <input
               value={workflow}
               onChange={(e) => setWorkflow(e.target.value)}
-              placeholder="idea-to-pr-with-kimi-coding-and-codex"
+              placeholder="idea-to-pr"
               className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
           </div>

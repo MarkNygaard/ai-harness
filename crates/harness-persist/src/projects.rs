@@ -184,7 +184,7 @@ mod tests {
                 &ProjectInput {
                     git_url: "https://github.com/me/ticket0.git".into(),
                     base_branch: "develop".into(),
-                    default_workflow: Some("idea-to-pr-with-kimi-coding-and-codex".into()),
+                    default_workflow: Some("idea-to-pr".into()),
                     toolchains: vec!["rust".into(), "pnpm".into()],
                 },
             )
@@ -192,10 +192,7 @@ mod tests {
             .expect("update");
         assert_eq!(updated.base_branch, "develop");
         assert_eq!(updated.created_at, created.created_at);
-        assert_eq!(
-            updated.default_workflow.as_deref(),
-            Some("idea-to-pr-with-kimi-coding-and-codex")
-        );
+        assert_eq!(updated.default_workflow.as_deref(), Some("idea-to-pr"));
         assert_eq!(updated.toolchains, vec!["rust", "pnpm"]);
 
         assert!(store.list().await.unwrap().iter().any(|p| p.name == name));

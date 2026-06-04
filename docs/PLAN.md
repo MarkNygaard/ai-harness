@@ -231,7 +231,7 @@ machinery.
 **Migration path:** ship an `archon-import` command that reads a `.archon`
 workflow YAML and emits our format. Field mapping is near-1:1 (we deliberately
 keep the same field names where possible), so the author's
-`idea-to-pr-with-kimi-coding-and-codex.yaml` ports with minimal edits. Bundled
+`idea-to-pr.yaml` ports with minimal edits. Bundled
 `command` markdown files (`archon-plan-setup`, `archon-implement-tasks`, …) get
 copied into `harness` defaults.
 
