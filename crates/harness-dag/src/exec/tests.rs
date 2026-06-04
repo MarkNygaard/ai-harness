@@ -263,6 +263,34 @@ nodes:
 }
 
 #[tokio::test]
+async fn non_agent_nodes_carry_no_provider_or_model() {
+    // A workflow-level provider/model must NOT be stamped onto a bash node (it
+    // runs no agent); an agent node still inherits it.
+    let yaml = r#"
+name: t
+provider: pi
+model: kimi-coding/kimi-for-coding
+nodes:
+  - id: setup
+    bash: "echo hi"
+  - id: think
+    prompt: "do it"
+    depends_on: [setup]
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new();
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    let setup = report.node("setup").unwrap();
+    assert_eq!(setup.provider, None, "bash node must have no provider");
+    assert_eq!(setup.model, None, "bash node must have no model");
+
+    let think = report.node("think").unwrap();
+    assert_eq!(think.provider.as_deref(), Some("pi"));
+    assert_eq!(think.model.as_deref(), Some("kimi-coding/kimi-for-coding"));
+}
+
+#[tokio::test]
 async fn loop_stops_at_max_without_signal() {
     let yaml = r#"
 name: looped

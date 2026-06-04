@@ -8,8 +8,10 @@
 //! `message.content[]` carries the assistant text, and a final `agent_end` whose
 //! `telemetry.usage` gives full token fidelity incl. cache (PLAN §7.3/§10.1).
 //!
-//! Auth is via the `MOONSHOT_API_KEY` env var (or a prior `omp` OAuth login),
-//! inherited by the subprocess — we don't manage credentials here.
+//! Auth is inherited from the environment: `KIMI_API_KEY` for the Kimi-for-Coding
+//! subscription (`kimi-coding/*`), a `~/.pi/agent/auth.json` from `omp /login`, or
+//! `MOONSHOT_API_KEY` for the per-token Moonshot API (`moonshotai/*`). The server
+//! materializes these from the credential store before a run; we don't manage them.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -23,9 +25,10 @@ use tokio::process::Command;
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
 
 /// Default model when a `pi` node declares no `model` (or only a bare name).
-const DEFAULT_MODEL: &str = "kimi-code/kimi-k2.5";
-/// Provider prefix expected by `omp --model provider/model`.
-const KIMI_PREFIX: &str = "kimi-code/";
+const DEFAULT_MODEL: &str = "kimi-coding/kimi-for-coding";
+/// Provider prefix expected by `omp --model provider/model` (the Kimi-for-Coding
+/// subscription; bare model names are prefixed with this).
+const KIMI_PREFIX: &str = "kimi-coding/";
 /// Hard cap on a single `omp` invocation, overridable via `OMP_TIMEOUT_SECS`.
 const DEFAULT_TIMEOUT_SECS: u64 = 900;
 
@@ -372,13 +375,15 @@ mod tests {
     #[test]
     fn resolve_model_qualifies_bare_names() {
         let agent = PiAgent::from_env();
+        // Already provider-qualified → passed through unchanged.
         assert_eq!(
-            agent.resolve_model(Some("kimi-code/kimi-k2.6")),
-            "kimi-code/kimi-k2.6"
+            agent.resolve_model(Some("kimi-coding/kimi-for-coding")),
+            "kimi-coding/kimi-for-coding"
         );
+        // Bare name → prefixed with the Kimi-for-Coding provider.
         assert_eq!(
             agent.resolve_model(Some("kimi-k2.5")),
-            "kimi-code/kimi-k2.5"
+            "kimi-coding/kimi-k2.5"
         );
         assert_eq!(agent.resolve_model(None), DEFAULT_MODEL);
     }
