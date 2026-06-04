@@ -10,10 +10,10 @@ export interface EditorNodeData extends Record<string, unknown> {
   node: EditorNode;
 }
 
-/** Lay out editor nodes top-to-bottom with Dagre (used on load / "tidy"). */
+/** Lay out editor nodes left-to-right with Dagre (used on load / "tidy"). */
 export function layout(nodes: Node<EditorNodeData>[], edges: Edge[]): Node<EditorNodeData>[] {
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "TB", nodesep: 48, ranksep: 80, marginx: 24, marginy: 24 });
+  g.setGraph({ rankdir: "LR", nodesep: 24, ranksep: 72, marginx: 24, marginy: 24 });
   for (const n of nodes) g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   for (const e of edges) {
     if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
@@ -54,8 +54,8 @@ export function toGraph(wf: EditorWorkflow): {
     type: "editor",
     position: { x: 0, y: 0 },
     data: { node: n },
-    sourcePosition: Position.Bottom,
-    targetPosition: Position.Top,
+    sourcePosition: Position.Right,
+    targetPosition: Position.Left,
   }));
   const edges: Edge[] = [];
   for (const n of wf.nodes) {
@@ -94,8 +94,8 @@ export function makeNode(node: EditorNode, x: number, y: number): Node<EditorNod
     type: "editor",
     position: { x, y },
     data: { node },
-    sourcePosition: Position.Bottom,
-    targetPosition: Position.Top,
+    sourcePosition: Position.Right,
+    targetPosition: Position.Left,
   };
 }
 
