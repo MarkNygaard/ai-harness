@@ -403,6 +403,22 @@ async fn execute_run_task(
                             )
                             .await;
                     }
+                    RunEvent::NodeStarted {
+                        node_id,
+                        provider,
+                        model,
+                    } => {
+                        let ord = ordinals.get(node_id).copied().unwrap_or(0);
+                        let _ = store
+                            .start_node(
+                                &persist_run_id,
+                                ord,
+                                node_id,
+                                provider.as_deref(),
+                                model.as_deref(),
+                            )
+                            .await;
+                    }
                     RunEvent::NodeFinished { node } => {
                         let ord = ordinals.get(&node.id).copied().unwrap_or(0);
                         let _ = store.record_node(&persist_run_id, ord, node).await;
