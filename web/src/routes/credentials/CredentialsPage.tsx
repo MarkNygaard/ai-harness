@@ -50,12 +50,23 @@ const PROVIDERS: { id: string; label: string; help: string; fields: ProviderFiel
   {
     id: "pi",
     label: "Pi / Kimi",
-    help: "Kimi-for-Coding via the omp CLI.",
+    help: "The omp CLI. For the Kimi-for-Coding subscription (kimi-coding/* models) set KIMI_API_KEY, or paste ~/.pi/agent/auth.json from a machine where you ran `omp` `/login`. MOONSHOT_API_KEY is only for the per-token Moonshot API (moonshotai/* models).",
     fields: [
       {
+        key: "kimi_api_key",
+        label: "KIMI_API_KEY (Kimi-for-Coding subscription)",
+        help: "Sets KIMI_API_KEY for omp — authenticates the kimi-coding/* models.",
+      },
+      {
+        key: "auth_json",
+        label: "…or ~/.pi/agent/auth.json (full JSON from `omp` /login)",
+        multiline: true,
+        help: "Written to ~/.pi/agent/auth.json — the subscription login credential.",
+      },
+      {
         key: "moonshot_api_key",
-        label: "MOONSHOT_API_KEY",
-        help: "Sets MOONSHOT_API_KEY for omp.",
+        label: "MOONSHOT_API_KEY (per-token Moonshot API, optional)",
+        help: "Only for moonshotai/* per-token models.",
       },
     ],
   },
