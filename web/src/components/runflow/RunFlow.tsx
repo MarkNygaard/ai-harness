@@ -50,7 +50,7 @@ export function RunFlow({ nodes: views }: { nodes: NodeView[] }) {
         className="bg-transparent"
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
-        <Controls showInteractive={false} className="!border-border !bg-card" />
+        <Controls showInteractive={false} className="border-border! bg-card!" />
       </ReactFlow>
       <StepDialog view={selected} onClose={() => setSelectedId(null)} />
     </>
