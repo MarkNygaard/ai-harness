@@ -16,6 +16,7 @@ import type {
   CreateRunRequest,
   CreateRunResponse,
   NodeMeta,
+  NodeStatus,
   NodeView,
   RunDetail,
   RunEvent,
@@ -24,6 +25,20 @@ import type {
 } from "@/types/run";
 
 const EMPTY_USAGE = { input: null, output: null, cache_read: null, cache_write: null };
+
+/**
+ * How far along a node is, for merging the live stream with persisted state.
+ * pending < running < terminal. Equal rank → prefer the persisted row (it
+ * carries the finished output/usage the live event may lack).
+ */
+const STATUS_RANK: Record<NodeStatus, number> = {
+  pending: 0,
+  running: 1,
+  success: 2,
+  failed: 2,
+  skipped: 2,
+  cancelled: 2,
+};
 
 export function useRuns() {
   return useQuery<RunSummary[], Error>({
@@ -258,10 +273,11 @@ export interface RunView {
 }
 
 /**
- * The combined run view: persisted detail is authoritative once present;
- * otherwise the live SSE accumulator drives the graph. Handles both a
- * freshly-submitted run (live → finishes → detail loads) and a historical run
- * (stream 404s → detail loads immediately).
+ * The combined run view. The full DAG topology (from the persisted detail, which
+ * exists from run-start) is the skeleton; live SSE state and persisted node rows
+ * are merged onto it per node. The graph therefore always shows every step and
+ * only updates states in place — it never collapses to the subset the live
+ * stream happened to observe (e.g. when the page subscribed mid-run).
  */
 export function useRunView(id: string | null): RunView {
   const [state, dispatch] = useReducer(liveReducer, {
@@ -291,28 +307,41 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
   const detail = useRunDetail(id, !liveTerminal);
 
   return useMemo<RunView>(() => {
-    const liveNodes = state.order.length
-      ? state.order.map((nid) => state.nodes[nid])
-      : Object.values(state.nodes);
+    const d = detail.data;
+    // Persisted view always carries the full topology (unstarted steps included).
+    const persisted = d ? nodesFromDetail(d) : [];
+    const persistedById = new Map(persisted.map((n) => [n.id, n]));
 
-    // While we're receiving live events this session they're the freshest and
-    // most complete view. Otherwise use the persisted detail — which now exists
-    // mid-run (persist-on-start) so a refresh or the list shows in-flight runs.
-    if (liveNodes.length === 0 && detail.data) {
-      return {
-        workflow: detail.data.workflow_name,
-        title: detail.data.title,
-        status: detail.data.status,
-        nodes: nodesFromDetail(detail.data),
-        live: detail.data.status === "running",
-      };
-    }
-    const status = liveTerminal ? state.status : (detail.data?.status ?? state.status);
+    // Render order: the full topology when we have it, else the live order.
+    const order = persisted.length
+      ? persisted.map((n) => n.id)
+      : state.order.length
+        ? state.order
+        : Object.keys(state.nodes);
+
+    // Merge per node: keep whichever source is furthest along. Live carries the
+    // realtime `running` state; the persisted row carries finished output/usage.
+    // Edges always come from the persisted topology (live may have missed
+    // `run_started` and so lack depends_on).
+    const nodes: NodeView[] = order.map((nid) => {
+      const p = persistedById.get(nid);
+      const l = state.nodes[nid];
+      const chosen =
+        p && l
+          ? STATUS_RANK[l.status] > STATUS_RANK[p.status]
+            ? l
+            : p
+          : (p ?? l ?? seedNode({ id: nid, depends_on: [] }));
+      const depends_on = p?.depends_on ?? chosen.depends_on;
+      return depends_on === chosen.depends_on ? chosen : { ...chosen, depends_on };
+    });
+
+    const status = liveTerminal ? state.status : (d?.status ?? state.status);
     return {
-      workflow: state.workflow ?? detail.data?.workflow_name ?? null,
-      title: detail.data?.title ?? null,
+      workflow: d?.workflow_name ?? state.workflow ?? null,
+      title: d?.title ?? null,
       status,
-      nodes: liveNodes,
+      nodes,
       live: status === "running",
     };
   }, [detail.data, state, liveTerminal]);

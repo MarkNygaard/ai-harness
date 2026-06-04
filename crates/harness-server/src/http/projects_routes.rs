@@ -74,6 +74,9 @@ pub struct RegisterProjectRequest {
     pub base_branch: Option<String>,
     #[serde(default)]
     pub default_workflow: Option<String>,
+    /// `mise` tool specs to provision before runs (e.g. `rust`, `node@22`, `pnpm`).
+    #[serde(default)]
+    pub toolchains: Vec<String>,
 }
 
 /// `POST /api/projects` — register/update a project and ensure its repo is
@@ -159,6 +162,13 @@ pub async fn register_project(
         git_url,
         base_branch,
         default_workflow: req.default_workflow.filter(|w| !w.trim().is_empty()),
+        // Drop blank entries so the form can send a trailing empty input.
+        toolchains: req
+            .toolchains
+            .into_iter()
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect(),
     };
     let project = match store.upsert(&req.name, &input).await {
         Ok(p) => p,

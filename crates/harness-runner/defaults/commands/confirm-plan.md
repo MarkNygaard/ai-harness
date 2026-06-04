@@ -9,6 +9,15 @@ argument-hint: (no arguments - reads from workflow artifacts)
 
 ---
 
+> ## ⛔ HARD RULE — READ BEFORE ANYTHING ELSE
+>
+> This is a **verification** step. Allowed: read-only inspection and writing the
+> confirmation artifact under `$ARTIFACTS_DIR`. **Forbidden**, however trivial the
+> change seems: editing/creating/deleting source files, `git add`/`commit`/`push`,
+> and any PR operation (`gh pr create`/`edit`). Implementation is `implement-tasks`;
+> the PR is `finalize-pr`. If the plan looks "already done" or tiny, you still do
+> **not** implement it here — just record your verification and end your turn.
+
 ## Your Mission
 
 Verify that the plan's research is still valid before implementation begins.

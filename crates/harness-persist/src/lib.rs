@@ -253,6 +253,38 @@ impl RunStore {
         Ok(())
     }
 
+    /// Mark a node **running** (on `NodeStarted`) so a reloaded or late-subscribed
+    /// run view shows in-flight steps as running rather than pending. Never
+    /// downgrades a node that already reached a terminal state.
+    pub async fn start_node(
+        &self,
+        run_id: &str,
+        ordinal: i32,
+        node_id: &str,
+        provider: Option<&str>,
+        model: Option<&str>,
+    ) -> Result<(), PersistError> {
+        sqlx::query(
+            "INSERT INTO harness_run_nodes (run_id, ordinal, node_id, status, provider, model, started_at)
+             VALUES ($1, $2, $3, 'running', $4, $5, now())
+             ON CONFLICT (run_id, node_id) DO UPDATE SET
+                status = CASE
+                    WHEN harness_run_nodes.status IN ('success','failed','skipped','cancelled')
+                    THEN harness_run_nodes.status ELSE 'running' END,
+                provider = excluded.provider,
+                model = excluded.model,
+                started_at = COALESCE(harness_run_nodes.started_at, excluded.started_at)",
+        )
+        .bind(run_id)
+        .bind(ordinal)
+        .bind(node_id)
+        .bind(provider)
+        .bind(model)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Upsert a single node row as it reaches a terminal state — so a run's
     /// detail reflects progress live and survives a page refresh.
     pub async fn record_node(

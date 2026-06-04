@@ -10,6 +10,21 @@ argument-hint: <path/to/plan.md>
 
 ---
 
+> ## ⛔ HARD RULE — READ BEFORE ANYTHING ELSE
+>
+> This is a **setup** step. Allowed: read-only inspection (`git status`,
+> `git log`, `cat`, `gh repo view`), branch sync (`fetch`/`rebase`), and writing
+> artifact files under `$ARTIFACTS_DIR`. **Forbidden**, no matter how small or
+> "obvious" the change looks:
+> - Editing, creating, or deleting any **source file**.
+> - `git add` / `git commit` / amending commits.
+> - Creating or editing a **PR** (`gh pr create`, `gh pr edit`, …).
+>
+> Implementation happens later in `implement-tasks`; the PR is opened in
+> `finalize-pr`. If you are tempted to "just do it" because the change is trivial,
+> **stop** — doing it here breaks the pipeline's review gates. Write the context
+> artifact and end your turn.
+
 ## Your Mission
 
 Prepare everything needed for plan implementation:
