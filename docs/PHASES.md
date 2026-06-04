@@ -294,19 +294,22 @@ triggers; Linear layered on after).
 - [x] **Registry** (`harness-persist::ProjectStore` + `harness_projects` table):
   `name` (slug + checkout dir) · `git_url` · `base_branch` · `default_workflow`.
   Idempotent `CREATE TABLE IF NOT EXISTS`; CRUD + a DB round-trip test.
-- [x] **API** `/api/projects` (list/register/get/delete). Register upserts the row
-  and clones `git_url` into `projects_dir/<name>` (sibling of `project_root`,
-  overridable via `HARNESS_PROJECTS_DIR`); re-register `git fetch`es. A clone
-  failure still saves the row and returns a `warning` (bad URL / missing token).
+- [x] **API** `/api/projects` (list/register/get/delete). Register clones `git_url`
+  into `projects_dir/<name>` (sibling of `project_root`, overridable via
+  `HARNESS_PROJECTS_DIR`); re-register `git fetch`es. **`base_branch` is optional —
+  auto-detected from the repo's `origin/HEAD`** after clone (so a repo whose default
+  is `develop` is picked up without asking), falling back to `main`. A clone failure
+  still saves the row and returns a `warning` (bad URL / missing token).
 - [x] **Global GitHub credential**: `github` provider in the encrypted credential
   store (`token`) → `GH_TOKEN`/`GITHUB_TOKEN` at run time + a transient git
   credential helper for private clone/fetch (token never written to repo config).
-- [x] **Project-scoped runs**: `POST /api/runs` gains `project`; the run fetches
-  the checkout and cuts an **isolated worktree** off `origin/<base_branch>` (so
-  concurrent same-project runs don't collide), falling back to `project_root`
-  when omitted. `project` persisted on the run row (column already existed) and
-  surfaced in the list/detail. A project's `default_workflow` fills an empty
-  `workflow`.
+- [x] **Project-scoped runs**: `POST /api/runs` **requires** `project` (400
+  otherwise — there is no global-root fallback; every run lives in a project). The
+  run fetches the checkout and cuts an **isolated worktree** off
+  `origin/<base_branch>` (concurrent same-project runs don't collide); a setup
+  failure fails the run visibly. `project` persisted on the run row (column already
+  existed) and surfaced in the list/detail. A project's `default_workflow` fills an
+  empty `workflow`; its stored (auto-detected) `base_branch` is the default.
 - [x] **UI**: Projects page (register form + list with remove) + sidebar nav; a
   **project selector** on the run-trigger form (pre-fills the default workflow);
   the GitHub-token field on the Credentials page; project badge on run rows.

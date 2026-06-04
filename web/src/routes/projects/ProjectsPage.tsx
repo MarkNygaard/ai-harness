@@ -89,7 +89,7 @@ function RegisterForm() {
   const register = useRegisterProject();
   const [name, setName] = useState("");
   const [gitUrl, setGitUrl] = useState("");
-  const [baseBranch, setBaseBranch] = useState("main");
+  const [baseBranch, setBaseBranch] = useState("");
   const [defaultWorkflow, setDefaultWorkflow] = useState("");
   const [warning, setWarning] = useState<string | null>(null);
 
@@ -100,7 +100,8 @@ function RegisterForm() {
       {
         name: name.trim(),
         git_url: gitUrl.trim(),
-        base_branch: baseBranch.trim() || "main",
+        // Empty → server auto-detects the repo's default branch (origin/HEAD).
+        base_branch: baseBranch.trim() || undefined,
         default_workflow: defaultWorkflow.trim() || null,
       },
       {
@@ -109,7 +110,7 @@ function RegisterForm() {
           if (!res.warning) {
             setName("");
             setGitUrl("");
-            setBaseBranch("main");
+            setBaseBranch("");
             setDefaultWorkflow("");
           }
         },
@@ -134,11 +135,13 @@ function RegisterForm() {
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Base branch</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                Base branch (optional)
+              </span>
               <input
                 value={baseBranch}
                 onChange={(e) => setBaseBranch(e.target.value)}
-                placeholder="main"
+                placeholder="auto-detect (e.g. main, develop)"
                 className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
               />
             </label>

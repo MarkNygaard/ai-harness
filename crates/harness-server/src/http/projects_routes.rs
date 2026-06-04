@@ -68,14 +68,12 @@ pub async fn get_project(
 pub struct RegisterProjectRequest {
     pub name: String,
     pub git_url: String,
-    #[serde(default = "default_branch")]
-    pub base_branch: String,
+    /// Optional. When omitted/empty, the repo's default branch (`origin/HEAD`) is
+    /// auto-detected after clone (falling back to `main`).
+    #[serde(default)]
+    pub base_branch: Option<String>,
     #[serde(default)]
     pub default_workflow: Option<String>,
-}
-
-fn default_branch() -> String {
-    "main".to_string()
 }
 
 /// `POST /api/projects` — register/update a project and ensure its repo is
@@ -100,9 +98,66 @@ pub async fn register_project(
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
 
+    // Bring the on-disk checkout in line first (clone if absent, else fetch), so
+    // we can auto-detect the repo's default branch when the caller didn't pick one.
+    let want_branch = req
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .map(str::to_string);
+    let detect = want_branch.is_none();
+    let dest: PathBuf = state.projects_dir.join(&req.name);
+    let token = state.github_token().await;
+    let git_url = req.git_url.trim().to_string();
+    let clone_url = git_url.clone();
+    let exists = dest.exists();
+    let git_result = tokio::task::spawn_blocking(
+        move || -> Result<Option<String>, harness_runner::WorktreeError> {
+            if exists {
+                harness_runner::fetch_repo(&dest, token.as_deref())?;
+            } else {
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        harness_runner::WorktreeError(format!("create projects dir: {e}"))
+                    })?;
+                }
+                harness_runner::clone_repo(&clone_url, &dest, token.as_deref())?;
+            }
+            // Detect origin/HEAD only when the caller didn't specify a branch.
+            Ok(if detect {
+                harness_runner::default_branch(&dest)
+            } else {
+                None
+            })
+        },
+    )
+    .await;
+
+    // Resolve the branch to store, and any non-fatal git warning.
+    let (base_branch, warning) = match git_result {
+        Ok(Ok(detected)) => (
+            want_branch
+                .or(detected)
+                .unwrap_or_else(|| "main".to_string()),
+            None,
+        ),
+        // Save the row anyway so the user can fix creds/URL and re-register.
+        Ok(Err(e)) => (
+            want_branch.unwrap_or_else(|| "main".to_string()),
+            Some(format!("registered, but repo sync failed: {e}")),
+        ),
+        Err(e) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("git task panicked: {e}"),
+            )
+        }
+    };
+
     let input = ProjectInput {
-        git_url: req.git_url.trim().to_string(),
-        base_branch: req.base_branch.trim().to_string(),
+        git_url,
+        base_branch,
         default_workflow: req.default_workflow.filter(|w| !w.trim().is_empty()),
     };
     let project = match store.upsert(&req.name, &input).await {
@@ -110,41 +165,13 @@ pub async fn register_project(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
 
-    // Bring the on-disk checkout in line: clone if absent, else fetch.
-    let dest: PathBuf = state.projects_dir.join(&req.name);
-    let token = state.github_token().await;
-    let git_url = project.git_url.clone();
-    let exists = dest.exists();
-    let git_result = tokio::task::spawn_blocking(move || {
-        if exists {
-            harness_runner::fetch_repo(&dest, token.as_deref())
-        } else {
-            if let Some(parent) = dest.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    harness_runner::WorktreeError(format!("create projects dir: {e}"))
-                })?;
-            }
-            harness_runner::clone_repo(&git_url, &dest, token.as_deref())
-        }
-    })
-    .await;
-
-    match git_result {
-        Ok(Ok(())) => Json(project).into_response(),
-        // Registry row is saved; surface the git failure so the UI can show it
-        // (e.g. bad URL / missing token) without losing the registration.
-        Ok(Err(e)) => (
+    match warning {
+        None => Json(project).into_response(),
+        Some(w) => (
             StatusCode::ACCEPTED,
-            Json(serde_json::json!({
-                "project": project,
-                "warning": format!("registered, but repo sync failed: {e}"),
-            })),
+            Json(serde_json::json!({ "project": project, "warning": w })),
         )
             .into_response(),
-        Err(e) => err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("git task panicked: {e}"),
-        ),
     }
 }
 

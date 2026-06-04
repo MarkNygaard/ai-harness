@@ -102,6 +102,20 @@ pub fn fetch_repo(repo: &Path, token: Option<&str>) -> Result<(), WorktreeError>
     finish(cmd, "fetch")
 }
 
+/// The repo's default branch, detected from `origin/HEAD` (set by `git clone`).
+/// Returns the bare branch name (e.g. `main`, `develop`), or `None` if it can't
+/// be determined — caller should fall back to a sane default.
+pub fn default_branch(repo: &Path) -> Option<String> {
+    // `git symbolic-ref refs/remotes/origin/HEAD` → "refs/remotes/origin/<branch>".
+    let out = run_git(repo, &["symbolic-ref", "refs/remotes/origin/HEAD"]).ok()?;
+    let branch = out.trim().rsplit('/').next()?.trim();
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
+    }
+}
+
 /// Inject a transient GitHub HTTPS credential helper that reads the token from
 /// the child env (`HARNESS_GIT_TOKEN`) — clears inherited helpers first.
 fn auth_args(cmd: &mut Command, token: Option<&str>) {

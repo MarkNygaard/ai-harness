@@ -129,13 +129,24 @@ function NewRunForm() {
               onChange={(e) => onProjectChange(e.target.value)}
               className="h-8 rounded-md border border-input bg-transparent px-2 text-[12px] outline-none focus:ring-2 focus:ring-ring"
             >
-              <option value="">No project (global workspace)</option>
+              <option value="" disabled>
+                Select a project…
+              </option>
               {projects.data?.map((p) => (
                 <option key={p.name} value={p.name}>
                   {p.name}
                 </option>
               ))}
             </select>
+            {projects.data?.length === 0 && (
+              <span className="text-[11px] text-muted-foreground">
+                No projects yet —{" "}
+                <Link to="/projects" className="text-accent-orange hover:underline">
+                  register one
+                </Link>{" "}
+                first.
+              </span>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">
@@ -179,7 +190,7 @@ function NewRunForm() {
               />
               Use real agents (otherwise echo)
             </label>
-            <Button type="submit" disabled={create.isPending || !workflow.trim()}>
+            <Button type="submit" disabled={create.isPending || !project || !workflow.trim()}>
               <Play className="h-3.5 w-3.5" />
               {create.isPending ? "Starting…" : "Run workflow"}
             </Button>
