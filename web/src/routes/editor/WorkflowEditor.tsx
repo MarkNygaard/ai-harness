@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import {
   addEdge,
   Background,
@@ -201,7 +201,10 @@ function Editor() {
 
   const editorTitle = (
     <div className="flex min-w-0 items-center gap-2">
-      <span className="shrink-0 font-semibold">Editor</span>
+      <Link to="/editor" className="shrink-0 font-semibold text-muted-foreground hover:text-foreground">
+        Workflows
+      </Link>
+      <span className="shrink-0 text-muted-foreground">/</span>
       <input
         className="h-7 w-56 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
         value={meta.name}

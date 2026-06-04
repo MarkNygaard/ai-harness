@@ -23,7 +23,7 @@ interface NavItem {
 
 const OPERATIONS: NavItem[] = [
   { href: "/", label: "Runs", icon: IconRocket, match: "/runs" },
-  { href: "/editor", label: "Editor", icon: IconBinaryTree2, match: "/editor" },
+  { href: "/editor", label: "Workflows", icon: IconBinaryTree2, match: "/editor" },
 ];
 
 const SYSTEM: NavItem[] = [
