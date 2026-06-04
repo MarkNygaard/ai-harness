@@ -259,6 +259,7 @@ function Editor() {
               onNodeClick={(_e, n) => setSelectedId(n.id)}
               onPaneClick={() => setSelectedId(null)}
               fitView
+              colorMode="dark"
               proOptions={{ hideAttribution: true }}
               className="bg-transparent"
             >

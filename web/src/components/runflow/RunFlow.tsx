@@ -45,6 +45,7 @@ export function RunFlow({ nodes: views }: { nodes: NodeView[] }) {
         maxZoom={1.5}
         nodesConnectable={false}
         onNodeClick={(_e, n) => setSelectedId(n.id)}
+        colorMode="dark"
         proOptions={{ hideAttribution: true }}
         className="bg-transparent"
       >

@@ -215,10 +215,27 @@
   background: var(--muted-foreground);
 }
 
-/* React Flow: transparent canvas. */
+/* React Flow: transparent canvas + control buttons themed to our tokens
+   (otherwise the zoom/fit buttons render white on the dark theme). */
 .react-flow {
   background: transparent;
 }
 .react-flow__attribution {
   display: none;
+}
+.react-flow__controls {
+  box-shadow: none;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--foreground);
+}
+.react-flow__controls-button:hover {
+  background: var(--secondary);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
 }
