@@ -420,8 +420,23 @@ async fn execute_node<R: NodeRunner>(
     incoming_session: Option<String>,
     events: Events<'_>,
 ) -> NodeRunResult {
-    let provider = node.provider.as_deref().or(wf_provider);
-    let model = node.model.as_deref().or(wf_model);
+    // Only agent-dispatching nodes carry a provider/model. bash/script/cancel/
+    // approval nodes run no agent, so they show none — they don't inherit the
+    // workflow default just for display.
+    let is_agent = matches!(
+        node.kind,
+        NodeKind::Prompt(_) | NodeKind::Command(_) | NodeKind::Loop(_)
+    );
+    let provider = if is_agent {
+        node.provider.as_deref().or(wf_provider)
+    } else {
+        None
+    };
+    let model = if is_agent {
+        node.model.as_deref().or(wf_model)
+    } else {
+        None
+    };
     emit(
         events,
         RunEvent::NodeStarted {
