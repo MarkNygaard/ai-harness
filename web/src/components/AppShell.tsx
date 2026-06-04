@@ -1,69 +1,34 @@
-import { useNavigate } from "react-router-dom";
-import { Sidebar, type SidebarSection } from "@/components/Sidebar";
-import { TopBar } from "@/components/TopBar";
-import { PaletteFab } from "@/components/PaletteFab";
+import { AppSidebar } from "@/components/AppSidebar";
+import { SiteHeader } from "@/components/SiteHeader";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 
-export type NavKey = "runs" | "editor" | "credentials" | "overview" | "worktrees" | "tasks";
-
-function sections(active: NavKey): SidebarSection[] {
-  const item = (id: NavKey, label: string, href: string) => ({
-    id,
-    label,
-    href,
-    active: id === active,
-  });
-  return [
-    {
-      label: "Operations",
-      items: [
-        item("runs", "Runs", "/"),
-        item("editor", "Editor", "/editor"),
-        item("tasks", "Tasks", "/tasks"),
-      ],
-    },
-    {
-      label: "System",
-      items: [
-        item("credentials", "Credentials", "/credentials"),
-        item("overview", "Overview", "/overview"),
-        item("worktrees", "Worktrees", "/worktrees"),
-      ],
-    },
-  ];
-}
-
-/** Shared application shell: sidebar nav + top bar + scrollable content. */
+/**
+ * Application shell — shadcn `Sidebar` (inset variant) + a `SiteHeader` title
+ * bar, mirroring home-ops-agent. Pages render their content as children.
+ */
 export function AppShell({
-  active,
-  breadcrumb,
+  title,
   actions,
-  searchPlaceholder,
   children,
 }: {
-  active: NavKey;
-  breadcrumb: { label: string; href?: string; current?: boolean }[];
+  title: React.ReactNode;
   actions?: React.ReactNode;
-  searchPlaceholder?: string;
   children: React.ReactNode;
 }) {
-  const navigate = useNavigate();
   return (
-    <div className="grid grid-cols-[240px_1fr] h-screen overflow-hidden">
-      <Sidebar
-        env="local"
-        sections={sections(active)}
-        onItemClick={(id) => {
-          const href = sections(active)
-            .flatMap((s) => s.items)
-            .find((i) => i.id === id)?.href;
-          if (href) navigate(href);
-        }}
-      />
-      <main className="flex flex-col min-h-0 min-w-0">
-        <TopBar breadcrumb={breadcrumb} searchPlaceholder={searchPlaceholder} actions={actions} />
-        <div className="flex-1 overflow-auto min-h-0">{children}</div>
-      </main>
-      <PaletteFab />
-    </div>
+    <SidebarProvider
+      style={
+        {
+          "--sidebar-width": "calc(var(--spacing) * 60)",
+          "--header-height": "calc(var(--spacing) * 12)",
+        } as React.CSSProperties
+      }
+    >
+      <AppSidebar variant="inset" />
+      <SidebarInset className="flex min-h-0 flex-col overflow-hidden">
+        <SiteHeader title={title} actions={actions} />
+        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+      </SidebarInset>
+    </SidebarProvider>
   );
 }

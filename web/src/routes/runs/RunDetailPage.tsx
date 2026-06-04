@@ -27,14 +27,7 @@ export function RunDetailPage() {
   ).length;
 
   return (
-    <AppShell
-      active="runs"
-      breadcrumb={[
-        { label: "harness" },
-        { label: "Runs", href: "/" },
-        { label: run.title ?? run.workflow ?? id ?? "run", current: true },
-      ]}
-    >
+    <AppShell title={run.title ?? run.workflow ?? id ?? "run"}>
       <div className="flex h-full flex-col">
         <div className="flex flex-none items-center gap-3 border-b border-border px-6 py-3">
           <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>{run.status}</Badge>

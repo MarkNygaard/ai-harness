@@ -66,10 +66,7 @@ export function CredentialsPage() {
   const configured = new Map((creds.data ?? []).map((c) => [c.provider, c.configured]));
 
   return (
-    <AppShell
-      active="credentials"
-      breadcrumb={[{ label: "harness" }, { label: "Credentials", current: true }]}
-    >
+    <AppShell title="Credentials">
       <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold">
