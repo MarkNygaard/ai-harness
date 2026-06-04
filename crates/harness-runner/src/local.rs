@@ -26,7 +26,10 @@ pub struct Shell {
 }
 
 impl Shell {
-    /// The platform default shell.
+    /// The platform default shell. On Unix we use **bash**, not `/bin/sh`: shell
+    /// node bodies (and the bundled commands' scripts) use bash-isms like
+    /// `set -o pipefail`, which dash — `/bin/sh` on Debian, our runtime image —
+    /// rejects. The image ships bash; tests can override via [`Self`] + `with_shell`.
     pub fn platform_default() -> Self {
         if cfg!(windows) {
             Shell {
@@ -35,7 +38,7 @@ impl Shell {
             }
         } else {
             Shell {
-                program: "sh".into(),
+                program: "bash".into(),
                 command_flag: "-c".into(),
             }
         }
@@ -476,6 +479,17 @@ mod tests {
             agent.last_prompt.lock().unwrap().as_deref(),
             Some("# Plan Setup\nDo the thing")
         );
+    }
+
+    #[test]
+    fn unix_default_shell_is_bash() {
+        let s = Shell::platform_default();
+        if cfg!(windows) {
+            assert_eq!(s.program, "cmd");
+        } else {
+            // bash, not /bin/sh (dash) — scripts use `set -o pipefail` etc.
+            assert_eq!(s.program, "bash");
+        }
     }
 
     #[test]
