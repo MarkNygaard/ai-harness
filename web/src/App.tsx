@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { RunsPage } from "./routes/runs/RunsPage";
 import { RunDetailPage } from "./routes/runs/RunDetailPage";
 import { WorkflowEditor } from "./routes/editor/WorkflowEditor";
+import { WorkflowsList } from "./routes/editor/WorkflowsList";
 import { CredentialsPage } from "./routes/credentials/CredentialsPage";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { TokenPrompt } from "./components/TokenPrompt";
@@ -25,7 +26,8 @@ export function App() {
         <Routes>
           <Route path="/" element={<RunsPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
-          <Route path="/editor" element={<WorkflowEditor />} />
+          <Route path="/editor" element={<WorkflowsList />} />
+          <Route path="/editor/new" element={<WorkflowEditor />} />
           <Route path="/editor/:name" element={<WorkflowEditor />} />
           <Route path="/credentials" element={<CredentialsPage />} />
         </Routes>
