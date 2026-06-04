@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import {
   addEdge,
   Background,
@@ -16,7 +16,8 @@ import {
   type NodeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ArrowLeft, Check, Loader2, Save, TriangleAlert } from "lucide-react";
+import { Check, Loader2, Save, TriangleAlert } from "lucide-react";
+import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -198,85 +199,87 @@ function Editor() {
     [deleteNode, selectedId],
   );
 
-  return (
-    <div className="flex h-screen flex-col">
-      {/* Top bar */}
-      <div className="flex flex-none items-center gap-3 border-b border-border bg-card px-4 py-2.5">
-        <Link to="/" className="rounded p-1.5 text-muted-foreground hover:bg-secondary">
-          <ArrowLeft className="h-4 w-4" />
-        </Link>
-        <span className="text-sm font-semibold">Workflow Editor</span>
-        <input
-          className="h-8 w-72 rounded-md border border-input bg-transparent px-2.5 font-mono text-[13px] outline-none focus:ring-2 focus:ring-ring"
-          value={meta.name}
-          onChange={(e) => setMeta((m) => ({ ...m, name: e.target.value }))}
-          placeholder="workflow-name"
-        />
-        {source.data?.source === "bundled" && (
-          <Badge variant="outline" title="Saving creates a project copy that shadows the bundled default">
-            bundled
-          </Badge>
-        )}
-        <ValidationStatus
-          pending={validate.isPending}
-          valid={validate.data?.valid}
-          error={validate.data?.error ?? null}
-          count={validate.data?.nodes.length}
-        />
-        <div className="ml-auto flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={tidy} disabled={nodes.length === 0}>
-            Tidy
-          </Button>
-          <Button
-            size="sm"
-            onClick={doSave}
-            disabled={save.isPending || validate.data?.valid === false || nodes.length === 0}
-          >
-            <Save className="h-3.5 w-3.5" />
-            {save.isPending ? "Saving…" : save.isSuccess ? "Saved" : "Save"}
-          </Button>
-        </div>
-      </div>
-
-      {save.isError && (
-        <div className="flex-none border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive">
-          {save.error.message}
-        </div>
+  const editorTitle = (
+    <div className="flex min-w-0 items-center gap-2">
+      <span className="shrink-0 font-semibold">Editor</span>
+      <input
+        className="h-7 w-56 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+        value={meta.name}
+        onChange={(e) => setMeta((m) => ({ ...m, name: e.target.value }))}
+        placeholder="workflow-name"
+      />
+      {source.data?.source === "bundled" && (
+        <Badge variant="outline" title="Saving creates a project copy that shadows the bundled default">
+          bundled
+        </Badge>
       )}
-
-      {/* Body */}
-      <div className="flex min-h-0 flex-1">
-        <Palette kinds={catalog.data?.node_kinds ?? []} onAdd={(k) => addNode(k)} />
-        <div className="min-w-0 flex-1" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
-          <EditorActionsContext.Provider value={actions}>
-            <ReactFlow
-              nodes={nodes}
-              edges={edges}
-              nodeTypes={nodeTypes}
-              onNodesChange={onNodesChange}
-              onEdgesChange={onEdgesChange}
-              onConnect={onConnect}
-              onNodeClick={(_e, n) => setSelectedId(n.id)}
-              onPaneClick={() => setSelectedId(null)}
-              fitView
-              proOptions={{ hideAttribution: true }}
-              className="bg-transparent"
-            >
-              <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
-              <Controls showInteractive={false} className="!border-border !bg-card" />
-            </ReactFlow>
-          </EditorActionsContext.Provider>
-        </div>
-        {selectedNode && (
-          <PropertiesDrawer
-            node={selectedNode}
-            catalog={catalog.data}
-            onChange={updateNode}
-            onClose={() => setSelectedId(null)}
-          />
-        )}
-      </div>
     </div>
+  );
+
+  const editorActions = (
+    <>
+      <ValidationStatus
+        pending={validate.isPending}
+        valid={validate.data?.valid}
+        error={validate.data?.error ?? null}
+        count={validate.data?.nodes.length}
+      />
+      <Button variant="outline" size="sm" onClick={tidy} disabled={nodes.length === 0}>
+        Tidy
+      </Button>
+      <Button
+        size="sm"
+        onClick={doSave}
+        disabled={save.isPending || validate.data?.valid === false || nodes.length === 0}
+      >
+        <Save className="h-3.5 w-3.5" />
+        {save.isPending ? "Saving…" : save.isSuccess ? "Saved" : "Save"}
+      </Button>
+    </>
+  );
+
+  return (
+    <AppShell title={editorTitle} actions={editorActions}>
+      <div className="flex h-full min-h-0 flex-col">
+        {save.isError && (
+          <div className="flex-none border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive">
+            {save.error.message}
+          </div>
+        )}
+        <div className="flex min-h-0 flex-1">
+          <Palette kinds={catalog.data?.node_kinds ?? []} onAdd={(k) => addNode(k)} />
+          <div className="min-w-0 flex-1" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+            <EditorActionsContext.Provider value={actions}>
+              <ReactFlow
+                nodes={nodes}
+                edges={edges}
+                nodeTypes={nodeTypes}
+                onNodesChange={onNodesChange}
+                onEdgesChange={onEdgesChange}
+                onConnect={onConnect}
+                onNodeClick={(_e, n) => setSelectedId(n.id)}
+                onPaneClick={() => setSelectedId(null)}
+                fitView
+                colorMode="dark"
+                proOptions={{ hideAttribution: true }}
+                className="bg-transparent"
+              >
+                <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
+                <Controls showInteractive={false} className="border-border! bg-card!" />
+              </ReactFlow>
+            </EditorActionsContext.Provider>
+          </div>
+          {selectedNode && (
+            <PropertiesDrawer
+              node={selectedNode}
+              catalog={catalog.data}
+              onChange={updateNode}
+              onClose={() => setSelectedId(null)}
+            />
+          )}
+        </div>
+      </div>
+    </AppShell>
   );
 }
 

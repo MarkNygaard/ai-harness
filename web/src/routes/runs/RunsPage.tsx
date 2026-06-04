@@ -30,11 +30,7 @@ function relativeTime(iso: string): string {
 export function RunsPage() {
   const runs = useRuns();
   return (
-    <AppShell
-      active="runs"
-      breadcrumb={[{ label: "harness" }, { label: "Runs", current: true }]}
-      searchPlaceholder="Search runs…"
-    >
+    <AppShell title="Runs">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
         <NewRunForm />
         <section className="flex flex-col gap-2">

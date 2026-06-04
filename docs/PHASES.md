@@ -371,6 +371,19 @@ secrets.
   milestone Gantt of the DAG, token panels by type/step/model, per-run cost
   dashboards, loop per-iteration token bars.
 - [ ] Re-enable optional majiayu features if wanted (policy rules, skills, GC).
+- [ ] **Remove the legacy majiayu *task* subsystem from the server.** The UI for
+  it (Kanban/Tasks, Overview, Worktrees, old shell) was deleted in the shadcn
+  migration (PR #24), but the Rust side is still present and dormant: the `/tasks`
+  routes + `task_routes`/`task_mutation_routes`/`task_query_routes`/
+  `task_submission_routes`, the `task_executor` + `task_runner`, the durable
+  `workflow_runtime`/runtime-hosts machinery, and the related `/api/dashboard`,
+  `/api/overview`, `/api/worktrees`, `/api/workflows/runtime/*`, `/api/runtime-hosts/*`
+  routes + their handlers/stores. None of it is used by the `/api/runs` (harness-dag)
+  path. Removing it is a large, careful pass (many modules + tests) — do it as its
+  own PR, keeping `/api/runs`, `/api/authoring`, `/api/credentials`, the SPA serving,
+  and the GitHub/webhook intake we still want. Also drop the now-orphaned
+  `crate::dashboard`/`crate::overview` HTML routes + the `/overview`,`/worktrees`
+  server GET routes.
 - [ ] Docs: operator runbook, workflow-authoring guide, Archon-migration guide.
 
 **Exit:** documented, observable, recoverable; the author's daily workflow lives
