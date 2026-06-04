@@ -234,6 +234,8 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
 
 export interface RunView {
   workflow: string | null;
+  /** The task title (persisted); null until/unless set. */
+  title: string | null;
   status: RunStatus;
   nodes: NodeView[];
   /** True while the run is executing (driven by SSE, not yet persisted). */
@@ -284,6 +286,7 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
     if (liveNodes.length === 0 && detail.data) {
       return {
         workflow: detail.data.workflow_name,
+        title: detail.data.title,
         status: detail.data.status,
         nodes: nodesFromDetail(detail.data),
         live: detail.data.status === "running",
@@ -292,6 +295,7 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
     const status = liveTerminal ? state.status : (detail.data?.status ?? state.status);
     return {
       workflow: state.workflow ?? detail.data?.workflow_name ?? null,
+      title: detail.data?.title ?? null,
       status,
       nodes: liveNodes,
       live: status === "running",

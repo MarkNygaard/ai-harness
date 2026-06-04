@@ -66,8 +66,11 @@ function RunRow({ run }: { run: RunSummary }) {
         <CardContent className="flex items-center gap-3 py-2.5">
           <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>{run.status}</Badge>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">{run.workflow_name}</div>
-            <div className="truncate font-mono text-[11px] text-muted-foreground">{run.id}</div>
+            <div className="truncate text-sm font-medium">{run.title || run.workflow_name}</div>
+            <div className="truncate font-mono text-[11px] text-muted-foreground">
+              {run.title ? `${run.workflow_name} · ` : ""}
+              {run.id}
+            </div>
           </div>
           <div className="text-right text-[11px] text-muted-foreground">
             <div>{run.node_count} steps</div>
@@ -84,13 +87,19 @@ function NewRunForm() {
   const navigate = useNavigate();
   const create = useCreateRun();
   const [workflow, setWorkflow] = useState("idea-to-pr-with-kimi-coding-and-codex");
-  const [args, setArgs] = useState("");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [real, setReal] = useState(false);
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     create.mutate(
-      { workflow, args: args || undefined, real },
+      {
+        workflow,
+        title: title.trim() || undefined,
+        description: description.trim() || undefined,
+        real,
+      },
       { onSuccess: (res) => navigate(`/runs/${res.run_id}`) },
     );
   }
@@ -111,12 +120,24 @@ function NewRunForm() {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Arguments (optional)</label>
+            <label className="text-xs font-medium text-muted-foreground">Title</label>
             <input
-              value={args}
-              onChange={(e) => setArgs(e.target.value)}
-              placeholder="passed as $ARGUMENTS / $USER_MESSAGE"
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="short task name (e.g. Add rate limiting to the API)"
               className="h-8 rounded-md border border-input bg-transparent px-2.5 text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">
+              Description (the task spec — what you want done)
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={5}
+              placeholder="Describe the work fully so the agents can decide and carry it out autonomously. Fed to nodes as $ARGUMENTS / $USER_MESSAGE / $TASK_DESCRIPTION."
+              className="rounded-md border border-input bg-transparent p-2 text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
           <div className="flex items-center justify-between gap-3">
