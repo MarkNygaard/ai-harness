@@ -410,6 +410,16 @@ secrets.
 
 - [ ] Secret redaction in logs/OTLP; retry/idempotency on runner crashes (lease
   recovery via the reducer machinery).
+- [ ] **Per-node tool/capability restrictions (workflow fidelity).** Today *every*
+  agent node runs with full tools (edit/bash/git/gh, `DangerFullAccess`); a node's
+  role is enforced only by its prompt. The first real run proved this is
+  insufficient: the `plan-setup` step **implemented the change, committed, pushed,
+  and opened the PR** even though its prompt explicitly said "This step does NOT
+  implement anything" / "does NOT create a PR" — a capable model given a tiny,
+  fully-specified task just did it. Fix: a node-level `tools`/`capabilities` field
+  in `harness-dag` (e.g. `read-only`, `no-vcs`, `implement`, `pr`) that the runner
+  **enforces** — read-only nodes physically cannot edit/commit/push/PR. Prompt
+  hardening (done for plan-setup/confirm-plan) is a stopgap, not the fix.
 - [ ] **Rich task overview** (Factory-style, PLAN §10.1): time waterfall /
   milestone Gantt of the DAG, token panels by type/step/model, per-run cost
   dashboards, loop per-iteration token bars.
