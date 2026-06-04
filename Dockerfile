@@ -45,18 +45,31 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
-# Bun + omp (the Pi/Kimi CLI), and mise (toolchain provisioning).
-RUN curl -fsSL https://bun.sh/install | bash \
-    && ln -sf /root/.bun/bin/bun /usr/local/bin/bun \
-    && bun install -g @oh-my-pi/pi-coding-agent \
-    && curl -fsSL https://mise.run | sh \
-    && ln -sf /root/.local/bin/mise /usr/local/bin/mise
+# Bun + omp (the Pi/Kimi CLI) and mise (toolchain provisioning). These MUST be
+# installed into world-readable/executable locations — NOT under /root, which is
+# mode 700 and unreadable by the non-root `harness` user (uid 1000). The old
+# symlink-into-/root pattern left these binaries unexecutable at runtime, so mise
+# could never provision a toolchain (cargo/pnpm/…). Install bun into /opt/bun via
+# BUN_INSTALL (so its global packages, incl. omp, land there too) and move the
+# mise binary into /usr/local/bin.
+RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/bun bash \
+    && BUN_INSTALL=/opt/bun /opt/bun/bin/bun install -g @oh-my-pi/pi-coding-agent \
+    && chmod -R a+rX /opt/bun \
+    && ln -sf /opt/bun/bin/bun /usr/local/bin/bun \
+    && ln -sf /opt/bun/bin/omp /usr/local/bin/omp
+RUN curl -fsSL https://mise.run | sh \
+    && mv /root/.local/bin/mise /usr/local/bin/mise \
+    && chmod a+rx /usr/local/bin/mise \
+    && rm -rf /root/.local
 
 # Non-root user; $HOME holds the run-time-materialized agent credentials and is
 # expected to be backed by a PersistentVolume so they survive restarts.
 RUN useradd --create-home --uid 1000 --shell /bin/bash harness
-# Make the root-installed global bun bin available to the harness user too.
-RUN ln -sf /root/.bun/bin/omp /usr/local/bin/omp || true
+# Activate mise in the harness user's login/interactive shells too. The runner
+# itself uses `bash -c` with an injected shims PATH, but agents and any login
+# shell (`bash -lc`) need this so mise-provisioned tools resolve there as well.
+RUN echo 'eval "$(/usr/local/bin/mise activate bash)"' >> /home/harness/.bashrc \
+    && chown harness:harness /home/harness/.bashrc
 
 COPY --from=builder /usr/local/bin/harness /usr/local/bin/harness
 
