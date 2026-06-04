@@ -33,7 +33,7 @@ pub use local::{LocalRunner, Shell};
 pub use pi::{parse_omp_stream, ParsedOmp, PiAgent};
 pub use registry::build_agent_registry;
 pub use run::{execute_run, parse_sandbox, print_report, RunOptions};
-pub use worktree::{sanitize_branch_component, Worktree, WorktreeError};
+pub use worktree::{clone_repo, fetch_repo, sanitize_branch_component, Worktree, WorktreeError};
 
 /// A request to run an AI prompt against a working directory.
 #[derive(Debug, Clone)]
