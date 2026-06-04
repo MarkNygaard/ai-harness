@@ -282,9 +282,52 @@ describe a change in natural language, and have the AI edit → `workflow_valida
 
 ---
 
+## Phase 5.0 — Projects (repo-scoped runs) — 🔨 in progress
+
+**Goal:** runs are scoped to a **project** (a git repo), not one global
+`project_root`. Register Ticket0 / ai-harness / niles, trigger runs into the
+right repo, and see them all in one mixed feed. Prerequisite for Linear (sources
+are per-project). Decisions (with the author): **persistent PVC clone** per
+project, **one global GitHub token**, **projects-only first pass** (manual
+triggers; Linear layered on after).
+
+- [x] **Registry** (`harness-persist::ProjectStore` + `harness_projects` table):
+  `name` (slug + checkout dir) · `git_url` · `base_branch` · `default_workflow`.
+  Idempotent `CREATE TABLE IF NOT EXISTS`; CRUD + a DB round-trip test.
+- [x] **API** `/api/projects` (list/register/get/delete). Register clones `git_url`
+  into `projects_dir/<name>` (sibling of `project_root`, overridable via
+  `HARNESS_PROJECTS_DIR`); re-register `git fetch`es. **`base_branch` is optional —
+  auto-detected from the repo's `origin/HEAD`** after clone (so a repo whose default
+  is `develop` is picked up without asking), falling back to `main`. A clone failure
+  still saves the row and returns a `warning` (bad URL / missing token).
+- [x] **Global GitHub credential**: `github` provider in the encrypted credential
+  store (`token`) → `GH_TOKEN`/`GITHUB_TOKEN` at run time + a transient git
+  credential helper for private clone/fetch (token never written to repo config).
+- [x] **Project-scoped runs**: `POST /api/runs` **requires** `project` (400
+  otherwise — there is no global-root fallback; every run lives in a project). The
+  run fetches the checkout and cuts an **isolated worktree** off
+  `origin/<base_branch>` (concurrent same-project runs don't collide); a setup
+  failure fails the run visibly. `project` persisted on the run row (column already
+  existed) and surfaced in the list/detail. A project's `default_workflow` fills an
+  empty `workflow`; its stored (auto-detected) `base_branch` is the default.
+- [x] **UI**: Projects page (register form + list with remove) + sidebar nav; a
+  **project selector** on the run-trigger form (pre-fills the default workflow);
+  the GitHub-token field on the Credentials page; project badge on run rows.
+- [ ] *Follow-ups:* resolve project workflows from the project's own
+  `.harness/workflows` (today: global + bundled); per-project credential scope if
+  ever needed (global for now); surface clone/worktree status in the UI; HTTP
+  integration tests for `/api/projects` (CI fixture).
+
+**Exit:** register two projects from the UI, trigger a run into each, and watch
+both appear in one Runs feed — each operating on its own repo's worktree.
+
+---
+
 ## Phase 5 — Linear source + cron triggers — ⬜ not started
 
 **Goal:** a cron job polls Linear and triggers workflows; status flows back.
+Linear sources are configured **per project** (Phase 5.0) — a saved filter maps
+to a project + workflow.
 
 - [ ] `harness-sources`: Linear GraphQL client; saved filter → workflow+args
   mapping; interval poller in the control plane; dedupe by Linear issue id

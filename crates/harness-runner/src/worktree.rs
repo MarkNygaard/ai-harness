@@ -81,6 +81,68 @@ impl Drop for Worktree {
     }
 }
 
+/// Clone `git_url` into `dest` (which must not already exist). When `token` is
+/// set, authenticates over HTTPS via a transient credential helper — the token
+/// is passed through the child environment and **never** written to the cloned
+/// repo's config or remote URL.
+pub fn clone_repo(git_url: &str, dest: &Path, token: Option<&str>) -> Result<(), WorktreeError> {
+    let mut cmd = Command::new("git");
+    auth_args(&mut cmd, token);
+    cmd.arg("clone").arg(git_url).arg(dest);
+    finish(cmd, "clone")
+}
+
+/// Fetch + prune `repo` from its origin (so a project's checkout has the latest
+/// `base_branch` before a run cuts a worktree off it). Auth as in [`clone_repo`].
+pub fn fetch_repo(repo: &Path, token: Option<&str>) -> Result<(), WorktreeError> {
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo);
+    auth_args(&mut cmd, token);
+    cmd.args(["fetch", "--prune", "origin"]);
+    finish(cmd, "fetch")
+}
+
+/// The repo's default branch, detected from `origin/HEAD` (set by `git clone`).
+/// Returns the bare branch name (e.g. `main`, `develop`), or `None` if it can't
+/// be determined — caller should fall back to a sane default.
+pub fn default_branch(repo: &Path) -> Option<String> {
+    // `git symbolic-ref refs/remotes/origin/HEAD` → "refs/remotes/origin/<branch>".
+    let out = run_git(repo, &["symbolic-ref", "refs/remotes/origin/HEAD"]).ok()?;
+    let branch = out.trim().rsplit('/').next()?.trim();
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch.to_string())
+    }
+}
+
+/// Inject a transient GitHub HTTPS credential helper that reads the token from
+/// the child env (`HARNESS_GIT_TOKEN`) — clears inherited helpers first.
+fn auth_args(cmd: &mut Command, token: Option<&str>) {
+    if let Some(tok) = token {
+        cmd.env("HARNESS_GIT_TOKEN", tok);
+        cmd.args([
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.helper=!f() { echo username=x-access-token; echo password=$HARNESS_GIT_TOKEN; }; f",
+        ]);
+    }
+}
+
+fn finish(mut cmd: Command, what: &str) -> Result<(), WorktreeError> {
+    let output = cmd
+        .output()
+        .map_err(|e| WorktreeError(format!("failed to spawn git {what}: {e}")))?;
+    if !output.status.success() {
+        return Err(WorktreeError(format!(
+            "git {what} failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )));
+    }
+    Ok(())
+}
+
 fn run_git(repo: &Path, args: &[&str]) -> Result<String, WorktreeError> {
     let output = Command::new("git")
         .arg("-C")

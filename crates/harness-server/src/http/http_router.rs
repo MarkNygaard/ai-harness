@@ -197,6 +197,16 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::put(credentials_routes::set_credential)
                 .delete(credentials_routes::delete_credential),
         )
+        // ── Project registry (scopes runs to a git repo) ────────────────────
+        .route(
+            "/api/projects",
+            get(super::projects_routes::list_projects)
+                .post(super::projects_routes::register_project),
+        )
+        .route(
+            "/api/projects/{name}",
+            get(super::projects_routes::get_project).delete(super::projects_routes::delete_project),
+        )
         // SPA fallback: serve the React shell for client-side routes
         // (`/runs/{id}`, `/editor`, …) so deep links / refreshes work.
         .fallback(crate::dashboard::spa_fallback)

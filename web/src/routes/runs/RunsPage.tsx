@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useCreateRun, useRuns } from "@/lib/runs";
+import { useProjects } from "@/lib/projects";
 import type { RunStatus, RunSummary } from "@/types/run";
 
 const STATUS_VARIANT: Record<RunStatus, "running" | "success" | "failed" | "skipped"> = {
@@ -62,7 +63,14 @@ function RunRow({ run }: { run: RunSummary }) {
         <CardContent className="flex items-center gap-3 py-2.5">
           <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>{run.status}</Badge>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm font-medium">{run.title || run.workflow_name}</div>
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-medium">{run.title || run.workflow_name}</span>
+              {run.project && (
+                <Badge variant="outline" className="shrink-0">
+                  {run.project}
+                </Badge>
+              )}
+            </div>
             <div className="truncate font-mono text-[11px] text-muted-foreground">
               {run.title ? `${run.workflow_name} · ` : ""}
               {run.id}
@@ -82,16 +90,26 @@ function RunRow({ run }: { run: RunSummary }) {
 function NewRunForm() {
   const navigate = useNavigate();
   const create = useCreateRun();
+  const projects = useProjects();
+  const [project, setProject] = useState("");
   const [workflow, setWorkflow] = useState("idea-to-pr-with-kimi-coding-and-codex");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [real, setReal] = useState(false);
+
+  // Selecting a project pre-fills its default workflow (if it declares one).
+  function onProjectChange(name: string) {
+    setProject(name);
+    const def = projects.data?.find((p) => p.name === name)?.default_workflow;
+    if (def) setWorkflow(def);
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
     create.mutate(
       {
         workflow,
+        project: project || undefined,
         title: title.trim() || undefined,
         description: description.trim() || undefined,
         real,
@@ -104,6 +122,32 @@ function NewRunForm() {
     <Card>
       <CardContent className="py-4">
         <form onSubmit={submit} className="flex flex-col gap-3">
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">Project</label>
+            <select
+              value={project}
+              onChange={(e) => onProjectChange(e.target.value)}
+              className="h-8 rounded-md border border-input bg-transparent px-2 text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="" disabled>
+                Select a project…
+              </option>
+              {projects.data?.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+            {projects.data?.length === 0 && (
+              <span className="text-[11px] text-muted-foreground">
+                No projects yet —{" "}
+                <Link to="/projects" className="text-accent-orange hover:underline">
+                  register one
+                </Link>{" "}
+                first.
+              </span>
+            )}
+          </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">
               Workflow (bundled name or path)
@@ -146,7 +190,7 @@ function NewRunForm() {
               />
               Use real agents (otherwise echo)
             </label>
-            <Button type="submit" disabled={create.isPending || !workflow.trim()}>
+            <Button type="submit" disabled={create.isPending || !project || !workflow.trim()}>
               <Play className="h-3.5 w-3.5" />
               {create.isPending ? "Starting…" : "Run workflow"}
             </Button>

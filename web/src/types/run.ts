@@ -100,6 +100,8 @@ export interface CreateRunRequest {
   description?: string;
   real?: boolean;
   base_branch?: string | null;
+  /** Project to run within; its repo checkout becomes the workspace. */
+  project?: string | null;
 }
 
 export interface CreateRunResponse {

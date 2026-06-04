@@ -1,5 +1,11 @@
 import { Link, useLocation } from "react-router-dom";
-import { IconBinaryTree2, IconHexagonalPrism, IconKey, IconRocket } from "@tabler/icons-react";
+import {
+  IconBinaryTree2,
+  IconFolderCog,
+  IconHexagonalPrism,
+  IconKey,
+  IconRocket,
+} from "@tabler/icons-react";
 import {
   Sidebar,
   SidebarContent,
@@ -23,6 +29,7 @@ interface NavItem {
 
 const OPERATIONS: NavItem[] = [
   { href: "/", label: "Runs", icon: IconRocket, match: "/runs" },
+  { href: "/projects", label: "Projects", icon: IconFolderCog, match: "/projects" },
   { href: "/editor", label: "Workflows", icon: IconBinaryTree2, match: "/editor" },
 ];
 

@@ -23,8 +23,8 @@ use serde::Deserialize;
 
 use super::runs_routes::RunsState;
 
-/// Providers the UI can configure (matches the agent backends).
-const PROVIDERS: &[&str] = &["claude", "codex", "pi"];
+/// Providers the UI can configure (the agent backends + GitHub for repo access).
+const PROVIDERS: &[&str] = &["claude", "codex", "pi", "github"];
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
@@ -119,6 +119,7 @@ fn write_secret_file(path: PathBuf, contents: &str) {
 ///   → `$HOME/.claude/.credentials.json`.
 /// - **codex**: `auth_json` → `$HOME/.codex/auth.json`.
 /// - **pi**: `moonshot_api_key` → `MOONSHOT_API_KEY`.
+/// - **github**: `token` → `GH_TOKEN` + `GITHUB_TOKEN` (so `gh` + git push work).
 ///
 /// Best-effort: missing providers/fields are skipped. Subprocesses spawned by
 /// the agent adapters inherit these (the control plane is single-operator, and
@@ -142,6 +143,12 @@ pub async fn materialize(store: &CredentialStore) {
     if let Ok(Some(pi)) = store.get("pi").await {
         if let Some(key) = pi.get("moonshot_api_key").filter(|v| !v.is_empty()) {
             std::env::set_var("MOONSHOT_API_KEY", key);
+        }
+    }
+    if let Ok(Some(gh)) = store.get("github").await {
+        if let Some(token) = gh.get("token").filter(|v| !v.is_empty()) {
+            std::env::set_var("GH_TOKEN", token);
+            std::env::set_var("GITHUB_TOKEN", token);
         }
     }
 }

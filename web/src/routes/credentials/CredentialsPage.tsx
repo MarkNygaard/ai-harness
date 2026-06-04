@@ -59,6 +59,18 @@ const PROVIDERS: { id: string; label: string; help: string; fields: ProviderFiel
       },
     ],
   },
+  {
+    id: "github",
+    label: "GitHub",
+    help: "Global token used to clone private project repos and to open PRs with `gh`. A fine-grained or classic PAT with repo + pull-request access to the repos you register as projects.",
+    fields: [
+      {
+        key: "token",
+        label: "GitHub token (PAT)",
+        help: "Sets GH_TOKEN / GITHUB_TOKEN and authenticates git clone/fetch over HTTPS.",
+      },
+    ],
+  },
 ];
 
 export function CredentialsPage() {

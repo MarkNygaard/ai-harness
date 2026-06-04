@@ -19,6 +19,9 @@ use sqlx::types::Json;
 mod credentials;
 pub use credentials::{CredentialStore, ProviderCredential};
 
+mod projects;
+pub use projects::{Project, ProjectInput, ProjectStore};
+
 /// A run row for listing (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunSummary {

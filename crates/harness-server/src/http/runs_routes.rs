@@ -23,7 +23,7 @@ use axum::Json;
 use futures::StreamExt;
 use harness_agents::registry::AgentRegistry;
 use harness_dag::{parse_workflow, run_workflow_streaming, RunEvent, VarContext};
-use harness_persist::RunStore;
+use harness_persist::{ProjectStore, RunStore};
 use harness_runner::{
     sanitize_branch_component, CodeAgentRunner, DispatchAgent, EchoAgent, LocalRunner, PiAgent,
     PromptAgent,
@@ -37,10 +37,12 @@ pub struct RunsState {
     db_url: Option<String>,
     store: OnceCell<RunStore>,
     agent_registry: Arc<AgentRegistry>,
-    pub(crate) project_root: PathBuf,
     /// AES key for the credential store (from `HARNESS_SECRET_KEY`), if set.
     secret_key: Option<[u8; 32]>,
     cred_store: OnceCell<harness_persist::CredentialStore>,
+    project_store: OnceCell<ProjectStore>,
+    /// Where project repos are cloned (one checkout dir per project).
+    pub(crate) projects_dir: PathBuf,
     /// Live runs → broadcast of their events (present only while executing).
     live: Mutex<HashMap<String, broadcast::Sender<RunEvent>>>,
 }
@@ -52,15 +54,47 @@ impl RunsState {
         project_root: PathBuf,
         secret_key: Option<[u8; 32]>,
     ) -> Self {
+        // Project checkouts live next to the default project root (sibling
+        // `projects/` dir), overridable via HARNESS_PROJECTS_DIR.
+        let projects_dir = std::env::var_os("HARNESS_PROJECTS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                project_root
+                    .parent()
+                    .map(|p| p.join("projects"))
+                    .unwrap_or_else(|| project_root.join("projects"))
+            });
         Self {
             db_url,
             store: OnceCell::new(),
             agent_registry,
-            project_root,
             secret_key,
             cred_store: OnceCell::new(),
+            project_store: OnceCell::new(),
+            projects_dir,
             live: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Lazily connect the project registry store.
+    pub(crate) async fn project_store(&self) -> Result<&ProjectStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.project_store
+            .get_or_try_init(|| async {
+                ProjectStore::connect(url).await.map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// The global GitHub token from the credential store, if configured — used
+    /// to clone/fetch private project repos. Best-effort: any error → `None`.
+    pub(crate) async fn github_token(&self) -> Option<String> {
+        let store = self.cred_store().await.ok()?;
+        let fields = store.get("github").await.ok()??;
+        fields.get("token").filter(|v| !v.is_empty()).cloned()
     }
 
     /// Lazily connect (and migrate) the persistence store.
@@ -112,6 +146,10 @@ pub struct CreateRunRequest {
     pub real: bool,
     #[serde(default)]
     pub base_branch: Option<String>,
+    /// Project to run within (**required**). Its repo checkout is the workspace;
+    /// a per-run worktree is cut off its `base_branch`. Missing → 400.
+    #[serde(default)]
+    pub project: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -163,10 +201,54 @@ pub async fn create_run(
     Extension(state): Extension<Arc<RunsState>>,
     Json(req): Json<CreateRunRequest>,
 ) -> Response {
-    // `workflow` is a path or a bare name (project `.harness/workflows` then a
-    // bundled default); empty uses the default pipeline.
+    // A run must live in a project — the project's checkout is the workspace
+    // (there is no global project root). Reject a missing/unknown project.
+    let project = match req
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+    {
+        Some(p) => p.to_string(),
+        None => return err(StatusCode::BAD_REQUEST, "project is required"),
+    };
+    let store = match state.project_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let project_row = match store.get(&project).await {
+        Ok(Some(p)) => p,
+        Ok(None) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!("unknown project `{project}`"),
+            )
+        }
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+
+    // Empty `workflow` → the project's default; base branch → request or project.
+    let workflow_name = {
+        let w = req.workflow.trim();
+        if w.is_empty() {
+            project_row.default_workflow.clone().unwrap_or_default()
+        } else {
+            w.to_string()
+        }
+    };
+    let base_branch = req
+        .base_branch
+        .as_deref()
+        .map(str::trim)
+        .filter(|b| !b.is_empty())
+        .map(str::to_string)
+        .unwrap_or(project_row.base_branch);
+
+    // Resolve `workflow` against the project's checkout (its `.harness/workflows`)
+    // then bundled defaults.
+    let workflow_root = state.projects_dir.join(&project);
     let (yaml, _label) =
-        match harness_runner::resolve_workflow_source(&req.workflow, &state.project_root) {
+        match harness_runner::resolve_workflow_source(&workflow_name, &workflow_root) {
             Ok(v) => v,
             Err(e) => return err(StatusCode::BAD_REQUEST, e),
         };
@@ -187,10 +269,6 @@ pub async fn create_run(
 
     let task_state = state.clone();
     let task_run_id = run_id.clone();
-    let base_branch = req
-        .base_branch
-        .clone()
-        .unwrap_or_else(|| "main".to_string());
     // `description` is the task spec; fall back to the deprecated `args` alias.
     let description = if req.description.is_empty() {
         req.args
@@ -207,6 +285,7 @@ pub async fn create_run(
             title,
             description,
             base_branch,
+            project,
             btx,
         )
         .await;
@@ -224,9 +303,41 @@ async fn execute_run_task(
     title: Option<String>,
     description: String,
     base_branch: String,
+    project: String,
     btx: broadcast::Sender<RunEvent>,
 ) {
-    let workspace = state.project_root.clone();
+    // The workspace is an isolated per-run worktree off the project checkout's
+    // `origin/<base_branch>` (so concurrent runs in the same project don't
+    // collide). `_worktree` is held for the run's lifetime and removed on drop.
+    // A setup failure fails the run visibly rather than running anywhere else.
+    let (workspace, _worktree) = match resolve_workspace(&state, &project, &run_id, &base_branch)
+        .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(run_id = %run_id, project = %project, "workspace setup failed: {e}");
+            if let Ok(store) = state.store().await {
+                let _ = store
+                    .start_run(
+                        &run_id,
+                        &workflow.name,
+                        title.as_deref(),
+                        Some(&project),
+                        0,
+                        &[],
+                    )
+                    .await;
+                let _ = store
+                    .finish_run(&run_id, harness_dag::RunStatus::Failed)
+                    .await;
+            }
+            let _ = btx.send(RunEvent::RunFinished {
+                status: harness_dag::RunStatus::Failed,
+            });
+            state.live.lock().await.remove(&run_id);
+            return;
+        }
+    };
     let artifacts = workspace.join(".harness").join("artifacts");
     let _ = std::fs::create_dir_all(&artifacts);
     let command_dirs = vec![workspace.join(".harness").join("commands")];
@@ -267,6 +378,7 @@ async fn execute_run_task(
     let persist_state = state.clone();
     let persist_run_id = run_id.clone();
     let persist_title = title.clone();
+    let persist_project = Some(project.clone());
     let forwarder = tokio::spawn(async move {
         let mut ordinals: HashMap<String, i32> = HashMap::new();
         while let Some(ev) = rx.next().await {
@@ -285,7 +397,7 @@ async fn execute_run_task(
                                 &persist_run_id,
                                 workflow,
                                 persist_title.as_deref(),
-                                None,
+                                persist_project.as_deref(),
                                 *total_nodes,
                                 nodes,
                             )
@@ -313,7 +425,7 @@ async fn execute_run_task(
     if let Ok(report) = &report {
         if let Ok(store) = state.store().await {
             if let Err(e) = store
-                .record_run(&run_id, title.as_deref(), None, report)
+                .record_run(&run_id, title.as_deref(), Some(project.as_str()), report)
                 .await
             {
                 tracing::warn!(run_id = %run_id, "failed to persist run: {e}");
@@ -324,6 +436,43 @@ async fn execute_run_task(
     }
 
     state.live.lock().await.remove(&run_id);
+}
+
+/// Resolve a run's workspace: fetch the project's checkout and cut an isolated
+/// worktree off `origin/<base_branch>`. Returns the worktree dir + a guard that
+/// removes it on drop. Errors (missing checkout, bad branch) fail the run — there
+/// is no global-root fallback.
+async fn resolve_workspace(
+    state: &Arc<RunsState>,
+    project: &str,
+    run_id: &str,
+    base_branch: &str,
+) -> Result<(PathBuf, harness_runner::Worktree), String> {
+    let checkout = state.projects_dir.join(project);
+    if !checkout.exists() {
+        return Err(format!(
+            "project `{project}` has no checkout at {} — re-register it",
+            checkout.display()
+        ));
+    }
+    let token = state.github_token().await;
+    let base = base_branch.to_string();
+    let branch = format!("run/{run_id}");
+    let dest = state.projects_dir.join(".worktrees").join(run_id);
+    let made = tokio::task::spawn_blocking(move || {
+        // Best-effort fetch so the worktree is cut off the latest remote tip.
+        let _ = harness_runner::fetch_repo(&checkout, token.as_deref());
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        harness_runner::Worktree::create(&checkout, &format!("origin/{base}"), &branch, &dest)
+    })
+    .await;
+    match made {
+        Ok(Ok(wt)) => Ok((wt.path.clone(), wt)),
+        Ok(Err(e)) => Err(format!("worktree create failed: {e}")),
+        Err(e) => Err(format!("worktree task panicked: {e}")),
+    }
 }
 
 /// `GET /runs/{id}/stream` — SSE of live events for a currently-executing run.
