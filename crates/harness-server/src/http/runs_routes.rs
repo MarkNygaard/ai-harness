@@ -238,10 +238,40 @@ async fn execute_run_task(
         .set("ARGUMENTS", args.clone())
         .set("USER_MESSAGE", args);
 
-    // Bridge the driver's futures-channel events → the tokio broadcast.
+    // Bridge the driver's futures-channel events → the tokio broadcast, and
+    // persist incrementally (run row on start, each node as it finishes, status
+    // on finish) so the run is durable: visible in the list and refresh-safe
+    // *before* it completes, not just after.
     let (tx, mut rx) = futures::channel::mpsc::unbounded::<RunEvent>();
+    let persist_state = state.clone();
+    let persist_run_id = run_id.clone();
     let forwarder = tokio::spawn(async move {
+        let mut ordinals: HashMap<String, i32> = HashMap::new();
         while let Some(ev) = rx.next().await {
+            if let Ok(store) = persist_state.store().await {
+                match &ev {
+                    RunEvent::RunStarted {
+                        workflow,
+                        total_nodes,
+                        nodes,
+                    } => {
+                        for (i, n) in nodes.iter().enumerate() {
+                            ordinals.insert(n.id.clone(), i as i32);
+                        }
+                        let _ = store
+                            .start_run(&persist_run_id, workflow, None, *total_nodes, nodes)
+                            .await;
+                    }
+                    RunEvent::NodeFinished { node } => {
+                        let ord = ordinals.get(&node.id).copied().unwrap_or(0);
+                        let _ = store.record_node(&persist_run_id, ord, node).await;
+                    }
+                    RunEvent::RunFinished { status } => {
+                        let _ = store.finish_run(&persist_run_id, *status).await;
+                    }
+                    _ => {}
+                }
+            }
             let _ = btx.send(ev);
         }
     });
@@ -250,6 +280,7 @@ async fn execute_run_task(
     drop(tx); // end the forwarder
     let _ = forwarder.await;
 
+    // Final authoritative snapshot (reconciles nodes + sets terminal status).
     if let Ok(report) = &report {
         if let Ok(store) = state.store().await {
             if let Err(e) = store.record_run(&run_id, None, report).await {

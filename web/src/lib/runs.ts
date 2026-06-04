@@ -259,31 +259,42 @@ export function useRunView(id: string | null): RunView {
     dispatch({ type: "reset" });
   }, [id]);
 
-  const runFinished = state.status !== "running";
-  const detail = useRunDetail(id, !runFinished);
-
   const handleEvent = useCallback((event: RunEvent) => {
     dispatch({ type: "event", event, now: new Date().toISOString() });
   }, []);
   useRunStream(id, handleEvent);
 
+  // Keep polling the persisted detail until *either* the live stream or the
+  // persisted row reports a terminal status (covers a refresh after finish).
+  return useRunViewMemo(state, id);
+}
+
+function useRunViewMemo(state: LiveState, id: string | null): RunView {
+  const liveTerminal = state.status !== "running";
+  const detail = useRunDetail(id, !liveTerminal);
+
   return useMemo<RunView>(() => {
-    if (detail.data) {
+    const liveNodes = state.order.length
+      ? state.order.map((nid) => state.nodes[nid])
+      : Object.values(state.nodes);
+
+    // While we're receiving live events this session they're the freshest and
+    // most complete view. Otherwise use the persisted detail — which now exists
+    // mid-run (persist-on-start) so a refresh or the list shows in-flight runs.
+    if (liveNodes.length === 0 && detail.data) {
       return {
         workflow: detail.data.workflow_name,
         status: detail.data.status,
         nodes: nodesFromDetail(detail.data),
-        live: false,
+        live: detail.data.status === "running",
       };
     }
-    const nodes = state.order.length
-      ? state.order.map((nid) => state.nodes[nid])
-      : Object.values(state.nodes);
+    const status = liveTerminal ? state.status : (detail.data?.status ?? state.status);
     return {
-      workflow: state.workflow,
-      status: state.status,
-      nodes,
-      live: state.status === "running",
+      workflow: state.workflow ?? detail.data?.workflow_name ?? null,
+      status,
+      nodes: liveNodes,
+      live: status === "running",
     };
-  }, [detail.data, state]);
+  }, [detail.data, state, liveTerminal]);
 }

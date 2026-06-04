@@ -11,7 +11,7 @@
 //! `CREATE TABLE IF NOT EXISTS`; a richer migration story can replace this later.
 
 use chrono::{DateTime, Utc};
-use harness_dag::{NodeMeta, NodeStatus, RunReport, RunStatus};
+use harness_dag::{NodeMeta, NodeRun, NodeStatus, RunReport, RunStatus};
 use serde::Serialize;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 use sqlx::types::Json;
@@ -207,6 +207,91 @@ impl RunStore {
         Ok(())
     }
 
+    /// Record a run as **running** at submission time, so it shows in the list
+    /// and its detail endpoint resolves (instead of 404ing) before it finishes.
+    /// Idempotent: a re-submit of the same id refreshes the topology but never
+    /// clobbers an already-terminal status.
+    pub async fn start_run(
+        &self,
+        run_id: &str,
+        workflow: &str,
+        project: Option<&str>,
+        total_nodes: usize,
+        graph: &[NodeMeta],
+    ) -> Result<(), PersistError> {
+        sqlx::query(
+            "INSERT INTO harness_workflow_runs (id, workflow_name, status, project, node_count, graph, recorded_at)
+             VALUES ($1, $2, 'running', $3, $4, $5, now())
+             ON CONFLICT (id) DO UPDATE SET
+                workflow_name = excluded.workflow_name,
+                node_count    = excluded.node_count,
+                graph         = excluded.graph",
+        )
+        .bind(run_id)
+        .bind(workflow)
+        .bind(project)
+        .bind(total_nodes as i32)
+        .bind(Json(graph))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Upsert a single node row as it reaches a terminal state — so a run's
+    /// detail reflects progress live and survives a page refresh.
+    pub async fn record_node(
+        &self,
+        run_id: &str,
+        ordinal: i32,
+        node: &NodeRun,
+    ) -> Result<(), PersistError> {
+        sqlx::query(
+            "INSERT INTO harness_run_nodes
+               (run_id, ordinal, node_id, status, provider, model, output, iterations,
+                converged, note, input_tokens, output_tokens, cache_read, cache_write,
+                started_at, ended_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+             ON CONFLICT (run_id, node_id) DO UPDATE SET
+                ordinal=excluded.ordinal, status=excluded.status, provider=excluded.provider,
+                model=excluded.model, output=excluded.output, iterations=excluded.iterations,
+                converged=excluded.converged, note=excluded.note,
+                input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
+                cache_read=excluded.cache_read, cache_write=excluded.cache_write,
+                started_at=excluded.started_at, ended_at=excluded.ended_at",
+        )
+        .bind(run_id)
+        .bind(ordinal)
+        .bind(&node.id)
+        .bind(node_status_str(node.status))
+        .bind(node.provider.as_deref())
+        .bind(node.model.as_deref())
+        .bind(&node.output)
+        .bind(node.iterations as i32)
+        .bind(node.converged)
+        .bind(node.note.as_deref())
+        .bind(node.usage.input.map(|v| v as i64))
+        .bind(node.usage.output.map(|v| v as i64))
+        .bind(node.usage.cache_read.map(|v| v as i64))
+        .bind(node.usage.cache_write.map(|v| v as i64))
+        .bind(node.started_at)
+        .bind(node.ended_at)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Mark a run's terminal status (run finished).
+    pub async fn finish_run(&self, run_id: &str, status: RunStatus) -> Result<(), PersistError> {
+        sqlx::query(
+            "UPDATE harness_workflow_runs SET status = $2, recorded_at = now() WHERE id = $1",
+        )
+        .bind(run_id)
+        .bind(run_status_str(status))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Fetch a run's status string, if present (for read-back / tests).
     pub async fn run_status(&self, run_id: &str) -> Result<Option<String>, PersistError> {
         let row: Option<(String,)> =
@@ -398,5 +483,59 @@ mod tests {
         assert_eq!(detail.graph[1].id, "review");
         assert_eq!(detail.graph[1].depends_on, vec!["build".to_string()]);
         assert!(store.get_run("does-not-exist").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn incremental_start_node_finish_round_trip() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let run_id = format!(
+            "test-incr-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        let report = sample_report();
+
+        // start_run → visible as `running` with the topology, before any node.
+        store
+            .start_run(
+                &run_id,
+                &report.workflow,
+                None,
+                report.nodes.len(),
+                &report.graph,
+            )
+            .await
+            .unwrap();
+        let detail = store
+            .get_run(&run_id)
+            .await
+            .unwrap()
+            .expect("running detail");
+        assert_eq!(detail.run.status, "running");
+        assert_eq!(detail.run.node_count, 2);
+        assert_eq!(detail.graph.len(), 2);
+        assert!(detail.nodes.is_empty(), "no nodes finished yet");
+
+        // record_node → the node appears immediately.
+        store
+            .record_node(&run_id, 0, &report.nodes[0])
+            .await
+            .unwrap();
+        let detail = store.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(detail.nodes.len(), 1);
+        assert_eq!(detail.nodes[0].node_id, "build");
+
+        // finish_run → terminal status.
+        store
+            .finish_run(&run_id, RunStatus::Completed)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.run_status(&run_id).await.unwrap().as_deref(),
+            Some("completed")
+        );
     }
 }
