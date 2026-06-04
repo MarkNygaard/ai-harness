@@ -106,6 +106,8 @@ subtle = "2"
 aes-gcm = "0.10"
 base64 = "0.22"
 rand = "0.8"
+# Serialize DB-integration tests (avoid concurrent migrate DDL-lock contention).
+serial_test = "3"
 
 # HTTP client (for Anthropic API)
 reqwest = { version = "0.12", features = ["json", "stream"] }

@@ -180,6 +180,7 @@ mod tests {
 
     /// Postgres-dependent: runs only when HARNESS_DATABASE_URL is set (CI).
     #[tokio::test]
+    #[serial_test::serial]
     async fn store_set_get_list_delete_round_trip() {
         let Ok(url) = std::env::var("HARNESS_DATABASE_URL") else {
             eprintln!("skipping: HARNESS_DATABASE_URL not set");
