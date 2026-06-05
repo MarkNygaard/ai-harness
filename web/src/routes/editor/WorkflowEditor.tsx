@@ -5,6 +5,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  MarkerType,
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
@@ -104,6 +105,9 @@ function Editor() {
           {
             ...c,
             id: `${c.source}->${c.target}`,
+            type: "smoothstep",
+            animated: true,
+            markerEnd: { type: MarkerType.ArrowClosed, width: 10, height: 10 },
             style: { stroke: "var(--muted-foreground)", strokeWidth: 1.5, opacity: 0.5 },
           },
           eds,
