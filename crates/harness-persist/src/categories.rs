@@ -24,17 +24,21 @@ CREATE TABLE IF NOT EXISTS harness_categories (
     updated_at  timestamptz NOT NULL DEFAULT now()
 )";
 
-/// Built-in categories seeded on first connect. Colours are the muted
-/// Factory-style palette (teal / olive / peach) used by tokens-by-type.
+/// Built-in categories seeded on first connect — the phases of the default
+/// `idea-to-pr` pipeline. Muted, well-separated hues (Factory-style). Ordered to
+/// read as the pipeline flows; users add/recolour/reorder freely in the UI.
 const SEED: &[(&str, &str, &str, i32)] = &[
-    ("planning", "Planning", "oklch(0.64 0.07 200)", 0),
+    ("planning", "Planning", "oklch(0.64 0.07 200)", 0), // teal
+    ("setup", "Setup", "oklch(0.70 0.03 250)", 1),       // slate
     (
         "implementation",
         "Implementation",
-        "oklch(0.75 0.09 130)",
-        1,
+        "oklch(0.75 0.09 130)", // olive-green
+        2,
     ),
-    ("validation", "Validation", "oklch(0.76 0.09 70)", 2),
+    ("validation", "Validation", "oklch(0.76 0.09 70)", 3), // amber
+    ("review", "Review", "oklch(0.68 0.10 300)", 4),        // violet
+    ("delivery", "Delivery", "oklch(0.70 0.10 20)", 5),     // rose
 ];
 
 /// A category (matches `harness_categories`).
