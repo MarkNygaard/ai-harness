@@ -195,6 +195,7 @@ function seedNode(meta: NodeMeta): NodeView {
     output: "",
     started_at: null,
     ended_at: null,
+    category: meta.category ?? null,
   };
 }
 
@@ -275,9 +276,17 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
 export function nodesFromDetail(detail: RunDetail): NodeView[] {
   const byId = new Map(detail.nodes.map((n) => [n.node_id, n]));
   const skeleton = detail.graph.length
-    ? detail.graph.map((g) => ({ id: g.id, depends_on: g.depends_on }))
-    : detail.nodes.map((n) => ({ id: n.node_id, depends_on: [] as string[] }));
-  return skeleton.map(({ id, depends_on }) => {
+    ? detail.graph.map((g) => ({
+        id: g.id,
+        depends_on: g.depends_on,
+        category: g.category ?? null,
+      }))
+    : detail.nodes.map((n) => ({
+        id: n.node_id,
+        depends_on: [] as string[],
+        category: null,
+      }));
+  return skeleton.map(({ id, depends_on, category }) => {
     const n = byId.get(id);
     return {
       id,
@@ -296,6 +305,7 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
       output: n?.output ?? "",
       started_at: n?.started_at ?? null,
       ended_at: n?.ended_at ?? null,
+      category,
     };
   });
 }

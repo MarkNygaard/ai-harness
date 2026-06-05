@@ -166,6 +166,26 @@ nodes:
 }
 
 #[test]
+fn parses_and_propagates_node_category() {
+    let yaml = r#"
+name: cats
+nodes:
+  - id: plan
+    category: planning
+    prompt: "plan it"
+  - id: build
+    depends_on: [plan]
+    prompt: "build it"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    assert_eq!(
+        wf.node("plan").unwrap().category.as_deref(),
+        Some("planning")
+    );
+    assert_eq!(wf.node("build").unwrap().category, None);
+}
+
+#[test]
 fn rejects_node_without_body() {
     let yaml = r#"
 name: nobody

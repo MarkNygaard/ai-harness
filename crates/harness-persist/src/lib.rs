@@ -22,6 +22,9 @@ pub use credentials::{CredentialStore, ProviderCredential};
 mod projects;
 pub use projects::{Project, ProjectInput, ProjectStore};
 
+mod categories;
+pub use categories::{Category, CategoryInput, CategoryStore};
+
 /// A run row for listing (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunSummary {
@@ -504,10 +507,12 @@ mod tests {
                 harness_dag::NodeMeta {
                     id: "build".into(),
                     depends_on: vec![],
+                    category: Some("implementation".into()),
                 },
                 harness_dag::NodeMeta {
                     id: "review".into(),
                     depends_on: vec!["build".into()],
+                    category: None,
                 },
             ],
             nodes: vec![

@@ -7,11 +7,12 @@ use axum::{
 use std::sync::Arc;
 
 use super::{
-    auth, credentials_routes, get_issue_workflow_by_issue, get_issue_workflow_by_pr,
-    get_project_workflow_by_project, get_task, get_task_artifacts, get_task_prompts,
-    get_task_proof, get_workflow_runtime_tree, github_webhook, handle_rpc, health_check,
-    ingest_signal, intake_status, list_tasks, password_reset, project_queue_stats, runs_routes,
-    state::AppState, stream_task_sse, task_mutation_routes, task_routes, workflows_routes,
+    auth, categories_routes, credentials_routes, get_issue_workflow_by_issue,
+    get_issue_workflow_by_pr, get_project_workflow_by_project, get_task, get_task_artifacts,
+    get_task_prompts, get_task_proof, get_workflow_runtime_tree, github_webhook, handle_rpc,
+    health_check, ingest_signal, intake_status, list_tasks, password_reset, project_queue_stats,
+    runs_routes, state::AppState, stream_task_sse, task_mutation_routes, task_routes,
+    workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -177,6 +178,13 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/runs/{id}/cancel", post(runs_routes::cancel_run))
         .route("/api/runs/{id}/stream", get(runs_routes::stream_run))
+        // ── Step categories (global registry for overview grouping/colour) ──
+        .route("/api/categories", get(categories_routes::list_categories))
+        .route(
+            "/api/categories/{id}",
+            axum::routing::put(categories_routes::save_category)
+                .delete(categories_routes::delete_category),
+        )
         // ── Workflow authoring API (visual editor + MCP) ────────────────────
         .route("/api/authoring/catalog", get(workflows_routes::get_catalog))
         .route(

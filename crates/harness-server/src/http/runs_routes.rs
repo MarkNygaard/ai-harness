@@ -41,6 +41,7 @@ pub struct RunsState {
     secret_key: Option<[u8; 32]>,
     cred_store: OnceCell<harness_persist::CredentialStore>,
     project_store: OnceCell<ProjectStore>,
+    category_store: OnceCell<harness_persist::CategoryStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
     /// Live runs → their event broadcast + task abort handle (present only while
@@ -78,6 +79,7 @@ impl RunsState {
             secret_key,
             cred_store: OnceCell::new(),
             project_store: OnceCell::new(),
+            category_store: OnceCell::new(),
             projects_dir,
             live: Mutex::new(HashMap::new()),
         }
@@ -92,6 +94,21 @@ impl RunsState {
         self.project_store
             .get_or_try_init(|| async {
                 ProjectStore::connect(url).await.map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the category registry store (seeds defaults on first use).
+    pub(crate) async fn category_store(&self) -> Result<&harness_persist::CategoryStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.category_store
+            .get_or_try_init(|| async {
+                harness_persist::CategoryStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
             })
             .await
     }

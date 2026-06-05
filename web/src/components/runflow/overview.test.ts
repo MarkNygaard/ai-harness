@@ -20,6 +20,7 @@ function node(
     output: "",
     started_at: null,
     ended_at: null,
+    category: null,
   };
 }
 

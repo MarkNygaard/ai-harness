@@ -165,6 +165,10 @@ pub struct NodeRun {
 pub struct NodeMeta {
     pub id: String,
     pub depends_on: Vec<String>,
+    /// Optional category id for overview grouping/colouring. Defaulted for
+    /// back-compat with graphs persisted before categories existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
 }
 
 /// The result of driving a workflow to completion.
@@ -256,6 +260,7 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
         .map(|n| NodeMeta {
             id: n.id.clone(),
             depends_on: n.depends_on.clone(),
+            category: n.category.clone(),
         })
         .collect();
     emit(
