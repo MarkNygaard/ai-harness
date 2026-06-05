@@ -213,11 +213,18 @@ impl LocalRunner {
     }
 
     /// Dispatch a prompt to the agent and map its result to a [`NodeOutput`].
+    /// When the node declares an `output_format`, a directive instructing the
+    /// agent to reply with conforming JSON is appended — so downstream
+    /// `$node.output.field` access and `when:` conditions read a stable shape.
     async fn run_prompt(
         &self,
         prompt: String,
         req: &NodeRequest<'_>,
     ) -> Result<NodeOutput, RunnerError> {
+        let prompt = match req.output_format {
+            Some(schema) => format!("{prompt}{}", output_format_directive(schema)),
+            None => prompt,
+        };
         let result = self
             .agent
             .run(PromptRequest {
@@ -265,6 +272,16 @@ impl NodeRunner for LocalRunner {
             }
         }
     }
+}
+
+/// Build the instruction appended to a prompt when a node declares an
+/// `output_format`. Kept terse and unambiguous so any agent CLI honors it.
+fn output_format_directive(schema: &serde_json::Value) -> String {
+    let pretty = serde_json::to_string_pretty(schema).unwrap_or_else(|_| schema.to_string());
+    format!(
+        "\n\nIMPORTANT: Respond with ONLY a single JSON value that conforms to \
+         this JSON schema. No prose, no markdown fences.\n\nSchema:\n{pretty}"
+    )
 }
 
 /// Strip a leading YAML frontmatter block (`---` … `---`) from a command body,
@@ -382,6 +399,7 @@ mod tests {
             body,
             timeout: None,
             vars,
+            output_format: None,
         }
     }
 
@@ -433,6 +451,22 @@ mod tests {
             agent.last_prompt.lock().unwrap().as_deref(),
             Some("do the thing")
         );
+    }
+
+    #[tokio::test]
+    async fn output_format_directive_is_appended_to_prompt() {
+        let dir = TempDir::new().unwrap();
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        let vars = VarContext::new();
+        let schema = serde_json::json!({ "type": "object" });
+        let mut req = request(NodeBody::Prompt("classify this".into()), &vars);
+        req.output_format = Some(&schema);
+
+        runner.execute(req).await.unwrap();
+        let sent = agent.last_prompt.lock().unwrap().clone().unwrap();
+        assert!(sent.starts_with("classify this"));
+        assert!(sent.contains("JSON schema"), "got: {sent:?}");
+        assert!(sent.contains("\"type\""), "schema not embedded: {sent:?}");
     }
 
     #[tokio::test]

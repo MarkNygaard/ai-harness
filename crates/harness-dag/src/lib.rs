@@ -26,6 +26,7 @@
 //! assert_eq!(layers.len(), 2);
 //! ```
 
+pub mod cond;
 pub mod error;
 pub mod exec;
 pub mod graph;
@@ -34,6 +35,7 @@ pub mod parse;
 pub mod signal;
 pub mod vars;
 
+pub use cond::eval_when;
 pub use error::DagError;
 pub use exec::{
     run_workflow, run_workflow_streaming, NodeBody, NodeMeta, NodeOutput, NodeRequest, NodeRun,
@@ -45,7 +47,7 @@ pub use model::{
 };
 pub use parse::parse_workflow;
 pub use signal::{detect_signal, validate_signal};
-pub use vars::{substitute, VarContext, RECOGNIZED_VARS};
+pub use vars::{referenced_node_ids, substitute, VarContext, RECOGNIZED_VARS};
 
 #[cfg(test)]
 mod tests;

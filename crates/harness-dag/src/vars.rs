@@ -1,12 +1,15 @@
 //! Template-variable substitution for node prompts and scripts.
 //!
 //! Substitution recognizes a fixed set of harness variables (e.g.
-//! `$ARTIFACTS_DIR`, `$BASE_BRANCH`) plus positional command args (`$1`..`$9`).
-//! Only recognized names are touched, so shell syntax like `$HOME` or
-//! `${results[@]}` in a `bash` body is left untouched. Referencing a recognized
-//! variable that has no value in the current context is a hard error
-//! ([`DagError::MissingVariable`]) — we fail loud rather than silently emit an
-//! empty string.
+//! `$ARTIFACTS_DIR`, `$BASE_BRANCH`) plus positional command args (`$1`..`$9`)
+//! and **upstream node outputs** (`$node-id.output`, with best-effort JSON field
+//! access via `$node-id.output.field`). Only recognized names are touched, so
+//! shell syntax like `$HOME` or `${results[@]}` in a `bash` body is left
+//! untouched. Referencing a recognized harness variable that has no value in the
+//! current context is a hard error ([`DagError::MissingVariable`]) — we fail loud
+//! rather than silently emit an empty string. A node-output reference whose node
+//! produced no usable value resolves to the empty string (the upstream node may
+//! legitimately have been skipped), so it is lenient by design.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -34,12 +37,14 @@ pub const RECOGNIZED_VARS: &[&str] = &[
 
 /// Values available for substitution in the current run/node context.
 ///
-/// Holds named harness variables and up to nine positional command args.
-/// Positional args `$1`..`$9` are recognized when present here.
+/// Holds named harness variables, up to nine positional command args, and the
+/// outputs of upstream nodes keyed by node id. Positional args `$1`..`$9` are
+/// recognized when present here.
 #[derive(Debug, Default, Clone)]
 pub struct VarContext {
     named: HashMap<String, String>,
     positional: Vec<String>,
+    node_outputs: HashMap<String, String>,
 }
 
 impl VarContext {
@@ -61,6 +66,13 @@ impl VarContext {
         self
     }
 
+    /// Record an upstream node's output, so `$node-id.output` (and JSON field
+    /// access on it) resolves for downstream nodes and `when:` conditions.
+    pub fn set_node_output(mut self, id: impl Into<String>, output: impl Into<String>) -> Self {
+        self.node_outputs.insert(id.into(), output.into());
+        self
+    }
+
     /// Whether `name` is a recognized variable (named or positional) regardless
     /// of whether it currently has a value.
     fn is_recognized(name: &str) -> bool {
@@ -75,6 +87,65 @@ impl VarContext {
             self.named.get(name).map(String::as_str)
         }
     }
+
+    /// Resolve a node-output reference of the form `id.output` or
+    /// `id.output.field[.field…]` to a string. The raw text is used for a bare
+    /// `.output`; a deeper path triggers best-effort JSON parsing of the output
+    /// and navigation into objects/arrays. A missing node, unparseable JSON, or
+    /// absent field all resolve to the empty string (lenient — see module docs).
+    pub fn resolve_node_ref(&self, reference: &str) -> String {
+        let mut parts = reference.splitn(2, '.');
+        let id = parts.next().unwrap_or("");
+        let rest = parts.next().unwrap_or(""); // "output" or "output.a.b"
+        let raw = self.node_outputs.get(id).map(String::as_str).unwrap_or("");
+
+        // Field path after the leading "output" segment.
+        let path: Vec<&str> = rest.split('.').skip(1).collect();
+        if path.is_empty() {
+            return raw.to_string();
+        }
+        match serde_json::from_str::<serde_json::Value>(raw.trim()) {
+            Ok(value) => navigate_json(&value, &path),
+            Err(_) => String::new(),
+        }
+    }
+}
+
+/// Walk a JSON value along a dotted field path, rendering the leaf as a plain
+/// string (string contents verbatim; scalars via `to_string`; objects/arrays as
+/// compact JSON). A missing key or out-of-range index yields the empty string.
+fn navigate_json(root: &serde_json::Value, path: &[&str]) -> String {
+    let mut cur = root;
+    for seg in path {
+        cur = match cur {
+            serde_json::Value::Object(map) => match map.get(*seg) {
+                Some(v) => v,
+                None => return String::new(),
+            },
+            serde_json::Value::Array(arr) => {
+                match seg.parse::<usize>().ok().and_then(|i| arr.get(i)) {
+                    Some(v) => v,
+                    None => return String::new(),
+                }
+            }
+            _ => return String::new(),
+        };
+    }
+    match cur {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Null => String::new(),
+        other => other.to_string(),
+    }
+}
+
+/// Collect the node ids referenced via `$id.output…` tokens in `text`. Used by
+/// workflow validation to ensure every reference points to a declared node.
+pub fn referenced_node_ids(text: &str) -> Vec<String> {
+    token_regex()
+        .captures_iter(text)
+        .filter_map(|caps| caps.get(2).or_else(|| caps.get(4)))
+        .filter_map(|m| m.as_str().split('.').next().map(str::to_string))
+        .collect()
 }
 
 fn is_positional(name: &str) -> bool {
@@ -95,12 +166,25 @@ fn positional_index(name: &str) -> Option<usize> {
 
 fn token_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    // $NAME, ${NAME}, $1..$9. NAME is an upper-snake identifier.
-    RE.get_or_init(|| Regex::new(r"\$\{([A-Z_][A-Z0-9_]*|\d)\}|\$([A-Z_][A-Z0-9_]*|\d)").unwrap())
+    // Four alternatives, braced forms first so `${…}` wins over the bare form:
+    //   1: ${NAME} / 3: $NAME      — harness var, upper-snake identifier or digit
+    //   2: ${id.output…} / 4: $id.output…  — node-output reference (kebab id)
+    // Harness vars start uppercase, node refs lowercase, so they never overlap.
+    RE.get_or_init(|| {
+        Regex::new(concat!(
+            r"\$\{([A-Z_][A-Z0-9_]*|\d)\}",
+            r"|\$\{([a-z][a-z0-9-]*\.output(?:\.[A-Za-z0-9_]+)*)\}",
+            r"|\$([A-Z_][A-Z0-9_]*|\d)",
+            r"|\$([a-z][a-z0-9-]*\.output(?:\.[A-Za-z0-9_]+)*)",
+        ))
+        .unwrap()
+    })
 }
 
-/// Substitute recognized variables in `template`. Unrecognized `$tokens` are
-/// left verbatim. Errors if a recognized variable is referenced but unset.
+/// Substitute recognized variables in `template`. Harness vars (`$NAME`) and
+/// node-output refs (`$id.output…`) are resolved; unrecognized `$tokens` are
+/// left verbatim. Errors only if a recognized harness variable is referenced but
+/// unset — node refs are lenient (missing → empty string).
 pub fn substitute(template: &str, ctx: &VarContext) -> Result<String, DagError> {
     let re = token_regex();
     let mut out = String::with_capacity(template.len());
@@ -108,28 +192,95 @@ pub fn substitute(template: &str, ctx: &VarContext) -> Result<String, DagError> 
 
     for caps in re.captures_iter(template) {
         let m = caps.get(0).unwrap();
-        // Either the braced (group 1) or bare (group 2) name matched.
-        let name = caps
-            .get(1)
-            .or_else(|| caps.get(2))
-            .map(|g| g.as_str())
-            .unwrap();
-
         // Copy the gap between the previous match and this one.
         out.push_str(&template[last..m.start()]);
 
-        if VarContext::is_recognized(name) {
-            match ctx.lookup(name) {
-                Some(value) => out.push_str(value),
-                None => return Err(DagError::MissingVariable(name.to_string())),
+        if let Some(name) = caps.get(1).or_else(|| caps.get(3)) {
+            // Harness variable (or shell-style token passed through verbatim).
+            let name = name.as_str();
+            if VarContext::is_recognized(name) {
+                match ctx.lookup(name) {
+                    Some(value) => out.push_str(value),
+                    None => return Err(DagError::MissingVariable(name.to_string())),
+                }
+            } else {
+                out.push_str(m.as_str());
             }
-        } else {
-            // Not a harness variable (e.g. a shell var) — pass through verbatim.
-            out.push_str(m.as_str());
+        } else if let Some(node_ref) = caps.get(2).or_else(|| caps.get(4)) {
+            // Node-output reference — always resolved (lenient, may be empty).
+            out.push_str(&ctx.resolve_node_ref(node_ref.as_str()));
         }
 
         last = m.end();
     }
     out.push_str(&template[last..]);
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctx() -> VarContext {
+        VarContext::new()
+            .set("ARGUMENTS", "do the thing")
+            .set_node_output("create-plan", "PLAN BODY")
+            .set_node_output("classify", r#"{"type":"BUG","nested":{"k":"v"},"n":3}"#)
+    }
+
+    #[test]
+    fn substitutes_bare_and_braced_node_output() {
+        assert_eq!(
+            substitute("plan: $create-plan.output", &ctx()).unwrap(),
+            "plan: PLAN BODY"
+        );
+        assert_eq!(
+            substitute("plan: ${create-plan.output}!", &ctx()).unwrap(),
+            "plan: PLAN BODY!"
+        );
+    }
+
+    #[test]
+    fn json_field_access() {
+        assert_eq!(
+            substitute("type=$classify.output.type", &ctx()).unwrap(),
+            "type=BUG"
+        );
+        assert_eq!(
+            substitute("k=$classify.output.nested.k n=$classify.output.n", &ctx()).unwrap(),
+            "k=v n=3"
+        );
+    }
+
+    #[test]
+    fn missing_node_ref_is_empty_not_error() {
+        assert_eq!(
+            substitute("x=$nope.output.field y", &ctx()).unwrap(),
+            "x= y"
+        );
+        // A node that produced non-JSON, asked for a field → empty.
+        assert_eq!(substitute("[$create-plan.output.x]", &ctx()).unwrap(), "[]");
+    }
+
+    #[test]
+    fn harness_vars_and_shell_vars_still_behave() {
+        assert_eq!(
+            substitute("msg: $ARGUMENTS", &ctx()).unwrap(),
+            "msg: do the thing"
+        );
+        // Lowercase shell-style and unknown upper tokens pass through verbatim.
+        assert_eq!(
+            substitute("$HOME and ${PATH}", &ctx()).unwrap(),
+            "$HOME and ${PATH}"
+        );
+        // A recognized-but-unset harness var is still a hard error.
+        assert!(substitute("$BASE_BRANCH", &VarContext::new()).is_err());
+    }
+
+    #[test]
+    fn referenced_ids_scans_node_refs_only() {
+        let ids =
+            referenced_node_ids("use $a.output and ${b-two.output.field} but not $UPPER or $x");
+        assert_eq!(ids, vec!["a".to_string(), "b-two".to_string()]);
+    }
 }

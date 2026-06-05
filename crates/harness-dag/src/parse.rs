@@ -44,6 +44,8 @@ struct RawNode {
     context: ContextMode,
     #[serde(default)]
     timeout: Option<u64>,
+    #[serde(default)]
+    output_format: Option<serde_json::Value>,
 
     // Mutually exclusive body discriminators.
     #[serde(default)]
@@ -88,6 +90,7 @@ impl RawNode {
             model,
             context,
             timeout,
+            output_format,
         } = self;
 
         let mut found: Vec<&'static str> = Vec::new();
@@ -154,6 +157,7 @@ impl RawNode {
                 model,
                 context,
                 timeout,
+                output_format,
             },
         ))
     }
@@ -170,6 +174,7 @@ struct NodeKindParts {
     model: Option<String>,
     context: ContextMode,
     timeout: Option<u64>,
+    output_format: Option<serde_json::Value>,
 }
 
 /// Parse a workflow from YAML, validating node uniqueness, body exclusivity,
@@ -195,6 +200,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             model: parts.model,
             context: parts.context,
             timeout: parts.timeout,
+            output_format: parts.output_format,
             kind: parts.kind,
         });
     }
@@ -208,6 +214,27 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
                     dep: dep.clone(),
                 });
             }
+        }
+    }
+
+    // Fail loud on dangling references and malformed conditions, so authoring
+    // mistakes surface at load time rather than silently no-op'ing at run time.
+    for node in &nodes {
+        // Every `$id.output` reference (in any inline body or the `when:`
+        // expression) must point to a declared node.
+        for text in node.substitutable_text() {
+            for referenced in crate::vars::referenced_node_ids(text) {
+                if !ids.contains(&referenced) {
+                    return Err(DagError::UnknownNodeReference {
+                        node: node.id.clone(),
+                        referenced,
+                    });
+                }
+            }
+        }
+        // The `when:` expression must be structurally valid.
+        if let Some(expr) = &node.when {
+            crate::cond::validate_syntax(expr)?;
         }
     }
 
