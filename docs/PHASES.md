@@ -274,11 +274,11 @@ identically.
   `.harness/workflows/` (refuses invalid + unsafe names).
 - [x] MCP tests (tool list + validate good/bad + catalog).
 - [ ] *Deferred:* `dry_run` (echo topology preview) and `start_run` — they need run
-  plumbing into the stdio server; folded into the Phase 5 `run/start` trigger work.
+  plumbing into the stdio server; folded into the Phase 8 `run/start` trigger work.
 
 **Exit:** ✅ from an MCP-connected assistant, read the catalog + default pipeline,
 describe a change in natural language, and have the AI edit → `workflow_validate`
-→ `workflow_save` it. (Triggering the run over MCP lands with Phase 5.)
+→ `workflow_save` it. (Triggering the run over MCP lands with Phase 8.)
 
 ---
 
@@ -320,27 +320,6 @@ triggers; Linear layered on after).
 
 **Exit:** register two projects from the UI, trigger a run into each, and watch
 both appear in one Runs feed — each operating on its own repo's worktree.
-
----
-
-## Phase 5 — Linear source + cron triggers — ⬜ not started
-
-**Goal:** a cron job polls Linear and triggers workflows; status flows back.
-Linear sources are configured **per project** (Phase 5.0) — a saved filter maps
-to a project + workflow.
-
-- [ ] `harness-sources`: Linear GraphQL client; saved filter → workflow+args
-  mapping; interval poller in the control plane; dedupe by Linear issue id
-  (cursor in `linear_sources`).
-- [ ] Write-back: comment/transition Linear issue on run start / PR open / verdict.
-- [ ] UI: **Linear sources panel** (configure filter, schedule, target workflow).
-- [ ] Manual/AI trigger via MCP server method (`run/start`).
-
-**Exit:** create/label a Linear issue → within one poll interval a run starts,
-and the issue gets a comment linking the run + resulting PR.
-
-> ⚠️ Needs author input first: exact Linear filter semantics + desired write-back
-> (status transition vs comment). See PLAN §12.2.
 
 ---
 
@@ -394,9 +373,9 @@ and the issue gets a comment linking the run + resulting PR.
 
 **Exit:** from a clean cluster, register a project, **connect Claude + Codex +
 Kimi entirely from the UI** (browser-authorize, no `kubectl`/SOPS), set toolchains,
-trigger the flagship workflow from Linear, and watch it provision toolchains +
+trigger the flagship workflow **from the UI/API**, and watch it provision toolchains +
 run to a PR — entirely in-cluster, no hand-built wrapper image, no hand-managed
-secrets.
+secrets. (Triggering from Linear is the final phase below.)
 
 > Cluster is now mapped (PLAN §14). Remaining author inputs: target namespace,
 > internal-vs-external exposure, and the warm-cache storage choice (recommend
@@ -444,6 +423,30 @@ on ai-harness instead of Archon.
 
 ---
 
+## Phase 8 — Linear source + cron triggers — ⬜ not started (LAST, by design)
+
+**Goal:** a cron job polls Linear and triggers workflows; status flows back.
+Linear sources are configured **per project** (Phase 5.0) — a saved filter maps
+to a project + workflow. **Deliberately the final phase:** everything else
+(projects, k8s execution, toolchains, the rich overview, hardening) is built and
+proven end-to-end via UI/API triggers first; Linear is just another trigger on
+top of an already-working system.
+
+- [ ] `harness-sources`: Linear GraphQL client; saved filter → workflow+args
+  mapping; interval poller in the control plane; dedupe by Linear issue id
+  (cursor in `linear_sources`).
+- [ ] Write-back: comment/transition Linear issue on run start / PR open / verdict.
+- [ ] UI: **Linear sources panel** (configure filter, schedule, target workflow).
+- [ ] Manual/AI trigger via MCP server method (`run/start`).
+
+**Exit:** create/label a Linear issue → within one poll interval a run starts,
+and the issue gets a comment linking the run + resulting PR.
+
+> ⚠️ Needs author input first: exact Linear filter semantics + desired write-back
+> (status transition vs comment). See PLAN §12.2.
+
+---
+
 ## Reminders / carried-over tasks
 
 - **Branch `feat/seed-dag-engine` → PR #1** open against `main`; **CI fully green**
@@ -456,7 +459,7 @@ on ai-harness instead of Archon.
 - **Web build is stub-only in dev** here (bun not producing a real bundle); the
   full UI rebuild happens in Phase 2. `sdk/typescript` retained because `web/`
   imports its types.
-- **Open inputs needed before** Phase 5 (Linear filter/write-back semantics).
+- **Open inputs needed before** Phase 8 (Linear filter/write-back semantics).
   Phase 6 cluster is now mapped from `home-ops` (PLAN §14); only namespace,
   internal/external exposure, and warm-cache storage choice remain.
 - **Target cluster = `home-ops`** (Talos + Flux + Envoy Gateway + CloudNativePG +
@@ -490,15 +493,11 @@ on ai-harness instead of Archon.
 
 ```
 P0 seed ─▶ P1 DAG+local ─▶ P2 API+UI graph ─▶ P3 Pi ─▶ P4 Archon parity
-                                                              │
-                                       ┌──────────────────────┤
-                                       ▼                      ▼
-                                P5 Linear+cron          P6 k8s+toolchains
-                                       └──────────┬───────────┘
-                                                  ▼
-                                            P7 hardening
+   ─▶ P4.5/4.6 editor+MCP ─▶ P5.0 projects ─▶ P6 k8s+toolchains
+   ─▶ P7 hardening (rich overview, recovery) ─▶ P8 Linear+cron
 ```
 
-P5 and P6 are independent after P4 and can be built in parallel. P6 is the
-biggest single phase; P3 carries the main external risk (Pi CLI capability) so
-its spike happens early.
+Linear (P8) is **last by design**: every phase before it is built and proven
+end-to-end with UI/API triggers, so Linear is just another trigger bolted onto an
+already-working system. P6 is the biggest single phase; P3 carried the main
+external risk (Pi CLI capability) so its spike happened early.
