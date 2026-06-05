@@ -64,13 +64,12 @@ export function pollKimiConnect(deviceCode: string): Promise<KimiPoll> {
   });
 }
 
-/** Codex (ChatGPT) OAuth device-login (server-driven). */
+/** Codex (ChatGPT) OAuth browser/PKCE login (server-driven, paste-redirect). */
 export interface CodexConnectStart {
-  user_code: string;
-  verification_uri: string;
-  device_auth_id: string;
-  interval: number;
-  expires_in: number;
+  authorize_url: string;
+  state: string;
+  verifier: string;
+  redirect_uri: string;
 }
 
 export function startCodexConnect(): Promise<CodexConnectStart> {
@@ -79,14 +78,16 @@ export function startCodexConnect(): Promise<CodexConnectStart> {
   });
 }
 
-export function pollCodexConnect(
-  deviceAuthId: string,
-  userCode: string,
+/** Exchange the pasted redirect URL (or bare code) for tokens. */
+export function completeCodexConnect(
+  redirect: string,
+  state: string,
+  verifier: string,
 ): Promise<KimiPoll> {
-  return apiJson<KimiPoll>("/api/credentials/codex/connect/poll", {
+  return apiJson<KimiPoll>("/api/credentials/codex/connect/complete", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
+    body: JSON.stringify({ redirect, state, verifier }),
   });
 }
 

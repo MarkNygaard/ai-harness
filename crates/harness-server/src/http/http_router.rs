@@ -224,8 +224,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             post(super::codex_routes::connect_start),
         )
         .route(
-            "/api/credentials/codex/connect/poll",
-            post(super::codex_routes::connect_poll),
+            "/api/credentials/codex/connect/complete",
+            post(super::codex_routes::connect_complete),
         )
         // ── Project registry (scopes runs to a git repo) ────────────────────
         .route(

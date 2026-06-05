@@ -9,7 +9,7 @@ import {
   startKimiConnect,
   pollKimiConnect,
   startCodexConnect,
-  pollCodexConnect,
+  completeCodexConnect,
   useCredentials,
   useDeleteCredential,
   useSetCredential,
@@ -238,62 +238,52 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
   );
 }
 
-/** Codex (ChatGPT) device login: Connect → open the device page, enter the code → poll. */
+/**
+ * Codex (ChatGPT) browser/PKCE login: Connect → sign in in the tab that opens →
+ * the browser redirects to a localhost URL that won't load → paste that URL back
+ * → we exchange it for tokens. (PKCE, not device-code — device-code needs a
+ * ChatGPT workspace setting many accounts don't have.)
+ */
 function CodexConnectCard({ configured }: { configured: boolean }) {
   const qc = useQueryClient();
   const [phase, setPhase] = useState<
-    "idle" | "pending" | "connected" | "error"
+    "idle" | "await_paste" | "exchanging" | "connected" | "error"
   >("idle");
-  const [info, setInfo] = useState<CodexConnectStart | null>(null);
+  const [start, setStart] = useState<CodexConnectStart | null>(null);
+  const [redirect, setRedirect] = useState("");
   const [msg, setMsg] = useState<string | null>(null);
-  const stopped = useRef(false);
 
-  useEffect(
-    () => () => {
-      stopped.current = true;
-    },
-    [],
-  );
-
-  async function connect() {
+  async function begin() {
     setMsg(null);
-    setInfo(null);
-    setPhase("pending");
+    setRedirect("");
     try {
-      const start = await startCodexConnect();
-      setInfo(start);
-      window.open(start.verification_uri, "_blank", "noopener");
-      const deadline = Date.now() + start.expires_in * 1000;
-      const tick = async () => {
-        if (stopped.current) return;
-        if (Date.now() > deadline) {
-          setPhase("error");
-          setMsg("Code expired — start again.");
-          return;
-        }
-        try {
-          const r = await pollCodexConnect(
-            start.device_auth_id,
-            start.user_code,
-          );
-          if (stopped.current) return;
-          if (r.status === "connected") {
-            setPhase("connected");
-            qc.invalidateQueries({ queryKey: ["credentials"] });
-            return;
-          }
-          if (r.status === "error") {
-            setPhase("error");
-            setMsg(r.message ?? "Authorization failed.");
-            return;
-          }
-          setTimeout(tick, Math.max(2, start.interval) * 1000);
-        } catch (e) {
-          setPhase("error");
-          setMsg((e as Error).message);
-        }
-      };
-      setTimeout(tick, Math.max(2, start.interval) * 1000);
+      const s = await startCodexConnect();
+      setStart(s);
+      setPhase("await_paste");
+      window.open(s.authorize_url, "_blank", "noopener");
+    } catch (e) {
+      setPhase("error");
+      setMsg((e as Error).message);
+    }
+  }
+
+  async function complete() {
+    if (!start || !redirect.trim()) return;
+    setMsg(null);
+    setPhase("exchanging");
+    try {
+      const r = await completeCodexConnect(
+        redirect.trim(),
+        start.state,
+        start.verifier,
+      );
+      if (r.status === "connected") {
+        setPhase("connected");
+        qc.invalidateQueries({ queryKey: ["credentials"] });
+      } else {
+        setPhase("error");
+        setMsg(r.message ?? "Authorization failed.");
+      }
     } catch (e) {
       setPhase("error");
       setMsg((e as Error).message);
@@ -313,8 +303,8 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
             <Badge variant="outline">not connected</Badge>
           )}
         </CardTitle>
-        <Button size="sm" onClick={connect} disabled={phase === "pending"}>
-          {phase === "pending" && (
+        <Button size="sm" onClick={begin} disabled={phase === "exchanging"}>
+          {phase === "exchanging" && (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           )}
           {configured ? "Reconnect" : "Connect Codex"}
@@ -323,29 +313,40 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
       <CardContent>
         <p className="mb-3 text-xs text-muted-foreground">
           The Codex review step (<code>gpt-5.3-codex</code>) uses your ChatGPT
-          subscription via a device login — no API key. Click Connect, then on
-          the page that opens enter the code shown below. The credential is
-          stored encrypted and written to <code>~/.codex/auth.json</code> (and
-          self-refreshes).
+          subscription. Click Connect, sign in in the tab that opens. Your
+          browser then redirects to a <code>localhost:1455</code> URL that{" "}
+          <em>won’t load</em> — copy that URL from the address bar and paste it
+          below. The credential is stored encrypted and written to{" "}
+          <code>~/.codex/auth.json</code> (and self-refreshes).
         </p>
-        {phase === "pending" && info && (
-          <div className="flex flex-col gap-1 text-sm">
-            <span>
-              Open{" "}
+        {(phase === "await_paste" || phase === "exchanging") && start && (
+          <div className="flex flex-col gap-2 text-sm">
+            <span className="text-muted-foreground">
+              Didn’t open?{" "}
               <a
-                href={info.verification_uri}
+                href={start.authorize_url}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-accent-orange hover:underline"
               >
-                {info.verification_uri} <ExternalLink className="h-3 w-3" />
-              </a>{" "}
-              and enter this code:
+                Open the sign-in page <ExternalLink className="h-3 w-3" />
+              </a>
             </span>
-            <span className="font-mono text-lg font-semibold tracking-widest text-foreground">
-              {info.user_code}
-            </span>
-            <span className="text-muted-foreground">Waiting for approval…</span>
+            <input
+              value={redirect}
+              onChange={(e) => setRedirect(e.target.value)}
+              placeholder="http://localhost:1455/auth/callback?code=…&state=…"
+              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            />
+            <div>
+              <Button
+                size="sm"
+                onClick={complete}
+                disabled={phase === "exchanging" || !redirect.trim()}
+              >
+                {phase === "exchanging" ? "Exchanging…" : "Complete connection"}
+              </Button>
+            </div>
           </div>
         )}
         {phase === "connected" && (
