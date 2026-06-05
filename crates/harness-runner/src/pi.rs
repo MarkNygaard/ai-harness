@@ -130,10 +130,13 @@ impl PromptAgent for PiAgent {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let parsed = parse_omp_stream(&stdout);
 
-        // A clean run reaches `agent_end` with a zero exit; otherwise surface the
-        // stderr tail so a misconfiguration (bad model, auth) is diagnosable.
-        let success = output.status.success() && parsed.saw_end;
-        if !success && parsed.text.is_empty() {
+        // A clean run is a zero exit with either the `agent_end` marker OR at
+        // least an assistant message. We do NOT hard-require `agent_end`: omp's
+        // terminal-event schema drifts by version, and requiring it previously
+        // failed runs that actually completed (and produced the full output).
+        let saw_end = parsed.saw_end;
+        let success = output.status.success() && (saw_end || !parsed.text.is_empty());
+        if !success {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let tail: String = stderr
                 .trim()
@@ -145,8 +148,9 @@ impl PromptAgent for PiAgent {
                 .rev()
                 .collect();
             return Err(AgentError(format!(
-                "omp run did not complete (exit {:?}): {tail}",
-                output.status.code()
+                "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B): {tail}",
+                output.status.code(),
+                parsed.text.len()
             )));
         }
 
@@ -154,7 +158,7 @@ impl PromptAgent for PiAgent {
             text: parsed.text,
             session: parsed.session.or(req.session),
             usage: parsed.usage,
-            success,
+            success: true,
         })
     }
 }
