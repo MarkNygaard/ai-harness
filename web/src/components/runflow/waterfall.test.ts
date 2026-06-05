@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { runWindow, timeByStep, usageByType, waterfall } from "./overview";
+import {
+  nodeColor,
+  runWindow,
+  timeByCategory,
+  timeByStep,
+  usageByType,
+  waterfall,
+} from "./overview";
+import type { Category } from "@/lib/categories";
 import type { NodeView } from "@/types/run";
 
 function node(
@@ -7,6 +15,7 @@ function node(
   startedAt: string | null,
   endedAt: string | null,
   status: NodeView["status"] = "success",
+  category: string | null = null,
 ): NodeView {
   return {
     id,
@@ -20,7 +29,18 @@ function node(
     output: "",
     started_at: startedAt,
     ended_at: endedAt,
-    category: null,
+    category,
+  };
+}
+
+function cat(id: string, color: string, ordinal: number): Category {
+  return {
+    id,
+    label: id[0].toUpperCase() + id.slice(1),
+    color,
+    ordinal,
+    created_at: "",
+    updated_at: "",
   };
 }
 
@@ -75,6 +95,39 @@ describe("timeByStep", () => {
     );
     expect(rows.map((r) => r.id)).toEqual(["long", "short"]);
     expect(rows[0].durationMs).toBe(60_000);
+  });
+});
+
+describe("timeByCategory", () => {
+  const cats = [cat("planning", "#aaa", 0), cat("impl", "#bbb", 1)];
+
+  it("sums durations per category, ordinal order, skips uncategorized", () => {
+    const segs = timeByCategory(
+      [
+        node("a", T0, T30, "success", "impl"),
+        node("b", T0, T10, "success", "planning"),
+        node("c", T0, T60, "success", null), // uncategorized → excluded
+      ],
+      NOW,
+      cats,
+    );
+    expect(segs.map((s) => s.id)).toEqual(["planning", "impl"]); // ordinal order
+    expect(segs.find((s) => s.id === "impl")!.ms).toBe(30_000);
+    expect(segs.find((s) => s.id === "planning")!.ms).toBe(10_000);
+  });
+
+  it("is empty when no node is categorized", () => {
+    expect(timeByCategory([node("a", T0, T30)], NOW, cats)).toEqual([]);
+  });
+});
+
+describe("nodeColor", () => {
+  const colors = new Map([["planning", "#aaa"]]);
+  it("uses category color when known, else status color", () => {
+    expect(nodeColor("success", "planning", colors)).toBe("#aaa");
+    // Unknown category or none → status color (a CSS var, not the category color).
+    expect(nodeColor("success", "nope", colors)).toContain("var(");
+    expect(nodeColor("failed", null, colors)).toContain("var(");
   });
 });
 

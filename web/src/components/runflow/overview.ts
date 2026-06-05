@@ -1,5 +1,68 @@
-import type { NodeView, Usage } from "@/types/run";
-import { elapsedMs, sumUsage, totalTokens } from "./format";
+import type { NodeStatus, NodeView, Usage } from "@/types/run";
+import type { Category } from "@/lib/categories";
+import { elapsedMs, statusColor, sumUsage, totalTokens } from "./format";
+
+/**
+ * The colour for a node's bars: its category colour when the node has a known
+ * category, else the semantic status colour (the confirmed fallback).
+ */
+export function nodeColor(
+  status: NodeStatus,
+  category: string | null,
+  colors: Map<string, string>,
+): string {
+  if (category) {
+    const c = colors.get(category);
+    if (c) return c;
+  }
+  return statusColor(status);
+}
+
+/** A category's share of wall-clock time, for the time-by-category bar. */
+export interface CategorySegment {
+  id: string;
+  label: string;
+  color: string;
+  ms: number;
+}
+
+/**
+ * Sum each step's duration by its category (uncategorized steps are excluded —
+ * they have no category to attribute time to), ordered by the registry's
+ * ordinal. An unknown category id falls back to its id + a neutral colour.
+ */
+export function timeByCategory(
+  nodes: NodeView[],
+  now: number,
+  categories: Category[],
+): CategorySegment[] {
+  const meta = new Map(
+    categories.map((c, i) => [
+      c.id,
+      { label: c.label, color: c.color, ord: c.ordinal ?? i },
+    ]),
+  );
+  const ms = new Map<string, number>();
+  for (const n of nodes) {
+    if (!n.category) continue;
+    const d = elapsedMs(n.started_at, n.ended_at, now);
+    if (d == null) continue;
+    ms.set(n.category, (ms.get(n.category) ?? 0) + d);
+  }
+  return [...ms.entries()]
+    .map(([id, total]) => {
+      const m = meta.get(id);
+      return {
+        id,
+        label: m?.label ?? id,
+        color: m?.color ?? "var(--status-skipped)",
+        ms: total,
+        ord: m?.ord ?? 999,
+      };
+    })
+    .sort((a, b) => a.ord - b.ord || b.ms - a.ms)
+    .map(({ ord: _ord, ...seg }) => seg);
+}
 
 /** Aggregate token usage grouped by model (falling back to provider). */
 export function usageByModel(
@@ -71,6 +134,7 @@ export function runWindow(nodes: NodeView[], now: number): RunWindow | null {
 export interface WaterfallRow {
   id: string;
   status: NodeView["status"];
+  category: string | null;
   durationMs: number | null;
   /** Left offset as a fraction [0,1] of the run window. */
   offset: number;
@@ -93,6 +157,7 @@ export function waterfall(nodes: NodeView[], now: number): WaterfallRow[] {
       return {
         id: n.id,
         status: n.status,
+        category: n.category,
         durationMs: elapsedMs(n.started_at, n.ended_at, now),
         offset: (start - win.startMs) / win.spanMs,
         width: Math.max(dur / win.spanMs, 0.004),
@@ -102,21 +167,21 @@ export function waterfall(nodes: NodeView[], now: number): WaterfallRow[] {
 }
 
 /** Per-step wall-clock durations, sorted longest-first (for the time bars). */
-export function timeByStep(
-  nodes: NodeView[],
-  now: number,
-): Array<{ id: string; status: NodeView["status"]; durationMs: number }> {
+export interface StepTime {
+  id: string;
+  status: NodeView["status"];
+  category: string | null;
+  durationMs: number;
+}
+
+export function timeByStep(nodes: NodeView[], now: number): StepTime[] {
   return nodes
     .map((n) => ({
       id: n.id,
       status: n.status,
+      category: n.category,
       durationMs: elapsedMs(n.started_at, n.ended_at, now),
     }))
-    .filter(
-      (
-        r,
-      ): r is { id: string; status: NodeView["status"]; durationMs: number } =>
-        r.durationMs != null,
-    )
+    .filter((r): r is StepTime => r.durationMs != null)
     .sort((a, b) => b.durationMs - a.durationMs);
 }
