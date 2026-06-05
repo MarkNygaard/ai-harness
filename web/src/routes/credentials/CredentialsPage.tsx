@@ -1,10 +1,18 @@
-import { useState } from "react";
-import { Check, KeyRound, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { Check, ExternalLink, KeyRound, Loader2, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useCredentials, useDeleteCredential, useSetCredential } from "@/lib/credentials";
+import {
+  startKimiConnect,
+  pollKimiConnect,
+  useCredentials,
+  useDeleteCredential,
+  useSetCredential,
+  type KimiConnectStart,
+} from "@/lib/credentials";
 
 /** A field the user pastes for a provider. */
 interface ProviderField {
@@ -49,24 +57,13 @@ const PROVIDERS: { id: string; label: string; help: string; fields: ProviderFiel
   },
   {
     id: "pi",
-    label: "Pi / Kimi",
-    help: "The omp CLI. For the Kimi-for-Coding subscription (kimi-code/* models) just paste your KIMI_API_KEY below — the harness sets the env var and writes the standard ~/.pi/agent/auth.json for you. MOONSHOT_API_KEY is only for the per-token Moonshot API (moonshotai/* models).",
+    label: "Moonshot API (per-token, optional)",
+    help: "Only for the per-token Moonshot API (moonshotai/* models). The Kimi-for-Coding subscription (kimi-code/* models) is connected via the device login above, not an API key.",
     fields: [
       {
-        key: "kimi_api_key",
-        label: "KIMI_API_KEY (Kimi-for-Coding subscription)",
-        help: "Just the key. Sets KIMI_API_KEY and writes ~/.pi/agent/auth.json as {\"kimi-coding\":{\"type\":\"api_key\",\"key\":…}}.",
-      },
-      {
-        key: "auth_json",
-        label: "Advanced: full ~/.pi/agent/auth.json (overrides the above)",
-        multiline: true,
-        help: "Only needed for a non-api-key login. Paste a complete auth.json; written verbatim.",
-      },
-      {
         key: "moonshot_api_key",
-        label: "MOONSHOT_API_KEY (per-token Moonshot API, optional)",
-        help: "Only for moonshotai/* per-token models.",
+        label: "MOONSHOT_API_KEY",
+        help: "Sets MOONSHOT_API_KEY for moonshotai/* per-token models.",
       },
     ],
   },
@@ -108,6 +105,8 @@ export function CredentialsPage() {
           </p>
         )}
 
+        <KimiConnectCard configured={configured.get("pi") ?? false} />
+
         {PROVIDERS.map((p) => (
           <ProviderCard
             key={p.id}
@@ -117,6 +116,116 @@ export function CredentialsPage() {
         ))}
       </div>
     </AppShell>
+  );
+}
+
+/** Kimi-for-Coding device login: Connect → approve in browser → poll until done. */
+function KimiConnectCard({ configured }: { configured: boolean }) {
+  const qc = useQueryClient();
+  const [phase, setPhase] = useState<"idle" | "pending" | "connected" | "error">("idle");
+  const [info, setInfo] = useState<KimiConnectStart | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const stopped = useRef(false);
+
+  useEffect(
+    () => () => {
+      stopped.current = true;
+    },
+    [],
+  );
+
+  async function connect() {
+    setMsg(null);
+    setInfo(null);
+    setPhase("pending");
+    try {
+      const start = await startKimiConnect();
+      setInfo(start);
+      window.open(start.verification_uri, "_blank", "noopener");
+      const deadline = Date.now() + start.expires_in * 1000;
+      const tick = async () => {
+        if (stopped.current) return;
+        if (Date.now() > deadline) {
+          setPhase("error");
+          setMsg("Code expired — start again.");
+          return;
+        }
+        try {
+          const r = await pollKimiConnect(start.device_code);
+          if (stopped.current) return;
+          if (r.status === "connected") {
+            setPhase("connected");
+            qc.invalidateQueries({ queryKey: ["credentials"] });
+            return;
+          }
+          if (r.status === "error") {
+            setPhase("error");
+            setMsg(r.message ?? "Authorization failed.");
+            return;
+          }
+          setTimeout(tick, Math.max(2, start.interval) * 1000);
+        } catch (e) {
+          setPhase("error");
+          setMsg((e as Error).message);
+        }
+      };
+      setTimeout(tick, Math.max(2, start.interval) * 1000);
+    } catch (e) {
+      setPhase("error");
+      setMsg((e as Error).message);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <CardTitle className="flex items-center gap-2">
+          Kimi-for-Coding
+          {configured ? (
+            <Badge variant="success">
+              <Check className="h-3 w-3" /> connected
+            </Badge>
+          ) : (
+            <Badge variant="outline">not connected</Badge>
+          )}
+        </CardTitle>
+        <Button size="sm" onClick={connect} disabled={phase === "pending"}>
+          {phase === "pending" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {configured ? "Reconnect" : "Connect Kimi"}
+        </Button>
+      </CardHeader>
+      <CardContent>
+        <p className="mb-3 text-xs text-muted-foreground">
+          The Kimi-for-Coding subscription (<code>kimi-code/*</code> models) uses a device login —
+          no API key. Click Connect, approve in the browser tab that opens; the credential is stored
+          encrypted and written to omp's auth db (and self-refreshes).
+        </p>
+        {phase === "pending" && info && (
+          <div className="flex flex-col gap-1 text-sm">
+            <span>
+              Approve at{" "}
+              <a
+                href={info.verification_uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-accent-orange hover:underline"
+              >
+                {info.verification_uri} <ExternalLink className="h-3 w-3" />
+              </a>
+            </span>
+            <span className="text-muted-foreground">
+              Code if prompted:{" "}
+              <span className="font-mono font-semibold text-foreground">{info.user_code}</span> —
+              waiting for approval…
+            </span>
+          </div>
+        )}
+        {phase === "connected" && (
+          <p className="text-sm text-status-success">Connected ✓ — Kimi is ready.</p>
+        )}
+        {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
+      </CardContent>
+    </Card>
   );
 }
 
