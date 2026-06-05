@@ -345,6 +345,18 @@ pub fn catalog(project_root: &Path) -> Catalog {
                 description: "An inline script run via bun (TS/JS) or uv (Python).",
                 ai: false,
             },
+            NodeKindInfo {
+                kind: "approval",
+                label: "Approval",
+                description: "Pause for human approval (requires interactive delivery).",
+                ai: false,
+            },
+            NodeKindInfo {
+                kind: "cancel",
+                label: "Cancel",
+                description: "Terminate the run with a reason (usually gated with when:).",
+                ai: false,
+            },
         ],
         providers: vec![
             ProviderInfo {
@@ -360,11 +372,7 @@ pub fn catalog(project_root: &Path) -> Catalog {
             ProviderInfo {
                 id: "pi",
                 label: "Pi / Kimi",
-                models: vec![
-                    "kimi-coding/kimi-for-coding",
-                    "kimi-code/kimi-k2.5",
-                    "kimi-code/kimi-k2.6",
-                ],
+                models: vec!["kimi-code/kimi-for-coding", "kimi-code/kimi-k2.6"],
             },
             ProviderInfo {
                 id: "anthropic-api",
@@ -501,8 +509,10 @@ nodes:
     fn catalog_exposes_kinds_providers_and_bundled_commands() {
         let tmp = tempfile::tempdir().unwrap();
         let cat = catalog(tmp.path());
-        assert_eq!(cat.node_kinds.len(), 5);
+        assert_eq!(cat.node_kinds.len(), 7);
         assert!(cat.node_kinds.iter().any(|k| k.kind == "loop" && k.ai));
+        assert!(cat.node_kinds.iter().any(|k| k.kind == "cancel"));
+        assert!(cat.node_kinds.iter().any(|k| k.kind == "approval"));
         assert!(cat.providers.iter().any(|p| p.id == "pi"));
         // Bundled commands surface in the catalog.
         assert!(cat.commands.iter().any(|c| c.name == "implement-tasks"));

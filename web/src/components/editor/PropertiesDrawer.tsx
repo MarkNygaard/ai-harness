@@ -3,6 +3,19 @@ import type { Catalog, EditorNode, NodeKindId } from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
 import { useCategories } from "@/lib/categories";
 
+/** Body fields that define a node's kind — cleared/swapped when the kind changes. */
+const BODY_KEYS = [
+  "prompt",
+  "bash",
+  "command",
+  "script",
+  "runtime",
+  "deps",
+  "loop",
+  "approval",
+  "cancel",
+] as const satisfies readonly (keyof EditorNode)[];
+
 /** Right drawer: edit the selected node's id, kind, body, and AI options. */
 export function PropertiesDrawer({
   node,
@@ -19,24 +32,17 @@ export function PropertiesDrawer({
   const categories = useCategories();
   const set = (patch: Partial<EditorNode>) => onChange({ ...node, ...patch });
 
-  // Switching kind clears the previous body but keeps id/edges/options.
+  // Switching kind swaps the body but keeps id/edges and all other options
+  // (when, category, output_format, provider/model/context/trigger_rule/…).
   const changeKind = (next: NodeKindId) => {
     const fresh = emptyNode(next, node.id);
-    onChange({
-      id: node.id,
-      depends_on: node.depends_on,
-      provider: node.provider,
-      model: node.model,
-      context: node.context,
-      trigger_rule: node.trigger_rule,
-      timeout: node.timeout,
-      prompt: fresh.prompt,
-      bash: fresh.bash,
-      command: fresh.command,
-      script: fresh.script,
-      runtime: fresh.runtime,
-      loop: fresh.loop,
-    });
+    const cleared: Partial<EditorNode> = { ...node };
+    const body: Record<string, unknown> = {};
+    for (const k of BODY_KEYS) {
+      delete cleared[k];
+      if (fresh[k] !== undefined) body[k] = fresh[k];
+    }
+    onChange({ ...cleared, ...body } as EditorNode);
   };
 
   const provider = node.provider ?? "";
@@ -181,6 +187,60 @@ export function PropertiesDrawer({
             </div>
           </>
         )}
+        {kind === "approval" && (
+          <>
+            <Field label="Approval message">
+              <textarea
+                className={textareaCls}
+                rows={4}
+                value={node.approval?.message ?? ""}
+                onChange={(e) =>
+                  set({
+                    approval: {
+                      ...(node.approval ?? { message: "" }),
+                      message: e.target.value,
+                    },
+                  })
+                }
+              />
+            </Field>
+            <label className="flex items-center gap-2 text-[12px] text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={node.approval?.capture_response ?? false}
+                onChange={(e) =>
+                  set({
+                    approval: {
+                      ...(node.approval ?? { message: "" }),
+                      capture_response: e.target.checked,
+                    },
+                  })
+                }
+              />
+              Capture the approver’s response
+            </label>
+          </>
+        )}
+        {kind === "cancel" && (
+          <Field label="Cancel reason">
+            <textarea
+              className={textareaCls}
+              rows={3}
+              value={node.cancel ?? ""}
+              onChange={(e) => set({ cancel: e.target.value })}
+              placeholder="Refusing to proceed: …"
+            />
+          </Field>
+        )}
+
+        <Field label="When (condition)">
+          <input
+            className={`${inputCls} font-mono`}
+            value={node.when ?? ""}
+            onChange={(e) => set({ when: e.target.value || undefined })}
+            placeholder="$classify.output.type == 'BUG'"
+          />
+        </Field>
 
         <div className="mt-1 border-t border-border pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
           AI options
