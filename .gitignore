@@ -24,3 +24,7 @@ sdk/typescript/bun.lock
 
 # macOS finder metadata
 .DS_Store
+
+# stray omp capture files
+omp.jsonl
+*.jsonl

@@ -181,6 +181,12 @@ pub struct ParsedOmp {
 pub fn parse_omp_stream(stdout: &str) -> ParsedOmp {
     use serde_json::Value;
     let mut out = ParsedOmp::default();
+    // omp reports tokens per assistant `message_end` (`message.usage`, fields
+    // input/output/cacheRead/cacheWrite). The headless `agent_end` has NO
+    // telemetry, so accumulate the per-message usage; if a future omp version
+    // *does* emit an `agent_end` telemetry summary, that overrides the sum.
+    let mut msg_usage = Usage::default();
+    let mut summary: Option<Usage> = None;
     for line in stdout.lines() {
         let line = line.trim();
         if line.is_empty() {
@@ -206,6 +212,9 @@ pub fn parse_omp_stream(stdout: &str) -> ParsedOmp {
                 if let Some(text) = assistant_text(v.get("message")) {
                     out.text = text; // last assistant message wins
                 }
+                if let Some(u) = v.get("message").and_then(|m| m.get("usage")) {
+                    add_usage(&mut msg_usage, &usage_from_value(u));
+                }
             }
             Some("agent_end") => {
                 out.saw_end = true;
@@ -218,7 +227,7 @@ pub fn parse_omp_stream(stdout: &str) -> ParsedOmp {
                     out.text = text;
                 }
                 if let Some(usage) = v.get("telemetry").and_then(|t| t.get("usage")) {
-                    out.usage = usage_from_value(usage);
+                    summary = Some(usage_from_value(usage));
                 }
                 if let Some(cost) = v
                     .get("telemetry")
@@ -232,7 +241,22 @@ pub fn parse_omp_stream(stdout: &str) -> ParsedOmp {
             _ => {}
         }
     }
+    // A summary total (if any) is authoritative; otherwise use the per-message sum.
+    out.usage = summary.unwrap_or(msg_usage);
     out
+}
+
+/// Add token counts from `b` into `a` (summing per-message usage across turns).
+fn add_usage(a: &mut Usage, b: &Usage) {
+    fn add(x: &mut Option<u64>, y: Option<u64>) {
+        if let Some(v) = y {
+            *x = Some(x.unwrap_or(0) + v);
+        }
+    }
+    add(&mut a.input, b.input);
+    add(&mut a.output, b.output);
+    add(&mut a.cache_read, b.cache_read);
+    add(&mut a.cache_write, b.cache_write);
 }
 
 /// Assistant text from a message `Value`. `content` may be a plain string or an
@@ -361,6 +385,25 @@ mod tests {
         assert_eq!(parsed.usage.input, Some(900));
         assert_eq!(parsed.usage.output, Some(120));
         assert_eq!(parsed.usage.cache_read, Some(40));
+    }
+
+    #[test]
+    fn sums_per_message_usage_when_agent_end_has_no_telemetry() {
+        // Real omp --mode json shape: usage is on each message_end's message
+        // (input/output/cacheRead/cacheWrite), and agent_end has NO telemetry.
+        // Sum the per-message usage; don't double-count agent_end.messages.
+        let stream = concat!(
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"a\"}],\"usage\":{\"input\":22893,\"output\":10,\"cacheRead\":100,\"cacheWrite\":0}}}\n",
+            "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"usage\":{\"input\":5485,\"output\":26,\"cacheRead\":17408,\"cacheWrite\":0}}}\n",
+            "{\"type\":\"agent_end\",\"messages\":[{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}],\"usage\":{\"input\":5485,\"output\":26}}]}\n"
+        );
+        let parsed = parse_omp_stream(stream);
+        assert!(parsed.saw_end);
+        assert_eq!(parsed.text, "hi");
+        assert_eq!(parsed.usage.input, Some(22893 + 5485));
+        assert_eq!(parsed.usage.output, Some(10 + 26));
+        assert_eq!(parsed.usage.cache_read, Some(100 + 17408));
+        assert_eq!(parsed.usage.cache_write, Some(0));
     }
 
     #[test]
