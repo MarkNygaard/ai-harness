@@ -14,7 +14,8 @@ export interface ProviderCredential {
 export function useCredentials() {
   return useQuery<ProviderCredential[], Error>({
     queryKey: ["credentials"],
-    queryFn: ({ signal }) => apiJson<ProviderCredential[]>("/api/credentials", { signal }),
+    queryFn: ({ signal }) =>
+      apiJson<ProviderCredential[]>("/api/credentials", { signal }),
   });
 }
 
@@ -50,7 +51,9 @@ export interface KimiPoll {
 }
 
 export function startKimiConnect(): Promise<KimiConnectStart> {
-  return apiJson<KimiConnectStart>("/api/credentials/kimi/connect/start", { method: "POST" });
+  return apiJson<KimiConnectStart>("/api/credentials/kimi/connect/start", {
+    method: "POST",
+  });
 }
 
 export function pollKimiConnect(deviceCode: string): Promise<KimiPoll> {
@@ -61,11 +64,39 @@ export function pollKimiConnect(deviceCode: string): Promise<KimiPoll> {
   });
 }
 
+/** Codex (ChatGPT) OAuth device-login (server-driven). */
+export interface CodexConnectStart {
+  user_code: string;
+  verification_uri: string;
+  device_auth_id: string;
+  interval: number;
+  expires_in: number;
+}
+
+export function startCodexConnect(): Promise<CodexConnectStart> {
+  return apiJson<CodexConnectStart>("/api/credentials/codex/connect/start", {
+    method: "POST",
+  });
+}
+
+export function pollCodexConnect(
+  deviceAuthId: string,
+  userCode: string,
+): Promise<KimiPoll> {
+  return apiJson<KimiPoll>("/api/credentials/codex/connect/poll", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ device_auth_id: deviceAuthId, user_code: userCode }),
+  });
+}
+
 export function useDeleteCredential() {
   const qc = useQueryClient();
   return useMutation<{ deleted: boolean; provider: string }, Error, string>({
     mutationFn: (provider) =>
-      apiJson(`/api/credentials/${encodeURIComponent(provider)}`, { method: "DELETE" }),
+      apiJson(`/api/credentials/${encodeURIComponent(provider)}`, {
+        method: "DELETE",
+      }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["credentials"] }),
   });
 }
