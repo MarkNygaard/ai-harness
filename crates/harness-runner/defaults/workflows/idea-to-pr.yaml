@@ -24,6 +24,7 @@ model: kimi-code/kimi-for-coding
 
 nodes:
   - id: explore
+    category: planning
     provider: claude
     model: sonnet
     context: fresh
@@ -55,6 +56,7 @@ nodes:
       Output a one-line confirmation and: <promise>EXPLORE-DONE</promise>
 
   - id: create-plan
+    category: planning
     provider: claude
     model: opus
     context: fresh
@@ -95,6 +97,7 @@ nodes:
       <promise>PLAN-DONE</promise>
 
   - id: install-deps
+    category: setup
     bash: |
       set -euo pipefail
       if [ -f pnpm-lock.yaml ]; then
@@ -127,6 +130,7 @@ nodes:
     timeout: 300000
 
   - id: implement-tasks
+    category: implementation
     command: implement-tasks
     depends_on: [install-deps]
     provider: pi
@@ -134,6 +138,7 @@ nodes:
     context: fresh
 
   - id: pi-simplify
+    category: implementation
     depends_on: [implement-tasks]
     provider: pi
     model: kimi-code/kimi-for-coding
@@ -191,6 +196,7 @@ nodes:
       or "no changes") and: <promise>SIMPLIFY-DONE</promise>
 
   - id: validate
+    category: validation
     command: validate
     depends_on: [pi-simplify]
     provider: pi
@@ -208,11 +214,13 @@ nodes:
   # Fail the run loudly if validation didn't pass — never open a PR on a branch
   # that doesn't build/test clean. (Skipped when validation passed.)
   - id: abort-on-invalid
+    category: validation
     depends_on: [validate]
     when: "$validate.output.passed != 'true'"
     cancel: "validation failed — refusing to open a PR. $validate.output.summary"
 
   - id: finalize-pr
+    category: delivery
     command: finalize-pr
     depends_on: [validate]
     when: "$validate.output.passed == 'true'"
@@ -221,6 +229,7 @@ nodes:
     context: fresh
 
   - id: verify-pr-base
+    category: delivery
     bash: |
       set -euo pipefail
       EXPECTED="$BASE_BRANCH"
@@ -235,6 +244,7 @@ nodes:
     depends_on: [finalize-pr]
 
   - id: verify-pr-title
+    category: delivery
     depends_on: [verify-pr-base]
     provider: pi
     model: kimi-code/kimi-for-coding
@@ -294,6 +304,7 @@ nodes:
       property. Title only.
 
   - id: pi-review-fix-loop
+    category: review
     depends_on: [verify-pr-title]
     loop:
       provider: pi
@@ -388,6 +399,7 @@ nodes:
         PR is the goal.
 
   - id: codex-review-fix
+    category: review
     depends_on: [pi-review-fix-loop]
     provider: codex
     model: gpt-5.3-codex
@@ -428,6 +440,7 @@ nodes:
       When done, output: <promise>CODEX-REVIEW-DONE</promise>
 
   - id: sonnet-final-review
+    category: review
     depends_on: [codex-review-fix]
     provider: claude
     model: sonnet
@@ -558,6 +571,7 @@ nodes:
       3. Output: <promise>SONNET-SIGNOFF-DONE</promise>
 
   - id: final-verify-loop
+    category: validation
     depends_on: [sonnet-final-review]
     loop:
       provider: pi
@@ -599,6 +613,7 @@ nodes:
         still red.
 
   - id: workflow-summary
+    category: delivery
     depends_on: [final-verify-loop]
     provider: pi
     model: kimi-code/kimi-for-coding
