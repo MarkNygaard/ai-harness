@@ -1,6 +1,7 @@
 import { X } from "lucide-react";
 import type { Catalog, EditorNode, NodeKindId } from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
+import { useCategories } from "@/lib/categories";
 
 /** Right drawer: edit the selected node's id, kind, body, and AI options. */
 export function PropertiesDrawer({
@@ -15,6 +16,7 @@ export function PropertiesDrawer({
   onClose: () => void;
 }) {
   const kind = nodeKind(node);
+  const categories = useCategories();
   const set = (patch: Partial<EditorNode>) => onChange({ ...node, ...patch });
 
   // Switching kind clears the previous body but keeps id/edges/options.
@@ -45,7 +47,11 @@ export function PropertiesDrawer({
     <div className="flex w-80 flex-none flex-col border-l border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <span className="text-sm font-semibold">Step settings</span>
-        <button type="button" onClick={onClose} className="rounded p-1 hover:bg-secondary">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-1 hover:bg-secondary"
+        >
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -116,7 +122,9 @@ export function PropertiesDrawer({
               <select
                 className={inputCls}
                 value={node.runtime ?? "bun"}
-                onChange={(e) => set({ runtime: e.target.value as EditorNode["runtime"] })}
+                onChange={(e) =>
+                  set({ runtime: e.target.value as EditorNode["runtime"] })
+                }
               >
                 <option value="bun">bun (TS/JS)</option>
                 <option value="uv">uv (Python)</option>
@@ -139,7 +147,9 @@ export function PropertiesDrawer({
                 className={textareaCls}
                 rows={5}
                 value={node.loop?.prompt ?? ""}
-                onChange={(e) => set({ loop: { ...loopOf(node), prompt: e.target.value } })}
+                onChange={(e) =>
+                  set({ loop: { ...loopOf(node), prompt: e.target.value } })
+                }
               />
             </Field>
             <div className="grid grid-cols-2 gap-2">
@@ -147,7 +157,9 @@ export function PropertiesDrawer({
                 <input
                   className={inputCls}
                   value={node.loop?.until ?? ""}
-                  onChange={(e) => set({ loop: { ...loopOf(node), until: e.target.value } })}
+                  onChange={(e) =>
+                    set({ loop: { ...loopOf(node), until: e.target.value } })
+                  }
                 />
               </Field>
               <Field label="Max iterations">
@@ -157,7 +169,12 @@ export function PropertiesDrawer({
                   className={inputCls}
                   value={node.loop?.max_iterations ?? 3}
                   onChange={(e) =>
-                    set({ loop: { ...loopOf(node), max_iterations: Number(e.target.value) } })
+                    set({
+                      loop: {
+                        ...loopOf(node),
+                        max_iterations: Number(e.target.value),
+                      },
+                    })
                   }
                 />
               </Field>
@@ -202,7 +219,9 @@ export function PropertiesDrawer({
             <select
               className={inputCls}
               value={node.context ?? "shared"}
-              onChange={(e) => set({ context: e.target.value as EditorNode["context"] })}
+              onChange={(e) =>
+                set({ context: e.target.value as EditorNode["context"] })
+              }
             >
               {(catalog?.context_modes ?? ["fresh", "shared"]).map((c) => (
                 <option key={c} value={c}>
@@ -215,7 +234,11 @@ export function PropertiesDrawer({
             <select
               className={inputCls}
               value={node.trigger_rule ?? "all_success"}
-              onChange={(e) => set({ trigger_rule: e.target.value as EditorNode["trigger_rule"] })}
+              onChange={(e) =>
+                set({
+                  trigger_rule: e.target.value as EditorNode["trigger_rule"],
+                })
+              }
             >
               {(catalog?.trigger_rules ?? ["all_success"]).map((t) => (
                 <option key={t} value={t}>
@@ -225,6 +248,20 @@ export function PropertiesDrawer({
             </select>
           </Field>
         </div>
+        <Field label="Category">
+          <select
+            className={inputCls}
+            value={node.category ?? ""}
+            onChange={(e) => set({ category: e.target.value || undefined })}
+          >
+            <option value="">(none — status colour)</option>
+            {(categories.data ?? []).map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+        </Field>
         {(kind === "bash" || kind === "script") && (
           <Field label="Timeout (ms)">
             <input
@@ -233,7 +270,9 @@ export function PropertiesDrawer({
               className={inputCls}
               value={node.timeout ?? ""}
               onChange={(e) =>
-                set({ timeout: e.target.value ? Number(e.target.value) : undefined })
+                set({
+                  timeout: e.target.value ? Number(e.target.value) : undefined,
+                })
               }
             />
           </Field>
@@ -247,10 +286,18 @@ function loopOf(node: EditorNode) {
   return node.loop ?? { prompt: "", until: "DONE", max_iterations: 3 };
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <span className="text-[11px] font-medium text-muted-foreground">
+        {label}
+      </span>
       {children}
     </label>
   );

@@ -5,6 +5,7 @@ import {
   IconHexagonalPrism,
   IconKey,
   IconRocket,
+  IconTags,
 } from "@tabler/icons-react";
 import {
   Sidebar,
@@ -29,17 +30,42 @@ interface NavItem {
 
 const OPERATIONS: NavItem[] = [
   { href: "/", label: "Runs", icon: IconRocket, match: "/runs" },
-  { href: "/projects", label: "Projects", icon: IconFolderCog, match: "/projects" },
-  { href: "/editor", label: "Workflows", icon: IconBinaryTree2, match: "/editor" },
+  {
+    href: "/projects",
+    label: "Projects",
+    icon: IconFolderCog,
+    match: "/projects",
+  },
+  {
+    href: "/editor",
+    label: "Workflows",
+    icon: IconBinaryTree2,
+    match: "/editor",
+  },
 ];
 
 const SYSTEM: NavItem[] = [
-  { href: "/credentials", label: "Credentials", icon: IconKey, match: "/credentials" },
+  {
+    href: "/credentials",
+    label: "Credentials",
+    icon: IconKey,
+    match: "/credentials",
+  },
+  {
+    href: "/categories",
+    label: "Categories",
+    icon: IconTags,
+    match: "/categories",
+  },
 ];
 
 function isActive(pathname: string, item: NavItem): boolean {
-  if (item.href === "/") return pathname === "/" || pathname.startsWith("/runs");
-  return pathname === item.href || (item.match ? pathname.startsWith(item.match) : false);
+  if (item.href === "/")
+    return pathname === "/" || pathname.startsWith("/runs");
+  return (
+    pathname === item.href ||
+    (item.match ? pathname.startsWith(item.match) : false)
+  );
 }
 
 /** Left navigation, mirroring home-ops-agent's sidebar (base-nova). */
@@ -53,7 +79,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarMenu>
           {items.map((item) => (
             <SidebarMenuItem key={item.href}>
-              <SidebarMenuButton render={<Link to={item.href} />} isActive={isActive(pathname, item)}>
+              <SidebarMenuButton
+                render={<Link to={item.href} />}
+                isActive={isActive(pathname, item)}
+              >
                 <item.icon />
                 <span>{item.label}</span>
               </SidebarMenuButton>

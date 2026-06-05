@@ -89,6 +89,8 @@ export interface EditorNode {
   context?: ContextMode;
   trigger_rule?: TriggerRule;
   timeout?: number;
+  /** Category id for overview grouping/colouring (from the categories registry). */
+  category?: string;
   // Mutually exclusive bodies:
   prompt?: string;
   bash?: string;

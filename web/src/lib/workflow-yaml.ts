@@ -38,7 +38,9 @@ export function emptyNode(kind: NodeKindId, id: string): EditorNode {
 }
 
 /** Drop undefined/null, empty strings, and empty arrays so the YAML stays terse. */
-function clean<T extends Record<string, unknown>>(obj: T): Record<string, unknown> {
+function clean<T extends Record<string, unknown>>(
+  obj: T,
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
     if (v === undefined || v === null) continue;
@@ -57,13 +59,16 @@ export function toYaml(wf: EditorWorkflow): string {
     provider: wf.provider,
     model: wf.model,
     nodes: wf.nodes.map((n) => {
-      const loop = n.loop ? clean(n.loop as unknown as Record<string, unknown>) : undefined;
+      const loop = n.loop
+        ? clean(n.loop as unknown as Record<string, unknown>)
+        : undefined;
       return clean({
         id: n.id,
         depends_on: n.depends_on,
         provider: n.provider,
         model: n.model,
         context: n.context,
+        category: n.category,
         trigger_rule: n.trigger_rule,
         timeout: n.timeout,
         prompt: n.prompt,
@@ -81,7 +86,9 @@ export function toYaml(wf: EditorWorkflow): string {
 /** Parse YAML into the flat editor shape (tolerant of missing optional fields). */
 export function fromYaml(text: string): EditorWorkflow {
   const raw = (yaml.load(text) ?? {}) as Record<string, unknown>;
-  const rawNodes = Array.isArray(raw.nodes) ? (raw.nodes as Record<string, unknown>[]) : [];
+  const rawNodes = Array.isArray(raw.nodes)
+    ? (raw.nodes as Record<string, unknown>[])
+    : [];
   const nodes: EditorNode[] = rawNodes.map((n) => ({
     id: String(n.id ?? ""),
     depends_on: Array.isArray(n.depends_on) ? (n.depends_on as string[]) : [],
@@ -90,6 +97,7 @@ export function fromYaml(text: string): EditorWorkflow {
     context: n.context as EditorNode["context"],
     trigger_rule: n.trigger_rule as EditorNode["trigger_rule"],
     timeout: typeof n.timeout === "number" ? n.timeout : undefined,
+    category: n.category as string | undefined,
     prompt: n.prompt as string | undefined,
     bash: n.bash as string | undefined,
     command: n.command as string | undefined,
