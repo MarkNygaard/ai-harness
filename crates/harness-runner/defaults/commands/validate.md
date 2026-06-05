@@ -1,341 +1,83 @@
 ---
-description: Run full validation suite - type-check, lint, tests, build
-argument-hint: (no arguments - reads from workflow artifacts)
+description: Run the project's full verify chain, fix what's fixable, emit a pass/fail verdict
+argument-hint: (no arguments — reads the verify chain from the project's CLAUDE.md / AGENTS.md)
 ---
 
 # Validate Implementation
 
 **Workflow ID**: $WORKFLOW_ID
 
----
+Run the project's complete verification suite, fix what you can, and report a
+machine-readable verdict the workflow uses to decide whether to open a PR.
 
-## Your Mission
-
-Run the complete validation suite and fix any failures.
-
-This is a focused step: run checks, fix issues, repeat until green.
+This step is **language-agnostic**. Do NOT assume Node/npm, Rust, or any
+particular toolchain — discover the project's actual verify chain.
 
 ---
 
-## Phase 1: LOAD - Get Validation Commands
+## Phase 1 — Find the verify chain
 
-### 1.1 Load Plan Context
+The authoritative commands live in the project's `CLAUDE.md` / `AGENTS.md`
+(auto-loaded into your context) — look for a "Build & verify" / "Validation
+commands" section, and honor any scoping guidance it gives (many projects want
+a scoped verify for small changes and the full chain only as a final gate;
+since this is the pre-PR gate, prefer the **complete** chain it describes).
 
-```bash
-cat $ARTIFACTS_DIR/plan-context.md
+If the project docs don't specify, infer from the repo:
+- `Cargo.toml` → `cargo fmt --check`, `cargo clippy`, `cargo test` (workspace or
+  the affected crates).
+- `package.json` → the `scripts` that exist (`tsc`/`type-check`, `lint`,
+  `format:check`, `test`, `build`) via the detected package manager
+  (`bun.lockb`→bun, `pnpm-lock.yaml`→pnpm, `yarn.lock`→yarn, else npm).
+- `pyproject.toml` / `uv.lock` → `ruff`, `pytest`, etc.
+- Mixed repos → run each ecosystem's chain for the parts the PR touched.
+
+Read `$ARTIFACTS_DIR/plan-context.md` if present — the plan may name the exact
+validation commands.
+
+---
+
+## Phase 2 — Run it, fix what's fixable
+
+Run each check. On failure:
+1. Read the error.
+2. If it's a clear, in-scope fix (type error, lint, format, a broken test you
+   understand, a compile error), fix the root cause and re-run.
+3. Auto-fixers are fine for lint/format (`cargo fmt`, `lint:fix`, `ruff --fix`).
+4. Never disable a check, never use `--no-verify`, never skip hooks, never run
+   DB migrations to make a check pass. Honor project-specific prohibitions in
+   `CLAUDE.md` / `AGENTS.md`.
+
+Repeat until the chain is green or you hit something you cannot safely fix.
+
+---
+
+## Phase 3 — Write the validation artifact
+
+Write `$ARTIFACTS_DIR/validation.md` with: the commands you ran, each result
+(✅/❌), and anything you fixed or that remains blocked. This is the detailed
+record for the human; keep it factual.
+
+---
+
+## Phase 4 — Verdict (this becomes the node's output)
+
+Your **final message** is consumed by the workflow to gate PR creation, so it
+must be the verdict and nothing else. Emit a single JSON object:
+
+```json
+{ "passed": true,  "summary": "fmt+clippy+test green; fixed 2 type errors" }
 ```
 
-Extract the "Validation Commands" section.
+or, if any check is still red after your fixes:
 
-### 1.2 Identify Package Manager
-
-```bash
-test -f bun.lockb && echo "bun" || \
-test -f pnpm-lock.yaml && echo "pnpm" || \
-test -f yarn.lock && echo "yarn" || \
-test -f package-lock.json && echo "npm" || \
-echo "unknown"
+```json
+{ "passed": false, "summary": "cargo test: 1 failing in harness-runner (token parse)" }
 ```
 
-### 1.3 Determine Available Commands
-
-Check `package.json` for available scripts:
-
-```bash
-cat package.json | grep -A 20 '"scripts"'
-```
-
-**PHASE_1_CHECKPOINT:**
-
-- [ ] Validation commands identified
-- [ ] Package manager known
-
----
-
-## Phase 2: VALIDATE - Run All Checks
-
-Run each check in order. Fix any failures before proceeding.
-
-### 2.1 Type Check
-
-```bash
-{runner} run type-check
-```
-
-**If fails:**
-1. Read error output
-2. Fix the type issues
-3. Re-run until passing
-
-**Record result**: ✅ Pass / ❌ Fail (fixed)
-
-### 2.2 Lint Check
-
-```bash
-{runner} run lint
-```
-
-**If fails:**
-
-1. Try auto-fix first:
-   ```bash
-   {runner} run lint:fix
-   ```
-
-2. Re-run lint check
-
-3. If still failing, manually fix remaining issues
-
-**Record result**: ✅ Pass / ❌ Fail (fixed)
-
-### 2.3 Format Check
-
-```bash
-{runner} run format:check
-```
-
-**If fails:**
-
-1. Auto-fix:
-   ```bash
-   {runner} run format
-   ```
-
-2. Verify fixed:
-   ```bash
-   {runner} run format:check
-   ```
-
-**Record result**: ✅ Pass / ❌ Fail (fixed)
-
-### 2.4 Test Suite
-
-```bash
-{runner} test
-```
-
-**If fails:**
-
-1. Identify which test(s) failed
-2. Determine: implementation bug or test bug?
-3. Fix the root cause
-4. Re-run tests
-
-**Record result**: ✅ Pass ({N} tests) / ❌ Fail (fixed)
-
-### 2.5 Build Check
-
-```bash
-{runner} run build
-```
-
-**If fails:**
-
-1. Usually a type or import issue
-2. Fix and re-run
-
-**Record result**: ✅ Pass / ❌ Fail (fixed)
-
-**PHASE_2_CHECKPOINT:**
-
-- [ ] Type check passes
-- [ ] Lint passes
-- [ ] Format passes
-- [ ] Tests pass
-- [ ] Build passes
-
----
-
-## Phase 3: ARTIFACT - Write Validation Results
-
-### 3.1 Write Validation Artifact
-
-Write to `$ARTIFACTS_DIR/validation.md`:
-
-```markdown
-# Validation Results
-
-**Generated**: {YYYY-MM-DD HH:MM}
-**Workflow ID**: $WORKFLOW_ID
-**Status**: {ALL_PASS | FIXED | BLOCKED}
-
----
-
-## Summary
-
-| Check | Result | Details |
-|-------|--------|---------|
-| Type check | ✅ | No errors |
-| Lint | ✅ | 0 errors, {N} warnings |
-| Format | ✅ | All files formatted |
-| Tests | ✅ | {N} passed, 0 failed |
-| Build | ✅ | Compiled successfully |
-
----
-
-## Type Check
-
-**Command**: `{runner} run type-check`
-**Result**: ✅ Pass
-
-{If issues were fixed:}
-### Issues Fixed
-
-- `src/file.ts:42` - Added missing return type
-- `src/other.ts:15` - Fixed generic constraint
-
----
-
-## Lint
-
-**Command**: `{runner} run lint`
-**Result**: ✅ Pass
-
-{If issues were fixed:}
-### Issues Fixed
-
-- {N} auto-fixed by `lint:fix`
-- {M} manually fixed
-
-### Remaining Warnings
-
-{List any warnings that weren't fixed, with justification}
-
----
-
-## Format
-
-**Command**: `{runner} run format:check`
-**Result**: ✅ Pass
-
-{If files were formatted:}
-### Files Formatted
-
-- `src/file.ts`
-- `src/other.ts`
-
----
-
-## Tests
-
-**Command**: `{runner} test`
-**Result**: ✅ Pass
-
-| Metric | Count |
-|--------|-------|
-| Total tests | {N} |
-| Passed | {N} |
-| Failed | 0 |
-| Skipped | {M} |
-
-{If tests were fixed:}
-### Tests Fixed
-
-- `src/x.test.ts` - Fixed assertion to match new behavior
-
----
-
-## Build
-
-**Command**: `{runner} run build`
-**Result**: ✅ Pass
-
-Build output: `dist/` (or as configured)
-
----
-
-## Files Modified During Validation
-
-{If any files were changed to fix issues:}
-
-| File | Changes |
-|------|---------|
-| `src/file.ts` | Fixed type error |
-| `src/other.ts` | Lint auto-fix |
-
----
-
-## Next Step
-
-Continue to `archon-finalize-pr` to update PR and mark ready for review.
-```
-
-**PHASE_3_CHECKPOINT:**
-
-- [ ] Validation artifact written
-- [ ] All results documented
-
----
-
-## Phase 4: OUTPUT - Report Results
-
-### If All Pass:
-
-```markdown
-## Validation Complete ✅
-
-**Workflow ID**: `$WORKFLOW_ID`
-
-### Results
-
-| Check | Status |
-|-------|--------|
-| Type check | ✅ |
-| Lint | ✅ |
-| Format | ✅ |
-| Tests | ✅ ({N} passed) |
-| Build | ✅ |
-
-{If issues were fixed:}
-### Issues Fixed
-
-- {N} type errors fixed
-- {M} lint issues fixed
-- {K} format issues fixed
-
-### Artifact
-
-Results written to: `$ARTIFACTS_DIR/validation.md`
-
-### Next Step
-
-Proceed to `archon-finalize-pr` to update PR and mark ready for review.
-```
-
-### If Blocked (unfixable issue):
-
-```markdown
-## Validation Blocked ❌
-
-**Workflow ID**: `$WORKFLOW_ID`
-
-### Failed Check
-
-**{check-name}**: {error description}
-
-### Attempts to Fix
-
-1. {what was tried}
-2. {what was tried}
-
-### Required Action
-
-This issue requires manual intervention:
-
-{description of what needs to be done}
-
-### Artifact
-
-Partial results written to: `$ARTIFACTS_DIR/validation.md`
-```
-
----
-
-## Success Criteria
-
-- **TYPE_CHECK_PASS**: `{runner} run type-check` exits 0
-- **LINT_PASS**: `{runner} run lint` exits 0
-- **FORMAT_PASS**: `{runner} run format:check` exits 0
-- **TESTS_PASS**: `{runner} test` all green
-- **BUILD_PASS**: `{runner} run build` exits 0
-- **ARTIFACT_WRITTEN**: Validation results documented
+Rules for the verdict:
+- `passed` is `true` **only if the entire verify chain is green** — every
+  command you ran exits clean. If you could not run a critical check at all
+  (e.g. the build never compiled), that is `false`, not `true`.
+- `summary` is one line: what passed, what you fixed, or what is still red.
+- Be honest. A false `true` ships a broken PR; the workflow trusts this field.
