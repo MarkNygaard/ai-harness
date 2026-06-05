@@ -139,34 +139,56 @@ nodes:
     model: kimi-code/kimi-for-coding
     context: fresh
     prompt: |
-      Run the pi-simplify extension over the code just implemented on
-      this branch. Invoke:
+      Simplify ONLY the code this PR changed — clarity, redundancy,
+      naming, dead code — while preserving behaviour exactly.
 
-          /simplify --ref=$BASE_BRANCH
+      ## Scope (critical — do not exceed it)
 
-      The extension reviews `git diff $BASE_BRANCH...HEAD`, applies
-      clarity / redundancy / naming improvements one file at a time,
-      and runs tests after each change to verify nothing breaks.
-      Per the extension docs, it preserves behaviour — it does not
-      change what the code does.
+      First compute the changed-file set for THIS branch:
 
-      After /simplify finishes:
+          git diff --name-only origin/$BASE_BRANCH...HEAD
 
-      - If `git status --porcelain` reports modified files, stage them
-        and commit with a single conventional-commit message:
-          `chore: simplify implementation per pi-simplify pass`
-        Do NOT push — the next finalize-pr step pushes the branch.
-        Do NOT skip commit hooks. Do NOT use --no-verify.
-      - If `git status --porcelain` is empty, do nothing — /simplify
-        found nothing to change. No-op is fine.
+      Those files — and ONLY those files — are in scope. Do NOT open,
+      read-for-simplification, or edit any file outside that list. You
+      are simplifying the work this PR introduced, not auditing the
+      repository. (If that command lists nothing, there is nothing to
+      do — skip to the no-op path below.)
 
-      The project's `CLAUDE.md` / `AGENTS.md` (auto-loaded into your
-      context) describe project-specific agent rules — migration
-      tooling restrictions, package-manager constraints, etc. Honor
-      those if they apply to changes /simplify proposes.
+      ## Process
 
-      Output a one-line summary of what was simplified (or "no changes")
-      and: <promise>SIMPLIFY-DONE</promise>
+      Go file by file through the in-scope list. For each, look only for:
+      - Unnecessary complexity / deep nesting that can flatten.
+      - Redundant or duplicated logic, unused variables/imports.
+      - Unclear names; dense one-liners that hurt readability.
+      - Obvious comments that just restate the code.
+      Match the surrounding module's conventions. Clarity over brevity —
+      never introduce clever-but-obscure code or nested ternaries, and
+      never drop a feature, output, or behaviour.
+
+      ## Verify BEFORE you commit (non-negotiable)
+
+      After making edits, run the project's scoped verify chain for the
+      crates/packages you touched — the commands live in `CLAUDE.md` /
+      `AGENTS.md` (auto-loaded into your context). Use the narrowest
+      scope that covers your edits. If verification fails, FIX or REVERT
+      your simplification until it passes — never commit code that does
+      not build and pass its tests. A simplification that breaks the
+      build is worse than no simplification.
+
+      ## Commit
+
+      - If, after a green verify, `git status --porcelain` shows modified
+        files, stage them and commit ONE conventional-commit:
+          `chore: simplify implementation`
+        Do NOT push — `finalize-pr` pushes the branch. Do NOT use
+        `--no-verify` or skip commit hooks. Do NOT run DB migrations.
+      - If you made no changes (or reverted them all), do nothing — a
+        no-op is a perfectly good outcome.
+
+      Honor any project-specific agent rules in `CLAUDE.md` / `AGENTS.md`.
+
+      Output a one-line summary (what you simplified + that verify passed,
+      or "no changes") and: <promise>SIMPLIFY-DONE</promise>
 
   - id: validate
     command: validate
