@@ -171,7 +171,11 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/runs",
             post(runs_routes::create_run).get(runs_routes::list_runs),
         )
-        .route("/api/runs/{id}", get(runs_routes::get_run))
+        .route(
+            "/api/runs/{id}",
+            get(runs_routes::get_run).delete(runs_routes::delete_run),
+        )
+        .route("/api/runs/{id}/cancel", post(runs_routes::cancel_run))
         .route("/api/runs/{id}/stream", get(runs_routes::stream_run))
         // ── Workflow authoring API (visual editor + MCP) ────────────────────
         .route("/api/authoring/catalog", get(workflows_routes::get_catalog))

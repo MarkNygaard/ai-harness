@@ -3,9 +3,10 @@ import { useParams } from "react-router-dom";
 import { ReactFlowProvider } from "@xyflow/react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
-import { useRunView } from "@/lib/runs";
+import { useCancelRun, useRunView } from "@/lib/runs";
 import type { RunStatus } from "@/types/run";
 
 const STATUS_VARIANT: Record<
@@ -24,6 +25,7 @@ export function RunDetailPage() {
   const { id = null } = useParams();
   const run = useRunView(id);
   const [panel, setPanel] = useState<Panel>("graph");
+  const cancel = useCancelRun();
 
   const done = run.nodes.filter((n) =>
     ["success", "failed", "skipped", "cancelled"].includes(n.status),
@@ -54,6 +56,16 @@ export function RunDetailPage() {
           <div className="ml-auto text-xs text-muted-foreground">
             {done}/{run.nodes.length} steps
           </div>
+          {run.live && id && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={cancel.isPending}
+              onClick={() => cancel.mutate(id)}
+            >
+              {cancel.isPending ? "Stopping…" : "Stop"}
+            </Button>
+          )}
           <div className="flex overflow-hidden rounded-md border border-border text-xs">
             <PanelTab
               label="Graph"

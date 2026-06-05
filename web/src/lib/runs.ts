@@ -24,7 +24,12 @@ import type {
   RunSummary,
 } from "@/types/run";
 
-const EMPTY_USAGE = { input: null, output: null, cache_read: null, cache_write: null };
+const EMPTY_USAGE = {
+  input: null,
+  output: null,
+  cache_read: null,
+  cache_write: null,
+};
 
 /**
  * How far along a node is, for merging the live stream with persisted state.
@@ -73,6 +78,31 @@ export function useCreateRun() {
   });
 }
 
+/** `POST /api/runs/{id}/cancel` — stop a running run. */
+export function useCancelRun() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: async (id) => {
+      await apiFetch(`/api/runs/${id}/cancel`, { method: "POST" });
+    },
+    onSuccess: (_data, id) => {
+      qc.invalidateQueries({ queryKey: ["runs"] });
+      qc.invalidateQueries({ queryKey: ["run", id] });
+    },
+  });
+}
+
+/** `DELETE /api/runs/{id}` — remove a run from the list. */
+export function useDeleteRun() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    mutationFn: async (id) => {
+      await apiFetch(`/api/runs/${id}`, { method: "DELETE" });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  });
+}
+
 /**
  * Read `GET /runs/{id}/stream` as SSE, parsing each `data:` line into a
  * [`RunEvent`] and invoking `onEvent`. `onClose(streaming)` fires once when the
@@ -114,10 +144,14 @@ export function useRunStream(
           const parts = buf.split("\n\n");
           buf = parts.pop() ?? "";
           for (const part of parts) {
-            const dataLine = part.split("\n").find((l) => l.startsWith("data:"));
+            const dataLine = part
+              .split("\n")
+              .find((l) => l.startsWith("data:"));
             if (!dataLine) continue;
             try {
-              onEventRef.current(JSON.parse(dataLine.slice(5).trim()) as RunEvent);
+              onEventRef.current(
+                JSON.parse(dataLine.slice(5).trim()) as RunEvent,
+              );
             } catch {
               // malformed SSE line — skip
             }
@@ -144,7 +178,9 @@ interface LiveState {
   order: string[];
 }
 
-type LiveAction = { type: "event"; event: RunEvent; now: string } | { type: "reset" };
+type LiveAction =
+  | { type: "event"; event: RunEvent; now: string }
+  | { type: "reset" };
 
 function seedNode(meta: NodeMeta): NodeView {
   return {
@@ -180,7 +216,9 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
       };
     }
     case "node_started": {
-      const prev = state.nodes[event.node_id] ?? seedNode({ id: event.node_id, depends_on: [] });
+      const prev =
+        state.nodes[event.node_id] ??
+        seedNode({ id: event.node_id, depends_on: [] });
       return {
         ...state,
         nodes: {
@@ -333,7 +371,9 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
             : p
           : (p ?? l ?? seedNode({ id: nid, depends_on: [] }));
       const depends_on = p?.depends_on ?? chosen.depends_on;
-      return depends_on === chosen.depends_on ? chosen : { ...chosen, depends_on };
+      return depends_on === chosen.depends_on
+        ? chosen
+        : { ...chosen, depends_on };
     });
 
     const status = liveTerminal ? state.status : (d?.status ?? state.status);
