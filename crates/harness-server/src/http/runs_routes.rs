@@ -43,8 +43,15 @@ pub struct RunsState {
     project_store: OnceCell<ProjectStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
-    /// Live runs → broadcast of their events (present only while executing).
-    live: Mutex<HashMap<String, broadcast::Sender<RunEvent>>>,
+    /// Live runs → their event broadcast + task abort handle (present only while
+    /// executing). Used by `/stream` to subscribe and by `cancel` to stop the task.
+    live: Mutex<HashMap<String, LiveRun>>,
+}
+
+/// A currently-executing run's handles.
+struct LiveRun {
+    tx: broadcast::Sender<RunEvent>,
+    abort: tokio::task::AbortHandle,
 }
 
 impl RunsState {
@@ -104,7 +111,19 @@ impl RunsState {
             .as_deref()
             .ok_or("no database configured (set server.database_url)")?;
         self.store
-            .get_or_try_init(|| async { RunStore::connect(url).await.map_err(|e| e.to_string()) })
+            .get_or_try_init(|| async {
+                let store = RunStore::connect(url).await.map_err(|e| e.to_string())?;
+                // First connect after (re)start: any run still marked `running`
+                // is orphaned — no run survives a process restart — so cancel it.
+                match store.reconcile_orphaned_runs().await {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("reconciled {n} orphaned run(s) → cancelled")
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("orphaned-run reconcile failed: {e}"),
+                }
+                Ok(store)
+            })
             .await
     }
 
@@ -265,7 +284,7 @@ pub async fn create_run(
 
     // Register a broadcast channel so /stream subscribers see live events.
     let (btx, _) = broadcast::channel::<RunEvent>(256);
-    state.live.lock().await.insert(run_id.clone(), btx.clone());
+    let live_tx = btx.clone();
 
     let task_state = state.clone();
     let task_run_id = run_id.clone();
@@ -277,7 +296,7 @@ pub async fn create_run(
         req.description
     };
     let title = req.title.filter(|t| !t.trim().is_empty());
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         execute_run_task(
             task_state,
             task_run_id,
@@ -292,6 +311,13 @@ pub async fn create_run(
         )
         .await;
     });
+    state.live.lock().await.insert(
+        run_id.clone(),
+        LiveRun {
+            tx: live_tx,
+            abort: handle.abort_handle(),
+        },
+    );
 
     (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response()
 }
@@ -534,7 +560,7 @@ pub async fn stream_run(
     let rx = {
         let live = state.live.lock().await;
         match live.get(&id) {
-            Some(btx) => btx.subscribe(),
+            Some(run) => run.tx.subscribe(),
             None => {
                 return err(
                     StatusCode::NOT_FOUND,
@@ -556,4 +582,49 @@ pub async fn stream_run(
     Sse::new(stream)
         .keep_alive(KeepAlive::default())
         .into_response()
+}
+
+/// `POST /runs/{id}/cancel` — stop a running run: abort its in-flight task (if
+/// this process owns it) and mark the run + its in-flight nodes cancelled.
+pub async fn cancel_run(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    // Abort the live task and drop its broadcast channel, if we own it. Aborting
+    // unwinds the task — its worktree guard is dropped and cleaned up.
+    if let Some(run) = state.live.lock().await.remove(&id) {
+        run.abort.abort();
+    }
+    let store = match state.store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.cancel_run(&id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => err(
+            StatusCode::CONFLICT,
+            format!("run `{id}` is not running (already finished or unknown)"),
+        ),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `DELETE /runs/{id}` — remove a run and its node rows from the list. Aborts a
+/// live task first so deleting a still-running run leaves nothing orphaned.
+pub async fn delete_run(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    if let Some(run) = state.live.lock().await.remove(&id) {
+        run.abort.abort();
+    }
+    let store = match state.store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.delete_run(&id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => err(StatusCode::NOT_FOUND, format!("run `{id}` not found")),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }

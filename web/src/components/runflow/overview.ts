@@ -32,15 +32,13 @@ export interface TokenSegment {
 
 /** Break a summed usage into ordered, non-zero segments for a stacked bar. */
 export function usageByType(usage: Usage): TokenSegment[] {
+  // Muted, Factory-style palette (teal / slate / peach / olive) — deliberately
+  // desaturated and independent of the semantic status colors.
   const defs: Array<Omit<TokenSegment, "value">> = [
-    {
-      key: "input",
-      label: "Input",
-      color: "var(--accent-blue, var(--primary))",
-    },
-    { key: "cache_read", label: "Cache read", color: "var(--status-skipped)" },
-    { key: "cache_write", label: "Cache write", color: "var(--accent-orange)" },
-    { key: "output", label: "Output", color: "var(--status-success)" },
+    { key: "input", label: "Input", color: "oklch(0.64 0.07 200)" },
+    { key: "cache_read", label: "Cache read", color: "oklch(0.68 0.03 250)" },
+    { key: "cache_write", label: "Cache write", color: "oklch(0.76 0.09 70)" },
+    { key: "output", label: "Output", color: "oklch(0.75 0.09 130)" },
   ];
   return defs
     .map((d) => ({ ...d, value: usage[d.key] ?? 0 }))

@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, Play } from "lucide-react";
+import { ArrowRight, Play, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useCreateRun, useRuns } from "@/lib/runs";
+import { useCreateRun, useDeleteRun, useRuns } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
 import type { RunStatus, RunSummary } from "@/types/run";
 
-const STATUS_VARIANT: Record<RunStatus, "running" | "success" | "failed" | "skipped"> = {
+const STATUS_VARIANT: Record<
+  RunStatus,
+  "running" | "success" | "failed" | "skipped"
+> = {
   running: "running",
   completed: "success",
   failed: "failed",
@@ -38,9 +41,13 @@ export function RunsPage() {
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Recent runs
           </h2>
-          {runs.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {runs.isLoading && (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          )}
           {runs.isError && (
-            <p className="text-sm text-destructive">Failed to load runs: {runs.error.message}</p>
+            <p className="text-sm text-destructive">
+              Failed to load runs: {runs.error.message}
+            </p>
           )}
           {runs.data?.length === 0 && (
             <p className="text-sm text-muted-foreground">
@@ -48,7 +55,9 @@ export function RunsPage() {
             </p>
           )}
           <div className="flex flex-col gap-1.5">
-            {runs.data?.map((run) => <RunRow key={run.id} run={run} />)}
+            {runs.data?.map((run) => (
+              <RunRow key={run.id} run={run} />
+            ))}
           </div>
         </section>
       </div>
@@ -57,14 +66,29 @@ export function RunsPage() {
 }
 
 function RunRow({ run }: { run: RunSummary }) {
+  const del = useDeleteRun();
+  function onDelete(e: React.MouseEvent) {
+    // The row is a Link — don't navigate when deleting.
+    e.preventDefault();
+    e.stopPropagation();
+    if (
+      window.confirm(`Delete run ${run.title || run.id}? This can't be undone.`)
+    ) {
+      del.mutate(run.id);
+    }
+  }
   return (
     <Link to={`/runs/${run.id}`} className="group block">
       <Card className="transition-colors group-hover:border-accent-orange/50">
         <CardContent className="flex items-center gap-3 py-2.5">
-          <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>{run.status}</Badge>
+          <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>
+            {run.status}
+          </Badge>
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="truncate text-sm font-medium">{run.title || run.workflow_name}</span>
+              <span className="truncate text-sm font-medium">
+                {run.title || run.workflow_name}
+              </span>
               {run.project && (
                 <Badge variant="outline" className="shrink-0">
                   {run.project}
@@ -81,6 +105,18 @@ function RunRow({ run }: { run: RunSummary }) {
             <div>{relativeTime(run.recorded_at)}</div>
           </div>
           <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="Delete run"
+            title="Delete run"
+            disabled={del.isPending}
+            onClick={onDelete}
+            className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
+          >
+            <Trash2 className="size-3.5" />
+          </Button>
         </CardContent>
       </Card>
     </Link>
@@ -123,7 +159,9 @@ function NewRunForm() {
       <CardContent className="py-4">
         <form onSubmit={submit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Project</label>
+            <label className="text-xs font-medium text-muted-foreground">
+              Project
+            </label>
             <select
               value={project}
               onChange={(e) => onProjectChange(e.target.value)}
@@ -141,7 +179,10 @@ function NewRunForm() {
             {projects.data?.length === 0 && (
               <span className="text-[11px] text-muted-foreground">
                 No projects yet —{" "}
-                <Link to="/projects" className="text-accent-orange hover:underline">
+                <Link
+                  to="/projects"
+                  className="text-accent-orange hover:underline"
+                >
                   register one
                 </Link>{" "}
                 first.
@@ -160,7 +201,9 @@ function NewRunForm() {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-muted-foreground">Title</label>
+            <label className="text-xs font-medium text-muted-foreground">
+              Title
+            </label>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
@@ -190,7 +233,10 @@ function NewRunForm() {
               />
               Use real agents (otherwise echo)
             </label>
-            <Button type="submit" disabled={create.isPending || !project || !workflow.trim()}>
+            <Button
+              type="submit"
+              disabled={create.isPending || !project || !workflow.trim()}
+            >
               <Play className="h-3.5 w-3.5" />
               {create.isPending ? "Starting…" : "Run workflow"}
             </Button>

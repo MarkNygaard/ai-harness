@@ -328,16 +328,77 @@ impl RunStore {
         Ok(())
     }
 
-    /// Mark a run's terminal status (run finished).
+    /// Mark a run's terminal status (run finished). Only updates a run that is
+    /// still `running` — so a run cancelled out from under the executor (via
+    /// [`Self::cancel_run`] or [`Self::reconcile_orphaned_runs`]) stays cancelled
+    /// even if the in-flight task later completes.
     pub async fn finish_run(&self, run_id: &str, status: RunStatus) -> Result<(), PersistError> {
         sqlx::query(
-            "UPDATE harness_workflow_runs SET status = $2, recorded_at = now() WHERE id = $1",
+            "UPDATE harness_workflow_runs SET status = $2, recorded_at = now()
+             WHERE id = $1 AND status = 'running'",
         )
         .bind(run_id)
         .bind(run_status_str(status))
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Cancel a still-running run: flip the run and any in-flight (`running`)
+    /// node rows to `cancelled`. No-op (returns `false`) if the run is absent or
+    /// already terminal, so a finished run can't be "un-finished".
+    pub async fn cancel_run(&self, run_id: &str) -> Result<bool, PersistError> {
+        let res = sqlx::query(
+            "UPDATE harness_workflow_runs SET status = 'cancelled', recorded_at = now()
+             WHERE id = $1 AND status = 'running'",
+        )
+        .bind(run_id)
+        .execute(&self.pool)
+        .await?;
+        if res.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE harness_run_nodes SET status = 'cancelled', ended_at = now()
+             WHERE run_id = $1 AND status = 'running'",
+        )
+        .bind(run_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(true)
+    }
+
+    /// Delete a run and its node rows entirely (for clearing old runs from the
+    /// list). Returns `false` if no such run existed.
+    pub async fn delete_run(&self, run_id: &str) -> Result<bool, PersistError> {
+        sqlx::query("DELETE FROM harness_run_nodes WHERE run_id = $1")
+            .bind(run_id)
+            .execute(&self.pool)
+            .await?;
+        let res = sqlx::query("DELETE FROM harness_workflow_runs WHERE id = $1")
+            .bind(run_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
+    }
+
+    /// Reconcile runs orphaned by a process crash/restart: no run survives a
+    /// restart, so any row still marked `running` at startup is stale — flip it
+    /// (and its in-flight node rows) to `cancelled`. Returns the run count.
+    pub async fn reconcile_orphaned_runs(&self) -> Result<u64, PersistError> {
+        let res = sqlx::query(
+            "UPDATE harness_workflow_runs SET status = 'cancelled', recorded_at = now()
+             WHERE status = 'running'",
+        )
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "UPDATE harness_run_nodes SET status = 'cancelled', ended_at = now()
+             WHERE status = 'running'",
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(res.rows_affected())
     }
 
     /// Fetch a run's status string, if present (for read-back / tests).
@@ -588,6 +649,96 @@ mod tests {
         assert_eq!(
             store.run_status(&run_id).await.unwrap().as_deref(),
             Some("completed")
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn cancel_run_marks_running_run_and_node() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let run_id = format!(
+            "test-cancel-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        let report = sample_report();
+        store
+            .start_run(&run_id, &report.workflow, None, None, 2, &report.graph)
+            .await
+            .unwrap();
+        store
+            .start_node(&run_id, 0, "build", Some("claude"), Some("sonnet"))
+            .await
+            .unwrap();
+
+        assert!(store.cancel_run(&run_id).await.unwrap(), "first cancel");
+        let detail = store.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(detail.run.status, "cancelled");
+        assert_eq!(detail.nodes[0].status, "cancelled");
+
+        // Cancelling an already-terminal run is a no-op.
+        assert!(!store.cancel_run(&run_id).await.unwrap(), "second cancel");
+
+        // finish_run must NOT resurrect a cancelled run.
+        store
+            .finish_run(&run_id, RunStatus::Completed)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.run_status(&run_id).await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn delete_run_removes_run_and_nodes() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let run_id = format!(
+            "test-delete-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        store
+            .record_run(&run_id, None, None, &sample_report())
+            .await
+            .unwrap();
+        assert!(store.delete_run(&run_id).await.unwrap(), "deleted");
+        assert!(store.get_run(&run_id).await.unwrap().is_none());
+        assert_eq!(store.node_count(&run_id).await.unwrap(), 0);
+        // Deleting again is a no-op.
+        assert!(!store.delete_run(&run_id).await.unwrap());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn reconcile_cancels_orphaned_running_runs() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let run_id = format!(
+            "test-orphan-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        let report = sample_report();
+        store
+            .start_run(&run_id, &report.workflow, None, None, 2, &report.graph)
+            .await
+            .unwrap();
+
+        let n = store.reconcile_orphaned_runs().await.unwrap();
+        assert!(n >= 1, "reconciled at least our orphan");
+        assert_eq!(
+            store.run_status(&run_id).await.unwrap().as_deref(),
+            Some("cancelled")
         );
     }
 }
