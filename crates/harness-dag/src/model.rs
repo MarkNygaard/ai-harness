@@ -152,8 +152,40 @@ pub struct Node {
     /// Timeout in milliseconds (for `bash`/`script` bodies).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+    /// Optional JSON schema the AI body's output should conform to. When set on a
+    /// `prompt`/`command` node the runner instructs the agent to emit JSON
+    /// matching it, so downstream `$node.output.field` access and `when:`
+    /// conditions read a stable shape. Ignored for deterministic bodies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_format: Option<serde_json::Value>,
     /// The executable body.
     pub kind: NodeKind,
+}
+
+impl Node {
+    /// Every inline text this node contributes to variable substitution: its
+    /// body text plus its `when:` expression. Used to collect `$id.output`
+    /// references for validation.
+    pub fn substitutable_text(&self) -> Vec<&str> {
+        let mut texts: Vec<&str> = Vec::new();
+        if let Some(w) = &self.when {
+            texts.push(w);
+        }
+        match &self.kind {
+            NodeKind::Prompt(t) | NodeKind::Bash(t) | NodeKind::Cancel(t) => texts.push(t),
+            NodeKind::Script { script, .. } => texts.push(script),
+            NodeKind::Loop(cfg) => {
+                texts.push(&cfg.prompt);
+                if let Some(b) = &cfg.until_bash {
+                    texts.push(b);
+                }
+            }
+            // `command` is a file reference (resolved by the runner); `approval`
+            // carries a human message, not substitutable node refs.
+            NodeKind::Command(_) | NodeKind::Approval(_) => {}
+        }
+        texts
+    }
 }
 
 /// A parsed, validated workflow DAG.

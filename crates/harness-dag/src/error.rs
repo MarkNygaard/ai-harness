@@ -19,6 +19,15 @@ pub enum DagError {
     #[error("node `{node}` depends on unknown node `{dep}`")]
     UnknownDependency { node: String, dep: String },
 
+    /// A node body or `when:` expression references `$id.output` for an id that
+    /// is not a declared node.
+    #[error("node `{node}` references output of unknown node `{referenced}`")]
+    UnknownNodeReference { node: String, referenced: String },
+
+    /// A `when:` expression is structurally invalid (e.g. a dangling operator).
+    #[error("invalid `when` condition `{expr}`: {reason}")]
+    InvalidCondition { expr: String, reason: String },
+
     /// A node declares no executable body (no `prompt`/`bash`/`command`/…).
     #[error("node `{0}` has no body: expected exactly one of prompt, bash, command, script, loop, approval, cancel")]
     NoNodeKind(String),

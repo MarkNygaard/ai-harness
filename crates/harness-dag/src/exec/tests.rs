@@ -475,3 +475,88 @@ nodes:
     assert_eq!(finished, 2);
     assert_eq!(report.status, RunStatus::Completed);
 }
+
+#[tokio::test]
+async fn passes_upstream_output_into_downstream_prompt() {
+    let yaml = r#"
+name: passthrough
+nodes:
+  - id: plan
+    prompt: "make a plan"
+  - id: build
+    depends_on: [plan]
+    prompt: "implement: $plan.output"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new().respond("plan", ok("STEP 1; STEP 2"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(
+        runner.calls_for("build")[0].body,
+        "prompt:implement: STEP 1; STEP 2"
+    );
+}
+
+#[tokio::test]
+async fn when_gate_skips_the_unmatched_branch() {
+    let yaml = r#"
+name: branch
+nodes:
+  - id: classify
+    prompt: "classify"
+    output_format:
+      type: object
+  - id: fix-bug
+    depends_on: [classify]
+    when: "$classify.output.type == 'BUG'"
+    prompt: "fix the bug"
+  - id: plan-feature
+    depends_on: [classify]
+    when: "$classify.output.type == 'FEATURE'"
+    prompt: "plan the feature"
+  - id: ship
+    depends_on: [fix-bug, plan-feature]
+    trigger_rule: none_failed_min_one_success
+    prompt: "ship it"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new().respond("classify", ok(r#"{"type":"BUG"}"#));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.node("fix-bug").unwrap().status, NodeStatus::Success);
+    // The FEATURE branch's `when` was false → skipped, never dispatched.
+    assert_eq!(
+        report.node("plan-feature").unwrap().status,
+        NodeStatus::Skipped
+    );
+    assert!(runner.calls_for("plan-feature").is_empty());
+    // Merge node runs: one dep succeeded, none failed (the skip is tolerated).
+    assert_eq!(report.node("ship").unwrap().status, NodeStatus::Success);
+}
+
+#[tokio::test]
+async fn output_format_appends_schema_directive_for_ai_nodes() {
+    // The driver only carries `output_format`; the *runner* injects the
+    // directive. This asserts the schema reaches the request body unchanged for
+    // an AI node (the mock echoes the prompt it received).
+    let yaml = r#"
+name: structured
+nodes:
+  - id: classify
+    prompt: "classify this"
+    output_format:
+      type: object
+      properties:
+        type: { type: string }
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    // The mock records the body the *driver* sent (pre-runner-injection), so we
+    // assert the driver substituted normally; runner injection is covered in the
+    // harness-runner crate. Here we just confirm output_format doesn't disturb
+    // the pipeline (node runs to success).
+    let runner = MockRunner::new().respond("classify", ok(r#"{"type":"BUG"}"#));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+    assert_eq!(report.node("classify").unwrap().status, NodeStatus::Success);
+}

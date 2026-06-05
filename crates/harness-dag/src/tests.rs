@@ -111,6 +111,61 @@ nodes:
 }
 
 #[test]
+fn rejects_unknown_node_output_reference() {
+    let yaml = r#"
+name: badref
+nodes:
+  - id: a
+    prompt: "use $ghost.output here"
+"#;
+    match parse_workflow(yaml) {
+        Err(DagError::UnknownNodeReference { node, referenced }) => {
+            assert_eq!(node, "a");
+            assert_eq!(referenced, "ghost");
+        }
+        other => panic!("expected UnknownNodeReference, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_malformed_when_condition() {
+    let yaml = r#"
+name: badwhen
+nodes:
+  - id: a
+    prompt: "x"
+  - id: b
+    depends_on: [a]
+    when: "$a.output =="
+    prompt: "y"
+"#;
+    assert!(matches!(
+        parse_workflow(yaml),
+        Err(DagError::InvalidCondition { .. })
+    ));
+}
+
+#[test]
+fn accepts_valid_when_and_node_reference() {
+    let yaml = r#"
+name: okrefs
+nodes:
+  - id: classify
+    prompt: "classify"
+  - id: act
+    depends_on: [classify]
+    when: "$classify.output.type == 'BUG'"
+    prompt: "handle $classify.output"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    assert_eq!(wf.nodes.len(), 2);
+    assert_eq!(
+        wf.node("act").unwrap().when.as_deref(),
+        Some("$classify.output.type == 'BUG'")
+    );
+}
+
+#[test]
 fn rejects_node_without_body() {
     let yaml = r#"
 name: nobody

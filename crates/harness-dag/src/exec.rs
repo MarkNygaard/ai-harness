@@ -85,6 +85,9 @@ pub struct NodeRequest<'a> {
     pub timeout: Option<u64>,
     /// Variable context, for `Command`/`Script` resolution by the runner.
     pub vars: &'a VarContext,
+    /// Optional JSON schema the agent's output should conform to (AI bodies
+    /// only). The runner instructs the agent to emit matching JSON.
+    pub output_format: Option<&'a serde_json::Value>,
 }
 
 /// What a [`NodeRunner`] returns from one invocation.
@@ -268,10 +271,19 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
 
     let mut statuses: HashMap<String, NodeStatus> = HashMap::new();
     let mut runs: HashMap<String, NodeRun> = HashMap::new();
+    // Accumulated upstream outputs, exposed to downstream nodes as
+    // `$id.output…`. Earlier topological layers are fully finalized before a
+    // later layer is built, so a node always sees its dependencies' outputs.
+    let mut outputs: HashMap<String, String> = HashMap::new();
     let mut last_session: Option<String> = None;
     let mut cancelled: Option<String> = None;
 
     for layer in &layers {
+        // Snapshot the variables for this whole layer: base vars + every output
+        // produced so far. Built once — siblings in a parallel layer cannot
+        // depend on each other, so they all share the same upstream view.
+        let layer_vars = with_outputs(vars, &outputs);
+
         // Decide run/skip for each node using already-finalized dep statuses.
         let mut to_run: Vec<usize> = Vec::new();
         for &idx in layer {
@@ -284,10 +296,8 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
                 )
                 .run;
                 emit(events, RunEvent::NodeFinished { node: run.clone() });
-                finalize(&mut statuses, &mut runs, run);
-            } else if trigger_satisfied(node, &statuses) {
-                to_run.push(idx);
-            } else {
+                finalize(&mut statuses, &mut runs, &mut outputs, run);
+            } else if !trigger_satisfied(node, &statuses) {
                 let run = skipped_run(
                     node,
                     "dependencies not satisfied (trigger_rule)".to_string(),
@@ -295,7 +305,32 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
                 )
                 .run;
                 emit(events, RunEvent::NodeFinished { node: run.clone() });
-                finalize(&mut statuses, &mut runs, run);
+                finalize(&mut statuses, &mut runs, &mut outputs, run);
+            } else {
+                // Trigger satisfied — now apply the optional `when:` gate.
+                match when_allows(node, &layer_vars) {
+                    Ok(true) => to_run.push(idx),
+                    Ok(false) => {
+                        let run = skipped_run(
+                            node,
+                            "`when` condition evaluated false".to_string(),
+                            NodeStatus::Skipped,
+                        )
+                        .run;
+                        emit(events, RunEvent::NodeFinished { node: run.clone() });
+                        finalize(&mut statuses, &mut runs, &mut outputs, run);
+                    }
+                    Err(e) => {
+                        let run = failed_run(
+                            node,
+                            node.provider.as_deref(),
+                            node.model.as_deref(),
+                            e.to_string(),
+                        );
+                        emit(events, RunEvent::NodeFinished { node: run.clone() });
+                        finalize(&mut statuses, &mut runs, &mut outputs, run);
+                    }
+                }
             }
         }
 
@@ -313,7 +348,15 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
             } else {
                 None
             };
-            execute_node(runner, node, wf_provider, wf_model, vars, incoming, events)
+            execute_node(
+                runner,
+                node,
+                wf_provider,
+                wf_model,
+                &layer_vars,
+                incoming,
+                events,
+            )
         });
         let results = join_all(futures).await;
 
@@ -329,7 +372,7 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
             if result.cancel.is_some() {
                 cancelled = result.cancel.clone();
             }
-            finalize(&mut statuses, &mut runs, result.run);
+            finalize(&mut statuses, &mut runs, &mut outputs, result.run);
         }
     }
 
@@ -361,10 +404,32 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
 fn finalize(
     statuses: &mut HashMap<String, NodeStatus>,
     runs: &mut HashMap<String, NodeRun>,
+    outputs: &mut HashMap<String, String>,
     run: NodeRun,
 ) {
     statuses.insert(run.id.clone(), run.status);
+    // Expose this node's output to `$id.output…` in downstream nodes. Skipped /
+    // cancelled nodes contribute an empty string so refs resolve (not error).
+    outputs.insert(run.id.clone(), run.output.clone());
     runs.insert(run.id.clone(), run);
+}
+
+/// Clone the base variable context and layer in the outputs produced so far,
+/// so node bodies and `when:` conditions can reference `$id.output…`.
+fn with_outputs(base: &VarContext, outputs: &HashMap<String, String>) -> VarContext {
+    let mut ctx = base.clone();
+    for (id, out) in outputs {
+        ctx = ctx.set_node_output(id.clone(), out.clone());
+    }
+    ctx
+}
+
+/// Evaluate a node's optional `when:` gate. Nodes without `when:` always pass.
+fn when_allows(node: &Node, vars: &VarContext) -> Result<bool, DagError> {
+    match &node.when {
+        Some(expr) => crate::cond::eval_when(expr, vars),
+        None => Ok(true),
+    }
 }
 
 fn skipped_run(node: &Node, note: String, status: NodeStatus) -> NodeRunResult {
@@ -619,6 +684,7 @@ async fn execute_body<R: NodeRunner>(
         body,
         timeout: node.timeout,
         vars,
+        output_format: node.output_format.as_ref(),
     };
     match runner.execute(req).await {
         Ok(out) => {
@@ -717,6 +783,7 @@ async fn run_loop<R: NodeRunner>(
             body: NodeBody::Prompt(rendered),
             timeout: node.timeout,
             vars: &iter_vars,
+            output_format: node.output_format.as_ref(),
         };
 
         match runner.execute(req).await {
@@ -769,6 +836,7 @@ async fn run_loop<R: NodeRunner>(
                         body: NodeBody::Bash(rendered),
                         timeout: node.timeout,
                         vars: &iter_vars,
+                        output_format: None,
                     };
                     match runner.execute(bash_req).await {
                         Ok(check) => {
