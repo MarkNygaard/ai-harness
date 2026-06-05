@@ -149,6 +149,12 @@ pub struct Node {
     pub model: Option<String>,
     /// Session-handling mode for AI bodies.
     pub context: ContextMode,
+    /// Optional category id (e.g. `planning`, `implementation`, `validation`)
+    /// grouping this step for the run overview's time-by-category breakdown and
+    /// bar colouring. Free-form; resolved to a colour via the categories
+    /// registry at render time. `None` → the node falls back to status colour.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
     /// Timeout in milliseconds (for `bash`/`script` bodies).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,

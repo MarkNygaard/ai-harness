@@ -31,6 +31,8 @@ export interface Usage {
 export interface NodeMeta {
   id: string;
   depends_on: string[];
+  /** Optional category id for overview grouping/colouring. */
+  category?: string | null;
 }
 
 /** A run row for the list view (matches `RunSummary`). */
@@ -87,8 +89,18 @@ export interface NodeRun {
 
 /** Live run events (SSE). Discriminated on `type`. */
 export type RunEvent =
-  | { type: "run_started"; workflow: string; total_nodes: number; nodes: NodeMeta[] }
-  | { type: "node_started"; node_id: string; provider: string | null; model: string | null }
+  | {
+      type: "run_started";
+      workflow: string;
+      total_nodes: number;
+      nodes: NodeMeta[];
+    }
+  | {
+      type: "node_started";
+      node_id: string;
+      provider: string | null;
+      model: string | null;
+    }
   | { type: "node_finished"; node: NodeRun }
   | { type: "run_finished"; status: RunStatus };
 
@@ -125,4 +137,6 @@ export interface NodeView {
   output: string;
   started_at: string | null;
   ended_at: string | null;
+  /** Category id (from the DAG topology), for overview grouping/colouring. */
+  category: string | null;
 }
