@@ -3,7 +3,7 @@ import { type Edge, type Node, MarkerType, Position } from "@xyflow/react";
 import type { NodeView } from "@/types/run";
 import { statusColor } from "./format";
 
-export const NODE_WIDTH = 196;
+export const NODE_WIDTH = 224;
 export const NODE_HEIGHT = 72;
 
 export interface RunNodeData extends Record<string, unknown> {

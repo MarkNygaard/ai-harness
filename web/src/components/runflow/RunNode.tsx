@@ -35,7 +35,7 @@ export function RunNode({ data }: NodeProps) {
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-border" />
       <div
         className={cn(
-          "flex w-[196px] flex-col gap-1.5 rounded-lg border bg-card px-3 py-2 shadow-sm transition-shadow",
+          "flex w-56 flex-col gap-1.5 rounded-lg border bg-card px-3 py-2 shadow-sm transition-shadow",
           running && "shadow-[0_0_0_3px_var(--status-running)]/20",
         )}
         style={{ borderColor: color, borderWidth: running ? 2 : 1 }}
@@ -67,7 +67,11 @@ export function RunNode({ data }: NodeProps) {
             {view.provider && <Cpu className="h-2.5 w-2.5 shrink-0" />}
             <span className="truncate">{view.model ?? view.provider ?? "—"}</span>
           </span>
-          {tokens > 0 && <span className="tabular-nums">{formatTokens(tokens)} tok</span>}
+          {tokens > 0 && (
+            <span className="shrink-0 whitespace-nowrap tabular-nums">
+              {formatTokens(tokens)} tok
+            </span>
+          )}
         </div>
       </div>
       <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-border" />
