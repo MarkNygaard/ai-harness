@@ -26,7 +26,8 @@ use tokio::process::Command;
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
 
 /// Default model when a `pi` node declares no `model` (or only a bare name).
-const DEFAULT_MODEL: &str = "kimi-code/kimi-k2.6";
+/// `kimi-for-coding` is the model *id* (its display name is "Kimi-k2.6").
+const DEFAULT_MODEL: &str = "kimi-code/kimi-for-coding";
 /// Model-namespace prefix for `omp --model provider/model` (bare model names are
 /// prefixed with this). Note: the *auth* provider is `kimi-coding`, but models
 /// are addressed under `kimi-code/`.
@@ -379,8 +380,8 @@ mod tests {
         let agent = PiAgent::from_env();
         // Already provider-qualified → passed through unchanged.
         assert_eq!(
-            agent.resolve_model(Some("kimi-code/kimi-k2.6")),
-            "kimi-code/kimi-k2.6"
+            agent.resolve_model(Some("kimi-code/kimi-for-coding")),
+            "kimi-code/kimi-for-coding"
         );
         // Bare name → prefixed with the Kimi model namespace.
         assert_eq!(
