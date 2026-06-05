@@ -197,6 +197,15 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::put(credentials_routes::set_credential)
                 .delete(credentials_routes::delete_credential),
         )
+        // ── Connect Kimi (OAuth device flow, server-side) ───────────────────
+        .route(
+            "/api/credentials/kimi/connect/start",
+            post(super::kimi_routes::connect_start),
+        )
+        .route(
+            "/api/credentials/kimi/connect/poll",
+            post(super::kimi_routes::connect_poll),
+        )
         // ── Project registry (scopes runs to a git repo) ────────────────────
         .route(
             "/api/projects",
