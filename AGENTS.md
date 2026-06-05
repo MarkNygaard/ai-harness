@@ -26,11 +26,27 @@ messages.
 
 ## Build & verify
 
-- `cargo check` after every change; `cargo test` before commit.
-- Before pushing a PR, ALWAYS run `RUSTFLAGS="-Dwarnings" cargo check --workspace --all-targets`
-  to catch CI-equivalent errors (dead code, unused imports, missing match arms).
-- Run `cargo fmt --all` before every commit — CI enforces `cargo fmt --all -- --check`.
-- `cargo clippy --workspace --all-targets` must be clean (CI runs it with `-Dwarnings`).
+**Scope verification to what you changed — do NOT run the whole workspace after
+every small edit.** This is a large Rust workspace; a full `--workspace` compile
+is minutes. Match the verify to the change:
+
+- **Web-only change** (only `web/**` touched): run **`cd web && bunx tsc --noEmit
+  && bunx vitest run && bunx vite build`**. Do **NOT** run any `cargo` command —
+  no Rust was touched, and compiling the workspace just to check a `.tsx` edit is
+  pure waste.
+- **Single-crate Rust change**: `cargo test -p <crate>` and `cargo clippy -p <crate>`
+  for the crate(s) you edited (plus direct dependents if you changed a public API).
+- **Cross-cutting Rust change** (enum variant, shared trait, workspace dep): the
+  wider `cargo check --workspace` is justified — exhaustive match / API breakage
+  needs it.
+
+Always: `cargo fmt --all` (or `cd web && bunx prettier`) before committing.
+
+**Full-workspace gate — run it once, at the end, not per-edit.** Before a PR is
+finalized (the workflow's final verify step), run the CI-equivalent chain:
+`RUSTFLAGS="-Dwarnings" cargo check --workspace --all-targets`,
+`cargo clippy --workspace --all-targets`, `cargo test --workspace`. This is the
+single authoritative gate; the per-edit loop above stays scoped and fast.
 - When adding an enum variant, grep ALL match sites and update them — CI uses
   exhaustive match checks.
 - Dead code in `#[cfg(test)]` modules still trips `-D warnings` in CI — delete

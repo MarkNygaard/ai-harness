@@ -32,7 +32,9 @@ const DEFAULT_MODEL: &str = "kimi-code/kimi-for-coding";
 /// are addressed under `kimi-code/`.
 const KIMI_PREFIX: &str = "kimi-code/";
 /// Hard cap on a single `omp` invocation, overridable via `OMP_TIMEOUT_SECS`.
-const DEFAULT_TIMEOUT_SECS: u64 = 900;
+/// 30 min: a Kimi node that runs the project's verify chain can trigger a cold
+/// Rust compile, which the previous 15-min cap killed mid-build.
+const DEFAULT_TIMEOUT_SECS: u64 = 1800;
 
 /// A [`PromptAgent`] backed by the `omp` CLI. Selected for `provider: pi`.
 pub struct PiAgent {
