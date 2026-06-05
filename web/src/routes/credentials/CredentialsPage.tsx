@@ -8,10 +8,13 @@ import { Button } from "@/components/ui/button";
 import {
   startKimiConnect,
   pollKimiConnect,
+  startCodexConnect,
+  pollCodexConnect,
   useCredentials,
   useDeleteCredential,
   useSetCredential,
   type KimiConnectStart,
+  type CodexConnectStart,
 } from "@/lib/credentials";
 
 /** A field the user pastes for a provider. */
@@ -23,7 +26,12 @@ interface ProviderField {
 }
 
 /** Per-provider form fields (mirrors the server's materialization contract). */
-const PROVIDERS: { id: string; label: string; help: string; fields: ProviderField[] }[] = [
+const PROVIDERS: {
+  id: string;
+  label: string;
+  help: string;
+  fields: ProviderField[];
+}[] = [
   {
     id: "claude",
     label: "Claude (subscription)",
@@ -39,19 +47,6 @@ const PROVIDERS: { id: string; label: string; help: string; fields: ProviderFiel
         label: "…or ~/.claude/.credentials.json (full JSON)",
         multiline: true,
         help: "Written to ~/.claude/.credentials.json (carries a refresh token, so it self-renews).",
-      },
-    ],
-  },
-  {
-    id: "codex",
-    label: "Codex",
-    help: "Paste the contents of ~/.codex/auth.json from a machine where you've run `codex login`.",
-    fields: [
-      {
-        key: "auth_json",
-        label: "~/.codex/auth.json (full JSON)",
-        multiline: true,
-        help: "Written to ~/.codex/auth.json (access/refresh tokens + account id).",
       },
     ],
   },
@@ -83,29 +78,34 @@ const PROVIDERS: { id: string; label: string; help: string; fields: ProviderFiel
 
 export function CredentialsPage() {
   const creds = useCredentials();
-  const configured = new Map((creds.data ?? []).map((c) => [c.provider, c.configured]));
+  const configured = new Map(
+    (creds.data ?? []).map((c) => [c.provider, c.configured]),
+  );
 
   return (
     <AppShell title="Credentials">
       <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <KeyRound className="h-5 w-5 text-accent-orange" /> Provider credentials
+            <KeyRound className="h-5 w-5 text-accent-orange" /> Provider
+            credentials
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Entered here, encrypted at rest in Postgres, and injected into the agent environment at
-            run time. Never stored in cluster secrets. Values are write-only — they're never shown
-            back.
+            Entered here, encrypted at rest in Postgres, and injected into the
+            agent environment at run time. Never stored in cluster secrets.
+            Values are write-only — they're never shown back.
           </p>
         </div>
 
         {creds.isError && (
           <p className="text-sm text-destructive">
-            Credentials unavailable: {creds.error.message} (is <code>HARNESS_SECRET_KEY</code> set?)
+            Credentials unavailable: {creds.error.message} (is{" "}
+            <code>HARNESS_SECRET_KEY</code> set?)
           </p>
         )}
 
         <KimiConnectCard configured={configured.get("pi") ?? false} />
+        <CodexConnectCard configured={configured.get("codex") ?? false} />
 
         {PROVIDERS.map((p) => (
           <ProviderCard
@@ -122,7 +122,9 @@ export function CredentialsPage() {
 /** Kimi-for-Coding device login: Connect → approve in browser → poll until done. */
 function KimiConnectCard({ configured }: { configured: boolean }) {
   const qc = useQueryClient();
-  const [phase, setPhase] = useState<"idle" | "pending" | "connected" | "error">("idle");
+  const [phase, setPhase] = useState<
+    "idle" | "pending" | "connected" | "error"
+  >("idle");
   const [info, setInfo] = useState<KimiConnectStart | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const stopped = useRef(false);
@@ -190,15 +192,18 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
           )}
         </CardTitle>
         <Button size="sm" onClick={connect} disabled={phase === "pending"}>
-          {phase === "pending" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {phase === "pending" && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          )}
           {configured ? "Reconnect" : "Connect Kimi"}
         </Button>
       </CardHeader>
       <CardContent>
         <p className="mb-3 text-xs text-muted-foreground">
-          The Kimi-for-Coding subscription (<code>kimi-code/*</code> models) uses a device login —
-          no API key. Click Connect, approve in the browser tab that opens; the credential is stored
-          encrypted and written to omp's auth db (and self-refreshes).
+          The Kimi-for-Coding subscription (<code>kimi-code/*</code> models)
+          uses a device login — no API key. Click Connect, approve in the
+          browser tab that opens; the credential is stored encrypted and written
+          to omp's auth db (and self-refreshes).
         </p>
         {phase === "pending" && info && (
           <div className="flex flex-col gap-1 text-sm">
@@ -215,13 +220,138 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
             </span>
             <span className="text-muted-foreground">
               Code if prompted:{" "}
-              <span className="font-mono font-semibold text-foreground">{info.user_code}</span> —
-              waiting for approval…
+              <span className="font-mono font-semibold text-foreground">
+                {info.user_code}
+              </span>{" "}
+              — waiting for approval…
             </span>
           </div>
         )}
         {phase === "connected" && (
-          <p className="text-sm text-status-success">Connected ✓ — Kimi is ready.</p>
+          <p className="text-sm text-status-success">
+            Connected ✓ — Kimi is ready.
+          </p>
+        )}
+        {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
+      </CardContent>
+    </Card>
+  );
+}
+
+/** Codex (ChatGPT) device login: Connect → open the device page, enter the code → poll. */
+function CodexConnectCard({ configured }: { configured: boolean }) {
+  const qc = useQueryClient();
+  const [phase, setPhase] = useState<
+    "idle" | "pending" | "connected" | "error"
+  >("idle");
+  const [info, setInfo] = useState<CodexConnectStart | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const stopped = useRef(false);
+
+  useEffect(
+    () => () => {
+      stopped.current = true;
+    },
+    [],
+  );
+
+  async function connect() {
+    setMsg(null);
+    setInfo(null);
+    setPhase("pending");
+    try {
+      const start = await startCodexConnect();
+      setInfo(start);
+      window.open(start.verification_uri, "_blank", "noopener");
+      const deadline = Date.now() + start.expires_in * 1000;
+      const tick = async () => {
+        if (stopped.current) return;
+        if (Date.now() > deadline) {
+          setPhase("error");
+          setMsg("Code expired — start again.");
+          return;
+        }
+        try {
+          const r = await pollCodexConnect(
+            start.device_auth_id,
+            start.user_code,
+          );
+          if (stopped.current) return;
+          if (r.status === "connected") {
+            setPhase("connected");
+            qc.invalidateQueries({ queryKey: ["credentials"] });
+            return;
+          }
+          if (r.status === "error") {
+            setPhase("error");
+            setMsg(r.message ?? "Authorization failed.");
+            return;
+          }
+          setTimeout(tick, Math.max(2, start.interval) * 1000);
+        } catch (e) {
+          setPhase("error");
+          setMsg((e as Error).message);
+        }
+      };
+      setTimeout(tick, Math.max(2, start.interval) * 1000);
+    } catch (e) {
+      setPhase("error");
+      setMsg((e as Error).message);
+    }
+  }
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-2">
+        <CardTitle className="flex items-center gap-2">
+          Codex (ChatGPT)
+          {configured ? (
+            <Badge variant="success">
+              <Check className="h-3 w-3" /> connected
+            </Badge>
+          ) : (
+            <Badge variant="outline">not connected</Badge>
+          )}
+        </CardTitle>
+        <Button size="sm" onClick={connect} disabled={phase === "pending"}>
+          {phase === "pending" && (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          )}
+          {configured ? "Reconnect" : "Connect Codex"}
+        </Button>
+      </CardHeader>
+      <CardContent>
+        <p className="mb-3 text-xs text-muted-foreground">
+          The Codex review step (<code>gpt-5.3-codex</code>) uses your ChatGPT
+          subscription via a device login — no API key. Click Connect, then on
+          the page that opens enter the code shown below. The credential is
+          stored encrypted and written to <code>~/.codex/auth.json</code> (and
+          self-refreshes).
+        </p>
+        {phase === "pending" && info && (
+          <div className="flex flex-col gap-1 text-sm">
+            <span>
+              Open{" "}
+              <a
+                href={info.verification_uri}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-accent-orange hover:underline"
+              >
+                {info.verification_uri} <ExternalLink className="h-3 w-3" />
+              </a>{" "}
+              and enter this code:
+            </span>
+            <span className="font-mono text-lg font-semibold tracking-widest text-foreground">
+              {info.user_code}
+            </span>
+            <span className="text-muted-foreground">Waiting for approval…</span>
+          </div>
+        )}
+        {phase === "connected" && (
+          <p className="text-sm text-status-success">
+            Connected ✓ — Codex is ready.
+          </p>
         )}
         {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
       </CardContent>
@@ -282,12 +412,16 @@ function ProviderCard({
         <form onSubmit={submit} className="flex flex-col gap-3">
           {provider.fields.map((f) => (
             <label key={f.key} className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">{f.label}</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                {f.label}
+              </span>
               {f.multiline ? (
                 <textarea
                   rows={4}
                   value={values[f.key] ?? ""}
-                  onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                  onChange={(e) =>
+                    setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                  }
                   placeholder="paste here"
                   className="rounded-md border border-input bg-transparent p-2 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
                 />
@@ -296,19 +430,27 @@ function ProviderCard({
                   type="password"
                   autoComplete="off"
                   value={values[f.key] ?? ""}
-                  onChange={(e) => setValues((v) => ({ ...v, [f.key]: e.target.value }))}
+                  onChange={(e) =>
+                    setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                  }
                   placeholder="paste here"
                   className="h-8 rounded-md border border-input bg-transparent px-2.5 text-[12px] outline-none focus:ring-2 focus:ring-ring"
                 />
               )}
-              <span className="text-[10px] text-muted-foreground">{f.help}</span>
+              <span className="text-[10px] text-muted-foreground">
+                {f.help}
+              </span>
             </label>
           ))}
           <div className="flex items-center gap-2">
             <Button type="submit" size="sm" disabled={save.isPending}>
               {save.isPending ? "Saving…" : save.isSuccess ? "Saved" : "Save"}
             </Button>
-            {save.isError && <span className="text-xs text-destructive">{save.error.message}</span>}
+            {save.isError && (
+              <span className="text-xs text-destructive">
+                {save.error.message}
+              </span>
+            )}
           </div>
         </form>
       </CardContent>
