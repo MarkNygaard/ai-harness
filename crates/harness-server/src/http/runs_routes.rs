@@ -345,6 +345,14 @@ async fn execute_run_task(
     let _ = std::fs::create_dir_all(&artifacts);
     let command_dirs = vec![workspace.join(".harness").join("commands")];
 
+    // Warm Rust build cache: point CARGO_TARGET_DIR at a per-project dir on the
+    // persistent volume (NOT the per-run worktree, whose `target/` is cold every
+    // run). Cargo invoked by any node (bash `install-deps`, agent verify chains)
+    // inherits this, so the first run compiles and later runs reuse artifacts.
+    let cargo_target = state.projects_dir.join(".cargo-target").join(&project);
+    let _ = std::fs::create_dir_all(&cargo_target);
+    std::env::set_var("CARGO_TARGET_DIR", &cargo_target);
+
     // Provision the project's toolchains via mise (cached on the PV — no image
     // rebuild), then put mise's shims on PATH so cargo/pnpm/etc. resolve for every
     // node. Best-effort: a failure is logged; the dependent build step will then
