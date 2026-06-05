@@ -20,7 +20,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use harness_dag::Usage;
-use serde::Deserialize;
 use tokio::process::Command;
 
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
@@ -178,143 +177,126 @@ pub struct ParsedOmp {
 /// Tolerant by design: unknown event types and malformed lines are skipped, so
 /// a new `omp` event variant never breaks a run. Pure — unit-tested.
 pub fn parse_omp_stream(stdout: &str) -> ParsedOmp {
+    use serde_json::Value;
     let mut out = ParsedOmp::default();
     for line in stdout.lines() {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        let Ok(event) = serde_json::from_str::<OmpEvent>(line) else {
+        // Parse leniently as a generic Value: a single field-shape quirk inside a
+        // message (tool_use/thinking content, or `content` as a bare string) must
+        // never drop the whole event. Strict struct deserialization previously
+        // failed `agent_end` that way — losing both the completion signal and the
+        // token usage that rides on it.
+        let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        match event {
-            OmpEvent::Session { id } => {
-                if id.is_some() {
-                    out.session = id;
+        match v.get("type").and_then(Value::as_str) {
+            Some("session") => {
+                if let Some(id) = v.get("id").and_then(Value::as_str) {
+                    if !id.is_empty() {
+                        out.session = Some(id.to_string());
+                    }
                 }
             }
-            OmpEvent::MessageEnd { message } => {
-                if let Some(text) = message.text() {
+            Some("message_end") => {
+                if let Some(text) = assistant_text(v.get("message")) {
                     out.text = text; // last assistant message wins
                 }
             }
-            OmpEvent::AgentEnd {
-                telemetry,
-                messages,
-            } => {
+            Some("agent_end") => {
                 out.saw_end = true;
                 // Prefer the final assistant text from the completed conversation.
-                if let Some(text) = messages.iter().rev().find_map(OmpMessage::text) {
+                if let Some(text) = v
+                    .get("messages")
+                    .and_then(Value::as_array)
+                    .and_then(|msgs| msgs.iter().rev().find_map(|m| assistant_text(Some(m))))
+                {
                     out.text = text;
                 }
-                if let Some(tel) = telemetry {
-                    if let Some(usage) = tel.usage {
-                        out.usage = usage.into();
-                    }
-                    if let Some(cost) = tel.cost {
-                        out.cost_usd = cost.estimated_usd;
-                    }
+                if let Some(usage) = v.get("telemetry").and_then(|t| t.get("usage")) {
+                    out.usage = usage_from_value(usage);
+                }
+                if let Some(cost) = v
+                    .get("telemetry")
+                    .and_then(|t| t.get("cost"))
+                    .and_then(|c| c.get("estimatedUsd").or_else(|| c.get("estimated_usd")))
+                    .and_then(Value::as_f64)
+                {
+                    out.cost_usd = Some(cost);
                 }
             }
-            OmpEvent::Other => {}
+            _ => {}
         }
     }
     out
 }
 
-// ── Lenient deserialization of the `omp` event stream ────────────────────────
-
-#[derive(Deserialize)]
-#[serde(tag = "type")]
-enum OmpEvent {
-    #[serde(rename = "session")]
-    Session { id: Option<String> },
-    #[serde(rename = "message_end")]
-    MessageEnd { message: OmpMessage },
-    #[serde(rename = "agent_end")]
-    AgentEnd {
-        #[serde(default)]
-        telemetry: Option<OmpTelemetry>,
-        #[serde(default)]
-        messages: Vec<OmpMessage>,
-    },
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Deserialize)]
-struct OmpMessage {
-    #[serde(default)]
-    role: Option<String>,
-    #[serde(default)]
-    content: Vec<OmpContent>,
-}
-
-impl OmpMessage {
-    /// Concatenated text content of an assistant message, if any.
-    fn text(&self) -> Option<String> {
-        if self.role.as_deref().is_some_and(|r| r != "assistant") {
+/// Assistant text from a message `Value`. `content` may be a plain string or an
+/// array of `{type:"text", text}` parts; non-assistant roles yield `None`.
+fn assistant_text(msg: Option<&serde_json::Value>) -> Option<String> {
+    use serde_json::Value;
+    let msg = msg?;
+    if let Some(role) = msg.get("role").and_then(Value::as_str) {
+        if role != "assistant" {
             return None;
         }
-        let text: String = self
-            .content
-            .iter()
-            .filter_map(|c| match c {
-                OmpContent::Text { text } => Some(text.as_str()),
-                OmpContent::Other => None,
-            })
-            .collect::<Vec<_>>()
-            .join("");
-        (!text.is_empty()).then_some(text)
     }
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "type")]
-enum OmpContent {
-    #[serde(rename = "text")]
-    Text { text: String },
-    #[serde(other)]
-    Other,
-}
-
-#[derive(Deserialize)]
-struct OmpTelemetry {
-    #[serde(default)]
-    usage: Option<OmpUsage>,
-    #[serde(default)]
-    cost: Option<OmpCost>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OmpUsage {
-    #[serde(default)]
-    input_tokens: Option<u64>,
-    #[serde(default)]
-    output_tokens: Option<u64>,
-    #[serde(default)]
-    cached_input_tokens: Option<u64>,
-    #[serde(default)]
-    cache_write_tokens: Option<u64>,
-}
-
-impl From<OmpUsage> for Usage {
-    fn from(u: OmpUsage) -> Self {
-        Usage {
-            input: u.input_tokens,
-            output: u.output_tokens,
-            cache_read: u.cached_input_tokens,
-            cache_write: u.cache_write_tokens,
-        }
+    let content = msg.get("content")?;
+    if let Some(s) = content.as_str() {
+        return (!s.is_empty()).then(|| s.to_string());
     }
+    let text: String = content
+        .as_array()?
+        .iter()
+        .filter_map(|c| {
+            if c.get("type").and_then(Value::as_str) == Some("text") {
+                c.get("text").and_then(Value::as_str)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    (!text.is_empty()).then_some(text)
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct OmpCost {
-    #[serde(default)]
-    estimated_usd: Option<f64>,
+/// Token usage from a telemetry `usage` object, tolerating camelCase or
+/// snake_case key spellings across omp versions.
+fn usage_from_value(u: &serde_json::Value) -> Usage {
+    let pick = |keys: &[&str]| {
+        keys.iter()
+            .find_map(|k| u.get(*k).and_then(serde_json::Value::as_u64))
+    };
+    Usage {
+        input: pick(&[
+            "inputTokens",
+            "input_tokens",
+            "input",
+            "promptTokens",
+            "prompt_tokens",
+        ]),
+        output: pick(&[
+            "outputTokens",
+            "output_tokens",
+            "output",
+            "completionTokens",
+            "completion_tokens",
+        ]),
+        cache_read: pick(&[
+            "cachedInputTokens",
+            "cached_input_tokens",
+            "cacheRead",
+            "cache_read",
+        ]),
+        cache_write: pick(&[
+            "cacheWriteTokens",
+            "cache_write_tokens",
+            "cacheWrite",
+            "cache_write",
+        ]),
+    }
 }
 
 #[cfg(test)]
@@ -351,6 +333,32 @@ mod tests {
         assert!(parsed.saw_end);
         assert_eq!(parsed.usage.input, Some(5));
         assert_eq!(parsed.usage.cache_read, None);
+    }
+
+    #[test]
+    fn agent_end_with_tool_and_string_content_still_yields_usage() {
+        // Regression: a real agent_end carries the whole conversation in
+        // `messages[]` — tool_use/tool_result/thinking parts and sometimes a
+        // string `content`. Strict struct parsing dropped the event (losing
+        // saw_end + usage). The Value-based parser must tolerate it.
+        let stream = concat!(
+            "{\"type\":\"agent_end\",\"messages\":[",
+            "{\"role\":\"user\",\"content\":\"do the thing\"},",
+            "{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"bash\",\"input\":{}}]},",
+            "{\"role\":\"tool\",\"content\":[{\"type\":\"tool_result\",\"output\":\"ok\"}]},",
+            "{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}",
+            "],\"telemetry\":{\"usage\":{\"input_tokens\":900,\"output_tokens\":120,\"cache_read\":40}}}\n"
+        );
+        let parsed = parse_omp_stream(stream);
+        assert!(
+            parsed.saw_end,
+            "agent_end must register despite tool/string content"
+        );
+        assert_eq!(parsed.text, "done");
+        // snake_case usage keys are tolerated.
+        assert_eq!(parsed.usage.input, Some(900));
+        assert_eq!(parsed.usage.output, Some(120));
+        assert_eq!(parsed.usage.cache_read, Some(40));
     }
 
     #[test]
