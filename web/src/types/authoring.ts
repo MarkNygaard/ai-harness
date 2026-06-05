@@ -57,7 +57,14 @@ export interface Catalog {
 }
 
 /** The node-kind discriminators (the single body each editor node carries). */
-export type NodeKindId = "prompt" | "command" | "bash" | "loop" | "script";
+export type NodeKindId =
+  | "prompt"
+  | "command"
+  | "bash"
+  | "loop"
+  | "script"
+  | "approval"
+  | "cancel";
 
 export type ContextMode = "fresh" | "shared";
 export type TriggerRule =
@@ -76,6 +83,13 @@ export interface EditorLoop {
   model?: string;
 }
 
+/** Approval body config (mirrors `ApprovalConfig`, editor-relevant fields). */
+export interface EditorApproval {
+  message: string;
+  capture_response?: boolean;
+  on_reject?: string;
+}
+
 /**
  * The flat, editor-facing node shape — mirrors the YAML node the parser accepts
  * (`RawNode`): an id, edges, AI options, and exactly one body field. The active
@@ -91,13 +105,21 @@ export interface EditorNode {
   timeout?: number;
   /** Category id for overview grouping/colouring (from the categories registry). */
   category?: string;
+  /** Conditional-execution expression evaluated after trigger_rule. */
+  when?: string;
+  /** JSON schema the AI body's output should match (prompt/command nodes). */
+  output_format?: unknown;
   // Mutually exclusive bodies:
   prompt?: string;
   bash?: string;
   command?: string;
   script?: string;
   runtime?: ScriptRuntime;
+  /** Script dependencies (uv only). */
+  deps?: string[];
   loop?: EditorLoop;
+  approval?: EditorApproval;
+  cancel?: string;
 }
 
 /** A whole workflow in the flat editor shape (round-trips to YAML via js-yaml). */

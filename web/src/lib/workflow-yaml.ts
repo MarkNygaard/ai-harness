@@ -14,6 +14,8 @@ export function nodeKind(node: EditorNode): NodeKindId {
   if (node.command !== undefined) return "command";
   if (node.script !== undefined) return "script";
   if (node.loop !== undefined) return "loop";
+  if (node.approval !== undefined) return "approval";
+  if (node.cancel !== undefined) return "cancel";
   return "prompt";
 }
 
@@ -32,6 +34,10 @@ export function emptyNode(kind: NodeKindId, id: string): EditorNode {
         ...base,
         loop: { prompt: "", until: "DONE", max_iterations: 3 },
       };
+    case "approval":
+      return { ...base, approval: { message: "" } };
+    case "cancel":
+      return { ...base, cancel: "" };
     default:
       return { ...base, prompt: "" };
   }
@@ -62,21 +68,29 @@ export function toYaml(wf: EditorWorkflow): string {
       const loop = n.loop
         ? clean(n.loop as unknown as Record<string, unknown>)
         : undefined;
+      const approval = n.approval
+        ? clean(n.approval as unknown as Record<string, unknown>)
+        : undefined;
       return clean({
         id: n.id,
         depends_on: n.depends_on,
+        when: n.when,
         provider: n.provider,
         model: n.model,
         context: n.context,
         category: n.category,
         trigger_rule: n.trigger_rule,
         timeout: n.timeout,
+        output_format: n.output_format,
         prompt: n.prompt,
         bash: n.bash,
         command: n.command,
         script: n.script,
         runtime: n.runtime,
+        deps: n.deps,
         loop,
+        approval,
+        cancel: n.cancel,
       });
     }),
   });
@@ -92,18 +106,23 @@ export function fromYaml(text: string): EditorWorkflow {
   const nodes: EditorNode[] = rawNodes.map((n) => ({
     id: String(n.id ?? ""),
     depends_on: Array.isArray(n.depends_on) ? (n.depends_on as string[]) : [],
+    when: n.when as string | undefined,
     provider: n.provider as string | undefined,
     model: n.model as string | undefined,
     context: n.context as EditorNode["context"],
     trigger_rule: n.trigger_rule as EditorNode["trigger_rule"],
     timeout: typeof n.timeout === "number" ? n.timeout : undefined,
     category: n.category as string | undefined,
+    output_format: n.output_format,
     prompt: n.prompt as string | undefined,
     bash: n.bash as string | undefined,
     command: n.command as string | undefined,
     script: n.script as string | undefined,
     runtime: n.runtime as EditorNode["runtime"],
+    deps: Array.isArray(n.deps) ? (n.deps as string[]) : undefined,
     loop: n.loop as EditorNode["loop"],
+    approval: n.approval as EditorNode["approval"],
+    cancel: n.cancel as string | undefined,
   }));
   return {
     name: String(raw.name ?? "untitled"),

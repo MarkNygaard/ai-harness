@@ -8,7 +8,12 @@ describe("nodeKind", () => {
     expect(nodeKind({ id: "a", bash: "x" })).toBe("bash");
     expect(nodeKind({ id: "a", command: "c" })).toBe("command");
     expect(nodeKind({ id: "a", script: "s", runtime: "bun" })).toBe("script");
-    expect(nodeKind({ id: "a", loop: { prompt: "", until: "D", max_iterations: 1 } })).toBe("loop");
+    expect(
+      nodeKind({
+        id: "a",
+        loop: { prompt: "", until: "D", max_iterations: 1 },
+      }),
+    ).toBe("loop");
     expect(nodeKind({ id: "a" })).toBe("prompt"); // default
   });
 });
@@ -29,7 +34,13 @@ describe("toYaml / fromYaml round-trip", () => {
       provider: "pi",
       model: "kimi-coding/kimi-for-coding",
       nodes: [
-        { id: "explore", provider: "claude", model: "sonnet", context: "fresh", prompt: "look" },
+        {
+          id: "explore",
+          provider: "claude",
+          model: "sonnet",
+          context: "fresh",
+          prompt: "look",
+        },
         {
           id: "review",
           depends_on: ["explore"],
@@ -65,5 +76,35 @@ describe("toYaml / fromYaml round-trip", () => {
     expect(wf.name).toBe("tiny");
     expect(wf.nodes).toEqual([]);
     expect(fromYaml("").name).toBe("untitled");
+  });
+
+  it("round-trips cancel, when, category, and output_format (the idea-to-pr gate)", () => {
+    const yaml = `name: gated
+nodes:
+  - id: validate
+    command: validate
+    category: validation
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+  - id: abort-on-invalid
+    depends_on: [validate]
+    when: "$validate.output.passed != 'true'"
+    cancel: "validation failed"
+  - id: finalize-pr
+    depends_on: [validate]
+    when: "$validate.output.passed == 'true'"
+    command: finalize-pr
+`;
+    // Load → save → reload must preserve every field (no silent body loss).
+    const back = fromYaml(toYaml(fromYaml(yaml)));
+    const validate = back.nodes.find((n) => n.id === "validate")!;
+    const abort = back.nodes.find((n) => n.id === "abort-on-invalid")!;
+    expect(nodeKind(abort)).toBe("cancel");
+    expect(abort.cancel).toBe("validation failed");
+    expect(abort.when).toBe("$validate.output.passed != 'true'");
+    expect(validate.category).toBe("validation");
+    expect(validate.output_format).toMatchObject({ type: "object" });
   });
 });
