@@ -196,10 +196,26 @@ nodes:
     provider: pi
     model: kimi-code/kimi-for-coding
     context: fresh
+    # The agent's final message is a {passed, summary} verdict; downstream
+    # nodes gate on `$validate.output.passed`.
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        summary: { type: string }
+      required: [passed]
+
+  # Fail the run loudly if validation didn't pass — never open a PR on a branch
+  # that doesn't build/test clean. (Skipped when validation passed.)
+  - id: abort-on-invalid
+    depends_on: [validate]
+    when: "$validate.output.passed != 'true'"
+    cancel: "validation failed — refusing to open a PR. $validate.output.summary"
 
   - id: finalize-pr
     command: finalize-pr
     depends_on: [validate]
+    when: "$validate.output.passed == 'true'"
     provider: pi
     model: kimi-code/kimi-for-coding
     context: fresh
