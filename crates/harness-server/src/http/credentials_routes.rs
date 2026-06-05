@@ -41,14 +41,69 @@ pub async fn list_credentials(Extension(state): Extension<Arc<RunsState>>) -> Re
         Ok(c) => c,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-    let out: Vec<ProviderCredential> = PROVIDERS
+    // Also count a provider as configured when the credential the CLIs actually
+    // use is present on disk, even if the encrypted store has no row (e.g. Kimi
+    // connected before the store persisted it, or the DB volume was reset while
+    // the agent's auth files on the PV survived). Otherwise the badge can read
+    // "not connected" for a provider that runs use fine.
+    let mut out: Vec<ProviderCredential> = PROVIDERS
         .iter()
         .map(|p| ProviderCredential {
             provider: p.to_string(),
             configured: configured.iter().any(|c| c == p),
         })
         .collect();
+    for c in out.iter_mut() {
+        if !c.configured {
+            c.configured = provider_native_present(&c.provider).await;
+        }
+    }
     Json(out).into_response()
+}
+
+/// Whether the credential a provider's CLI actually reads is present on disk —
+/// the source of truth for "connected" independent of the encrypted store.
+async fn provider_native_present(provider: &str) -> bool {
+    let home = home_dir();
+    match provider {
+        // Kimi-for-Coding: omp keeps the OAuth credential in its agent.db.
+        "pi" => {
+            kimi_agent_db_has_credential(home.join(".omp").join("agent").join("agent.db")).await
+        }
+        // Codex: ChatGPT OAuth tokens / api key live in auth.json.
+        "codex" => file_non_empty(home.join(".codex").join("auth.json")),
+        // Claude: the CLI reads ~/.claude/.credentials.json.
+        "claude" => file_non_empty(home.join(".claude").join(".credentials.json")),
+        _ => false,
+    }
+}
+
+fn file_non_empty(path: PathBuf) -> bool {
+    std::fs::metadata(&path)
+        .map(|m| m.len() > 2)
+        .unwrap_or(false)
+}
+
+/// True if omp's `agent.db` has a `kimi-code` OAuth row. Best-effort (any error
+/// or missing file → false).
+async fn kimi_agent_db_has_credential(path: PathBuf) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .read_only(true);
+    let Ok(pool) = sqlx::SqlitePool::connect_with(opts).await else {
+        return false;
+    };
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT count(*) FROM auth_credentials WHERE provider = 'kimi-code'")
+            .fetch_optional(&pool)
+            .await
+            .ok()
+            .flatten();
+    pool.close().await;
+    row.map(|r| r.0 > 0).unwrap_or(false)
 }
 
 #[derive(Debug, Deserialize)]
