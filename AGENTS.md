@@ -14,6 +14,8 @@ Linear**, execute **user-authored workflow DAGs**, and **provision toolchains
 from the UI**.
 
 - Authoritative design: [docs/PLAN.md](docs/PLAN.md), [docs/PHASES.md](docs/PHASES.md).
+- Authoring workflow DAGs (node types, `when:`/`$node.output`/`output_format`,
+  `trigger_rule`, good-practices): [docs/authoring-workflows.md](docs/authoring-workflows.md).
 - Inherited design specs in [docs/reference/](docs/reference/) are **background
   only** — they describe majiayu's design at seed time and may have drifted.
   Verify against the current code before relying on them.
