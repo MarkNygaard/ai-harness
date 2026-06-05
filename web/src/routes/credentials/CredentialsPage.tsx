@@ -138,11 +138,16 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
     setMsg(null);
     setInfo(null);
     setPhase("pending");
+    const fail = (e: unknown) => {
+      setPhase("error");
+      setMsg((e as Error).message);
+    };
     try {
       const start = await startKimiConnect();
       setInfo(start);
       window.open(start.verification_uri, "_blank", "noopener");
       const deadline = Date.now() + start.expires_in * 1000;
+      const intervalMs = Math.max(2_000, start.interval * 1000);
       const tick = async () => {
         if (stopped.current) return;
         if (Date.now() > deadline) {
@@ -163,19 +168,16 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
             setMsg(r.message ?? "Authorization failed.");
             return;
           }
-          setTimeout(tick, Math.max(2, start.interval) * 1000);
+          setTimeout(tick, intervalMs);
         } catch (e) {
-          setPhase("error");
-          setMsg((e as Error).message);
+          fail(e);
         }
       };
-      setTimeout(tick, Math.max(2, start.interval) * 1000);
+      setTimeout(tick, intervalMs);
     } catch (e) {
-      setPhase("error");
-      setMsg((e as Error).message);
+      fail(e);
     }
   }
-
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-2">

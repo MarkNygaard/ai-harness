@@ -20,6 +20,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use harness_dag::Usage;
+use serde_json::Value;
 use tokio::process::Command;
 
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
@@ -139,15 +140,9 @@ impl PromptAgent for PiAgent {
         let success = output.status.success() && (saw_end || !parsed.text.is_empty());
         if !success {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            let tail: String = stderr
-                .trim()
-                .chars()
-                .rev()
-                .take(500)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
+            let s = stderr.trim();
+            let skip = s.chars().count().saturating_sub(500);
+            let tail: String = s.chars().skip(skip).collect();
             return Err(AgentError(format!(
                 "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B): {tail}",
                 output.status.code(),
@@ -179,7 +174,6 @@ pub struct ParsedOmp {
 /// Tolerant by design: unknown event types and malformed lines are skipped, so
 /// a new `omp` event variant never breaks a run. Pure — unit-tested.
 pub fn parse_omp_stream(stdout: &str) -> ParsedOmp {
-    use serde_json::Value;
     let mut out = ParsedOmp::default();
     for line in stdout.lines() {
         let line = line.trim();
@@ -238,8 +232,6 @@ pub fn parse_omp_stream(stdout: &str) -> ParsedOmp {
 /// Assistant text from a message `Value`. `content` may be a plain string or an
 /// array of `{type:"text", text}` parts; non-assistant roles yield `None`.
 fn assistant_text(msg: Option<&serde_json::Value>) -> Option<String> {
-    use serde_json::Value;
-    let msg = msg?;
     if let Some(role) = msg.get("role").and_then(Value::as_str) {
         if role != "assistant" {
             return None;
@@ -259,8 +251,10 @@ fn assistant_text(msg: Option<&serde_json::Value>) -> Option<String> {
                 None
             }
         })
-        .collect::<Vec<_>>()
-        .join("");
+        .fold(String::new(), |mut acc, s| {
+            acc.push_str(s);
+            acc
+        });
     (!text.is_empty()).then_some(text)
 }
 
@@ -399,8 +393,8 @@ mod tests {
         );
         // Bare name → prefixed with the Kimi model namespace.
         assert_eq!(
-            agent.resolve_model(Some("kimi-k2.5")),
-            "kimi-code/kimi-k2.5"
+            agent.resolve_model(Some("kimi-for-coding")),
+            "kimi-code/kimi-for-coding"
         );
         assert_eq!(agent.resolve_model(None), DEFAULT_MODEL);
     }
@@ -408,7 +402,6 @@ mod tests {
     #[test]
     fn build_args_adds_resume_when_session_present() {
         let agent = PiAgent::from_env();
-        let base = agent.build_args("do it", "kimi-code/kimi-k2.5", None);
         assert_eq!(
             base,
             vec![
@@ -417,10 +410,10 @@ mod tests {
                 "--mode",
                 "json",
                 "--model",
-                "kimi-code/kimi-k2.5"
+                "kimi-code/kimi-for-coding"
             ]
         );
-        let resumed = agent.build_args("again", "kimi-code/kimi-k2.5", Some("sess-9"));
+        let resumed = agent.build_args("again", "kimi-code/kimi-for-coding", Some("sess-9"));
         assert!(resumed.windows(2).any(|w| w == ["--resume", "sess-9"]));
     }
 }

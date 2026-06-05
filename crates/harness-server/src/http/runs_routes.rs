@@ -266,10 +266,9 @@ pub async fn create_run(
     // Register a broadcast channel so /stream subscribers see live events.
     let (btx, _) = broadcast::channel::<RunEvent>(256);
     state.live.lock().await.insert(run_id.clone(), btx.clone());
-
     let task_state = state.clone();
     let task_run_id = run_id.clone();
-    let toolchains = project_row.toolchains.clone();
+    let toolchains = project_row.toolchains;
     // `description` is the task spec; fall back to the deprecated `args` alias.
     let description = if req.description.is_empty() {
         req.args
@@ -292,7 +291,6 @@ pub async fn create_run(
         )
         .await;
     });
-
     (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response()
 }
 
@@ -358,8 +356,7 @@ async fn execute_run_task(
     // node. Best-effort: a failure is logged; the dependent build step will then
     // surface the missing tool clearly.
     if !toolchains.is_empty() {
-        let specs = toolchains.clone();
-        match tokio::task::spawn_blocking(move || harness_runner::provision_toolchains(&specs))
+        match tokio::task::spawn_blocking(move || harness_runner::provision_toolchains(&toolchains))
             .await
         {
             Ok(Ok(())) => {

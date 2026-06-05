@@ -333,6 +333,7 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
             : p
           : (p ?? l ?? seedNode({ id: nid, depends_on: [] }));
       const depends_on = p?.depends_on ?? chosen.depends_on;
+      // persisted topology wins when it differs from the live/seed node
       return depends_on === chosen.depends_on ? chosen : { ...chosen, depends_on };
     });
 

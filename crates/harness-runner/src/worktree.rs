@@ -126,9 +126,7 @@ pub fn provision_toolchains(specs: &[String]) -> Result<(), WorktreeError> {
     }
     let mut cmd = Command::new("mise");
     cmd.args(["use", "--global", "--yes"]);
-    for s in specs {
-        cmd.arg(s);
-    }
+    cmd.args(specs);
     finish(cmd, "mise use")
 }
 
@@ -136,13 +134,7 @@ pub fn provision_toolchains(specs: &[String]) -> Result<(), WorktreeError> {
 /// so tools provisioned by [`provision_toolchains`] resolve in node subprocesses.
 pub fn mise_shims_dir() -> Option<PathBuf> {
     let home = std::env::var_os("HOME")?;
-    Some(
-        PathBuf::from(home)
-            .join(".local")
-            .join("share")
-            .join("mise")
-            .join("shims"),
-    )
+    Some(PathBuf::from(home).join(".local/share/mise/shims"))
 }
 
 /// Inject a transient GitHub HTTPS credential helper that reads the token from

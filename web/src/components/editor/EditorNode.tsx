@@ -1,5 +1,13 @@
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { Bot, FileCode2, Repeat, Settings2, SquareTerminal, Terminal, Trash2 } from "lucide-react";
+import {
+  Bot,
+  FileCode2,
+  Repeat,
+  Settings2,
+  SquareTerminal,
+  Terminal,
+  Trash2,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NodeKindId } from "@/types/authoring";
 import { type EditorNodeData, nodeKind } from "./graph";
@@ -30,7 +38,9 @@ export function EditorNode({ id, data }: NodeProps) {
   const selected = selectedId === id;
 
   const providerModel =
-    node.model ?? node.provider ?? (kind === "loop" ? node.loop?.model : undefined);
+    node.model ??
+    node.provider ??
+    (kind === "loop" ? node.loop?.model : undefined);
 
   return (
     <div
@@ -39,11 +49,18 @@ export function EditorNode({ id, data }: NodeProps) {
         selected ? "border-accent-orange" : "border-border",
       )}
     >
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-border" />
+      <Handle
+        type="target"
+        position={Position.Top}
+        className="!h-2 !w-2 !border-0 !bg-border"
+      />
       <div className="flex items-center gap-2 px-3 py-2">
         <Icon className="h-4 w-4 shrink-0 text-accent-orange" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[13px] font-semibold text-card-foreground" title={node.id}>
+          <div
+            className="truncate text-[13px] font-semibold text-card-foreground"
+            title={node.id}
+          >
             {node.id || "(unnamed)"}
           </div>
           <div className="truncate text-[10px] text-muted-foreground">
@@ -74,7 +91,11 @@ export function EditorNode({ id, data }: NodeProps) {
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-border" />
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        className="!h-2 !w-2 !border-0 !bg-border"
+      />
     </div>
   );
 }

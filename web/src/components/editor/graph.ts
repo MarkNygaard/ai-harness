@@ -10,20 +10,34 @@ export interface EditorNodeData extends Record<string, unknown> {
   node: EditorNode;
 }
 
-/** Lay out editor nodes left-to-right with Dagre (used on load / "tidy"). */
-export function layout(nodes: Node<EditorNodeData>[], edges: Edge[]): Node<EditorNodeData>[] {
+/** Lay out editor nodes top-to-bottom with Dagre (used on load / "tidy"). */
+export function layout(
+  nodes: Node<EditorNodeData>[],
+  edges: Edge[],
+): Node<EditorNodeData>[] {
   const g = new Dagre.graphlib.Graph().setDefaultEdgeLabel(() => ({}));
-  g.setGraph({ rankdir: "LR", nodesep: 24, ranksep: 72, marginx: 24, marginy: 24 });
-  for (const n of nodes) g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  g.setGraph({
+    rankdir: "TB",
+    nodesep: 40,
+    ranksep: 72,
+    marginx: 24,
+    marginy: 24,
+  });
+  for (const n of nodes)
+    g.setNode(n.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
   for (const e of edges) {
-    if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target);
+    if (g.hasNode(e.source) && g.hasNode(e.target))
+      g.setEdge(e.source, e.target);
   }
   Dagre.layout(g);
   return nodes.map((n) => {
     const p = g.node(n.id);
     return {
       ...n,
-      position: { x: (p?.x ?? 0) - NODE_WIDTH / 2, y: (p?.y ?? 0) - NODE_HEIGHT / 2 },
+      position: {
+        x: (p?.x ?? 0) - NODE_WIDTH / 2,
+        y: (p?.y ?? 0) - NODE_HEIGHT / 2,
+      },
     };
   });
 }
@@ -33,7 +47,11 @@ function edgeOf(source: string, target: string): Edge {
     id: `${source}->${target}`,
     source,
     target,
-    style: { stroke: "var(--muted-foreground)", strokeWidth: 1.5, opacity: 0.5 },
+    style: {
+      stroke: "var(--muted-foreground)",
+      strokeWidth: 1.5,
+      opacity: 0.5,
+    },
     markerEnd: {
       type: MarkerType.ArrowClosed,
       width: 14,
@@ -54,8 +72,8 @@ export function toGraph(wf: EditorWorkflow): {
     type: "editor",
     position: { x: 0, y: 0 },
     data: { node: n },
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
+    sourcePosition: Position.Bottom,
+    targetPosition: Position.Top,
   }));
   const edges: Edge[] = [];
   for (const n of wf.nodes) {
@@ -88,14 +106,18 @@ export function fromGraph(
 }
 
 /** A new xyflow node for the canvas at a position. */
-export function makeNode(node: EditorNode, x: number, y: number): Node<EditorNodeData> {
+export function makeNode(
+  node: EditorNode,
+  x: number,
+  y: number,
+): Node<EditorNodeData> {
   return {
     id: node.id,
     type: "editor",
     position: { x, y },
     data: { node },
-    sourcePosition: Position.Right,
-    targetPosition: Position.Left,
+    sourcePosition: Position.Bottom,
+    targetPosition: Position.Top,
   };
 }
 

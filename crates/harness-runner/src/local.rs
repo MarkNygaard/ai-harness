@@ -17,9 +17,8 @@ use tokio::process::Command;
 
 use crate::{PromptAgent, PromptRequest};
 
-/// How to invoke a shell for `bash` bodies. Defaults to the platform shell
-/// (`sh -c` on Unix, `cmd /C` on Windows); override for tests or custom setups.
-#[derive(Debug, Clone)]
+/// How to invoke a shell for `bash` bodies. Defaults to **bash** on Unix (`bash -c`)
+/// and `cmd /C` on Windows; override for tests or custom setups.
 pub struct Shell {
     pub program: String,
     pub command_flag: String,
@@ -275,7 +274,7 @@ fn strip_frontmatter(body: &str) -> String {
     let mut lines = s.lines();
     // Frontmatter must open with `---` on the very first line.
     if lines.next().map(str::trim_end) != Some("---") {
-        return body.to_string();
+        return s.to_string();
     }
     let mut rest: Vec<&str> = Vec::new();
     let mut closed = false;

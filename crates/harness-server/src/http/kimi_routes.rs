@@ -37,6 +37,10 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/home/harness"))
 }
 
+fn agent_db_path() -> PathBuf {
+    home_dir().join(".omp/agent/agent.db")
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -45,35 +49,32 @@ fn now_ms() -> i64 {
 }
 
 /// `X-Msh-*` headers omp sends. The device id is persisted to match omp's own
-/// (`~/.omp/agent/kimi-device-id`); the rest are informational tracking values.
 fn kimi_headers() -> reqwest::header::HeaderMap {
     use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
     let device_id = device_id();
     let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "ai-harness".to_string());
     let mut h = HeaderMap::new();
-    let mut set = |k: &'static str, v: String| {
-        if let Ok(val) = HeaderValue::from_str(&v) {
+    let mut set = |k: &'static str, v: &str| {
+        if let Ok(val) = HeaderValue::from_str(v) {
             h.insert(HeaderName::from_static(k), val);
         }
     };
-    set("user-agent", "KimiCLI/ai-harness".into());
-    set("x-msh-platform", "kimi_cli".into());
-    set("x-msh-version", "ai-harness".into());
-    set("x-msh-device-name", host);
-    set("x-msh-device-model", "Linux".into());
-    set("x-msh-os-version", "Linux".into());
-    set("x-msh-device-id", device_id);
+    set("user-agent", "KimiCLI/ai-harness");
+    set("x-msh-platform", "kimi_cli");
+    set("x-msh-version", "ai-harness");
+    set("x-msh-device-name", &host);
+    set("x-msh-device-model", "Linux");
+    set("x-msh-os-version", "Linux");
+    set("x-msh-device-id", &device_id);
     h
 }
-
 /// Read or generate the persistent device id (UUID without hyphens), stored where
 /// omp keeps it so a later omp invocation reuses the same identity.
 fn device_id() -> String {
-    let path = home_dir().join(".omp").join("agent").join("kimi-device-id");
+    let path = home_dir().join(".omp/agent/kimi-device-id");
     if let Ok(existing) = std::fs::read_to_string(&path) {
-        let trimmed = existing.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
+        if !existing.trim().is_empty() {
+            return existing.trim().to_string();
         }
     }
     let id = uuid::Uuid::new_v4().simple().to_string();
@@ -86,9 +87,8 @@ fn device_id() -> String {
 
 // ── Device-authorization start ───────────────────────────────────────────────
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 struct DeviceAuthResponse {
-    user_code: Option<String>,
     device_code: Option<String>,
     verification_uri: Option<String>,
     verification_uri_complete: Option<String>,
@@ -268,7 +268,7 @@ pub async fn connect_poll(
 /// (SQLite, schema v4) so `omp` reads it like a native `/login`. Replaces any
 /// existing `kimi-code` row; omp self-refreshes the tokens from there on.
 pub(crate) async fn write_agent_db(data_json: &str) -> Result<(), String> {
-    let path = home_dir().join(".omp").join("agent").join("agent.db");
+    let path = agent_db_path();
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create dir: {e}"))?;
     }
@@ -284,7 +284,6 @@ pub(crate) async fn write_agent_db(data_json: &str) -> Result<(), String> {
         "CREATE TABLE IF NOT EXISTS auth_schema_version (id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL)",
         "INSERT OR REPLACE INTO auth_schema_version(id, version) VALUES (1, 4)",
         "CREATE TABLE IF NOT EXISTS auth_credentials (\
-            id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, \
             credential_type TEXT NOT NULL, data TEXT NOT NULL, \
             disabled_cause TEXT DEFAULT NULL, identity_key TEXT DEFAULT NULL, \
             created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)), \
@@ -314,7 +313,7 @@ pub(crate) async fn write_agent_db(data_json: &str) -> Result<(), String> {
 /// Re-seed `agent.db` from the stored `pi.kimi_oauth` if the file is missing
 /// (e.g. a fresh volume). Called from credential materialization. Best-effort.
 pub(crate) async fn reseed_agent_db_if_missing(fields: &BTreeMap<String, String>) {
-    let path = home_dir().join(".omp").join("agent").join("agent.db");
+    let path = agent_db_path();
     if path.exists() {
         return;
     }

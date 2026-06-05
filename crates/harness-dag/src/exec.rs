@@ -423,10 +423,7 @@ async fn execute_node<R: NodeRunner>(
     // Only agent-dispatching nodes carry a provider/model. bash/script/cancel/
     // approval nodes run no agent, so they show none — they don't inherit the
     // workflow default just for display.
-    let is_agent = matches!(
-        node.kind,
-        NodeKind::Prompt(_) | NodeKind::Command(_) | NodeKind::Loop(_)
-    );
+    let is_agent = node.kind.is_ai();
     let provider = if is_agent {
         node.provider.as_deref().or(wf_provider)
     } else {

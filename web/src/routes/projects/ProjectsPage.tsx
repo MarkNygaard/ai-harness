@@ -116,7 +116,6 @@ function RegisterForm() {
         // Comma/space-separated mise specs → array (server drops blanks too).
         toolchains: toolchains
           .split(/[,\s]+/)
-          .map((t) => t.trim())
           .filter(Boolean),
       },
       {
