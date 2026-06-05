@@ -8,10 +8,11 @@
 //! `message.content[]` carries the assistant text, and a final `agent_end` whose
 //! `telemetry.usage` gives full token fidelity incl. cache (PLAN §7.3/§10.1).
 //!
-//! Auth is inherited from the environment: `KIMI_API_KEY` for the Kimi-for-Coding
-//! subscription (`kimi-coding/*`), a `~/.pi/agent/auth.json` from `omp /login`, or
-//! `MOONSHOT_API_KEY` for the per-token Moonshot API (`moonshotai/*`). The server
-//! materializes these from the credential store before a run; we don't manage them.
+//! Models are namespaced `kimi-code/*` (e.g. `kimi-code/kimi-k2.6`); auth for the
+//! Kimi-for-Coding subscription is the `kimi-coding` provider — `KIMI_API_KEY` or a
+//! `~/.pi/agent/auth.json` from `omp /login`. `MOONSHOT_API_KEY` covers the
+//! per-token Moonshot API (`moonshotai/*`). The server materializes these from the
+//! credential store before a run; we don't manage them here.
 
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -25,10 +26,11 @@ use tokio::process::Command;
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
 
 /// Default model when a `pi` node declares no `model` (or only a bare name).
-const DEFAULT_MODEL: &str = "kimi-coding/kimi-for-coding";
-/// Provider prefix expected by `omp --model provider/model` (the Kimi-for-Coding
-/// subscription; bare model names are prefixed with this).
-const KIMI_PREFIX: &str = "kimi-coding/";
+const DEFAULT_MODEL: &str = "kimi-code/kimi-k2.6";
+/// Model-namespace prefix for `omp --model provider/model` (bare model names are
+/// prefixed with this). Note: the *auth* provider is `kimi-coding`, but models
+/// are addressed under `kimi-code/`.
+const KIMI_PREFIX: &str = "kimi-code/";
 /// Hard cap on a single `omp` invocation, overridable via `OMP_TIMEOUT_SECS`.
 const DEFAULT_TIMEOUT_SECS: u64 = 900;
 
@@ -377,13 +379,13 @@ mod tests {
         let agent = PiAgent::from_env();
         // Already provider-qualified → passed through unchanged.
         assert_eq!(
-            agent.resolve_model(Some("kimi-coding/kimi-for-coding")),
-            "kimi-coding/kimi-for-coding"
+            agent.resolve_model(Some("kimi-code/kimi-k2.6")),
+            "kimi-code/kimi-k2.6"
         );
-        // Bare name → prefixed with the Kimi-for-Coding provider.
+        // Bare name → prefixed with the Kimi model namespace.
         assert_eq!(
             agent.resolve_model(Some("kimi-k2.5")),
-            "kimi-coding/kimi-k2.5"
+            "kimi-code/kimi-k2.5"
         );
         assert_eq!(agent.resolve_model(None), DEFAULT_MODEL);
     }

@@ -20,7 +20,7 @@ description: |
   NOT for: standalone reviews, or plans without implementation.
 
 provider: pi
-model: kimi-coding/kimi-for-coding
+model: kimi-code/kimi-k2.6
 
 nodes:
   - id: explore
@@ -130,13 +130,13 @@ nodes:
     command: implement-tasks
     depends_on: [install-deps]
     provider: pi
-    model: kimi-coding/kimi-for-coding
+    model: kimi-code/kimi-k2.6
     context: fresh
 
   - id: pi-simplify
     depends_on: [implement-tasks]
     provider: pi
-    model: kimi-coding/kimi-for-coding
+    model: kimi-code/kimi-k2.6
     context: fresh
     prompt: |
       Run the pi-simplify extension over the code just implemented on
@@ -172,14 +172,14 @@ nodes:
     command: validate
     depends_on: [pi-simplify]
     provider: pi
-    model: kimi-coding/kimi-for-coding
+    model: kimi-code/kimi-k2.6
     context: fresh
 
   - id: finalize-pr
     command: finalize-pr
     depends_on: [validate]
     provider: pi
-    model: kimi-coding/kimi-for-coding
+    model: kimi-code/kimi-k2.6
     context: fresh
 
   - id: verify-pr-base
@@ -199,7 +199,7 @@ nodes:
   - id: verify-pr-title
     depends_on: [verify-pr-base]
     provider: pi
-    model: kimi-coding/kimi-for-coding
+    model: kimi-code/kimi-k2.6
     context: fresh
     prompt: |
       Verify the PR title follows the conventional-commits format.
@@ -259,7 +259,7 @@ nodes:
     depends_on: [verify-pr-title]
     loop:
       provider: pi
-      model: kimi-coding/kimi-for-coding
+      model: kimi-code/kimi-k2.6
       max_iterations: 5
       until: PI_REVIEW_CLEAN
       prompt: |
@@ -523,7 +523,7 @@ nodes:
     depends_on: [sonnet-final-review]
     loop:
       provider: pi
-      model: kimi-coding/kimi-for-coding
+      model: kimi-code/kimi-k2.6
       max_iterations: 3
       until: FINAL_VERIFY_CLEAN
       prompt: |
@@ -563,7 +563,7 @@ nodes:
   - id: workflow-summary
     depends_on: [final-verify-loop]
     provider: pi
-    model: kimi-coding/kimi-for-coding
+    model: kimi-code/kimi-k2.6
     context: fresh
     prompt: |
       Post a short "workflow complete" PR comment that reflects what
