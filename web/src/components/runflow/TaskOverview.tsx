@@ -5,18 +5,20 @@ import {
   elapsedMs,
   formatDuration,
   formatTokens,
-  statusColor,
   statusLabel,
   sumUsage,
   totalTokens,
 } from "./format";
 import {
+  nodeColor,
+  timeByCategory,
   timeByStep,
   usageByModel,
   usageByType,
   waterfall,
   type WaterfallRow,
 } from "./overview";
+import { categoryColorMap, useCategories } from "@/lib/categories";
 
 export { usageByModel };
 
@@ -43,6 +45,15 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
   const bars = useMemo(() => waterfall(nodes, now), [nodes, now]);
   const steps = useMemo(() => timeByStep(nodes, now), [nodes, now]);
   const segments = useMemo(() => usageByType(totals), [totals]);
+
+  // Category colours + time-by-category (uncategorized steps keep status colour).
+  const cats = useCategories();
+  const colors = useMemo(() => categoryColorMap(cats.data), [cats.data]);
+  const catBar = useMemo(
+    () => timeByCategory(nodes, now, cats.data ?? []),
+    [nodes, now, cats.data],
+  );
+  const catTotal = catBar.reduce((s, c) => s + c.ms, 0);
 
   const done = nodes.filter((n) =>
     ["success", "failed", "skipped", "cancelled"].includes(n.status),
@@ -72,13 +83,50 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
       {/* Two-column body */}
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="flex flex-col gap-6">
+          {catTotal > 0 && (
+            <Section title="Time by category">
+              <div className="border border-border p-3">
+                <div className="flex h-4 w-full overflow-hidden bg-secondary/50">
+                  {catBar.map((c) => (
+                    <div
+                      key={c.id}
+                      style={{
+                        width: `${(c.ms / catTotal) * 100}%`,
+                        backgroundColor: c.color,
+                      }}
+                      title={`${c.label}: ${formatDuration(c.ms)}`}
+                    />
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-[12px]">
+                  {catBar.map((c) => (
+                    <div key={c.id} className="flex items-center gap-1.5">
+                      <span
+                        className="size-2.5 rounded-full"
+                        style={{ backgroundColor: c.color }}
+                      />
+                      <span className="text-muted-foreground">{c.label}</span>
+                      <span className="font-medium tabular-nums">
+                        {formatDuration(c.ms)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </Section>
+          )}
+
           <Section title="Milestone waterfall">
             {bars.length === 0 ? (
               <Empty>No timing recorded yet.</Empty>
             ) : (
               <div className="flex flex-col gap-1 border border-border p-3">
                 {bars.map((b) => (
-                  <WaterfallBar key={b.id} row={b} />
+                  <WaterfallBar
+                    key={b.id}
+                    row={b}
+                    color={nodeColor(b.status, b.category, colors)}
+                  />
                 ))}
               </div>
             )}
@@ -105,7 +153,11 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
                         className="h-full"
                         style={{
                           width: `${longest > 0 ? (s.durationMs / longest) * 100 : 0}%`,
-                          backgroundColor: statusColor(s.status),
+                          backgroundColor: nodeColor(
+                            s.status,
+                            s.category,
+                            colors,
+                          ),
                         }}
                       />
                     </div>
@@ -282,7 +334,7 @@ function runDuration(nodes: NodeView[], now: number): number | null {
     : null;
 }
 
-function WaterfallBar({ row }: { row: WaterfallRow }) {
+function WaterfallBar({ row, color }: { row: WaterfallRow; color: string }) {
   return (
     <div className="flex items-center gap-3 text-[12px]">
       <div className="w-40 shrink-0 truncate font-medium" title={row.id}>
@@ -294,7 +346,7 @@ function WaterfallBar({ row }: { row: WaterfallRow }) {
           style={{
             left: `${row.offset * 100}%`,
             width: `${row.width * 100}%`,
-            backgroundColor: statusColor(row.status),
+            backgroundColor: color,
           }}
           title={`${statusLabel(row.status)} · ${formatDuration(row.durationMs)}`}
         />
