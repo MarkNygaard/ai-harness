@@ -32,7 +32,10 @@ const statusVariant: Record<
   pending: "default",
 };
 
-/** Factory-style task overview: headline metrics, waterfall, time + token breakdowns. */
+/**
+ * Factory-style task overview: full-width, square-edged dashboard — headline
+ * metrics, a milestone waterfall, time + token breakdowns, and detail tables.
+ */
 export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
   const now = Date.now();
   const byModel = useMemo(() => usageByModel(nodes), [nodes]);
@@ -53,9 +56,9 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
   const longest = steps[0]?.durationMs ?? 0;
 
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex w-full flex-col gap-6">
       {/* Headline metrics */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-4">
         <Metric label="Total time" value={formatDuration(wallMs)} />
         <Metric label="Total tokens" value={formatTokens(totalTok)} />
         <Metric
@@ -66,94 +69,140 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
         <Metric label="Models" value={String(byModel.length || "—")} />
       </div>
 
-      {/* Milestone waterfall */}
-      <section>
-        <SectionTitle>Milestone waterfall</SectionTitle>
-        {bars.length === 0 ? (
-          <Empty>No timing recorded yet.</Empty>
-        ) : (
-          <div className="flex flex-col gap-1 rounded-lg border border-border p-3">
-            {bars.map((b) => (
-              <WaterfallBar key={b.id} row={b} />
-            ))}
-          </div>
-        )}
-      </section>
+      {/* Two-column body */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <div className="flex flex-col gap-6">
+          <Section title="Milestone waterfall">
+            {bars.length === 0 ? (
+              <Empty>No timing recorded yet.</Empty>
+            ) : (
+              <div className="flex flex-col gap-1 border border-border p-3">
+                {bars.map((b) => (
+                  <WaterfallBar key={b.id} row={b} />
+                ))}
+              </div>
+            )}
+          </Section>
 
-      {/* Time by step */}
-      <section>
-        <SectionTitle>Time by step</SectionTitle>
-        {steps.length === 0 ? (
-          <Empty>No timing recorded yet.</Empty>
-        ) : (
-          <div className="flex flex-col gap-2 rounded-lg border border-border p-3">
-            {steps.map((s) => (
-              <div key={s.id} className="flex items-center gap-3 text-[12px]">
-                <div
-                  className="w-40 shrink-0 truncate font-medium"
-                  title={s.id}
-                >
-                  {s.id}
-                </div>
-                <div className="h-3 flex-1 overflow-hidden rounded-full bg-secondary/50">
+          <Section title="Time by step">
+            {steps.length === 0 ? (
+              <Empty>No timing recorded yet.</Empty>
+            ) : (
+              <div className="flex flex-col gap-2 border border-border p-3">
+                {steps.map((s) => (
                   <div
-                    className="h-full rounded-full"
-                    style={{
-                      width: `${longest > 0 ? (s.durationMs / longest) * 100 : 0}%`,
-                      backgroundColor: statusColor(s.status),
-                    }}
-                  />
+                    key={s.id}
+                    className="flex items-center gap-3 text-[12px]"
+                  >
+                    <div
+                      className="w-40 shrink-0 truncate font-medium"
+                      title={s.id}
+                    >
+                      {s.id}
+                    </div>
+                    <div className="h-3 flex-1 overflow-hidden bg-secondary/50">
+                      <div
+                        className="h-full"
+                        style={{
+                          width: `${longest > 0 ? (s.durationMs / longest) * 100 : 0}%`,
+                          backgroundColor: statusColor(s.status),
+                        }}
+                      />
+                    </div>
+                    <div className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">
+                      {formatDuration(s.durationMs)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Section>
+        </div>
+
+        <div className="flex flex-col gap-6">
+          <Section title="Tokens by type">
+            {segTotal === 0 ? (
+              <Empty>No token usage reported yet.</Empty>
+            ) : (
+              <div className="border border-border p-3">
+                <div className="flex h-4 w-full overflow-hidden bg-secondary/50">
+                  {segments.map((s) => (
+                    <div
+                      key={s.key}
+                      style={{
+                        width: `${(s.value / segTotal) * 100}%`,
+                        backgroundColor: s.color,
+                      }}
+                      title={`${s.label}: ${formatTokens(s.value)}`}
+                    />
+                  ))}
                 </div>
-                <div className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">
-                  {formatDuration(s.durationMs)}
+                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-[12px]">
+                  {segments.map((s) => (
+                    <div key={s.key} className="flex items-center gap-1.5">
+                      <span
+                        className="size-2.5 rounded-full"
+                        style={{ backgroundColor: s.color }}
+                      />
+                      <span className="text-muted-foreground">{s.label}</span>
+                      <span className="font-medium tabular-nums">
+                        {formatTokens(s.value)}
+                      </span>
+                    </div>
+                  ))}
                 </div>
               </div>
-            ))}
-          </div>
-        )}
-      </section>
+            )}
+          </Section>
 
-      {/* Tokens by type */}
-      <section>
-        <SectionTitle>Tokens by type</SectionTitle>
-        {segTotal === 0 ? (
-          <Empty>No token usage reported yet.</Empty>
-        ) : (
-          <div className="rounded-lg border border-border p-3">
-            <div className="flex h-4 w-full overflow-hidden rounded-full bg-secondary/50">
-              {segments.map((s) => (
-                <div
-                  key={s.key}
-                  style={{
-                    width: `${(s.value / segTotal) * 100}%`,
-                    backgroundColor: s.color,
-                  }}
-                  title={`${s.label}: ${formatTokens(s.value)}`}
-                />
-              ))}
-            </div>
-            <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-[12px]">
-              {segments.map((s) => (
-                <div key={s.key} className="flex items-center gap-1.5">
-                  <span
-                    className="size-2.5 rounded-sm"
-                    style={{ backgroundColor: s.color }}
-                  />
-                  <span className="text-muted-foreground">{s.label}</span>
-                  <span className="font-medium tabular-nums">
-                    {formatTokens(s.value)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-      </section>
+          <Section title="By model">
+            {byModel.length === 0 ? (
+              <Empty>No token usage reported yet.</Empty>
+            ) : (
+              <div className="overflow-hidden border border-border">
+                <table className="w-full text-[12px]">
+                  <thead className="bg-secondary/50 text-muted-foreground">
+                    <tr>
+                      <Th className="text-left">Model</Th>
+                      <Th className="text-right">Steps</Th>
+                      <Th className="text-right">In</Th>
+                      <Th className="text-right">Out</Th>
+                      <Th className="text-right">Cache</Th>
+                      <Th className="text-right">Total</Th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {byModel.map((g) => (
+                      <tr key={g.key} className="border-t border-border">
+                        <Td className="font-medium text-foreground">{g.key}</Td>
+                        <Td className="text-right tabular-nums text-muted-foreground">
+                          {g.steps}
+                        </Td>
+                        <Td className="text-right tabular-nums">
+                          {formatTokens(g.usage.input)}
+                        </Td>
+                        <Td className="text-right tabular-nums">
+                          {formatTokens(g.usage.output)}
+                        </Td>
+                        <Td className="text-right tabular-nums text-muted-foreground">
+                          {formatTokens(g.usage.cache_read)}
+                        </Td>
+                        <Td className="text-right font-medium tabular-nums">
+                          {formatTokens(g.total)}
+                        </Td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Section>
+        </div>
+      </div>
 
-      {/* By step (detail table) */}
-      <section>
-        <SectionTitle>By step</SectionTitle>
-        <div className="overflow-hidden rounded-lg border border-border">
+      {/* By step (full-width detail table) */}
+      <Section title="By step">
+        <div className="overflow-hidden border border-border">
           <table className="w-full text-[12px]">
             <thead className="bg-secondary/50 text-muted-foreground">
               <tr>
@@ -211,52 +260,7 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
             </tfoot>
           </table>
         </div>
-      </section>
-
-      {/* By model */}
-      <section>
-        <SectionTitle>By model</SectionTitle>
-        {byModel.length === 0 ? (
-          <Empty>No token usage reported yet.</Empty>
-        ) : (
-          <div className="overflow-hidden rounded-lg border border-border">
-            <table className="w-full text-[12px]">
-              <thead className="bg-secondary/50 text-muted-foreground">
-                <tr>
-                  <Th className="text-left">Model</Th>
-                  <Th className="text-right">Steps</Th>
-                  <Th className="text-right">In</Th>
-                  <Th className="text-right">Out</Th>
-                  <Th className="text-right">Cache</Th>
-                  <Th className="text-right">Total</Th>
-                </tr>
-              </thead>
-              <tbody>
-                {byModel.map((g) => (
-                  <tr key={g.key} className="border-t border-border">
-                    <Td className="font-medium text-foreground">{g.key}</Td>
-                    <Td className="text-right tabular-nums text-muted-foreground">
-                      {g.steps}
-                    </Td>
-                    <Td className="text-right tabular-nums">
-                      {formatTokens(g.usage.input)}
-                    </Td>
-                    <Td className="text-right tabular-nums">
-                      {formatTokens(g.usage.output)}
-                    </Td>
-                    <Td className="text-right tabular-nums text-muted-foreground">
-                      {formatTokens(g.usage.cache_read)}
-                    </Td>
-                    <Td className="text-right font-medium tabular-nums">
-                      {formatTokens(g.total)}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      </Section>
     </div>
   );
 }
@@ -286,7 +290,7 @@ function WaterfallBar({ row }: { row: WaterfallRow }) {
       </div>
       <div className="relative h-4 flex-1">
         <div
-          className="absolute top-0 h-full min-w-0.75 rounded-sm"
+          className="absolute top-0 h-full min-w-0.75"
           style={{
             left: `${row.offset * 100}%`,
             width: `${row.width * 100}%`,
@@ -312,7 +316,7 @@ function Metric({
   hint?: string;
 }) {
   return (
-    <div className="rounded-lg border border-border p-3">
+    <div className="bg-card p-3">
       <div className="text-[11px] uppercase tracking-wide text-muted-foreground">
         {label}
       </div>
@@ -322,11 +326,22 @@ function Metric({
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
+/** A titled section with a Factory-style accent tick before the label. */
+function Section({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
   return (
-    <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+    <section>
+      <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="h-3 w-0.5 bg-status-running" aria-hidden />
+        {title}
+      </h3>
       {children}
-    </h3>
+    </section>
   );
 }
 
