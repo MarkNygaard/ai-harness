@@ -42,10 +42,13 @@ where
     F: FnOnce() -> Fut,
     Fut: Future<Output = anyhow::Result<()>>,
 {
+    let _lock = crate::test_support::process_env_lock();
+    if resolve_database_url(None).is_err() {
+        return Ok(());
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let _lock = crate::test_support::process_env_lock();
     runtime.block_on(test())
 }
 
