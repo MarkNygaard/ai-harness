@@ -119,6 +119,16 @@ impl PiAgent {
             "--model".to_string(),
             model.to_string(),
         ];
+        // Optional omp plugin dirs (e.g. pi-web-access), colon-separated in
+        // OMP_PLUGIN_DIRS. Baked into the image at a fixed path and loaded via
+        // `--plugin-dir` so they survive the PV-mounted $HOME. Unset (local dev)
+        // = no extra plugins.
+        if let Ok(dirs) = std::env::var("OMP_PLUGIN_DIRS") {
+            for dir in dirs.split(':').map(str::trim).filter(|d| !d.is_empty()) {
+                args.push("--plugin-dir".to_string());
+                args.push(dir.to_string());
+            }
+        }
         if let Some(id) = session {
             args.push("--resume".to_string());
             args.push(id.to_string());
