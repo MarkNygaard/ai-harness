@@ -104,11 +104,28 @@ impl VarContext {
         if path.is_empty() {
             return raw.to_string();
         }
-        match serde_json::from_str::<serde_json::Value>(raw.trim()) {
-            Ok(value) => navigate_json(&value, &path),
-            Err(_) => String::new(),
+        match extract_json(raw) {
+            Some(value) => navigate_json(&value, &path),
+            None => String::new(),
         }
     }
+}
+
+/// Best-effort JSON parse of an agent's output for field access. Agents commonly
+/// wrap their JSON in a ```` ```json ```` fence or surround it with prose despite
+/// instructions, so if a direct parse fails we extract the outermost `{…}`/`[…]`
+/// span and parse that. Returns `None` if no JSON is found.
+fn extract_json(raw: &str) -> Option<serde_json::Value> {
+    let trimmed = raw.trim();
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        return Some(v);
+    }
+    let start = trimmed.find(['{', '['])?;
+    let end = trimmed.rfind(['}', ']'])?;
+    if end <= start {
+        return None;
+    }
+    serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]).ok()
 }
 
 /// Walk a JSON value along a dotted field path, rendering the leaf as a plain
@@ -249,6 +266,21 @@ mod tests {
         assert_eq!(
             substitute("k=$classify.output.nested.k n=$classify.output.n", &ctx()).unwrap(),
             "k=v n=3"
+        );
+    }
+
+    #[test]
+    fn json_field_access_through_markdown_fence() {
+        // Agents often wrap the JSON verdict in a ```json fence despite
+        // instructions; field access must still work (the validate→gate path).
+        let ctx = VarContext::new().set_node_output(
+            "validate",
+            "```json\n{\"passed\": true, \"summary\": \"all green\"}\n```",
+        );
+        assert_eq!(substitute("$validate.output.passed", &ctx).unwrap(), "true");
+        assert_eq!(
+            substitute("$validate.output.summary", &ctx).unwrap(),
+            "all green"
         );
     }
 
