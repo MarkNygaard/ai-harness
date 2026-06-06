@@ -36,6 +36,76 @@ export function useSetCredential() {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Per-project credentials (`/api/projects/{project}/credentials`).
+//
+// Project-scoped keys override the global ones for that project (with the
+// global value as fallback). The server allowlists which providers may be set
+// per project. As with the global API, secret values are never returned —
+// `configured` only reports presence.
+// ---------------------------------------------------------------------------
+
+/** Providers that can be overridden per project, and the field each expects. */
+export const PROJECT_CREDENTIALS: { provider: string; field: string }[] = [
+  { provider: "linear", field: "api_key" },
+  { provider: "github", field: "token" },
+];
+
+export function useProjectCredentials(project: string | null) {
+  return useQuery<ProviderCredential[], Error>({
+    queryKey: ["project-credentials", project],
+    enabled: !!project,
+    queryFn: ({ signal }) =>
+      apiJson<ProviderCredential[]>(
+        `/api/projects/${encodeURIComponent(project!)}/credentials`,
+        { signal },
+      ),
+  });
+}
+
+export function useSetProjectCredential(project: string | null) {
+  const qc = useQueryClient();
+  return useMutation<
+    unknown,
+    Error,
+    { provider: string; fields: Record<string, string> }
+  >({
+    mutationFn: ({ provider, fields }) =>
+      apiJson(
+        `/api/projects/${encodeURIComponent(project!)}/credentials/${encodeURIComponent(provider)}`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fields }),
+        },
+      ),
+    onSuccess: (_data, { provider }) => {
+      qc.invalidateQueries({ queryKey: ["project-credentials", project] });
+      // Linear discovery uses the key — refetch so trigger dropdowns populate.
+      if (provider === "linear") {
+        qc.invalidateQueries({ queryKey: ["linear", "discovery", project] });
+      }
+    },
+  });
+}
+
+export function useDeleteProjectCredential(project: string | null) {
+  const qc = useQueryClient();
+  return useMutation<unknown, Error, string>({
+    mutationFn: (provider) =>
+      apiJson(
+        `/api/projects/${encodeURIComponent(project!)}/credentials/${encodeURIComponent(provider)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: (_data, provider) => {
+      qc.invalidateQueries({ queryKey: ["project-credentials", project] });
+      if (provider === "linear") {
+        qc.invalidateQueries({ queryKey: ["linear", "discovery", project] });
+      }
+    },
+  });
+}
+
 /** Kimi-for-Coding OAuth device-login (server-driven). */
 export interface KimiConnectStart {
   user_code: string;
