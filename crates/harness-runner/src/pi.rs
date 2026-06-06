@@ -209,6 +209,21 @@ impl PiAgent {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+
+        // Opt-in filesystem sandbox (`HARNESS_FS_SANDBOX`): confine the agent and
+        // every tool it spawns to writing only under the worktree + build caches,
+        // so it can't overwrite shared toolchains/system binaries. Best-effort
+        // Landlock (Linux only); see `harness_sandbox::restrict_self_writes`.
+        #[cfg(unix)]
+        if std::env::var_os("HARNESS_FS_SANDBOX").is_some() {
+            let allowed = sandbox_allowlist(cwd);
+            // SAFETY: the hook only performs Landlock syscalls + path opens, all
+            // safe to run in the single-threaded child between fork and exec.
+            unsafe {
+                cmd.pre_exec(move || harness_sandbox::restrict_self_writes(&allowed));
+            }
+        }
+
         let mut child = cmd.spawn().map_err(|e| {
             AgentError(format!(
                 "failed to spawn `{}` (is the omp CLI installed / on PATH?): {e}",
@@ -281,6 +296,33 @@ impl PiAgent {
             status,
         })
     }
+}
+
+/// Paths the agent (and its build tools) may legitimately write to under the
+/// opt-in filesystem sandbox: the run's worktree plus the package/build caches
+/// and omp's own state. Everything else (toolchains in `$HOME/.local`, `/usr`,
+/// `/usr/local`, …) stays read+execute only. Missing paths are simply skipped.
+#[cfg(unix)]
+fn sandbox_allowlist(cwd: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![
+        cwd.to_path_buf(),
+        PathBuf::from("/tmp"),
+        PathBuf::from("/var/tmp"),
+    ];
+    if let Some(home) = std::env::var_os("HOME") {
+        let home = PathBuf::from(home);
+        for sub in [
+            ".cargo", ".rustup", ".cache", ".bun", ".npm", ".config", ".omp",
+        ] {
+            paths.push(home.join(sub));
+        }
+    }
+    for key in ["CARGO_TARGET_DIR", "XDG_CACHE_HOME"] {
+        if let Some(v) = std::env::var_os(key) {
+            paths.push(PathBuf::from(v));
+        }
+    }
+    paths
 }
 
 /// The distilled result of an `omp --mode json` stream.
