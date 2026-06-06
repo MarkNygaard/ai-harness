@@ -11,6 +11,33 @@ bundled default of the same name). Validate any candidate with
 `harness_dag::parse_workflow` (the visual editor and MCP authoring server both
 go through `harness-runner`'s `validate_workflow`).
 
+## Two ways to author
+
+**Prefer the MCP tools** (the `harness mcp-server` exposes them) — build a
+workflow with structured, node-level calls instead of hand-writing YAML. Each
+call validates and saves atomically, so a bad change fails without corrupting
+the file:
+
+| Tool | Use |
+|---|---|
+| `workflow_catalog` | discover legal node kinds, providers/models, commands, trigger rules |
+| `workflow_create` | new empty workflow (`name`, optional `description`/`provider`/`model`) |
+| `workflow_set_node` | add/replace a node by id from a JSON spec (`{id, <body>, depends_on, when, category, …}`) |
+| `workflow_connect` | add a dependency edge (`to` depends on `from`) |
+| `workflow_remove_node` | delete a node + strip it from dependents |
+| `workflow_get` / `workflow_list` / `workflow_validate` | read / list / check |
+
+A typical build: `workflow_catalog` → `workflow_create` → a `workflow_set_node`
+per step (each returns the resulting node summaries — the build→validate→fix
+loop) → `workflow_connect` for any extra edges. You never write YAML, and every
+step is checked.
+
+**The rest of this doc is the format + design reference** — the node fields a
+`workflow_set_node` JSON spec accepts map 1:1 to the YAML below, and the
+good-practices / `trigger_rule` / `when:` / `output_format` rules apply
+identically whichever way you author. (Raw YAML via `workflow_save` / editing
+the file directly is still supported — it's the same model.)
+
 ## Workflow shape
 
 ```yaml
