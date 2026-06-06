@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Position, type Edge, type Node } from "@xyflow/react";
-import { fromGraph, toGraph, layout, makeNode, type EditorNodeData } from "./graph";
+import {
+  fromGraph,
+  toGraph,
+  layout,
+  makeNode,
+  type EditorNodeData,
+} from "./graph";
 import type { EditorWorkflow } from "@/types/authoring";
 
 describe("toGraph", () => {
@@ -23,7 +29,10 @@ describe("toGraph", () => {
   });
 
   it("drops edges referencing missing nodes", () => {
-    const { edges } = toGraph({ name: "d", nodes: [{ id: "b", depends_on: ["ghost"], prompt: "x" }] });
+    const { edges } = toGraph({
+      name: "d",
+      nodes: [{ id: "b", depends_on: ["ghost"], prompt: "x" }],
+    });
     expect(edges).toHaveLength(0);
   });
 
@@ -41,8 +50,18 @@ describe("toGraph", () => {
 describe("fromGraph", () => {
   it("rebuilds depends_on from the canvas edges", () => {
     const nodes: Node<EditorNodeData>[] = [
-      { id: "a", type: "editor", position: { x: 0, y: 0 }, data: { node: { id: "a", bash: "x" } } },
-      { id: "b", type: "editor", position: { x: 0, y: 0 }, data: { node: { id: "b", prompt: "y" } } },
+      {
+        id: "a",
+        type: "editor",
+        position: { x: 0, y: 0 },
+        data: { node: { id: "a", bash: "x" } },
+      },
+      {
+        id: "b",
+        type: "editor",
+        position: { x: 0, y: 0 },
+        data: { node: { id: "b", prompt: "y" } },
+      },
     ];
     const edges: Edge[] = [{ id: "a->b", source: "a", target: "b" }];
     const wf = fromGraph(nodes, edges, { name: "d" });
@@ -76,8 +95,22 @@ describe("makeNode", () => {
 describe("layout", () => {
   it("places upstream nodes above downstream nodes in TB layout", () => {
     const raw: Node<EditorNodeData>[] = [
-      { id: "a", type: "editor", position: { x: 0, y: 0 }, data: { node: { id: "a", bash: "x" } }, sourcePosition: Position.Bottom, targetPosition: Position.Top },
-      { id: "b", type: "editor", position: { x: 0, y: 0 }, data: { node: { id: "b", bash: "y" } }, sourcePosition: Position.Bottom, targetPosition: Position.Top },
+      {
+        id: "a",
+        type: "editor",
+        position: { x: 0, y: 0 },
+        data: { node: { id: "a", bash: "x" } },
+        sourcePosition: Position.Bottom,
+        targetPosition: Position.Top,
+      },
+      {
+        id: "b",
+        type: "editor",
+        position: { x: 0, y: 0 },
+        data: { node: { id: "b", bash: "y" } },
+        sourcePosition: Position.Bottom,
+        targetPosition: Position.Top,
+      },
     ];
     const edges: Edge[] = [{ id: "a->b", source: "a", target: "b" }];
     const laidOut = layout(raw, edges);
@@ -88,7 +121,14 @@ describe("layout", () => {
 
   it("preserves sourcePosition and targetPosition on laid-out nodes", () => {
     const raw: Node<EditorNodeData>[] = [
-      { id: "a", type: "editor", position: { x: 0, y: 0 }, data: { node: { id: "a", bash: "x" } }, sourcePosition: Position.Bottom, targetPosition: Position.Top },
+      {
+        id: "a",
+        type: "editor",
+        position: { x: 0, y: 0 },
+        data: { node: { id: "a", bash: "x" } },
+        sourcePosition: Position.Bottom,
+        targetPosition: Position.Top,
+      },
     ];
     const laidOut = layout(raw, []);
     expect(laidOut[0].sourcePosition).toBe(Position.Bottom);
