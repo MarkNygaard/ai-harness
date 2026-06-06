@@ -70,6 +70,7 @@ impl AgentAdapter for ClaudeAdapter {
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
         crate::strip_claude_env(&mut cmd);
+        crate::strip_control_plane_env(&mut cmd);
 
         if !req.allowed_tools.is_empty() {
             cmd.arg("--allowedTools").arg(req.allowed_tools.join(","));

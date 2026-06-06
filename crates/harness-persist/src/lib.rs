@@ -542,25 +542,30 @@ fn node_status_str(s: NodeStatus) -> &'static str {
     }
 }
 
+/// Guard for Postgres-dependent tests: only treat a URL as a test database when
+/// its name clearly says so (CI uses `harness_test`). A production DB name like
+/// `harness` returns false, so pointing `HARNESS_DATABASE_URL` at the cluster can
+/// never let a test create rows or run a destructive statement against it. Used
+/// by every persist crate's test `db_url()` gate.
+#[cfg(test)]
+pub(crate) fn is_test_db(url: &str) -> bool {
+    let db = url.rsplit('/').next().unwrap_or(url);
+    let db = db.split(['?', '#']).next().unwrap_or(db);
+    db.to_ascii_lowercase().contains("test")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use harness_dag::{NodeRun, Usage};
 
-    /// Postgres-dependent tests run only when HARNESS_DATABASE_URL is set
-    /// (CI provides one; locally `docker compose up -d postgres` + export it).
+    /// Postgres-dependent tests run only when HARNESS_DATABASE_URL is set to a
+    /// **test** database (CI provides `harness_test`; locally `docker compose up
+    /// -d postgres` + export it). A non-test URL is ignored so these tests can
+    /// never touch a production DB.
     fn db_url() -> Option<String> {
-        std::env::var("HARNESS_DATABASE_URL").ok()
-    }
-
-    /// Guard for destructive tests: only treat a URL as a test database when its
-    /// name clearly says so (CI uses `harness_test`). A production DB name like
-    /// `harness` returns false, so pointing `HARNESS_DATABASE_URL` at the cluster
-    /// can never let a test run a global, destructive statement against it.
-    fn is_test_db(url: &str) -> bool {
-        let db = url.rsplit('/').next().unwrap_or(url);
-        let db = db.split(['?', '#']).next().unwrap_or(db);
-        db.to_ascii_lowercase().contains("test")
+        let url = std::env::var("HARNESS_DATABASE_URL").ok()?;
+        is_test_db(&url).then_some(url)
     }
 
     fn sample_report() -> RunReport {
@@ -797,18 +802,13 @@ mod tests {
     #[tokio::test]
     #[serial_test::serial]
     async fn reconcile_reaps_only_stale_leases() {
+        // `db_url()` already refuses a non-test DB, so this destructive test
+        // (`reconcile_orphaned_runs(ZERO)` cancels every running run) can only
+        // ever run against an obvious test database.
         let Some(url) = db_url() else {
-            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            eprintln!("skipping: HARNESS_DATABASE_URL not set to a test database");
             return;
         };
-        // `reconcile_orphaned_runs(ZERO)` cancels *every* running run, so it must
-        // never touch a production DB. Refuse unless this is clearly a test DB.
-        if !is_test_db(&url) {
-            eprintln!(
-                "skipping destructive reconcile test: HARNESS_DATABASE_URL is not a *test* database"
-            );
-            return;
-        }
         let store = RunStore::connect(&url).await.expect("connect");
         let run_id = format!(
             "test-orphan-{}",

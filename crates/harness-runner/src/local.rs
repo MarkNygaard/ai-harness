@@ -88,6 +88,9 @@ impl LocalRunner {
         cmd.args(args)
             .current_dir(&self.workspace)
             .kill_on_drop(true);
+        // `bash`/`script` nodes run task-authored commands — keep the control
+        // plane's DB URL / secrets out of their environment.
+        harness_agents::strip_control_plane_env(&mut cmd);
 
         let fut = cmd.output();
         let output = match timeout {

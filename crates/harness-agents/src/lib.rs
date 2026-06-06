@@ -20,6 +20,31 @@ pub(crate) fn strip_claude_env(cmd: &mut tokio::process::Command) {
     }
 }
 
+/// Control-plane secrets that must never reach a spawned task/agent process.
+/// A run executes untrusted, AI-generated code (and full test suites) inside the
+/// server's process tree — it has no business reading the control plane's
+/// database URL, credential-encryption key, or API tokens. Leaking
+/// `HARNESS_DATABASE_URL` in particular made task `cargo test` runs connect to
+/// the **production** database (creating stray `test-*` runs and, before the
+/// run-lease fix, cancelling live runs).
+const CONTROL_PLANE_ENV: &[&str] = &[
+    "HARNESS_DATABASE_URL",
+    "DATABASE_URL",
+    "HARNESS_SECRET_KEY",
+    "HARNESS_API_TOKEN",
+    "HARNESS_TOKEN",
+    "HARNESS_REMOTE_URL",
+];
+
+/// Strip [`CONTROL_PLANE_ENV`] from a command before spawning it, so an agent or
+/// `bash`/`script` node (and everything it spawns) can't reach the server's
+/// secrets or its production database. Call at every task-facing spawn point.
+pub fn strip_control_plane_env(cmd: &mut tokio::process::Command) {
+    for key in CONTROL_PLANE_ENV {
+        cmd.env_remove(key);
+    }
+}
+
 /// Place the child process into its own process group.
 ///
 /// Uses the stable `CommandExt::process_group(0)` API (Rust 1.64+).

@@ -144,7 +144,9 @@ mod tests {
     use super::*;
 
     fn db_url() -> Option<String> {
-        std::env::var("HARNESS_DATABASE_URL").ok()
+        let url = std::env::var("HARNESS_DATABASE_URL").ok()?;
+        // Only ever touch an obvious test database, never production.
+        crate::is_test_db(&url).then_some(url)
     }
 
     #[tokio::test]

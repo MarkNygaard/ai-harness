@@ -209,6 +209,9 @@ impl PiAgent {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        // Never let the agent (or any tool it spawns, e.g. `cargo test`) inherit
+        // the control plane's DB URL / secrets.
+        harness_agents::strip_control_plane_env(&mut cmd);
 
         // Opt-in filesystem sandbox (`HARNESS_FS_SANDBOX`): confine the agent and
         // every tool it spawns to writing only under the worktree + build caches,

@@ -189,6 +189,7 @@ impl CodexAdapter {
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
         crate::strip_claude_env(&mut cmd);
+        crate::strip_control_plane_env(&mut cmd);
 
         let mut child = cmd.spawn().map_err(|error| {
             harness_core::error::HarnessError::AgentExecution(format!(
