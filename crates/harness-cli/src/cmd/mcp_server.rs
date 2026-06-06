@@ -201,6 +201,11 @@ impl McpServer {
             "workflow_get" => workflow_get_tool(arguments),
             "workflow_validate" => workflow_validate_tool(arguments),
             "workflow_save" => workflow_save_tool(arguments),
+            // Structured (node-level) authoring — build a workflow without YAML.
+            "workflow_create" => workflow_create_tool(arguments),
+            "workflow_set_node" => workflow_set_node_tool(arguments),
+            "workflow_remove_node" => workflow_remove_node_tool(arguments),
+            "workflow_connect" => workflow_connect_tool(arguments),
             _ => tool_error_result(format!("unknown tool `{tool_name}`")),
         }
     }
@@ -432,6 +437,103 @@ fn workflow_save_tool(arguments: Value) -> Value {
     }
 }
 
+/// After a successful node mutation, report the resulting workflow's node
+/// summaries (the build→validate→fix loop sees the new DAG state).
+fn workflow_state_result(root: &std::path::Path, name: &str, msg: String) -> Value {
+    match harness_runner::authoring::get_workflow(root, name) {
+        Ok(src) => {
+            let v = harness_runner::authoring::validate_workflow(&src.yaml);
+            to_value_result(&v, msg)
+        }
+        Err(e) => tool_error_result(e),
+    }
+}
+
+/// `workflow_create` — make a new, empty workflow in the project.
+fn workflow_create_tool(arguments: Value) -> Value {
+    let args: WorkflowCreateArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_create` args: {e}")),
+    };
+    let root = match resolve_project_root(args.project_root) {
+        Ok(p) => p,
+        Err(e) => return tool_error_result(e.to_string()),
+    };
+    match harness_runner::authoring::create_workflow(
+        &root,
+        &args.name,
+        args.description.as_deref(),
+        args.provider.as_deref(),
+        args.model.as_deref(),
+    ) {
+        Ok(()) => workflow_state_result(
+            &root,
+            &args.name,
+            format!("created workflow `{}`", args.name),
+        ),
+        Err(e) => tool_error_result(e),
+    }
+}
+
+/// `workflow_set_node` — add or replace a node (by id) from a JSON description.
+fn workflow_set_node_tool(arguments: Value) -> Value {
+    let args: WorkflowSetNodeArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_set_node` args: {e}")),
+    };
+    let root = match resolve_project_root(args.project_root) {
+        Ok(p) => p,
+        Err(e) => return tool_error_result(e.to_string()),
+    };
+    match harness_runner::authoring::set_node(&root, &args.name, args.node) {
+        Ok(()) => workflow_state_result(&root, &args.name, format!("set node in `{}`", args.name)),
+        Err(e) => tool_error_result(e),
+    }
+}
+
+/// `workflow_remove_node` — delete a node and strip it from dependents' edges.
+fn workflow_remove_node_tool(arguments: Value) -> Value {
+    let args: WorkflowRemoveNodeArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_remove_node` args: {e}")),
+    };
+    let root = match resolve_project_root(args.project_root) {
+        Ok(p) => p,
+        Err(e) => return tool_error_result(e.to_string()),
+    };
+    match harness_runner::authoring::remove_node(&root, &args.name, &args.id) {
+        Ok(()) => workflow_state_result(
+            &root,
+            &args.name,
+            format!("removed node `{}` from `{}`", args.id, args.name),
+        ),
+        Err(e) => tool_error_result(e),
+    }
+}
+
+/// `workflow_connect` — add a dependency edge (`to` depends on `from`).
+fn workflow_connect_tool(arguments: Value) -> Value {
+    let args: WorkflowConnectArgs = match serde_json::from_value(arguments) {
+        Ok(v) => v,
+        Err(e) => return tool_error_result(format!("invalid `workflow_connect` args: {e}")),
+    };
+    let root = match resolve_project_root(args.project_root) {
+        Ok(p) => p,
+        Err(e) => return tool_error_result(e.to_string()),
+    };
+    match harness_runner::authoring::connect_nodes(&root, &args.name, &args.from, &args.to) {
+        Ok(()) => workflow_state_result(
+            &root,
+            &args.name,
+            format!(
+                "connected `{}` -> `{}` in `{}`",
+                args.from, args.to, args.name
+            ),
+        ),
+        Err(e) => tool_error_result(e),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ToolCallParams {
@@ -483,6 +585,48 @@ struct WorkflowYamlArgs {
 struct WorkflowSaveArgs {
     name: String,
     yaml: String,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowCreateArgs {
+    name: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowSetNodeArgs {
+    name: String,
+    node: Value,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowRemoveNodeArgs {
+    name: String,
+    id: String,
+    #[serde(default)]
+    project_root: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkflowConnectArgs {
+    name: String,
+    from: String,
+    to: String,
     #[serde(default)]
     project_root: Option<PathBuf>,
 }
@@ -590,6 +734,70 @@ fn mcp_tools() -> Vec<Value> {
                     "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
                 },
                 "required": ["name", "yaml"],
+            }
+        }),
+        json!({
+            "name": "workflow_create",
+            "description": "Create a new, empty workflow in the project (build it up with workflow_set_node / workflow_connect — no YAML needed). Errors if one already exists. Returns the (empty) node summary.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "description": "Workflow name (file stem)." },
+                    "description": { "type": "string" },
+                    "provider": { "type": "string", "description": "Default provider (claude/codex/pi) — see workflow_catalog." },
+                    "model": { "type": "string", "description": "Default model." },
+                    "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
+                },
+                "required": ["name"],
+            }
+        }),
+        json!({
+            "name": "workflow_set_node",
+            "description": "Add or replace (by id) one node in a workflow — no YAML. `node` is an object with `id` and exactly one body field (prompt | bash | command | script | loop | approval | cancel) plus optional depends_on, when, category, provider, model, context, trigger_rule, timeout, output_format. Validates the whole DAG and reports node summaries; rejects a node with zero/multiple bodies or dangling refs. Use workflow_catalog for legal kinds/providers/commands.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "description": "Workflow to edit (project shadows bundled)." },
+                    "node": {
+                        "type": "object",
+                        "description": "Node spec. e.g. {\"id\":\"classify\",\"prompt\":\"...\",\"depends_on\":[\"explore\"],\"category\":\"planning\"}.",
+                        "properties": { "id": { "type": "string" } },
+                        "required": ["id"]
+                    },
+                    "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
+                },
+                "required": ["name", "node"],
+            }
+        }),
+        json!({
+            "name": "workflow_remove_node",
+            "description": "Remove a node by id and strip it from every other node's depends_on. Validates and reports the resulting node summaries.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "description": "Workflow to edit." },
+                    "id": { "type": "string", "description": "Node id to remove." },
+                    "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
+                },
+                "required": ["name", "id"],
+            }
+        }),
+        json!({
+            "name": "workflow_connect",
+            "description": "Add a dependency edge: `to` now depends on `from`. Validates (catches unknown ids and cycles).",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "description": "Workflow to edit." },
+                    "from": { "type": "string", "description": "Upstream node id (runs first)." },
+                    "to": { "type": "string", "description": "Downstream node id (gains the dependency)." },
+                    "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
+                },
+                "required": ["name", "from", "to"],
             }
         }),
     ]
@@ -825,6 +1033,10 @@ mod tests {
             "workflow_get",
             "workflow_validate",
             "workflow_save",
+            "workflow_create",
+            "workflow_set_node",
+            "workflow_remove_node",
+            "workflow_connect",
         ] {
             assert!(names.contains(&expected), "missing tool `{expected}`");
         }
@@ -894,6 +1106,89 @@ mod tests {
                 >= 5,
             "catalog should list node kinds"
         );
+    }
+
+    #[tokio::test]
+    async fn workflow_structured_authoring_tools() {
+        let server = McpServer::new(
+            "mock-default".to_string(),
+            Arc::new(MockExecutor::default()),
+        );
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_string_lossy().to_string();
+        let call = |id: i64, name: &str, args: Value| {
+            let mut a = args;
+            a["project_root"] = Value::String(root.clone());
+            make_request(id, "tools/call", json!({ "name": name, "arguments": a }))
+        };
+
+        // create → add two nodes → connect → the DAG is valid with 2 nodes.
+        let r = extract_result(
+            server
+                .handle_request(call(1, "workflow_create", json!({ "name": "built" })))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(r["isError"], Value::Bool(false));
+
+        for (i, node) in [
+            json!({ "id": "explore", "prompt": "look" }),
+            json!({ "id": "plan", "command": "create-plan" }),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let r = extract_result(
+                server
+                    .handle_request(call(
+                        2 + i as i64,
+                        "workflow_set_node",
+                        json!({ "name": "built", "node": node }),
+                    ))
+                    .await
+                    .unwrap(),
+            );
+            assert_eq!(r["isError"], Value::Bool(false), "set_node {i}");
+        }
+
+        let r = extract_result(
+            server
+                .handle_request(call(
+                    10,
+                    "workflow_connect",
+                    json!({ "name": "built", "from": "explore", "to": "plan" }),
+                ))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(r["structuredContent"]["valid"], Value::Bool(true));
+        assert_eq!(r["structuredContent"]["nodes"].as_array().unwrap().len(), 2);
+
+        // A node with two bodies is rejected (the tool errors, file untouched).
+        let r = extract_result(
+            server
+                .handle_request(call(
+                    11,
+                    "workflow_set_node",
+                    json!({ "name": "built", "node": { "id": "bad", "prompt": "x", "bash": "y" } }),
+                ))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(r["isError"], Value::Bool(true));
+
+        // remove a node → back to 1.
+        let r = extract_result(
+            server
+                .handle_request(call(
+                    12,
+                    "workflow_remove_node",
+                    json!({ "name": "built", "id": "explore" }),
+                ))
+                .await
+                .unwrap(),
+        );
+        assert_eq!(r["structuredContent"]["nodes"].as_array().unwrap().len(), 1);
     }
 
     #[tokio::test]
