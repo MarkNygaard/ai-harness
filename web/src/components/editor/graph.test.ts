@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Edge, Node } from "@xyflow/react";
-import { fromGraph, toGraph, type EditorNodeData } from "./graph";
+import { Position, type Edge, type Node } from "@xyflow/react";
+import { fromGraph, makeNode, toGraph, type EditorNodeData } from "./graph";
 import type { EditorWorkflow } from "@/types/authoring";
 
 describe("toGraph", () => {
@@ -20,6 +20,15 @@ describe("toGraph", () => {
       expect(Number.isFinite(n.position.x)).toBe(true);
       expect(Number.isFinite(n.position.y)).toBe(true);
     }
+  });
+
+  it("sets sourcePosition to Bottom and targetPosition to Top", () => {
+    const { nodes } = toGraph({
+      name: "d",
+      nodes: [{ id: "a", bash: "echo a" }],
+    });
+    expect(nodes[0].sourcePosition).toBe(Position.Bottom);
+    expect(nodes[0].targetPosition).toBe(Position.Top);
   });
 
   it("drops edges referencing missing nodes", () => {
@@ -52,5 +61,14 @@ describe("fromGraph", () => {
     const { nodes, edges } = toGraph(wf);
     const back = fromGraph(nodes, edges, { name: "d" });
     expect(back.nodes.find((n) => n.id === "b")?.depends_on).toEqual(["a"]);
+  });
+});
+
+describe("makeNode", () => {
+  it("creates a node with Bottom source and Top target handles", () => {
+    const n = makeNode({ id: "a", bash: "echo a" }, 10, 20);
+    expect(n.position).toEqual({ x: 10, y: 20 });
+    expect(n.sourcePosition).toBe(Position.Bottom);
+    expect(n.targetPosition).toBe(Position.Top);
   });
 });
