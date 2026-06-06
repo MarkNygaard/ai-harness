@@ -24,6 +24,8 @@ pub use projects::{Project, ProjectInput, ProjectStore};
 
 mod categories;
 pub use categories::{Category, CategoryInput, CategoryStore};
+mod linear_sources;
+pub use linear_sources::{LinearSource, LinearSourceInput, LinearSourceStore};
 
 /// A run row (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
