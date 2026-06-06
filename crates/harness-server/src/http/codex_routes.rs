@@ -203,8 +203,9 @@ pub async fn connect_complete(
         );
     };
 
+    // Exactly the shape `codex login` writes: no `auth_mode` (the CLI parses it
+    // as an enum and infers ChatGPT mode from the presence of `tokens`).
     let auth_json = serde_json::json!({
-        "auth_mode": "ChatGPT",
         "OPENAI_API_KEY": serde_json::Value::Null,
         "tokens": {
             "id_token": id_token,
