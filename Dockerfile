@@ -74,6 +74,15 @@ RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/bun bash \
     && chmod -R a+rX /opt/bun \
     && ln -sf /opt/bun/bin/bun /usr/local/bin/bun \
     && ln -sf /opt/bun/bin/omp /usr/local/bin/omp
+
+# pi-web-access: adds web SEARCH + rich fetch (Exa MCP) to the omp agent on top
+# of omp's built-in URL `fetch`. Installed into a fixed, world-readable dir —
+# NOT the PV-backed $HOME, which a runtime volume mount would shadow — and loaded
+# via `--plugin-dir` (the runner passes OMP_PLUGIN_DIRS → `--plugin-dir`).
+RUN mkdir -p /opt/omp-plugins \
+    && cd /opt/omp-plugins \
+    && BUN_INSTALL=/opt/bun /opt/bun/bin/bun add pi-web-access \
+    && chmod -R a+rX /opt/omp-plugins
 RUN curl -fsSL https://mise.run | sh \
     && mv /root/.local/bin/mise /usr/local/bin/mise \
     && chmod a+rx /usr/local/bin/mise \
@@ -93,7 +102,8 @@ COPY --from=builder /usr/local/bin/harness /usr/local/bin/harness
 USER harness
 ENV HOME=/home/harness \
     PATH="/home/harness/.local/bin:/usr/local/bin:/usr/bin:/bin" \
-    HARNESS_HTTP_ADDR=0.0.0.0:8080
+    HARNESS_HTTP_ADDR=0.0.0.0:8080 \
+    OMP_PLUGIN_DIRS=/opt/omp-plugins/node_modules/pi-web-access
 WORKDIR /home/harness
 EXPOSE 8080
 
