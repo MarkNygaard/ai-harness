@@ -70,6 +70,9 @@ pub async fn get_source(
     axum::extract::Path(project): axum::extract::Path<String>,
     Query(q): Query<WorkflowQuery>,
 ) -> Response {
+    if q.workflow.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "`workflow` is required");
+    }
     if let Err(r) = ensure_project(&state, &project).await {
         return r;
     }
@@ -165,6 +168,9 @@ pub async fn delete_source(
     axum::extract::Path(project): axum::extract::Path<String>,
     Query(q): Query<WorkflowQuery>,
 ) -> Response {
+    if q.workflow.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "`workflow` is required");
+    }
     if let Err(r) = ensure_project(&state, &project).await {
         return r;
     }
