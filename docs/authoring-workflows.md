@@ -32,11 +32,32 @@ per step (each returns the resulting node summaries — the build→validate→f
 loop) → `workflow_connect` for any extra edges. You never write YAML, and every
 step is checked.
 
-**Authoring against the hosted cluster.** Point the MCP server at a hosted
-harness so the tools author in a *registered cluster project* instead of local
-files — set `HARNESS_REMOTE_URL` (+ `HARNESS_TOKEN`) in your client's `.mcp.json`
-`env`. In remote mode every `workflow_*` tool takes a required `project` and
-calls the cluster's `/api/projects/{project}/authoring/*` API:
+**Authoring (and running) against the hosted cluster.** There are two transports
+to the same cluster; both make every tool project-scoped (a required `project`
+argument) against a *registered cluster project*.
+
+**(a) Hosted HTTP endpoint — no local binary (preferred).** The server exposes a
+single `POST /mcp` (JSON-RPC over HTTPS). Point your client straight at it; the
+bearer token is the cluster API token. This transport also exposes **run
+control** — `run_trigger`, `run_status`, `run_list` — so you can kick off and
+monitor a run (e.g. `idea-to-pr`) from the editor, not just author:
+
+```json
+{
+  "mcpServers": {
+    "harness-cluster": {
+      "type": "http",
+      "url": "https://harness.mnygaard.io/mcp",
+      "headers": { "Authorization": "Bearer ${HARNESS_TOKEN}" }
+    }
+  }
+}
+```
+
+**(b) Local stdio proxy.** Run `harness mcp-server` locally and set
+`HARNESS_REMOTE_URL` (+ `HARNESS_TOKEN`) in the client's `.mcp.json` `env`; the
+binary proxies the `workflow_*` tools to the cluster's
+`/api/projects/{project}/authoring/*` API. (Authoring only — no run control.)
 
 ```json
 {
