@@ -44,11 +44,17 @@ is minutes. Match the verify to the change:
 
 Always: `cargo fmt --all` (or `cd web && bunx prettier`) before committing.
 
-**Full-workspace gate — run it once, at the end, not per-edit.** Before a PR is
-finalized (the workflow's final verify step), run the CI-equivalent chain:
-`RUSTFLAGS="-Dwarnings" cargo check --workspace --all-targets`,
-`cargo clippy --workspace --all-targets`, `cargo test --workspace`. This is the
-single authoritative gate; the per-edit loop above stays scoped and fast.
+**Two verify tiers — quick pre-check vs. the full gate:**
+
+- **Quick pre-check** (an early/mid-pipeline sanity gate — NOT the full suite):
+  `cargo fmt --all --check`, `RUSTFLAGS="-Dwarnings" cargo clippy --workspace
+  --all-targets`, `cargo build --workspace`. Fast; catches format/lint/compile
+  breakage without paying for the whole test run.
+- **Full gate — run it once, at the end, not per-edit.** Before a PR is finalized
+  (the workflow's final verify step), run the CI-equivalent chain:
+  `RUSTFLAGS="-Dwarnings" cargo check --workspace --all-targets`,
+  `cargo clippy --workspace --all-targets`, `cargo test --workspace`. This is the
+  single authoritative gate; the per-edit loop above stays scoped and fast.
 - When adding an enum variant, grep ALL match sites and update them — CI uses
   exhaustive match checks.
 - Dead code in `#[cfg(test)]` modules still trips `-D warnings` in CI — delete
