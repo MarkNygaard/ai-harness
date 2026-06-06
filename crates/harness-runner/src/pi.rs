@@ -14,12 +14,13 @@
 //! per-token Moonshot API (`moonshotai/*`). The server materializes these from the
 //! credential store before a run; we don't manage them here.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use harness_dag::Usage;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
@@ -31,16 +32,38 @@ const DEFAULT_MODEL: &str = "kimi-code/kimi-for-coding";
 /// prefixed with this). Note: the *auth* provider is `kimi-coding`, but models
 /// are addressed under `kimi-code/`.
 const KIMI_PREFIX: &str = "kimi-code/";
-/// Hard cap on a single `omp` invocation, overridable via `OMP_TIMEOUT_SECS`.
-/// 30 min: a Kimi node that runs the project's verify chain can trigger a cold
-/// Rust compile, which the previous 15-min cap killed mid-build.
-const DEFAULT_TIMEOUT_SECS: u64 = 1800;
+/// Idle (no-output) watchdog: if `omp` emits no stdout line for this long, the
+/// call is treated as stalled (e.g. an LLM connection died with no read timeout
+/// on omp's side) and killed. Overridable via `OMP_IDLE_TIMEOUT_SECS`.
+///
+/// This is **activity-based**, not wall-clock: a step that keeps producing
+/// output is never stopped, however long it runs — so big tasks are safe. The
+/// default (15 min) sits comfortably above a silent in-tool gap (e.g. a long
+/// `cargo build`) while still bounding a true silent hang. There is **no**
+/// wall-clock cap by default; set `OMP_TIMEOUT_SECS` to add a hard ceiling.
+const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
+
+/// Outcome of one `omp` invocation that didn't error outright.
+enum Attempt {
+    /// The process closed stdout and exited; carries streamed stdout + stderr.
+    Done {
+        stdout: String,
+        stderr: String,
+        status: std::process::ExitStatus,
+    },
+    /// No output for the idle window — killed as stalled (retryable once).
+    Stalled,
+}
 
 /// A [`PromptAgent`] backed by the `omp` CLI. Selected for `provider: pi`.
 pub struct PiAgent {
     cli_path: PathBuf,
     default_model: String,
-    timeout: Duration,
+    /// Optional wall-clock hard ceiling on a single call. `None` (default) means
+    /// no wall-clock cap — only the activity-based idle watchdog applies, so a
+    /// long *active* step is never stopped. Set via `OMP_TIMEOUT_SECS`.
+    timeout: Option<Duration>,
+    idle_timeout: Duration,
 }
 
 impl Default for PiAgent {
@@ -51,21 +74,28 @@ impl Default for PiAgent {
 
 impl PiAgent {
     /// Build from the environment: `OMP_CLI`/`OMP_PATH` overrides the binary
-    /// (default `omp`); `OMP_TIMEOUT_SECS` overrides the per-call timeout.
+    /// (default `omp`). `OMP_IDLE_TIMEOUT_SECS` tunes the idle (stall) watchdog;
+    /// `OMP_TIMEOUT_SECS`, if set, adds an optional wall-clock hard ceiling
+    /// (default: none — long active steps run uncapped).
     pub fn from_env() -> Self {
         let cli_path = std::env::var_os("OMP_CLI")
             .or_else(|| std::env::var_os("OMP_PATH"))
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("omp"));
-        let timeout = std::env::var("OMP_TIMEOUT_SECS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .map(Duration::from_secs)
-            .unwrap_or_else(|| Duration::from_secs(DEFAULT_TIMEOUT_SECS));
+        let secs = |key: &str| {
+            std::env::var(key)
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map(Duration::from_secs)
+        };
+        let timeout = secs("OMP_TIMEOUT_SECS"); // None = no wall-clock cap
+        let idle_timeout =
+            secs("OMP_IDLE_TIMEOUT_SECS").unwrap_or(Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS));
         Self {
             cli_path,
             default_model: DEFAULT_MODEL.to_string(),
             timeout,
+            idle_timeout,
         }
     }
 
@@ -103,32 +133,34 @@ impl PromptAgent for PiAgent {
         let model = self.resolve_model(req.model.as_deref());
         let args = self.build_args(&req.prompt, &model, req.session.as_deref());
 
-        let mut cmd = Command::new(&self.cli_path);
-        cmd.args(&args)
-            .current_dir(&req.cwd)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true);
-
-        let fut = cmd.output();
-        let output = match tokio::time::timeout(self.timeout, fut).await {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
-                return Err(AgentError(format!(
-                    "failed to spawn `{}` (is the omp CLI installed / on PATH?): {e}",
-                    self.cli_path.display()
-                )))
-            }
-            Err(_) => {
-                return Err(AgentError(format!(
-                    "omp timed out after {}s",
-                    self.timeout.as_secs()
-                )))
+        // One automatic retry, but ONLY on a stall (a transient dropped LLM
+        // connection that omp doesn't time out). A clean non-zero exit (e.g.
+        // tests failed) is deterministic — never retried. Capped at 1 → no loop.
+        let mut attempt = 0u32;
+        let output = loop {
+            match self.run_attempt(&args, &req.cwd).await? {
+                Attempt::Done {
+                    stdout,
+                    stderr,
+                    status,
+                } => break (stdout, stderr, status),
+                Attempt::Stalled => {
+                    if attempt == 0 {
+                        attempt += 1;
+                        tracing::warn!(
+                            "omp produced no output for {}s — stalled; retrying once",
+                            self.idle_timeout.as_secs()
+                        );
+                        continue;
+                    }
+                    return Err(AgentError(format!(
+                        "omp stalled (no output for {}s) and again after one retry",
+                        self.idle_timeout.as_secs()
+                    )));
+                }
             }
         };
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let (stdout, stderr, status) = output;
         let parsed = parse_omp_stream(&stdout);
 
         // A clean run is a zero exit with either the `agent_end` marker OR at
@@ -136,9 +168,8 @@ impl PromptAgent for PiAgent {
         // terminal-event schema drifts by version, and requiring it previously
         // failed runs that actually completed (and produced the full output).
         let saw_end = parsed.saw_end;
-        let success = output.status.success() && (saw_end || !parsed.text.is_empty());
+        let success = status.success() && (saw_end || !parsed.text.is_empty());
         if !success {
-            let stderr = String::from_utf8_lossy(&output.stderr);
             let tail: String = stderr
                 .trim()
                 .chars()
@@ -150,7 +181,7 @@ impl PromptAgent for PiAgent {
                 .collect();
             return Err(AgentError(format!(
                 "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B): {tail}",
-                output.status.code(),
+                status.code(),
                 parsed.text.len()
             )));
         }
@@ -160,6 +191,94 @@ impl PromptAgent for PiAgent {
             session: parsed.session.or(req.session),
             usage: parsed.usage,
             success: true,
+        })
+    }
+}
+
+impl PiAgent {
+    /// Run `omp` once, streaming stdout so an **idle watchdog** can kill a
+    /// *stalled* call (no output for `idle_timeout`) without ever stopping a
+    /// long but actively-producing step. Spawn failures / the optional
+    /// wall-clock cap / read errors are returned as `Err` (not retried); a stall
+    /// returns `Attempt::Stalled` (retried once by `run`).
+    async fn run_attempt(&self, args: &[String], cwd: &Path) -> Result<Attempt, AgentError> {
+        let mut cmd = Command::new(&self.cli_path);
+        cmd.args(args)
+            .current_dir(cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let mut child = cmd.spawn().map_err(|e| {
+            AgentError(format!(
+                "failed to spawn `{}` (is the omp CLI installed / on PATH?): {e}",
+                self.cli_path.display()
+            ))
+        })?;
+
+        // Drain stderr concurrently so a full stderr pipe can't deadlock stdout.
+        let stderr_pipe = child.stderr.take();
+        let stderr_task = tokio::spawn(async move {
+            let mut buf = String::new();
+            if let Some(pipe) = stderr_pipe {
+                let _ = BufReader::new(pipe).read_to_string(&mut buf).await;
+            }
+            buf
+        });
+
+        let stdout = child.stdout.take().expect("stdout piped");
+        let mut lines = BufReader::new(stdout).lines();
+        let mut acc = String::new();
+
+        // Optional wall-clock ceiling. When unset, this future is `pending` —
+        // it never fires, so only the idle watchdog can stop the call.
+        let cap = self.timeout;
+        let overall = async move {
+            match cap {
+                Some(d) => tokio::time::sleep(d).await,
+                None => std::future::pending::<()>().await,
+            }
+        };
+        tokio::pin!(overall);
+        loop {
+            let idle = tokio::time::sleep(self.idle_timeout);
+            tokio::select! {
+                read = lines.next_line() => match read {
+                    Ok(Some(line)) => {
+                        acc.push_str(&line);
+                        acc.push('\n');
+                    }
+                    Ok(None) => break, // stdout closed → process is finishing
+                    Err(e) => {
+                        let _ = child.start_kill();
+                        return Err(AgentError(format!("omp stdout read error: {e}")));
+                    }
+                },
+                _ = &mut overall => {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    let secs = self.timeout.map(|d| d.as_secs()).unwrap_or(0);
+                    return Err(AgentError(format!(
+                        "omp exceeded the wall-clock cap ({secs}s, OMP_TIMEOUT_SECS)"
+                    )));
+                }
+                _ = idle => {
+                    let _ = child.start_kill();
+                    let _ = child.wait().await;
+                    return Ok(Attempt::Stalled);
+                }
+            }
+        }
+
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| AgentError(format!("omp wait failed: {e}")))?;
+        let stderr = stderr_task.await.unwrap_or_default();
+        Ok(Attempt::Done {
+            stdout: acc,
+            stderr,
+            status,
         })
     }
 }
@@ -465,5 +584,53 @@ mod tests {
         );
         let resumed = agent.build_args("again", "kimi-code/kimi-k2.5", Some("sess-9"));
         assert!(resumed.windows(2).any(|w| w == ["--resume", "sess-9"]));
+    }
+
+    // The idle watchdog is exercised against a real `sh` process (unix only; CI
+    // is Linux). It must NOT depend on a wall-clock cap — only on output silence.
+    #[cfg(unix)]
+    fn agent_with(cli: &str, idle: Duration) -> PiAgent {
+        PiAgent {
+            cli_path: PathBuf::from(cli),
+            default_model: DEFAULT_MODEL.to_string(),
+            timeout: None, // no wall-clock cap — prove the idle watchdog alone works
+            idle_timeout: idle,
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn idle_watchdog_kills_a_stalled_process() {
+        let agent = agent_with("sh", Duration::from_millis(300));
+        // Prints one line, then goes silent for 30s — the watchdog must fire fast.
+        let args = vec!["-c".to_string(), "printf 'a\\n'; sleep 30".to_string()];
+        let started = std::time::Instant::now();
+        let out = agent.run_attempt(&args, Path::new(".")).await.unwrap();
+        assert!(matches!(out, Attempt::Stalled));
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "killed promptly"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn active_process_completes_without_being_killed() {
+        // Emits a line every ~100ms for ~1s — never silent past the 300ms idle
+        // window, so it must run to completion (proving active work isn't killed).
+        let agent = agent_with("sh", Duration::from_millis(300));
+        let args = vec![
+            "-c".to_string(),
+            "for i in 1 2 3 4 5 6 7 8 9 10; do printf 'line %s\\n' \"$i\"; sleep 0.1; done"
+                .to_string(),
+        ];
+        let out = agent.run_attempt(&args, Path::new(".")).await.unwrap();
+        match out {
+            Attempt::Done { stdout, status, .. } => {
+                assert!(status.success());
+                assert!(stdout.contains("line 10"), "ran to completion: {stdout:?}");
+            }
+            Attempt::Stalled => panic!("active process was wrongly killed as stalled"),
+        }
     }
 }
