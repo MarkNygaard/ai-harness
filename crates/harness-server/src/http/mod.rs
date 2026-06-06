@@ -26,6 +26,7 @@ pub(crate) mod http_router;
 pub(crate) mod init;
 pub(crate) mod kimi_routes;
 pub(crate) mod linear_routes;
+pub(crate) mod linear_source_routes;
 pub(crate) mod mcp_routes;
 pub(crate) mod misc_routes;
 pub(crate) mod project_authoring_routes;

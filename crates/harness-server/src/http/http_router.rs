@@ -10,9 +10,9 @@ use super::{
     auth, categories_routes, credentials_routes, get_issue_workflow_by_issue,
     get_issue_workflow_by_pr, get_project_workflow_by_project, get_task, get_task_artifacts,
     get_task_prompts, get_task_proof, get_workflow_runtime_tree, github_webhook, handle_rpc,
-    health_check, ingest_signal, intake_status, linear_routes, list_tasks, mcp_routes,
-    password_reset, project_authoring_routes, project_queue_stats, runs_routes, state::AppState,
-    stream_task_sse, task_mutation_routes, task_routes, workflows_routes,
+    health_check, ingest_signal, intake_status, linear_routes, linear_source_routes, list_tasks,
+    mcp_routes, password_reset, project_authoring_routes, project_queue_stats, runs_routes,
+    state::AppState, stream_task_sse, task_mutation_routes, task_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -242,6 +242,17 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/projects/{project}/authoring/connect",
             post(project_authoring_routes::connect_nodes),
+        )
+        // ── Linear trigger binding (per project+workflow; persist only) ─────
+        .route(
+            "/api/projects/{project}/linear-source",
+            get(linear_source_routes::get_source)
+                .put(linear_source_routes::put_source)
+                .delete(linear_source_routes::delete_source),
+        )
+        .route(
+            "/api/projects/{project}/linear-sources",
+            get(linear_source_routes::list_sources),
         )
         // ── Provider credentials (UI-managed, encrypted at rest) ────────────
         .route(
