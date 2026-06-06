@@ -253,6 +253,19 @@ nodes:
       Verify the PR title follows the conventional-commits format.
       If it doesn't, rewrite it via `gh pr edit`.
 
+      ## Task
+      $ARGUMENTS
+
+      ## Linear-sourced tasks
+      If the task above references a Linear issue identifier (it will say
+      "Linear issue ABC-123 — …"), the final PR title MUST end with that
+      identifier in parentheses — e.g. `feat(api): add webhook (ABC-123)`
+      — so Linear links the PR to the issue. Keep the conventional-commits
+      prefix; the suffix is part of the description. Do NOT use close
+      keywords ("Fixes"/"Closes") — a plain id links without auto-closing
+      the issue (the poller owns its status). If the task is not from
+      Linear, add no suffix.
+
       ## Format (universal — same for every project)
 
           ^(feat|fix|chore|ci|docs|refactor|perf|test)(\([^)]+\))?!?: <description>
@@ -289,13 +302,15 @@ nodes:
       1. `gh pr view --json number,title`
       2. If the title already matches the pattern AND the type fits the
          change set (don't accept `chore:` on a PR that adds a new
-         feature), output `TITLE OK: <title>` and emit
+         feature) AND (for Linear tasks) already carries the
+         ` (ABC-123)` suffix, output `TITLE OK: <title>` and emit
          <promise>PR-TITLE-OK</promise>.
       3. Otherwise infer the right type+scope from
          `git diff origin/$BASE_BRANCH...HEAD --stat` and
          `git log --oneline origin/$BASE_BRANCH..HEAD`. Pick the
          dominant scope when multiple packages are touched.
-      4. Rewrite the title and apply with
+      4. Rewrite the title (appending the ` (ABC-123)` suffix for Linear
+         tasks) and apply with
          `gh pr edit <number> --title "<new title>"`.
       5. Output `Renamed PR title to: <new title>` and emit
          <promise>PR-TITLE-OK</promise>.

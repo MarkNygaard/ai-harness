@@ -261,13 +261,24 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
 }
 
 /// The task spec handed to the fired run: the issue identifier/title/url + body.
+///
+/// The identifier is stated up front *and* as an explicit PR-title directive so
+/// the `verify-pr-title` node carries it into the final title — that's what lets
+/// Linear link the PR back to this issue (and lets `merge-pr` find the PR via
+/// `gh pr list --search`). We deliberately avoid close keywords ("Fixes"/
+/// "Closes") so Linear's GitHub integration links without auto-closing the
+/// issue, which would bypass the poller's own status transitions.
 fn task_for_issue(issue: &Issue) -> String {
+    let id = &issue.identifier;
     format!(
-        "Linear issue {} — {}\n{}\n\n{}",
-        issue.identifier,
-        issue.title,
-        issue.url,
-        issue.body.as_deref().unwrap_or("").trim()
+        "Linear issue {id} — {title}\n{url}\n\n\
+         When you open the PR, make sure its title ends with \" ({id})\" so \
+         Linear links the PR to this issue. Do not use close keywords like \
+         \"Fixes\" or \"Closes\".\n\n\
+         {body}",
+        title = issue.title,
+        url = issue.url,
+        body = issue.body.as_deref().unwrap_or("").trim()
     )
 }
 
