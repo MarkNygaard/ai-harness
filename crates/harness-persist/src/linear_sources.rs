@@ -119,6 +119,21 @@ impl LinearSourceStore {
         Ok(rows)
     }
 
+    /// All **enabled** bindings across every project — the poller's work-list.
+    pub async fn list_enabled(&self) -> Result<Vec<LinearSource>, PersistError> {
+        let rows = sqlx::query_as::<_, LinearSource>(
+            "SELECT project, workflow, team_id, team_name, source_state_id, label,
+                    in_progress_state_id, review_state_id, ready_state_id, base_branch,
+                    poll_interval_secs, enabled, created_at, updated_at
+             FROM harness_linear_sources
+             WHERE enabled = true
+             ORDER BY project, workflow",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Create or update a binding (upsert on `(project, workflow)`).
     /// `created_at` is preserved on conflict; `updated_at` always advances.
     pub async fn upsert(
