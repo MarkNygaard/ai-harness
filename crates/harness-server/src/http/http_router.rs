@@ -10,8 +10,8 @@ use super::{
     auth, categories_routes, credentials_routes, get_issue_workflow_by_issue,
     get_issue_workflow_by_pr, get_project_workflow_by_project, get_task, get_task_artifacts,
     get_task_prompts, get_task_proof, get_workflow_runtime_tree, github_webhook, handle_rpc,
-    health_check, ingest_signal, intake_status, list_tasks, password_reset, project_queue_stats,
-    project_authoring_routes, runs_routes, state::AppState, stream_task_sse,
+    health_check, ingest_signal, intake_status, list_tasks, password_reset,
+    project_authoring_routes, project_queue_stats, runs_routes, state::AppState, stream_task_sse,
     task_mutation_routes, task_routes, workflows_routes,
 };
 
