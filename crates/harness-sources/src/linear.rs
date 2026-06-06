@@ -123,9 +123,15 @@ struct IssueLabelNode {
 
 // ── GraphQL documents ────────────────────────────────────────────────────────
 
+// Linear caps GraphQL query complexity at 10,000, charged on the *requested*
+// page sizes (not the rows actually returned). `teams(first: 250)` with the
+// nested `states`/`labels` connections (default 50 each) costs ~32,800 and is
+// rejected with HTTP 400 "Query too complex". Capping teams at 50 keeps it
+// ~6,500 — comfortably under the limit, while still covering far more teams
+// than any realistic workspace.
 const DISCOVERY_QUERY: &str = r#"
 query Discovery {
-  teams(first: 250) {
+  teams(first: 50) {
     nodes {
       id name key
       states { nodes { id name type position } }
@@ -399,6 +405,20 @@ mod tests {
         let json = br#"{"errors":[{"message":"authentication required"}]}"#;
         let err = parse_discovery(json).unwrap_err();
         assert!(err.0.contains("authentication required"));
+    }
+
+    #[test]
+    fn discovery_query_stays_under_linear_complexity_cap() {
+        // Regression guard: Linear caps complexity at 10k (charged on requested
+        // page sizes). `teams(first: 250)` blew it at ~32.8k in production.
+        assert!(
+            DISCOVERY_QUERY.contains("teams(first: 50)"),
+            "cap teams at 50 to stay under Linear's 10k complexity limit"
+        );
+        assert!(
+            !DISCOVERY_QUERY.contains("first: 250"),
+            "teams(first: 250) exceeds Linear's complexity cap"
+        );
     }
 
     #[test]
