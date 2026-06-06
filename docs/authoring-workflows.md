@@ -32,6 +32,27 @@ per step (each returns the resulting node summaries — the build→validate→f
 loop) → `workflow_connect` for any extra edges. You never write YAML, and every
 step is checked.
 
+**Authoring against the hosted cluster.** Point the MCP server at a hosted
+harness so the tools author in a *registered cluster project* instead of local
+files — set `HARNESS_REMOTE_URL` (+ `HARNESS_TOKEN`) in your client's `.mcp.json`
+`env`. In remote mode every `workflow_*` tool takes a required `project` and
+calls the cluster's `/api/projects/{project}/authoring/*` API:
+
+```json
+{
+  "mcpServers": {
+    "harness-cluster": {
+      "command": "harness",
+      "args": ["mcp-server"],
+      "env": {
+        "HARNESS_REMOTE_URL": "https://harness.mnygaard.io",
+        "HARNESS_TOKEN": "<your token>"
+      }
+    }
+  }
+}
+```
+
 **The rest of this doc is the format + design reference** — the node fields a
 `workflow_set_node` JSON spec accepts map 1:1 to the YAML below, and the
 good-practices / `trigger_rule` / `when:` / `output_format` rules apply
