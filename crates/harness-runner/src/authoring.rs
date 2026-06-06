@@ -19,7 +19,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::defaults;
 
-
 /// Where a workflow or command came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -468,22 +467,46 @@ pub fn list_commands(project_root: &Path) -> Vec<CommandInfo> {
 /// distilled from the bundled `idea-to-pr` pipeline so the prompts/configs stay
 /// a single source of truth.
 static PREBUILT_CURATED: &[(&str, &str, &str)] = &[
-    ("explore", "Explore codebase",
-     "Read-only Sonnet pass that maps the code a task touches and writes exploration notes."),
-    ("create-plan", "Create plan",
-     "Opus planner that turns the task + exploration into a concrete implementation plan."),
-    ("install-deps", "Install dependencies",
-     "Auto-detects the project's package manager and installs locked dependencies."),
-    ("implement-tasks", "Implement tasks",
-     "Runs the bundled implement-tasks command to write the code for the plan."),
-    ("validate", "Validate",
-     "Runs the validate command and emits a {passed, summary} verdict downstream nodes gate on."),
-    ("pi-review-fix-loop", "Review & fix loop",
-     "Self-review-and-fix loop (up to 5 passes) that commits fixes until the PR is clean."),
-    ("finalize-pr", "Open PR",
-     "Runs the finalize-pr command to push the branch and open the pull request."),
-    ("final-verify-loop", "Final verify gate",
-     "Final build gate (up to 3 passes) that re-runs the full verify chain before merge."),
+    (
+        "explore",
+        "Explore codebase",
+        "Read-only Sonnet pass that maps the code a task touches and writes exploration notes.",
+    ),
+    (
+        "create-plan",
+        "Create plan",
+        "Opus planner that turns the task + exploration into a concrete implementation plan.",
+    ),
+    (
+        "install-deps",
+        "Install dependencies",
+        "Auto-detects the project's package manager and installs locked dependencies.",
+    ),
+    (
+        "implement-tasks",
+        "Implement tasks",
+        "Runs the bundled implement-tasks command to write the code for the plan.",
+    ),
+    (
+        "validate",
+        "Validate",
+        "Runs the validate command and emits a {passed, summary} verdict downstream nodes gate on.",
+    ),
+    (
+        "pi-review-fix-loop",
+        "Review & fix loop",
+        "Self-review-and-fix loop (up to 5 passes) that commits fixes until the PR is clean.",
+    ),
+    (
+        "finalize-pr",
+        "Open PR",
+        "Runs the finalize-pr command to push the branch and open the pull request.",
+    ),
+    (
+        "final-verify-loop",
+        "Final verify gate",
+        "Final build gate (up to 3 passes) that re-runs the full verify chain before merge.",
+    ),
 ];
 
 static PREBUILT_STEPS_CACHE: LazyLock<Vec<PrebuiltStep>> = LazyLock::new(|| {
