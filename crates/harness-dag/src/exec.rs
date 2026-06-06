@@ -518,23 +518,27 @@ async fn execute_node<R: NodeRunner>(
 
     let started = Utc::now();
     let mut result = match &node.kind {
-        NodeKind::Cancel(reason) => NodeRunResult {
-            run: NodeRun {
-                id: node.id.clone(),
-                status: NodeStatus::Success,
-                provider: provider.map(str::to_string),
-                model: model.map(str::to_string),
-                output: reason.clone(),
-                usage: Usage::default(),
-                iterations: 1,
-                converged: None,
-                note: Some(format!("cancel: {reason}")),
-                started_at: None,
-                ended_at: None,
-            },
-            session: None,
-            cancel: Some(reason.clone()),
-        },
+        NodeKind::Cancel(reason) => {
+            // Substitute vars (e.g. `$upstream.output.summary`) in the reason.
+            let reason = substitute(reason, vars).unwrap_or_else(|_| reason.clone());
+            NodeRunResult {
+                run: NodeRun {
+                    id: node.id.clone(),
+                    status: NodeStatus::Success,
+                    provider: provider.map(str::to_string),
+                    model: model.map(str::to_string),
+                    output: reason.clone(),
+                    usage: Usage::default(),
+                    iterations: 1,
+                    converged: None,
+                    note: Some(format!("cancel: {reason}")),
+                    started_at: None,
+                    ended_at: None,
+                },
+                session: None,
+                cancel: Some(reason),
+            }
+        }
 
         NodeKind::Approval(cfg) => NodeRunResult {
             // Human gates need an input channel the driver does not yet have.
