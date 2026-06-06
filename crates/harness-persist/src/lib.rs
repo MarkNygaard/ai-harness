@@ -25,14 +25,15 @@ pub use projects::{Project, ProjectInput, ProjectStore};
 mod categories;
 pub use categories::{Category, CategoryInput, CategoryStore};
 
-/// A run row for listing (matches `harness_workflow_runs`).
+/// A run row (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunSummary {
     pub id: String,
     pub workflow_name: String,
     /// Human task name (the trigger title); `None` for older/CLI runs.
     pub title: Option<String>,
-    /// The task spec submitted with the run; `None` for older/CLI runs.
+    /// The task spec submitted with the run. Populated by detail reads; redacted
+    /// from list reads to avoid repeatedly shipping long or sensitive prompts.
     pub description: Option<String>,
     pub status: String,
     pub project: Option<String>,
@@ -494,7 +495,7 @@ impl RunStore {
     /// List the most recently recorded runs (newest first).
     pub async fn list_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, title, description, status, project, node_count, recorded_at
+            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
              FROM harness_workflow_runs
              ORDER BY recorded_at DESC
              LIMIT $1",
@@ -672,9 +673,16 @@ mod tests {
             .unwrap();
         assert_eq!(store.node_count(&run_id).await.unwrap(), 2);
 
-        // list_runs includes it; get_run returns ordered node detail.
+        // list_runs includes metadata only; get_run returns ordered node detail and description.
         let listed = store.list_runs(50).await.unwrap();
-        assert!(listed.iter().any(|r| r.id == run_id && r.node_count == 2));
+        let listed_run = listed
+            .iter()
+            .find(|r| r.id == run_id && r.node_count == 2)
+            .expect("listed run");
+        assert!(
+            listed_run.description.is_none(),
+            "list_runs must redact long task descriptions"
+        );
         let detail = store.get_run(&run_id).await.unwrap().expect("detail");
         assert_eq!(detail.run.status, "completed");
         assert_eq!(detail.nodes.len(), 2);

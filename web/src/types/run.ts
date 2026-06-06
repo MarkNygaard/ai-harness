@@ -41,7 +41,7 @@ export interface RunSummary {
   workflow_name: string;
   /** Human task title (the trigger title); null for older/CLI runs. */
   title: string | null;
-  /** The task spec submitted with the run; null for older/CLI runs. */
+  /** The task spec; null in list responses and for older/CLI runs. */
   description: string | null;
   status: RunStatus;
   project: string | null;
@@ -68,7 +68,7 @@ export interface PersistedNode {
   ended_at: string | null;
 }
 
-/** A run plus its node rows and topology (matches `RunDetail`). */
+/** A run plus its task spec, node rows, and topology (matches `RunDetail`). */
 export interface RunDetail extends RunSummary {
   nodes: PersistedNode[];
   graph: NodeMeta[];
