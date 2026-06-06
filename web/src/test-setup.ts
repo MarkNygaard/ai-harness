@@ -24,30 +24,24 @@ function createMemoryStorage(): Storage {
   };
 }
 
-function readGlobalStorage(): Storage | null {
+
+function setupGlobalStorage(name: "localStorage" | "sessionStorage") {
+  if (typeof window === "undefined") return;
   try {
-    return globalThis.localStorage;
+    const existing = (globalThis as Record<string, unknown>)[name] as Storage | undefined;
+    const hasUsableStorage =
+      typeof existing?.getItem === "function" &&
+      typeof existing?.setItem === "function" &&
+      typeof existing?.clear === "function";
+    if (!hasUsableStorage) {
+      const storage = createMemoryStorage();
+      Object.defineProperty(globalThis, name, { value: storage, configurable: true });
+      Object.defineProperty(window, name, { value: storage, configurable: true });
+    }
   } catch {
-    return null;
+    // ignore
   }
 }
 
-if (typeof window !== "undefined") {
-  const globalStorage = readGlobalStorage();
-  const hasUsableStorage =
-    typeof globalStorage?.getItem === "function" &&
-    typeof globalStorage?.setItem === "function" &&
-    typeof globalStorage?.clear === "function";
-
-  if (!hasUsableStorage) {
-    const storage = createMemoryStorage();
-    Object.defineProperty(globalThis, "localStorage", {
-      value: storage,
-      configurable: true,
-    });
-    Object.defineProperty(window, "localStorage", {
-      value: storage,
-      configurable: true,
-    });
-  }
-}
+setupGlobalStorage("localStorage");
+setupGlobalStorage("sessionStorage");

@@ -27,7 +27,7 @@ import {
   useWorkflowSource,
 } from "@/lib/authoring";
 import { fromYaml, toYaml } from "@/lib/workflow-yaml";
-import type { EditorNode, NodeKindId } from "@/types/authoring";
+import type { EditorNode, NodeKindId, PrebuiltStep } from "@/types/authoring";
 import { EditorNode as EditorNodeView } from "@/components/editor/EditorNode";
 import { EditorActionsContext } from "@/components/editor/context";
 import { Palette } from "@/components/editor/Palette";
@@ -39,7 +39,7 @@ import {
   makeNode,
   toGraph,
 } from "@/components/editor/graph";
-import { emptyNode } from "@/lib/workflow-yaml";
+import { emptyNode, prebuiltNode } from "@/lib/workflow-yaml";
 
 const nodeTypes: NodeTypes = { editor: EditorNodeView };
 
@@ -134,15 +134,30 @@ function Editor() {
     },
     [nodes.length, setNodes, uniqueId],
   );
-
+  const addPrebuiltNode = useCallback(
+    (step: PrebuiltStep, pos?: { x: number; y: number }) => {
+      const id = uniqueId(step.node.id);
+      const node = prebuiltNode(step, id);
+      const position = pos ?? { x: 80 + nodes.length * 36, y: 100 + nodes.length * 36 };
+      setNodes((nds) => [...nds, makeNode(node, position.x, position.y)]);
+      setSelectedId(id);
+    },
+    [nodes.length, setNodes, uniqueId],
+  );
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      const prebuiltId = e.dataTransfer.getData("application/harness-prebuilt-step");
+      if (prebuiltId) {
+        const step = catalog.data?.prebuilt_steps?.find((s) => s.id === prebuiltId);
+        if (step) addPrebuiltNode(step, pos);
+        return;
+      }
       const kind = e.dataTransfer.getData("application/harness-node-kind") as NodeKindId;
-      if (!kind) return;
-      addNode(kind, screenToFlowPosition({ x: e.clientX, y: e.clientY }));
+      if (kind) addNode(kind, pos);
     },
-    [addNode, screenToFlowPosition],
+    [addNode, addPrebuiltNode, catalog.data, screenToFlowPosition],
   );
 
   const deleteNode = useCallback(
@@ -250,7 +265,12 @@ function Editor() {
           </div>
         )}
         <div className="flex min-h-0 flex-1">
-          <Palette kinds={catalog.data?.node_kinds ?? []} onAdd={(k) => addNode(k)} />
+          <Palette
+            kinds={catalog.data?.node_kinds ?? []}
+            prebuilt={catalog.data?.prebuilt_steps ?? []}
+            onAdd={(k) => addNode(k)}
+            onAddPrebuilt={(s) => addPrebuiltNode(s)}
+          />
           <div className="min-w-0 flex-1" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
             <EditorActionsContext.Provider value={actions}>
               <ReactFlow

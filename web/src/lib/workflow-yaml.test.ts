@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptyNode, fromYaml, nodeKind, toYaml } from "./workflow-yaml";
-import type { EditorWorkflow } from "@/types/authoring";
-
+import { emptyNode, fromYaml, nodeKind, prebuiltNode, toYaml } from "./workflow-yaml";
+import type { EditorWorkflow, PrebuiltStep } from "@/types/authoring";
 describe("nodeKind", () => {
   it("derives the kind from the active body field", () => {
     expect(nodeKind({ id: "a", prompt: "x" })).toBe("prompt");
@@ -106,5 +105,35 @@ nodes:
     expect(abort.when).toBe("$validate.output.passed != 'true'");
     expect(validate.category).toBe("validation");
     expect(validate.output_format).toMatchObject({ type: "object" });
+  });
+});
+
+describe("prebuiltNode", () => {
+  it("clones the template node with a fresh id and no inbound deps or when", () => {
+    const step: PrebuiltStep = {
+      id: "validate",
+      label: "Validate",
+      description: "x",
+      node: {
+        id: "validate",
+        command: "validate",
+        category: "validation",
+        provider: "pi",
+        model: "kimi-code/kimi-for-coding",
+        depends_on: ["upstream"],
+        when: "$upstream.output.passed == 'true'",
+      },
+    };
+    const node = prebuiltNode(step, "validate-2");
+    expect(node.id).toBe("validate-2");
+    expect(node.depends_on).toEqual([]);
+    expect(node.when).toBeUndefined();
+    expect(nodeKind(node)).toBe("command");
+    expect(node.command).toBe("validate");
+    expect(node.category).toBe("validation");
+    // The template object is not mutated.
+    expect(step.node.id).toBe("validate");
+    expect(step.node.depends_on).toEqual(["upstream"]);
+    expect(step.node.when).toBe("$upstream.output.passed == 'true'");
   });
 });

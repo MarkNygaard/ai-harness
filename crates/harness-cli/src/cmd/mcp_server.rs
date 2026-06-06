@@ -501,9 +501,10 @@ fn workflow_catalog_tool(arguments: Value) -> Value {
     to_value_result(
         &catalog,
         format!(
-            "node kinds: {kinds}; {} providers; {} commands",
+            "node kinds: {kinds}; {} providers; {} commands; {} prebuilt steps",
             catalog.providers.len(),
-            catalog.commands.len()
+            catalog.commands.len(),
+            catalog.prebuilt_steps.len()
         ),
     )
 }

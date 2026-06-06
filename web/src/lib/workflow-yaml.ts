@@ -6,7 +6,7 @@
  * saves — so what the canvas produces is exactly what gets persisted. Pure.
  */
 import yaml from "js-yaml";
-import type { EditorNode, EditorWorkflow, NodeKindId } from "@/types/authoring";
+import type { EditorNode, EditorWorkflow, NodeKindId, PrebuiltStep } from "@/types/authoring";
 
 /** The body field that defines a node's kind (first present wins; default prompt). */
 export function nodeKind(node: EditorNode): NodeKindId {
@@ -41,6 +41,12 @@ export function emptyNode(kind: NodeKindId, id: string): EditorNode {
     default:
       return { ...base, prompt: "" };
   }
+}
+/** Clone a prebuilt step's node spec with a fresh id and no inbound deps or
+ *  conditional wiring (canvas edges and the user define those). Mirrors `emptyNode`. */
+export function prebuiltNode(step: PrebuiltStep, id: string): EditorNode {
+  const { when: _when, ...rest } = step.node;
+  return { ...rest, id, depends_on: [] };
 }
 
 /** Drop undefined/null, empty strings, and empty arrays so the YAML stays terse. */
