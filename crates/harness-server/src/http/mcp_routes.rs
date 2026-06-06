@@ -163,7 +163,8 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
             };
             let limit = args.get("limit").and_then(Value::as_i64).unwrap_or(50);
             match store.list_runs(limit).await {
-                Ok(runs) => to_result(format!("{} run(s)", runs.len()), &runs),
+                // `structuredContent` must be a JSON object, never a bare array.
+                Ok(runs) => to_result(format!("{} run(s)", runs.len()), &json!({ "runs": runs })),
                 Err(e) => tool_error(e.to_string()),
             }
         }
@@ -191,7 +192,10 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
         "workflow_list" => match project_dir(state, &s("project")).await {
             Ok(dir) => {
                 let list = authoring::list_workflows(&dir);
-                to_result(format!("{} workflow(s)", list.len()), &list)
+                to_result(
+                    format!("{} workflow(s)", list.len()),
+                    &json!({ "workflows": list }),
+                )
             }
             Err(e) => tool_error(e),
         },

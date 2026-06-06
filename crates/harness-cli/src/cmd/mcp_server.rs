@@ -525,7 +525,8 @@ fn workflow_list_tool(arguments: Value) -> Value {
         .map(|w| format!("{} ({:?}, {} steps)", w.name, w.source, w.node_count))
         .collect::<Vec<_>>()
         .join("\n");
-    to_value_result(&workflows, text)
+    // `structuredContent` must be a JSON object, never a bare array.
+    to_value_result(serde_json::json!({ "workflows": workflows }), text)
 }
 
 /// `workflow_get` — a workflow's editable YAML source by name.
