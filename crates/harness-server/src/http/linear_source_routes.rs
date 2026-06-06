@@ -102,7 +102,7 @@ pub async fn list_sources(
 }
 
 fn non_empty(s: Option<String>) -> Option<String> {
-    s.filter(|s| !s.is_empty())
+    s.filter(|s| !s.trim().is_empty())
 }
 
 /// `PUT /api/projects/{project}/linear-source` — create or update a binding.

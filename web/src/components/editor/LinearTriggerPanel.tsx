@@ -164,8 +164,12 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
   };
 
   const handleDelete = () => {
-    if (!source.data) return;
-    del.mutate(workflow);
+    if (!source.data || del.isPending) return;
+    del.mutate(workflow, {
+      onSuccess: () => {
+        loadedFor.current = null;
+      },
+    });
   };
 
   const isMissingCredential = discovery.isError;
@@ -352,9 +356,9 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
                     {del.isPending ? "Deleting…" : "Delete"}
                   </Button>
                 )}
-                {save.isError && (
+                {(save.isError || del.isError) && (
                   <span className="text-xs text-destructive">
-                    {save.error.message}
+                    {save.error?.message ?? del.error?.message}
                   </span>
                 )}
               </div>
