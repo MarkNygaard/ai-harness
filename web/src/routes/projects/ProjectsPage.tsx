@@ -1,11 +1,42 @@
 import { useState } from "react";
-import { IconFolderCog, IconPlus, IconTrash } from "@tabler/icons-react";
+import { IconFolderCog, IconKey, IconPlus, IconTrash } from "@tabler/icons-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import {
+  PROJECT_CREDENTIALS,
+  useDeleteProjectCredential,
+  useProjectCredentials,
+  useSetProjectCredential,
+} from "@/lib/credentials";
 import { useDeleteProject, useProjects, useRegisterProject } from "@/lib/projects";
 import type { Project } from "@/types/project";
+
+/** Display metadata for each per-project credential provider. */
+const PROJECT_CRED_META: Record<
+  string,
+  { label: string; placeholder: string; help: string }
+> = {
+  linear: {
+    label: "Linear API key",
+    placeholder: "lin_api_…",
+    help: "Personal API key for this project's Linear workspace. Overrides the global Linear key; used by the Linear trigger to discover teams and claim issues.",
+  },
+  github: {
+    label: "GitHub token",
+    placeholder: "ghp_… / github_pat_…",
+    help: "PAT with repo + pull-request access for this project's repo. Overrides the global GitHub token; used to clone the repo and open PRs.",
+  },
+};
 
 /** Browse + register projects. A project scopes runs to a git repo. */
 export function ProjectsPage() {
@@ -76,6 +107,7 @@ function ProjectRow({ project }: { project: Project }) {
             </div>
           )}
         </div>
+        <ProjectCredentialsDialog project={project.name} />
         <Button
           variant="ghost"
           size="sm"
@@ -91,6 +123,109 @@ function ProjectRow({ project }: { project: Project }) {
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+/** A "Keys" button that opens a dialog of per-project credential overrides. */
+function ProjectCredentialsDialog({ project }: { project: string }) {
+  const creds = useProjectCredentials(project);
+  return (
+    <Dialog>
+      <DialogTrigger
+        render={<Button variant="ghost" size="sm" title="Project credentials" />}
+      >
+        <IconKey className="size-3.5" /> Keys
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="font-mono text-base">{project}</DialogTitle>
+          <DialogDescription>
+            Project-scoped keys override the global ones from the Credentials
+            page for this project. Leave blank to fall back to the global value.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          {PROJECT_CREDENTIALS.map(({ provider, field }) => (
+            <CredentialField
+              key={provider}
+              project={project}
+              provider={provider}
+              field={field}
+              configured={
+                creds.data?.some((c) => c.provider === provider && c.configured) ??
+                false
+              }
+            />
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function CredentialField({
+  project,
+  provider,
+  field,
+  configured,
+}: {
+  project: string;
+  provider: string;
+  field: string;
+  configured: boolean;
+}) {
+  const meta = PROJECT_CRED_META[provider];
+  const set = useSetProjectCredential(project);
+  const del = useDeleteProjectCredential(project);
+  const [value, setValue] = useState("");
+
+  const save = () => {
+    const v = value.trim();
+    if (!v) return;
+    set.mutate(
+      { provider, fields: { [field]: v } },
+      { onSuccess: () => setValue("") },
+    );
+  };
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-medium text-muted-foreground">{meta.label}</span>
+        <Badge variant={configured ? "success" : "outline"} className="text-[10px]">
+          {configured ? "set" : "not set"}
+        </Badge>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="password"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          placeholder={configured ? "set — paste a new value to replace" : meta.placeholder}
+          className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+        />
+        <Button size="sm" onClick={save} disabled={!value.trim() || set.isPending}>
+          {set.isPending ? "Saving…" : "Save"}
+        </Button>
+        {configured && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => del.mutate(provider)}
+            disabled={del.isPending}
+            title="Clear this project's override"
+          >
+            <IconTrash className="size-3.5" /> Clear
+          </Button>
+        )}
+      </div>
+      <span className="text-[10px] text-muted-foreground">{meta.help}</span>
+      {(set.isError || del.isError) && (
+        <span className="text-[10px] text-destructive">
+          {set.error?.message ?? del.error?.message}
+        </span>
+      )}
+    </div>
   );
 }
 

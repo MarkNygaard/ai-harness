@@ -11,9 +11,7 @@ import {
   useDeleteLinearSource,
   useLinearDiscovery,
   useLinearSource,
-  useProjectLinearKey,
   useSaveLinearSource,
-  useSetProjectLinearKey,
 } from "@/lib/linear";
 import type { LinearState, LinearTeam } from "@/types/linear";
 
@@ -78,9 +76,6 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
   const source = useLinearSource(project || null, workflow || null);
   const save = useSaveLinearSource(project || null);
   const del = useDeleteLinearSource(project || null);
-  const projectKey = useProjectLinearKey(project || null);
-  const setProjectKey = useSetProjectLinearKey(project || null);
-  const [keyInput, setKeyInput] = useState("");
 
   // Form state.
   const [teamId, setTeamId] = useState("");
@@ -225,39 +220,6 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
     </Field>
   );
 
-  const keyField = (
-    <Field label="Linear API key (this project)">
-      <div className="flex gap-2">
-        <input
-          type="password"
-          className={`${inputCls} flex-1`}
-          value={keyInput}
-          placeholder={
-            projectKey.data ? "set — paste a new key to replace" : "lin_api_…"
-          }
-          onChange={(e) => setKeyInput(e.target.value)}
-        />
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={!keyInput.trim() || setProjectKey.isPending}
-          onClick={() =>
-            setProjectKey.mutate(keyInput.trim(), {
-              onSuccess: () => setKeyInput(""),
-            })
-          }
-        >
-          {setProjectKey.isPending ? "Saving…" : "Save key"}
-        </Button>
-      </div>
-      <span className="text-[11px] text-muted-foreground">
-        {projectKey.data
-          ? "A project key is set (overrides the global Linear key)."
-          : "No project key — falls back to the global Linear key if one is set."}
-      </span>
-    </Field>
-  );
-
   return (
     <Collapsible
       defaultOpen={false}
@@ -286,17 +248,15 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
           ) : isMissingCredential || hasNoTeams ? (
             <>
               {projectSelect}
-              {keyField}
               <div className="text-xs text-muted-foreground">
-                {setProjectKey.isSuccess
-                  ? "Key saved — loading teams…"
-                  : "Add this project's Linear API key above (or a global key in Settings → Credentials) to load teams."}
+                No Linear key for this project. Set a Linear API key on the{" "}
+                <span className="font-medium">Projects</span> page (or a global
+                key in Settings → Credentials) to load teams.
               </div>
             </>
           ) : (
             <>
               {projectSelect}
-              {keyField}
 
               {/* Team */}
               <Field label="Team">
