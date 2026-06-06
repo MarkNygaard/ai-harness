@@ -9,11 +9,15 @@ import type {
   LinearSourceInput,
 } from "@/types/linear";
 
-export function useLinearDiscovery() {
+export function useLinearDiscovery(project: string | null) {
   return useQuery<LinearDiscovery, Error>({
-    queryKey: ["linear", "discovery"],
+    queryKey: ["linear", "discovery", project],
+    enabled: !!project,
     queryFn: ({ signal }) =>
-      apiJson<LinearDiscovery>("/api/linear/discovery", { signal }),
+      apiJson<LinearDiscovery>(
+        `/api/projects/${encodeURIComponent(project!)}/linear/discovery`,
+        { signal },
+      ),
     retry: false,
     staleTime: 60_000,
   });

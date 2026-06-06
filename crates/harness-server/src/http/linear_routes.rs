@@ -12,7 +12,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Extension, Query};
+use axum::extract::{Extension, Path as AxumPath, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -26,19 +26,22 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 /// Build a Linear client from the stored credential, or a 4xx/5xx response.
-async fn linear_client(state: &Arc<RunsState>) -> Result<LinearClient, Response> {
+async fn linear_client(state: &Arc<RunsState>, project: &str) -> Result<LinearClient, Response> {
     let store = state
         .cred_store()
         .await
         .map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    // Project-scoped key first, then the global `linear` credential.
     let fields = store
-        .get("linear")
+        .get_for_project(project, "linear")
         .await
         .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| {
             err(
                 StatusCode::BAD_REQUEST,
-                "Linear not connected — store an API key under provider `linear`",
+                format!(
+                    "Linear not connected for `{project}` — store an API key (project or global) under provider `linear`"
+                ),
             )
         })?;
     let key = fields
@@ -53,9 +56,13 @@ async fn linear_client(state: &Arc<RunsState>) -> Result<LinearClient, Response>
     Ok(LinearClient::new(key))
 }
 
-/// `GET /api/linear/discovery` — teams + their workflow states + labels.
-pub async fn discovery(Extension(state): Extension<Arc<RunsState>>) -> Response {
-    let client = match linear_client(&state).await {
+/// `GET /api/projects/{project}/linear/discovery` — teams + states + labels,
+/// using the project's Linear key (or the global fallback).
+pub async fn discovery(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(project): AxumPath<String>,
+) -> Response {
+    let client = match linear_client(&state, &project).await {
         Ok(c) => c,
         Err(resp) => return resp,
     };
@@ -73,16 +80,17 @@ pub struct PreviewQuery {
     pub label: Option<String>,
 }
 
-/// `GET /api/linear/preview?team=&state=&label=` — issues the filter matches.
-/// Read-only; nothing is claimed.
+/// `GET /api/projects/{project}/linear/preview?team=&state=&label=` — issues the
+/// filter matches, using the project's Linear key. Read-only; nothing is claimed.
 pub async fn preview(
     Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(project): AxumPath<String>,
     Query(q): Query<PreviewQuery>,
 ) -> Response {
     if q.team.trim().is_empty() || q.state.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "`team` and `state` are required");
     }
-    let client = match linear_client(&state).await {
+    let client = match linear_client(&state, &project).await {
         Ok(c) => c,
         Err(resp) => return resp,
     };

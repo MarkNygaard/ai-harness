@@ -160,6 +160,15 @@ impl RunsState {
         fields.get("token").filter(|v| !v.is_empty()).cloned()
     }
 
+    /// GitHub token for `project`: the project-scoped credential if set, else the
+    /// global one. Lets a project that lives in a different GitHub account use
+    /// its own token for clone/fetch.
+    pub(crate) async fn github_token_for_project(&self, project: &str) -> Option<String> {
+        let store = self.cred_store().await.ok()?;
+        let fields = store.get_for_project(project, "github").await.ok()??;
+        fields.get("token").filter(|v| !v.is_empty()).cloned()
+    }
+
     /// Lazily connect (and migrate) the persistence store.
     pub(crate) async fn store(&self) -> Result<&RunStore, String> {
         let url = self
@@ -661,7 +670,7 @@ async fn resolve_workspace(
             checkout.display()
         ));
     }
-    let token = state.github_token().await;
+    let token = state.github_token_for_project(project).await;
     let base = base_branch.to_string();
     let branch = format!("run/{run_id}");
     let dest = state.projects_dir.join(".worktrees").join(run_id);
