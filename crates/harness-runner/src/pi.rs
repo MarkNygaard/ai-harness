@@ -311,7 +311,9 @@ fn sandbox_allowlist(cwd: &Path) -> Vec<PathBuf> {
     ];
     if let Some(home) = std::env::var_os("HOME") {
         let home = PathBuf::from(home);
-        for sub in [".cargo", ".rustup", ".cache", ".bun", ".npm", ".config", ".omp"] {
+        for sub in [
+            ".cargo", ".rustup", ".cache", ".bun", ".npm", ".config", ".omp",
+        ] {
             paths.push(home.join(sub));
         }
     }
