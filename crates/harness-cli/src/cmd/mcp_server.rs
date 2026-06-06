@@ -75,10 +75,151 @@ struct SessionState {
     turns: Vec<SessionTurn>,
 }
 
+/// HTTP client for a cluster's **per-project** authoring API — the remote MCP
+/// mode. Enabled by `HARNESS_REMOTE_URL` (+ `HARNESS_TOKEN`) so an MCP client's
+/// `.mcp.json` `env` block points the workflow tools at the hosted harness.
+struct RemoteAuthoring {
+    client: reqwest::Client,
+    base: String,
+    token: Option<String>,
+}
+
+impl RemoteAuthoring {
+    fn from_env() -> Option<Self> {
+        let base = std::env::var("HARNESS_REMOTE_URL")
+            .ok()
+            .map(|s| s.trim().trim_end_matches('/').to_string())
+            .filter(|s| !s.is_empty())?;
+        Some(Self {
+            client: reqwest::Client::new(),
+            base,
+            token: std::env::var("HARNESS_TOKEN")
+                .ok()
+                .filter(|t| !t.is_empty()),
+        })
+    }
+
+    async fn send(&self, rb: reqwest::RequestBuilder) -> Result<Value, String> {
+        let rb = match &self.token {
+            Some(t) => rb.bearer_auth(t),
+            None => rb,
+        };
+        let resp = rb
+            .send()
+            .await
+            .map_err(|e| format!("request failed: {e}"))?;
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if status.is_success() {
+            Ok(body)
+        } else {
+            let msg = body
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("request error");
+            Err(format!("{msg} (HTTP {})", status.as_u16()))
+        }
+    }
+
+    async fn get(&self, project: &str, path: &str) -> Result<Value, String> {
+        let url = format!("{}/api/projects/{project}/authoring/{path}", self.base);
+        self.send(self.client.get(url)).await
+    }
+
+    async fn post(&self, project: &str, path: &str, body: Value) -> Result<Value, String> {
+        let url = format!("{}/api/projects/{project}/authoring/{path}", self.base);
+        self.send(self.client.post(url).json(&body)).await
+    }
+}
+
+/// Route a `workflow_*` tool call to the remote cluster API. `project` is a
+/// required argument in remote mode. Returns a tool result.
+async fn remote_workflow_tool(remote: &RemoteAuthoring, name: &str, args: &Value) -> Value {
+    let project = match args.get("project").and_then(Value::as_str) {
+        Some(p) if !p.is_empty() => p,
+        _ => return tool_error_result("`project` is required (remote authoring mode)"),
+    };
+    let s = |k: &str| {
+        args.get(k)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let result = match name {
+        "workflow_catalog" => remote.get(project, "catalog").await,
+        "workflow_list" => remote.get(project, "workflows").await,
+        "workflow_get" => {
+            remote
+                .get(project, &format!("workflows/{}", s("name")))
+                .await
+        }
+        "workflow_validate" => {
+            remote
+                .post(project, "validate", json!({ "yaml": s("yaml") }))
+                .await
+        }
+        "workflow_save" => {
+            remote
+                .post(
+                    project,
+                    "workflows",
+                    json!({ "name": s("name"), "yaml": s("yaml") }),
+                )
+                .await
+        }
+        "workflow_create" => {
+            let mut body = serde_json::Map::new();
+            body.insert("name".into(), json!(s("name")));
+            for k in ["description", "provider", "model"] {
+                if let Some(v) = args.get(k) {
+                    body.insert(k.into(), v.clone());
+                }
+            }
+            remote.post(project, "create", Value::Object(body)).await
+        }
+        "workflow_set_node" => {
+            let node = args.get("node").cloned().unwrap_or(Value::Null);
+            remote
+                .post(
+                    project,
+                    "set-node",
+                    json!({ "name": s("name"), "node": node }),
+                )
+                .await
+        }
+        "workflow_remove_node" => {
+            remote
+                .post(
+                    project,
+                    "remove-node",
+                    json!({ "name": s("name"), "id": s("id") }),
+                )
+                .await
+        }
+        "workflow_connect" => {
+            remote
+                .post(
+                    project,
+                    "connect",
+                    json!({ "name": s("name"), "from": s("from"), "to": s("to") }),
+                )
+                .await
+        }
+        _ => return tool_error_result(format!("unknown tool `{name}`")),
+    };
+    match result {
+        Ok(value) => tool_success_result(format!("{name} ok"), value),
+        Err(e) => tool_error_result(e),
+    }
+}
+
 struct McpServer {
     default_agent: String,
     sessions: Arc<RwLock<HashMap<String, SessionState>>>,
     executor: Arc<dyn PromptExecutor>,
+    /// When set, the `workflow_*` tools author against a remote cluster's
+    /// per-project API instead of the local filesystem.
+    remote: Option<RemoteAuthoring>,
 }
 
 impl McpServer {
@@ -87,6 +228,7 @@ impl McpServer {
             default_agent,
             sessions: Arc::new(RwLock::new(HashMap::new())),
             executor,
+            remote: RemoteAuthoring::from_env(),
         }
     }
 
@@ -163,7 +305,9 @@ impl McpServer {
                 }
             }
             "ping" => jsonrpc_success_response(id, json!({})),
-            "tools/list" => jsonrpc_success_response(id, json!({ "tools": mcp_tools() })),
+            "tools/list" => {
+                jsonrpc_success_response(id, json!({ "tools": mcp_tools(self.remote.is_some()) }))
+            }
             "tools/call" => {
                 let call_params: ToolCallParams = match serde_json::from_value(params) {
                     Ok(value) => value,
@@ -190,6 +334,12 @@ impl McpServer {
     }
 
     async fn call_tool(&self, tool_name: String, arguments: Value) -> Value {
+        // In remote mode, the workflow tools author against the cluster API.
+        if let Some(remote) = &self.remote {
+            if tool_name.starts_with("workflow_") {
+                return remote_workflow_tool(remote, &tool_name, &arguments).await;
+            }
+        }
         match tool_name.as_str() {
             "harness" => self.run_harness_tool(arguments).await,
             "harness-reply" => self.run_harness_reply_tool(arguments).await,
@@ -631,7 +781,47 @@ struct WorkflowConnectArgs {
     project_root: Option<PathBuf>,
 }
 
-fn mcp_tools() -> Vec<Value> {
+/// Tool definitions. In `remote` mode the `workflow_*` tools gain a required
+/// `project` argument (they target a registered cluster project).
+fn mcp_tools(remote: bool) -> Vec<Value> {
+    let mut tools = mcp_tools_base();
+    if remote {
+        for t in tools.iter_mut() {
+            let is_workflow = t
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|n| n.starts_with("workflow_"));
+            if !is_workflow {
+                continue;
+            }
+            if let Some(props) = t
+                .pointer_mut("/inputSchema/properties")
+                .and_then(Value::as_object_mut)
+            {
+                props.insert(
+                    "project".into(),
+                    json!({ "type": "string", "description": "Registered project on the cluster." }),
+                );
+            }
+            match t
+                .pointer_mut("/inputSchema/required")
+                .and_then(Value::as_array_mut)
+            {
+                Some(req) => req.insert(0, json!("project")),
+                None => {
+                    if let Some(schema) =
+                        t.pointer_mut("/inputSchema").and_then(Value::as_object_mut)
+                    {
+                        schema.insert("required".into(), json!(["project"]));
+                    }
+                }
+            }
+        }
+    }
+    tools
+}
+
+fn mcp_tools_base() -> Vec<Value> {
     vec![
         json!({
             "name": "harness",
@@ -1269,5 +1459,57 @@ mod tests {
             .as_str()
             .expect("error text")
             .contains("unknown tool"));
+    }
+
+    fn remote_server() -> McpServer {
+        McpServer {
+            default_agent: "mock".to_string(),
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            executor: Arc::new(MockExecutor::default()),
+            remote: Some(RemoteAuthoring {
+                client: reqwest::Client::new(),
+                base: "http://127.0.0.1:0".to_string(),
+                token: None,
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn remote_mode_workflow_tools_require_project() {
+        let server = remote_server();
+        // tools/list: workflow tools gain a required `project`; others don't.
+        let resp = server
+            .handle_request(make_request(1, "tools/list", json!({})))
+            .await
+            .unwrap();
+        let tools = resp["result"]["tools"].as_array().unwrap();
+        let create = tools
+            .iter()
+            .find(|t| t["name"] == "workflow_create")
+            .unwrap();
+        let required = create["inputSchema"]["required"].as_array().unwrap();
+        assert!(required.iter().any(|v| v == "project"), "project required");
+        let harness = tools.iter().find(|t| t["name"] == "harness").unwrap();
+        let hreq = harness["inputSchema"]["required"].as_array().unwrap();
+        assert!(
+            !hreq.iter().any(|v| v == "project"),
+            "non-workflow unchanged"
+        );
+
+        // A workflow call without `project` errors before any HTTP request.
+        let resp = server
+            .handle_request(make_request(
+                2,
+                "tools/call",
+                json!({ "name": "workflow_list", "arguments": {} }),
+            ))
+            .await
+            .unwrap();
+        let r = extract_result(resp);
+        assert_eq!(r["isError"], Value::Bool(true));
+        assert!(r["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("project"));
     }
 }

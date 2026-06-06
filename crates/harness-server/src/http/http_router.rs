@@ -10,9 +10,9 @@ use super::{
     auth, categories_routes, credentials_routes, get_issue_workflow_by_issue,
     get_issue_workflow_by_pr, get_project_workflow_by_project, get_task, get_task_artifacts,
     get_task_prompts, get_task_proof, get_workflow_runtime_tree, github_webhook, handle_rpc,
-    health_check, ingest_signal, intake_status, list_tasks, password_reset, project_queue_stats,
-    runs_routes, state::AppState, stream_task_sse, task_mutation_routes, task_routes,
-    workflows_routes,
+    health_check, ingest_signal, intake_status, list_tasks, password_reset,
+    project_authoring_routes, project_queue_stats, runs_routes, state::AppState, stream_task_sse,
+    task_mutation_routes, task_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -198,6 +198,40 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/authoring/validate",
             post(workflows_routes::validate_workflow),
+        )
+        // ── Project-scoped authoring (per registered project; remote MCP) ───
+        .route(
+            "/api/projects/{project}/authoring/catalog",
+            get(project_authoring_routes::get_catalog),
+        )
+        .route(
+            "/api/projects/{project}/authoring/workflows",
+            get(project_authoring_routes::list_workflows)
+                .post(project_authoring_routes::save_workflow),
+        )
+        .route(
+            "/api/projects/{project}/authoring/workflows/{name}",
+            get(project_authoring_routes::get_workflow),
+        )
+        .route(
+            "/api/projects/{project}/authoring/validate",
+            post(project_authoring_routes::validate_workflow),
+        )
+        .route(
+            "/api/projects/{project}/authoring/create",
+            post(project_authoring_routes::create_workflow),
+        )
+        .route(
+            "/api/projects/{project}/authoring/set-node",
+            post(project_authoring_routes::set_node),
+        )
+        .route(
+            "/api/projects/{project}/authoring/remove-node",
+            post(project_authoring_routes::remove_node),
+        )
+        .route(
+            "/api/projects/{project}/authoring/connect",
+            post(project_authoring_routes::connect_nodes),
         )
         // ── Provider credentials (UI-managed, encrypted at rest) ────────────
         .route(
