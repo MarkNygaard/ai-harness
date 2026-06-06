@@ -120,6 +120,18 @@ impl LinearClaimStore {
         Ok(rows)
     }
 
+    /// How many times this issue has been claimed (one row per attempt) — the
+    /// retry counter the poller uses to stop a perpetually-failing issue from
+    /// looping back into the source column forever.
+    pub async fn attempts_for_issue(&self, issue_id: &str) -> Result<i64, PersistError> {
+        let row: (i64,) =
+            sqlx::query_as("SELECT count(*) FROM harness_linear_claims WHERE issue_id = $1")
+                .bind(issue_id)
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.0)
+    }
+
     /// Advance a claim's phase.
     pub async fn set_phase(&self, run_id: &str, phase: &str) -> Result<(), PersistError> {
         sqlx::query("UPDATE harness_linear_claims SET phase = $2 WHERE run_id = $1")

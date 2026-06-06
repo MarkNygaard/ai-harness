@@ -29,6 +29,11 @@ use super::runs_routes::{start_run, CreateRunRequest, RunsState};
 /// `poll_interval_secs` has elapsed; status-sync runs every tick.
 const POLLER_TICK_SECS: u64 = 30;
 
+/// Retry fail-safe: after this many failed attempts on the same issue, the
+/// poller stops returning it to the source column (which would re-claim it
+/// forever) and flags it for a human instead.
+const MAX_CLAIM_ATTEMPTS: i64 = 2;
+
 /// Spawn the Linear poller. Best-effort; a no-op outside a Tokio runtime.
 pub(crate) fn spawn_poller(state: Arc<RunsState>) {
     if tokio::runtime::Handle::try_current().is_err() {
@@ -299,25 +304,52 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                 tracing::info!("linear poller: {} — run completed → ready", c.identifier);
             }
             "failed" | "cancelled" => {
-                // Roll back to the state the issue was claimed from.
-                let _ = client
-                    .set_issue_state(&c.issue_id, &c.original_state_id)
-                    .await;
-                let _ = client
-                    .add_comment(
-                        &c.issue_id,
-                        &format!(
-                            "⚠️ ai-harness run `{}` did not complete ({}); returned to its previous state.",
-                            c.run_id, detail.run.status
-                        ),
-                    )
-                    .await;
+                // How many times this issue has been attempted (incl. this run).
+                let attempts = claim_store
+                    .attempts_for_issue(&c.issue_id)
+                    .await
+                    .unwrap_or(MAX_CLAIM_ATTEMPTS);
+                if attempts >= MAX_CLAIM_ATTEMPTS {
+                    // Fail-safe: stop the loop. Do NOT return it to the source
+                    // column (which would re-claim it forever). Leave it where the
+                    // run left it and flag it for a human.
+                    let _ = client
+                        .add_comment(
+                            &c.issue_id,
+                            &format!(
+                                "❌ ai-harness run `{}` failed ({}) — gave up after {} attempt(s). Not retrying; needs a human. Move it back to the source column to re-arm.",
+                                c.run_id, detail.run.status, attempts
+                            ),
+                        )
+                        .await;
+                    tracing::warn!(
+                        "linear poller: {} — {} attempt(s) failed; giving up (no rollback)",
+                        c.identifier,
+                        attempts
+                    );
+                } else {
+                    // Roll back to the claimed-from state so it's retried.
+                    let _ = client
+                        .set_issue_state(&c.issue_id, &c.original_state_id)
+                        .await;
+                    let _ = client
+                        .add_comment(
+                            &c.issue_id,
+                            &format!(
+                                "⚠️ ai-harness run `{}` did not complete ({}); returning for retry (attempt {}/{}).",
+                                c.run_id, detail.run.status, attempts, MAX_CLAIM_ATTEMPTS
+                            ),
+                        )
+                        .await;
+                    tracing::info!(
+                        "linear poller: {} — run {} → rolled back (attempt {}/{})",
+                        c.identifier,
+                        detail.run.status,
+                        attempts,
+                        MAX_CLAIM_ATTEMPTS
+                    );
+                }
                 let _ = claim_store.set_phase(&c.run_id, "done").await;
-                tracing::info!(
-                    "linear poller: {} — run {} → rolled back",
-                    c.identifier,
-                    detail.run.status
-                );
             }
             _ => {
                 // Still running: move to Review once the PR exists (a delivery
