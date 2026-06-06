@@ -1,14 +1,22 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { ReactFlowProvider } from "@xyflow/react";
+import { Info } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
 import { useCancelRun, useRunView } from "@/lib/runs";
 import type { RunStatus } from "@/types/run";
-
 const STATUS_VARIANT: Record<
   RunStatus,
   "running" | "success" | "failed" | "skipped"
@@ -66,6 +74,47 @@ export function RunDetailPage() {
               {cancel.isPending ? "Stopping…" : "Stop"}
             </Button>
           )}
+          <Sheet>
+            <SheetTrigger
+              render={
+                <Button variant="outline" size="sm">
+                  <Info className="size-3.5" />
+                  Details
+                </Button>
+              }
+            />
+            <SheetContent className="flex flex-col gap-0 p-0">
+              <SheetHeader>
+                <SheetTitle>Run details</SheetTitle>
+              </SheetHeader>
+              <Separator />
+              <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 p-4 text-sm">
+                <Field label="Project" value={run.project ?? "—"} />
+                <Field label="Workflow" value={run.workflow ?? "—"} />
+                <Field label="Run ID" value={id ?? "—"} mono />
+                <Field label="Status" value={run.status} />
+                <Field
+                  label="Recorded"
+                  value={
+                    run.recordedAt
+                      ? new Date(run.recordedAt).toLocaleString()
+                      : "—"
+                  }
+                />
+              </dl>
+              <Separator />
+              <div className="min-h-0 flex-1 overflow-y-auto p-4">
+                <div className="mb-1 text-xs font-medium text-muted-foreground">
+                  Description
+                </div>
+                {run.description ? (
+                  <p className="whitespace-pre-wrap text-sm">{run.description}</p>
+                ) : (
+                  <p className="text-sm italic text-muted-foreground">No description</p>
+                )}
+              </div>
+            </SheetContent>
+          </Sheet>
           <div className="flex overflow-hidden rounded-md border border-border text-xs">
             <PanelTab
               label="Graph"
@@ -117,5 +166,22 @@ function PanelTab({
     >
       {label}
     </button>
+  );
+}
+
+function Field({
+  label,
+  value,
+  mono,
+}: {
+  label: string;
+  value: string;
+  mono?: boolean;
+}) {
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={mono ? "truncate font-mono text-xs" : "truncate"}>{value}</dd>
+    </>
   );
 }

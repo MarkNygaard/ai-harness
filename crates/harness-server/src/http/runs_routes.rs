@@ -430,6 +430,7 @@ async fn execute_run_task(
                         &run_id,
                         &workflow.name,
                         title.as_deref(),
+                        Some(description.as_str()),
                         Some(&project),
                         0,
                         &[],
@@ -510,8 +511,7 @@ async fn execute_run_task(
         .set("TASK_TITLE", title.clone().unwrap_or_default())
         .set("TASK_DESCRIPTION", description.clone())
         .set("ARGUMENTS", description.clone())
-        .set("USER_MESSAGE", description);
-
+        .set("USER_MESSAGE", description.clone());
     // Bridge the driver's futures-channel events → the tokio broadcast, and
     // persist incrementally (run row on start, each node as it finishes, status
     // on finish) so the run is durable: visible in the list and refresh-safe
@@ -520,6 +520,7 @@ async fn execute_run_task(
     let persist_state = state.clone();
     let persist_run_id = run_id.clone();
     let persist_title = title.clone();
+    let persist_description = description.clone();
     let persist_project = Some(project.clone());
     let persist_owner = state.instance_id.clone();
     let forwarder = tokio::spawn(async move {
@@ -540,6 +541,7 @@ async fn execute_run_task(
                                 &persist_run_id,
                                 workflow,
                                 persist_title.as_deref(),
+                                Some(persist_description.as_str()),
                                 persist_project.as_deref(),
                                 *total_nodes,
                                 nodes,
@@ -600,12 +602,17 @@ async fn execute_run_task(
     drop(tx); // end the forwarder
     let _ = forwarder.await;
     heartbeat.abort();
-
     // Final authoritative snapshot (reconciles nodes + sets terminal status).
     if let Ok(report) = &report {
         if let Ok(store) = state.store().await {
             if let Err(e) = store
-                .record_run(&run_id, title.as_deref(), Some(project.as_str()), report)
+                .record_run(
+                    &run_id,
+                    title.as_deref(),
+                    Some(description.as_str()),
+                    Some(project.as_str()),
+                    report,
+                )
                 .await
             {
                 tracing::warn!(run_id = %run_id, "failed to persist run: {e}");

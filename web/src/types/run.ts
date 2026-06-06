@@ -41,6 +41,8 @@ export interface RunSummary {
   workflow_name: string;
   /** Human task title (the trigger title); null for older/CLI runs. */
   title: string | null;
+  /** The task spec submitted with the run; null for older/CLI runs. */
+  description: string | null;
   status: RunStatus;
   project: string | null;
   node_count: number;
