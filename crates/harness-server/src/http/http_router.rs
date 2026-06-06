@@ -189,8 +189,14 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // ".../mcp" }`. Behind the global bearer-token middleware.
         .route("/mcp", post(mcp_routes::handle_mcp))
         // ── Linear read-only discovery (Phase 8, Slice 1) ───────────────────
-        .route("/api/linear/discovery", get(linear_routes::discovery))
-        .route("/api/linear/preview", get(linear_routes::preview))
+        .route(
+            "/api/projects/{project}/linear/discovery",
+            get(linear_routes::discovery),
+        )
+        .route(
+            "/api/projects/{project}/linear/preview",
+            get(linear_routes::preview),
+        )
         // ── Step categories (global registry for overview grouping/colour) ──
         .route("/api/categories", get(categories_routes::list_categories))
         .route(
@@ -266,6 +272,16 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/credentials/{provider}",
             axum::routing::put(credentials_routes::set_credential)
                 .delete(credentials_routes::delete_credential),
+        )
+        // Per-project credential overrides (linear / github only).
+        .route(
+            "/api/projects/{project}/credentials",
+            get(credentials_routes::list_project_credentials),
+        )
+        .route(
+            "/api/projects/{project}/credentials/{provider}",
+            axum::routing::put(credentials_routes::set_project_credential)
+                .delete(credentials_routes::delete_project_credential),
         )
         // ── Connect Kimi (OAuth device flow, server-side) ───────────────────
         .route(

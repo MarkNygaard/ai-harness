@@ -26,6 +26,19 @@ CREATE TABLE IF NOT EXISTS harness_credentials (
     updated_at  timestamptz NOT NULL DEFAULT now()
 )";
 
+/// Project-scoped credentials (e.g. a per-project Linear/GitHub token for a
+/// project that lives in a different account). Resolution is project-first with
+/// a fallback to the global [`harness_credentials`] row — see
+/// [`CredentialStore::get_for_project`].
+const CREATE_PROJECT_CREDENTIALS: &str = "
+CREATE TABLE IF NOT EXISTS harness_project_credentials (
+    project     text NOT NULL,
+    provider    text NOT NULL,
+    data        bytea NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (project, provider)
+)";
+
 /// A provider's stored credential, as returned to the API (never the secrets).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ProviderCredential {
@@ -55,6 +68,9 @@ impl CredentialStore {
     pub async fn from_pool(pool: PgPool, key: [u8; 32]) -> Result<Self, PersistError> {
         let store = Self { pool, key };
         sqlx::query(CREATE_CREDENTIALS).execute(&store.pool).await?;
+        sqlx::query(CREATE_PROJECT_CREDENTIALS)
+            .execute(&store.pool)
+            .await?;
         Ok(store)
     }
 
@@ -118,6 +134,91 @@ impl CredentialStore {
     /// Remove a provider's credential.
     pub async fn delete(&self, provider: &str) -> Result<(), PersistError> {
         sqlx::query("DELETE FROM harness_credentials WHERE provider = $1")
+            .bind(provider)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    // ── Project-scoped credentials (project-first, global fallback) ──────────
+
+    /// Store (upsert) a **project-scoped** credential.
+    pub async fn set_project(
+        &self,
+        project: &str,
+        provider: &str,
+        fields: &BTreeMap<String, String>,
+    ) -> Result<(), PersistError> {
+        let json = serde_json::to_vec(fields).map_err(|e| PersistError::Crypto(e.to_string()))?;
+        let blob = encrypt(&self.key, &json)?;
+        sqlx::query(
+            "INSERT INTO harness_project_credentials (project, provider, data, updated_at)
+             VALUES ($1, $2, $3, now())
+             ON CONFLICT (project, provider) DO UPDATE SET data = excluded.data, updated_at = now()",
+        )
+        .bind(project)
+        .bind(provider)
+        .bind(blob)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Fetch a **project-scoped** credential (no fallback).
+    pub async fn get_project(
+        &self,
+        project: &str,
+        provider: &str,
+    ) -> Result<Option<BTreeMap<String, String>>, PersistError> {
+        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+            "SELECT data FROM harness_project_credentials WHERE project = $1 AND provider = $2",
+        )
+        .bind(project)
+        .bind(provider)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((blob,)) = row else {
+            return Ok(None);
+        };
+        let plaintext = decrypt(&self.key, &blob)?;
+        let fields: BTreeMap<String, String> =
+            serde_json::from_slice(&plaintext).map_err(|e| PersistError::Crypto(e.to_string()))?;
+        Ok(Some(fields))
+    }
+
+    /// Resolve a credential for `project`: the project-scoped row if present,
+    /// otherwise the global [`Self::get`] one. This is the lookup integrations
+    /// (Linear, GitHub) use so a project in a different account can override the
+    /// shared default.
+    pub async fn get_for_project(
+        &self,
+        project: &str,
+        provider: &str,
+    ) -> Result<Option<BTreeMap<String, String>>, PersistError> {
+        if let Some(fields) = self.get_project(project, provider).await? {
+            return Ok(Some(fields));
+        }
+        self.get(provider).await
+    }
+
+    /// Project-scoped provider names configured for `project`.
+    pub async fn list_project_configured(
+        &self,
+        project: &str,
+    ) -> Result<Vec<String>, PersistError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT provider FROM harness_project_credentials WHERE project = $1 ORDER BY provider",
+        )
+        .bind(project)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Remove a project-scoped credential.
+    pub async fn delete_project(&self, project: &str, provider: &str) -> Result<(), PersistError> {
+        sqlx::query("DELETE FROM harness_project_credentials WHERE project = $1 AND provider = $2")
+            .bind(project)
             .bind(provider)
             .execute(&self.pool)
             .await?;
@@ -215,5 +316,82 @@ mod tests {
 
         store.delete(&provider).await.unwrap();
         assert!(store.get(&provider).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn project_scoped_overrides_global_with_fallback() {
+        let Ok(url) = std::env::var("HARNESS_DATABASE_URL") else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        if !crate::is_test_db(&url) {
+            eprintln!("skipping: HARNESS_DATABASE_URL is not a test database");
+            return;
+        }
+        let store = CredentialStore::connect(&url, [5u8; 32]).await.unwrap();
+        let provider = format!(
+            "linear-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let project = "proj-A";
+        let field = |v: &str| BTreeMap::from([("api_key".to_string(), v.to_string())]);
+
+        // No creds anywhere → None.
+        assert!(store
+            .get_for_project(project, &provider)
+            .await
+            .unwrap()
+            .is_none());
+
+        // Global only → resolves to global.
+        store.set(&provider, &field("GLOBAL")).await.unwrap();
+        assert_eq!(
+            store
+                .get_for_project(project, &provider)
+                .await
+                .unwrap()
+                .unwrap()["api_key"],
+            "GLOBAL"
+        );
+
+        // Project override wins.
+        store
+            .set_project(project, &provider, &field("PROJECT"))
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .get_for_project(project, &provider)
+                .await
+                .unwrap()
+                .unwrap()["api_key"],
+            "PROJECT"
+        );
+        // A different project still falls back to global.
+        assert_eq!(
+            store
+                .get_for_project("proj-B", &provider)
+                .await
+                .unwrap()
+                .unwrap()["api_key"],
+            "GLOBAL"
+        );
+
+        // Deleting the override falls back to global again.
+        store.delete_project(project, &provider).await.unwrap();
+        assert_eq!(
+            store
+                .get_for_project(project, &provider)
+                .await
+                .unwrap()
+                .unwrap()["api_key"],
+            "GLOBAL"
+        );
+
+        store.delete(&provider).await.unwrap();
     }
 }

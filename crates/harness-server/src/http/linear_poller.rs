@@ -43,10 +43,11 @@ pub(crate) fn spawn_poller(state: Arc<RunsState>) {
     });
 }
 
-/// The Linear API key from the credential store (provider `linear`), if set.
-async fn linear_api_key(state: &Arc<RunsState>) -> Option<String> {
+/// The Linear API key for `project`: project-scoped credential first, else the
+/// global `linear` one.
+async fn linear_key_for_project(state: &Arc<RunsState>, project: &str) -> Option<String> {
     let store = state.cred_store().await.ok()?;
-    let fields = store.get("linear").await.ok()??;
+    let fields = store.get_for_project(project, "linear").await.ok()??;
     fields.get("api_key").filter(|k| !k.is_empty()).cloned()
 }
 
@@ -65,15 +66,6 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
     if bindings.is_empty() {
         return;
     }
-    let Some(api_key) = linear_api_key(state).await else {
-        // Enabled bindings exist but no Linear credential — nothing to poll.
-        tracing::debug!(
-            "linear poller: {} enabled binding(s) but no `linear` credential",
-            bindings.len()
-        );
-        return;
-    };
-    let client = LinearClient::new(api_key);
 
     let now = Instant::now();
     for b in bindings {
@@ -88,6 +80,18 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
             continue;
         }
         last.insert(key, now);
+
+        // Per-project Linear key (project-scoped, else global). A binding whose
+        // project has no key configured is simply skipped.
+        let Some(api_key) = linear_key_for_project(state, &b.project).await else {
+            tracing::debug!(
+                "linear poller: {}/{} — no Linear credential for project",
+                b.project,
+                b.workflow
+            );
+            continue;
+        };
+        let client = LinearClient::new(api_key);
 
         match client
             .preview_issues(&b.team_id, &b.source_state_id, b.label.as_deref())

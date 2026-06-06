@@ -72,7 +72,7 @@ function StateSelect({
 export function LinearTriggerPanel({ workflow }: { workflow: string }) {
   const projects = useProjects();
   const [project, setProject] = useState<string>("");
-  const discovery = useLinearDiscovery();
+  const discovery = useLinearDiscovery(project || null);
   const source = useLinearSource(project || null, workflow || null);
   const save = useSaveLinearSource(project || null);
   const del = useDeleteLinearSource(project || null);

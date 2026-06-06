@@ -154,6 +154,86 @@ pub async fn delete_credential(
     }
 }
 
+// ── Per-project credentials (linear / github only; project-first, global fallback) ──
+
+/// Providers that may be overridden **per project** — the external integrations
+/// whose account can differ by project. AI provider keys stay global only.
+const PROJECT_PROVIDERS: &[&str] = &["linear", "github"];
+
+/// `GET /api/projects/{project}/credentials` — which per-project providers are
+/// configured for this project (no secrets).
+pub async fn list_project_credentials(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(project): AxumPath<String>,
+) -> Response {
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let configured = match store.list_project_configured(&project).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let out: Vec<ProviderCredential> = PROJECT_PROVIDERS
+        .iter()
+        .map(|p| ProviderCredential {
+            provider: p.to_string(),
+            configured: configured.iter().any(|c| c == p),
+        })
+        .collect();
+    Json(out).into_response()
+}
+
+/// `PUT /api/projects/{project}/credentials/{provider}` — set a project-scoped
+/// credential (allowlisted to `linear` / `github`).
+pub async fn set_project_credential(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath((project, provider)): AxumPath<(String, String)>,
+    Json(req): Json<SetCredentialRequest>,
+) -> Response {
+    if !PROJECT_PROVIDERS.contains(&provider.as_str()) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "provider `{provider}` is not configurable per project (allowed: linear, github)"
+            ),
+        );
+    }
+    if req.fields.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "no fields provided");
+    }
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.set_project(&project, &provider, &req.fields).await {
+        Ok(()) => {
+            Json(serde_json::json!({ "saved": true, "project": project, "provider": provider }))
+                .into_response()
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `DELETE /api/projects/{project}/credentials/{provider}` — clear a
+/// project-scoped credential (falls back to the global one thereafter).
+pub async fn delete_project_credential(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath((project, provider)): AxumPath<(String, String)>,
+) -> Response {
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.delete_project(&project, &provider).await {
+        Ok(()) => {
+            Json(serde_json::json!({ "deleted": true, "project": project, "provider": provider }))
+                .into_response()
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
