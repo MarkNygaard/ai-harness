@@ -124,8 +124,11 @@ pub async fn put_source(
     if body.source_state_id.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "`source_state_id` is required");
     }
-    if body.poll_interval_secs < 1 {
-        return err(StatusCode::BAD_REQUEST, "`poll_interval_secs` must be >= 1");
+    if body.poll_interval_secs < 1 || body.poll_interval_secs > 86_400 {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "`poll_interval_secs` must be between 1 and 86400",
+        );
     }
 
     if let Err(r) = ensure_project(&state, &project).await {

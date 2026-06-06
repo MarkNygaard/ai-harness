@@ -90,9 +90,26 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
 
   const loadedFor = useRef<string | null>(null);
 
-  // Seed form state once when source data arrives.
+  // Seed form state once when source data arrives (or reset when none exists).
   useEffect(() => {
-    if (!source.data || loadedFor.current === `${project}:${workflow}`) return;
+    if (loadedFor.current === `${project}:${workflow}`) return;
+
+    if (source.data === null) {
+      setTeamId("");
+      setSourceStateId("");
+      setLabel("");
+      setInProgressStateId("");
+      setReviewStateId("");
+      setReadyStateId("");
+      setBaseBranch("");
+      setPollIntervalSecs(60);
+      setEnabled(false);
+      loadedFor.current = `${project}:${workflow}`;
+      return;
+    }
+
+    if (!source.data) return; // still loading
+
     const s = source.data;
     setTeamId(s.team_id);
     setSourceStateId(s.source_state_id);
@@ -105,6 +122,11 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
     setEnabled(s.enabled);
     loadedFor.current = `${project}:${workflow}`;
   }, [source.data, project, workflow]);
+  // Clear stale mutation state when the context changes.
+  useEffect(() => {
+    save.reset();
+    del.reset();
+  }, [project, workflow, save, del]);
 
   // Default project to first available project.
   useEffect(() => {
@@ -286,10 +308,14 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
                     className={inputCls}
                     type="number"
                     min={1}
+                    max={86400}
                     value={pollIntervalSecs}
                     onChange={(e) =>
                       setPollIntervalSecs(
-                        Math.max(1, parseInt(e.target.value, 10) || 1),
+                        Math.min(
+                          86400,
+                          Math.max(1, parseInt(e.target.value, 10) || 1),
+                        ),
                       )
                     }
                   />

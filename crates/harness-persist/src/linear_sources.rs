@@ -247,10 +247,13 @@ mod tests {
         assert_eq!(updated.team_id, "team-2");
         assert_eq!(updated.label, Some("bug".into()));
         assert_eq!(updated.created_at, created.created_at);
-
         // list_by_project returns the binding.
         let list = store.list_by_project(project).await.unwrap();
         assert!(list.iter().any(|s| s.workflow == workflow));
+
+        // list_by_project for an unknown project returns empty.
+        let empty = store.list_by_project("no-such-project").await.unwrap();
+        assert!(empty.is_empty());
 
         // Delete returns true, then false on second call.
         assert!(store.delete(project, &workflow).await.unwrap());
