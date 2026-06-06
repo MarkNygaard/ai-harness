@@ -27,6 +27,9 @@ pub use categories::{Category, CategoryInput, CategoryStore};
 mod linear_sources;
 pub use linear_sources::{LinearSource, LinearSourceInput, LinearSourceStore};
 
+mod linear_claims;
+pub use linear_claims::{LinearClaim, LinearClaimStore};
+
 /// A run row (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunSummary {

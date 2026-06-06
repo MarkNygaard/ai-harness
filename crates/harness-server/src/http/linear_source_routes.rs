@@ -58,6 +58,9 @@ pub struct PutSourceBody {
     pub poll_interval_secs: i32,
     #[serde(default)]
     pub enabled: bool,
+    /// When false (default) the poller dry-runs this binding; true = claim + fire.
+    #[serde(default)]
+    pub live: bool,
 }
 
 fn default_poll() -> i32 {
@@ -159,6 +162,7 @@ pub async fn put_source(
         base_branch: optional_trimmed_non_empty(body.base_branch),
         poll_interval_secs: body.poll_interval_secs,
         enabled: body.enabled,
+        live: body.live,
     };
 
     match store.upsert(&project, &workflow, &input).await {

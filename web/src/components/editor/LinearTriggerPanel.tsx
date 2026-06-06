@@ -87,6 +87,7 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
   const [baseBranch, setBaseBranch] = useState("");
   const [pollIntervalSecs, setPollIntervalSecs] = useState(60);
   const [enabled, setEnabled] = useState(false);
+  const [live, setLive] = useState(false);
 
   const loadedFor = useRef<string | null>(null);
   const sourceKey = `${project}:${workflow}`;
@@ -101,6 +102,7 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
     setBaseBranch("");
     setPollIntervalSecs(60);
     setEnabled(false);
+    setLive(false);
   };
 
   // Seed form state once when source data arrives (or reset when none exists).
@@ -137,6 +139,7 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
     setBaseBranch(s.base_branch ?? "");
     setPollIntervalSecs(s.poll_interval_secs);
     setEnabled(s.enabled);
+    setLive(s.live);
     loadedFor.current = sourceKey;
   }, [source.data, project, workflow, sourceKey]);
   // Clear stale mutation state when the context changes.
@@ -184,6 +187,7 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
       base_branch: baseBranch.trim() || undefined,
       poll_interval_secs: pollIntervalSecs,
       enabled,
+      live,
     });
   };
 
@@ -350,7 +354,7 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
                 </Field>
               </div>
 
-              {/* Enabled toggle */}
+              {/* Enabled toggle — on/off without deleting the binding. */}
               <label className="flex items-center gap-2 text-[13px]">
                 <input
                   type="checkbox"
@@ -359,6 +363,23 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
                   className="h-4 w-4 rounded border-border"
                 />
                 <span>Enabled</span>
+              </label>
+
+              {/* Live toggle — off = dry-run (logs only); on = claim + fire. */}
+              <label className="flex items-center gap-2 text-[13px]">
+                <input
+                  type="checkbox"
+                  checked={live}
+                  onChange={(e) => setLive(e.target.checked)}
+                  disabled={!enabled}
+                  className="h-4 w-4 rounded border-border"
+                />
+                <span>
+                  Live{" "}
+                  <span className="text-muted-foreground">
+                    (off = dry-run: logs candidates without claiming or firing)
+                  </span>
+                </span>
               </label>
 
               {/* Actions */}

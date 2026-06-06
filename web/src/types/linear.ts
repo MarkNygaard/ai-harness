@@ -41,6 +41,7 @@ export interface LinearSource {
   base_branch: string | null;
   poll_interval_secs: number;
   enabled: boolean;
+  live: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -58,4 +59,5 @@ export interface LinearSourceInput {
   base_branch?: string;
   poll_interval_secs: number;
   enabled: boolean;
+  live: boolean;
 }
