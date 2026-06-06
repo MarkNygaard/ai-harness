@@ -89,26 +89,43 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
   const [enabled, setEnabled] = useState(false);
 
   const loadedFor = useRef<string | null>(null);
+  const sourceKey = `${project}:${workflow}`;
+
+  const resetForm = () => {
+    setTeamId("");
+    setSourceStateId("");
+    setLabel("");
+    setInProgressStateId("");
+    setReviewStateId("");
+    setReadyStateId("");
+    setBaseBranch("");
+    setPollIntervalSecs(60);
+    setEnabled(false);
+  };
 
   // Seed form state once when source data arrives (or reset when none exists).
   useEffect(() => {
-    if (loadedFor.current === `${project}:${workflow}`) return;
-
-    if (source.data === null) {
-      setTeamId("");
-      setSourceStateId("");
-      setLabel("");
-      setInProgressStateId("");
-      setReviewStateId("");
-      setReadyStateId("");
-      setBaseBranch("");
-      setPollIntervalSecs(60);
-      setEnabled(false);
-      loadedFor.current = `${project}:${workflow}`;
+    if (!project || !workflow) {
+      resetForm();
+      loadedFor.current = null;
       return;
     }
 
-    if (!source.data) return; // still loading
+    if (loadedFor.current === sourceKey) return;
+
+    if (source.data === undefined) {
+      if (loadedFor.current !== null) {
+        resetForm();
+        loadedFor.current = null;
+      }
+      return;
+    }
+
+    if (source.data === null) {
+      resetForm();
+      loadedFor.current = sourceKey;
+      return;
+    }
 
     const s = source.data;
     setTeamId(s.team_id);
@@ -120,13 +137,13 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
     setBaseBranch(s.base_branch ?? "");
     setPollIntervalSecs(s.poll_interval_secs);
     setEnabled(s.enabled);
-    loadedFor.current = `${project}:${workflow}`;
-  }, [source.data, project, workflow]);
+    loadedFor.current = sourceKey;
+  }, [source.data, project, workflow, sourceKey]);
   // Clear stale mutation state when the context changes.
   useEffect(() => {
     save.reset();
     del.reset();
-  }, [project, workflow, save, del]);
+  }, [project, workflow]);
 
   // Default project to first available project.
   useEffect(() => {
@@ -143,8 +160,15 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
   const states = selectedTeam?.states ?? [];
   const labels = selectedTeam?.labels ?? [];
   const sortedStates = [...states].sort((a, b) => a.position - b.position);
+  const sourceLoaded = loadedFor.current === sourceKey;
 
-  const canSave = !!project && !!teamId && !!sourceStateId && !save.isPending;
+  const canSave =
+    sourceLoaded &&
+    !!project &&
+    !!teamId &&
+    !!teamName &&
+    !!sourceStateId &&
+    !save.isPending;
 
   const handleSave = () => {
     if (!canSave) return;
@@ -153,11 +177,11 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
       team_id: teamId,
       team_name: teamName,
       source_state_id: sourceStateId,
-      label: label || undefined,
-      in_progress_state_id: inProgressStateId || undefined,
-      review_state_id: reviewStateId || undefined,
-      ready_state_id: readyStateId || undefined,
-      base_branch: baseBranch || undefined,
+      label: label.trim() || undefined,
+      in_progress_state_id: inProgressStateId.trim() || undefined,
+      review_state_id: reviewStateId.trim() || undefined,
+      ready_state_id: readyStateId.trim() || undefined,
+      base_branch: baseBranch.trim() || undefined,
       poll_interval_secs: pollIntervalSecs,
       enabled,
     });
@@ -265,7 +289,7 @@ export function LinearTriggerPanel({ workflow }: { workflow: string }) {
                 >
                   <option value="">(none)</option>
                   {labels.map((l) => (
-                    <option key={l.id} value={l.id}>
+                    <option key={l.id} value={l.name}>
                       {l.name}
                     </option>
                   ))}

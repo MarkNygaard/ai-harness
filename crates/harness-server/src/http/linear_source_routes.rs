@@ -70,9 +70,9 @@ pub async fn get_source(
     axum::extract::Path(project): axum::extract::Path<String>,
     Query(q): Query<WorkflowQuery>,
 ) -> Response {
-    if q.workflow.trim().is_empty() {
+    let Some(workflow) = trimmed_non_empty(q.workflow) else {
         return err(StatusCode::BAD_REQUEST, "`workflow` is required");
-    }
+    };
     if let Err(r) = ensure_project(&state, &project).await {
         return r;
     }
@@ -80,7 +80,7 @@ pub async fn get_source(
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    match store.get(&project, &q.workflow).await {
+    match store.get(&project, &workflow).await {
         Ok(opt) => Json(opt).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -104,8 +104,13 @@ pub async fn list_sources(
     }
 }
 
-fn non_empty(s: Option<String>) -> Option<String> {
-    s.filter(|s| !s.trim().is_empty())
+fn trimmed_non_empty(s: String) -> Option<String> {
+    let trimmed = s.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn optional_trimmed_non_empty(s: Option<String>) -> Option<String> {
+    s.and_then(trimmed_non_empty)
 }
 
 /// `PUT /api/projects/{project}/linear-source` — create or update a binding.
@@ -115,18 +120,18 @@ pub async fn put_source(
     Json(body): Json<PutSourceBody>,
 ) -> Response {
     // Validation.
-    if body.workflow.trim().is_empty() {
+    let Some(workflow) = trimmed_non_empty(body.workflow) else {
         return err(StatusCode::BAD_REQUEST, "`workflow` is required");
-    }
-    if body.team_id.trim().is_empty() {
+    };
+    let Some(team_id) = trimmed_non_empty(body.team_id) else {
         return err(StatusCode::BAD_REQUEST, "`team_id` is required");
-    }
-    if body.team_name.trim().is_empty() {
+    };
+    let Some(team_name) = trimmed_non_empty(body.team_name) else {
         return err(StatusCode::BAD_REQUEST, "`team_name` is required");
-    }
-    if body.source_state_id.trim().is_empty() {
+    };
+    let Some(source_state_id) = trimmed_non_empty(body.source_state_id) else {
         return err(StatusCode::BAD_REQUEST, "`source_state_id` is required");
-    }
+    };
     if body.poll_interval_secs < 1 || body.poll_interval_secs > 86_400 {
         return err(
             StatusCode::BAD_REQUEST,
@@ -144,19 +149,19 @@ pub async fn put_source(
     };
 
     let input = LinearSourceInput {
-        team_id: body.team_id,
-        team_name: body.team_name,
-        source_state_id: body.source_state_id,
-        label: non_empty(body.label),
-        in_progress_state_id: non_empty(body.in_progress_state_id),
-        review_state_id: non_empty(body.review_state_id),
-        ready_state_id: non_empty(body.ready_state_id),
-        base_branch: non_empty(body.base_branch),
+        team_id,
+        team_name,
+        source_state_id,
+        label: optional_trimmed_non_empty(body.label),
+        in_progress_state_id: optional_trimmed_non_empty(body.in_progress_state_id),
+        review_state_id: optional_trimmed_non_empty(body.review_state_id),
+        ready_state_id: optional_trimmed_non_empty(body.ready_state_id),
+        base_branch: optional_trimmed_non_empty(body.base_branch),
         poll_interval_secs: body.poll_interval_secs,
         enabled: body.enabled,
     };
 
-    match store.upsert(&project, &body.workflow, &input).await {
+    match store.upsert(&project, &workflow, &input).await {
         Ok(row) => Json(row).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -168,9 +173,9 @@ pub async fn delete_source(
     axum::extract::Path(project): axum::extract::Path<String>,
     Query(q): Query<WorkflowQuery>,
 ) -> Response {
-    if q.workflow.trim().is_empty() {
+    let Some(workflow) = trimmed_non_empty(q.workflow) else {
         return err(StatusCode::BAD_REQUEST, "`workflow` is required");
-    }
+    };
     if let Err(r) = ensure_project(&state, &project).await {
         return r;
     }
@@ -178,10 +183,10 @@ pub async fn delete_source(
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    match store.delete(&project, &q.workflow).await {
+    match store.delete(&project, &workflow).await {
         Ok(deleted) => Json(serde_json::json!({
             "deleted": deleted,
-            "workflow": q.workflow,
+            "workflow": workflow,
         }))
         .into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
