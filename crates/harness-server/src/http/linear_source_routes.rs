@@ -58,6 +58,9 @@ pub struct PutSourceBody {
     pub poll_interval_secs: i32,
     #[serde(default)]
     pub enabled: bool,
+    /// When false (default) the poller dry-runs this binding; true = claim + fire.
+    #[serde(default)]
+    pub live: bool,
 }
 
 fn default_poll() -> i32 {
@@ -138,6 +141,24 @@ pub async fn put_source(
             "`poll_interval_secs` must be between 1 and 86400",
         );
     }
+    // The source (pickup) status is exclusive: claiming an issue MOVES it out of
+    // that column, so reusing it as a status-map target (in-progress/review/ready)
+    // would mean the issue never leaves the pickup column — and a failed run
+    // returning it there would re-claim it forever. Reject the misconfiguration.
+    for (slot, st) in [
+        ("in_progress_state_id", &body.in_progress_state_id),
+        ("review_state_id", &body.review_state_id),
+        ("ready_state_id", &body.ready_state_id),
+    ] {
+        if st.as_deref().map(str::trim) == Some(source_state_id.as_str()) {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "`{slot}` must differ from the source status — the pickup column can't also be a status-map target"
+                ),
+            );
+        }
+    }
 
     if let Err(r) = ensure_project(&state, &project).await {
         return r;
@@ -159,6 +180,7 @@ pub async fn put_source(
         base_branch: optional_trimmed_non_empty(body.base_branch),
         poll_interval_secs: body.poll_interval_secs,
         enabled: body.enabled,
+        live: body.live,
     };
 
     match store.upsert(&project, &workflow, &input).await {

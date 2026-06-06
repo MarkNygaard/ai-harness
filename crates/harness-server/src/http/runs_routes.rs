@@ -52,6 +52,7 @@ pub struct RunsState {
     project_store: OnceCell<ProjectStore>,
     category_store: OnceCell<harness_persist::CategoryStore>,
     linear_source_store: OnceCell<harness_persist::LinearSourceStore>,
+    linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
     /// This server instance's identity, stamped as the `owner` of every run it
@@ -101,6 +102,7 @@ impl RunsState {
             project_store: OnceCell::new(),
             category_store: OnceCell::new(),
             linear_source_store: OnceCell::new(),
+            linear_claim_store: OnceCell::new(),
             projects_dir,
             instance_id,
             live: Mutex::new(HashMap::new()),
@@ -146,6 +148,23 @@ impl RunsState {
         self.linear_source_store
             .get_or_try_init(|| async {
                 harness_persist::LinearSourceStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the Linear claim-linkage store (live poller).
+    pub(crate) async fn linear_claim_store(
+        &self,
+    ) -> Result<&harness_persist::LinearClaimStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.linear_claim_store
+            .get_or_try_init(|| async {
+                harness_persist::LinearClaimStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })

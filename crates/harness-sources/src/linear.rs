@@ -48,13 +48,16 @@ pub struct Label {
     pub name: String,
 }
 
-/// An issue matched by a preview filter (read-only — never claimed here).
+/// An issue matched by a preview filter.
 #[derive(Debug, Clone, Serialize)]
 pub struct Issue {
+    /// Linear internal id (used for state/comment mutations).
     pub id: String,
     pub identifier: String,
     pub title: String,
     pub url: String,
+    /// Issue description (markdown) — the task spec fed to the fired run.
+    pub body: Option<String>,
     pub labels: Vec<String>,
 }
 
@@ -107,6 +110,8 @@ struct IssueNode {
     title: String,
     url: String,
     #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
     labels: Option<Conn<IssueLabelNode>>,
 }
 
@@ -132,7 +137,7 @@ query Discovery {
 const ISSUES_QUERY: &str = r#"
 query Preview($teamId: ID!, $stateId: ID!) {
   issues(first: 50, filter: { team: { id: { eq: $teamId } }, state: { id: { eq: $stateId } } }) {
-    nodes { id identifier title url labels { nodes { name } } }
+    nodes { id identifier title url description labels { nodes { name } } }
   }
 }"#;
 
@@ -208,6 +213,7 @@ pub fn parse_issues(json: &[u8], label: Option<&str>) -> Result<Vec<Issue>, Line
             identifier: i.identifier,
             title: i.title,
             url: i.url,
+            body: i.description,
             labels: i
                 .labels
                 .map(|c| c.nodes.into_iter().map(|l| l.name).collect())
@@ -278,11 +284,66 @@ impl LinearClient {
         });
         parse_issues(&self.post(body).await?, label)
     }
+
+    /// Move an issue to a workflow state (write). `issue_id` is the Linear
+    /// internal id (the `id` field from a previewed [`Issue`]), not the
+    /// identifier (`COR-12`).
+    pub async fn set_issue_state(&self, issue_id: &str, state_id: &str) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!,$s:String!){ issueUpdate(id:$id, input:{stateId:$s}){ success } }",
+            "variables": { "id": issue_id, "s": state_id },
+        });
+        expect_mutation_success(&self.post(body).await?, "issueUpdate")
+    }
+
+    /// Add a comment to an issue (write).
+    pub async fn add_comment(&self, issue_id: &str, body_md: &str) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!,$b:String!){ commentCreate(input:{issueId:$id, body:$b}){ success } }",
+            "variables": { "id": issue_id, "b": body_md },
+        });
+        expect_mutation_success(&self.post(body).await?, "commentCreate")
+    }
+}
+
+/// Check a mutation response reported `{ <field>: { success: true } }`.
+fn expect_mutation_success(json: &[u8], field: &str) -> Result<(), LinearError> {
+    let data: serde_json::Value = gql_data(json)?;
+    let ok = data
+        .get(field)
+        .and_then(|f| f.get("success"))
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    if ok {
+        Ok(())
+    } else {
+        Err(LinearError(format!("{field} did not report success")))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mutation_success_parsing() {
+        assert!(expect_mutation_success(
+            br#"{"data":{"issueUpdate":{"success":true}}}"#,
+            "issueUpdate"
+        )
+        .is_ok());
+        assert!(expect_mutation_success(
+            br#"{"data":{"issueUpdate":{"success":false}}}"#,
+            "issueUpdate"
+        )
+        .is_err());
+        // A GraphQL error surfaces through gql_data.
+        assert!(expect_mutation_success(
+            br#"{"errors":[{"message":"not authorized"}]}"#,
+            "issueUpdate"
+        )
+        .is_err());
+    }
 
     #[test]
     fn parse_discovery_maps_teams_states_labels() {
