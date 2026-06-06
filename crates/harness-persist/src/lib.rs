@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS harness_workflow_runs (
     project       text,
     node_count    int  NOT NULL DEFAULT 0,
     graph         jsonb NOT NULL DEFAULT '[]'::jsonb,
+    owner         text,
+    heartbeat_at  timestamptz,
     recorded_at   timestamptz NOT NULL DEFAULT now()
 )";
 
@@ -97,6 +99,13 @@ const ALTER_RUNS_GRAPH: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS graph jsonb NOT NULL DEFAULT '[]'::jsonb";
 const ALTER_RUNS_TITLE: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS title text";
+/// Run-lease columns: `owner` stamps the server instance that started a run and
+/// `heartbeat_at` is renewed while it executes, so reconcile can reap only runs
+/// whose lease has gone stale — never a live run owned by another instance.
+const ALTER_RUNS_OWNER: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS owner text";
+const ALTER_RUNS_HEARTBEAT: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz";
 
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
@@ -146,6 +155,10 @@ impl RunStore {
         sqlx::query(CREATE_RUNS).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_GRAPH).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_TITLE).execute(&self.pool).await?;
+        sqlx::query(ALTER_RUNS_OWNER).execute(&self.pool).await?;
+        sqlx::query(ALTER_RUNS_HEARTBEAT)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
         Ok(())
     }
@@ -235,15 +248,21 @@ impl RunStore {
         project: Option<&str>,
         total_nodes: usize,
         graph: &[NodeMeta],
+        owner: Option<&str>,
     ) -> Result<(), PersistError> {
+        // Stamp the lease (`owner` + fresh `heartbeat_at`) so this run is
+        // claimed by the current instance and protected from reconcile until its
+        // heartbeat goes stale.
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, title, status, project, node_count, graph, recorded_at)
-             VALUES ($1, $2, $3, 'running', $4, $5, $6, now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, status, project, node_count, graph, owner, heartbeat_at, recorded_at)
+             VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, now(), now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 title         = COALESCE(excluded.title, harness_workflow_runs.title),
                 node_count    = excluded.node_count,
-                graph         = excluded.graph",
+                graph         = excluded.graph,
+                owner         = excluded.owner,
+                heartbeat_at  = now()",
         )
         .bind(run_id)
         .bind(workflow)
@@ -251,6 +270,20 @@ impl RunStore {
         .bind(project)
         .bind(total_nodes as i32)
         .bind(Json(graph))
+        .bind(owner)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Renew a running run's lease (`heartbeat_at = now()`). Called periodically
+    /// by the owning executor; a no-op once the run is terminal.
+    pub async fn heartbeat_run(&self, run_id: &str) -> Result<(), PersistError> {
+        sqlx::query(
+            "UPDATE harness_workflow_runs SET heartbeat_at = now()
+             WHERE id = $1 AND status = 'running'",
+        )
+        .bind(run_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -385,22 +418,43 @@ impl RunStore {
         Ok(res.rows_affected() > 0)
     }
 
-    /// Reconcile runs orphaned by a process crash/restart: no run survives a
-    /// restart, so any row still marked `running` at startup is stale — flip it
-    /// (and its in-flight node rows) to `cancelled`. Returns the run count.
-    pub async fn reconcile_orphaned_runs(&self) -> Result<u64, PersistError> {
-        let res = sqlx::query(
-            "UPDATE harness_workflow_runs SET status = 'cancelled', recorded_at = now()
-             WHERE status = 'running'",
-        )
-        .execute(&self.pool)
-        .await?;
+    /// Reap runs whose **lease has gone stale**: a run still marked `running`
+    /// whose `heartbeat_at` is older than `stale_after` (or never set) has no
+    /// live executor renewing it — flip it (and its in-flight node rows) to
+    /// `cancelled`. Returns the run count.
+    ///
+    /// Crucially this is **scoped by liveness**, not "all running": a run a
+    /// different instance is actively heartbeating is left alone, so a second
+    /// replica's startup — or any stray connection (a test, a manual `psql`)
+    /// running this — can no longer cancel live runs. Pass `Duration::ZERO` to
+    /// reap every running run regardless of heartbeat (the old behaviour).
+    pub async fn reconcile_orphaned_runs(
+        &self,
+        stale_after: std::time::Duration,
+    ) -> Result<u64, PersistError> {
+        let secs = stale_after.as_secs_f64();
+        let mut tx = self.pool.begin().await?;
+        // Node rows first (while their runs are still `running` so the subquery
+        // matches), scoped to exactly the stale runs we're about to cancel.
         sqlx::query(
             "UPDATE harness_run_nodes SET status = 'cancelled', ended_at = now()
-             WHERE status = 'running'",
+             WHERE status = 'running' AND run_id IN (
+                 SELECT id FROM harness_workflow_runs
+                 WHERE status = 'running'
+                   AND (heartbeat_at IS NULL OR heartbeat_at < now() - ($1 * interval '1 second')))",
         )
-        .execute(&self.pool)
+        .bind(secs)
+        .execute(&mut *tx)
         .await?;
+        let res = sqlx::query(
+            "UPDATE harness_workflow_runs SET status = 'cancelled', recorded_at = now()
+             WHERE status = 'running'
+               AND (heartbeat_at IS NULL OR heartbeat_at < now() - ($1 * interval '1 second'))",
+        )
+        .bind(secs)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(res.rows_affected())
     }
 
@@ -497,6 +551,16 @@ mod tests {
     /// (CI provides one; locally `docker compose up -d postgres` + export it).
     fn db_url() -> Option<String> {
         std::env::var("HARNESS_DATABASE_URL").ok()
+    }
+
+    /// Guard for destructive tests: only treat a URL as a test database when its
+    /// name clearly says so (CI uses `harness_test`). A production DB name like
+    /// `harness` returns false, so pointing `HARNESS_DATABASE_URL` at the cluster
+    /// can never let a test run a global, destructive statement against it.
+    fn is_test_db(url: &str) -> bool {
+        let db = url.rsplit('/').next().unwrap_or(url);
+        let db = db.split(['?', '#']).next().unwrap_or(db);
+        db.to_ascii_lowercase().contains("test")
     }
 
     fn sample_report() -> RunReport {
@@ -623,6 +687,7 @@ mod tests {
                 None,
                 report.nodes.len(),
                 &report.graph,
+                None,
             )
             .await
             .unwrap();
@@ -671,7 +736,15 @@ mod tests {
         );
         let report = sample_report();
         store
-            .start_run(&run_id, &report.workflow, None, None, 2, &report.graph)
+            .start_run(
+                &run_id,
+                &report.workflow,
+                None,
+                None,
+                2,
+                &report.graph,
+                None,
+            )
             .await
             .unwrap();
         store
@@ -723,11 +796,19 @@ mod tests {
 
     #[tokio::test]
     #[serial_test::serial]
-    async fn reconcile_cancels_orphaned_running_runs() {
+    async fn reconcile_reaps_only_stale_leases() {
         let Some(url) = db_url() else {
             eprintln!("skipping: HARNESS_DATABASE_URL not set");
             return;
         };
+        // `reconcile_orphaned_runs(ZERO)` cancels *every* running run, so it must
+        // never touch a production DB. Refuse unless this is clearly a test DB.
+        if !is_test_db(&url) {
+            eprintln!(
+                "skipping destructive reconcile test: HARNESS_DATABASE_URL is not a *test* database"
+            );
+            return;
+        }
         let store = RunStore::connect(&url).await.expect("connect");
         let run_id = format!(
             "test-orphan-{}",
@@ -735,11 +816,35 @@ mod tests {
         );
         let report = sample_report();
         store
-            .start_run(&run_id, &report.workflow, None, None, 2, &report.graph)
+            .start_run(
+                &run_id,
+                &report.workflow,
+                None,
+                None,
+                2,
+                &report.graph,
+                None,
+            )
             .await
             .unwrap();
 
-        let n = store.reconcile_orphaned_runs().await.unwrap();
+        // A fresh lease survives reconcile with a generous staleness window —
+        // this is what protects a live run from a stray reconcile call.
+        let n = store
+            .reconcile_orphaned_runs(std::time::Duration::from_secs(3600))
+            .await
+            .unwrap();
+        assert_eq!(
+            store.run_status(&run_id).await.unwrap().as_deref(),
+            Some("running"),
+            "fresh-heartbeat run must NOT be reaped (reaped {n})"
+        );
+
+        // With a zero window every running run is stale → reaped.
+        let n = store
+            .reconcile_orphaned_runs(std::time::Duration::ZERO)
+            .await
+            .unwrap();
         assert!(n >= 1, "reconciled at least our orphan");
         assert_eq!(
             store.run_status(&run_id).await.unwrap().as_deref(),
