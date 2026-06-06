@@ -604,6 +604,7 @@ mod tests {
                 ("HARNESS_DATABASE_POOL_ACQUIRE_TIMEOUT_SECS", None::<&str>),
                 ("HARNESS_API_TOKEN", None::<&str>),
                 ("GITHUB_TOKEN", None::<&str>),
+                ("GH_TOKEN", None::<&str>),
             ],
             || {
                 let mut cfg = ServerConfig::default();
