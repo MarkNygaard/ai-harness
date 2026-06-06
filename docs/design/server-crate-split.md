@@ -1,6 +1,63 @@
 # Design: split `harness-server` to cut verify time
 
-**Status:** proposed (Stage A ready to implement). **Owner:** build-perf.
+**Status:** **DEFERRED** (2026-06-06) — do **not** start unless the revisit
+trigger below fires. **Owner:** build-perf.
+
+## Decision & revisit trigger
+
+The cheap win — the lighter `validate` pre-check (PR #77) — shipped first and
+removed the single biggest cost (a full test compile+run dropped from `validate`,
+~15–18 min). **Revisit this split only if, *after that deploy*, a typical
+`idea-to-pr` run's verify gates (`validate` + `final-verify-loop`) are still
+painfully slow** (say > ~25 min combined). If they're acceptable, leave
+`harness-server` as-is — the split is a large, risky investment that isn't worth
+it just for tidiness.
+
+**Why deferred (a boundary probe, 2026-06-06):** the high-value target
+(`task_executor`/`task_runner`, ~22k LOC) is **not a clean leaf** — it's a
+central hub:
+
+- imported by **~30 files** across `harness-server`, including **`http/state.rs`
+  (`AppState`)** and the **active `workflow_runtime_worker/*`** — so it's shared
+  by *both* the legacy and the live runs path (not dead code; can't delete);
+- **mutually coupled with `task_db`** (`task_runner::store` → `TaskDb`, and
+  `task_db` → `task_runner`), so they must move together;
+- `task_executor` takes **`Arc<HarnessServer>`** (the server's own type) in core
+  functions — a back-reference that would create a crate cycle.
+
+So a clean extraction needs **decoupling first**, not a `git mv`. It's a
+multi-PR, high-risk effort — see the staged approach under "If the trigger
+fires" below.
+
+## If the trigger fires — staged approach
+
+Do **not** attempt the move in one PR. Sequence:
+
+1. **Trait boundary (no code moves).** Define the slice of `HarnessServer` /
+   `AppState` that `task_executor`/`task_runner` actually need as a trait in
+   `harness-core`; switch their signatures from `Arc<HarnessServer>` to the
+   trait. This is the real work and lands as its own reviewable PR with zero
+   behaviour change.
+2. **Extract the engine.** Once the back-reference is gone, move
+   `task_runner` + `task_executor` + `task_db` (they move together) into a new
+   `harness-task-engine` crate that depends only on `harness-core`. Update the
+   ~30 importers.
+3. **Then** the smaller isolated modules (`q_value_store`, `complexity_router`,
+   `parallel_dispatch`, …) if still worthwhile.
+
+## Also on the build-perf backlog
+
+- **`cargo nextest`** (deferred from #77): drop-in faster test runner, but its
+  per-test-process model breaks the `serial_test`-based Postgres-test isolation
+  (concurrent `CREATE SCHEMA` → duplicate-key). Needs a `.config/nextest.toml`
+  serial test-group covering the DB tests (`harness-core db::tests`,
+  `harness-persist`, and any `#[serial_test::serial]` users) before it's safe.
+  Smaller, contained — do this *before* the crate-split if perf is still a
+  concern.
+
+---
+
+## Original analysis (retained)
 
 ## Problem
 
