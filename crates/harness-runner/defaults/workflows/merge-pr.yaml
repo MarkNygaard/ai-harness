@@ -1,0 +1,130 @@
+name: merge-pr
+description: |
+  Merge a ready pull request — resolving merge conflicts against its base branch
+  first if needed — then squash-merge it. Input ($ARGUMENTS) names the PR: a PR
+  number, a PR URL, or a Linear issue whose linked PR should be merged.
+
+  Linear-agnostic: works from a manual/API trigger or a "Ready for merge" Linear
+  source binding (which feeds one issue at a time). Project rules (merge vs
+  rebase, verify chain, prohibitions) live in the project's CLAUDE.md / AGENTS.md
+  and are auto-loaded into every agent's context.
+provider: pi
+model: kimi-code/kimi-for-coding
+
+nodes:
+  # 1. Resolve exactly which PR we're merging, and its current mergeability.
+  - id: resolve-pr
+    category: planning
+    provider: claude
+    model: haiku
+    context: fresh
+    prompt: |
+      Identify the GitHub pull request to merge from this input:
+
+      $ARGUMENTS
+
+      The input may be a PR number, a PR URL, or a Linear issue identifier whose
+      linked PR should be merged. Use `gh` to resolve it to a single PR in this
+      repository. If the input is a Linear issue, find its associated PR (e.g.
+      `gh pr list --search "<issue-id>"`, or the PR whose branch/title references
+      it).
+
+      Inspect it:
+        gh pr view <pr> --json number,state,mergeable,mergeStateStatus,baseRefName,headRefName,title
+
+      Then emit ONLY this JSON verdict (no prose). If you cannot find a PR, set
+      `pr` to "" and `state` to "CLOSED".
+    output_format:
+      type: object
+      properties:
+        pr: { type: string, description: "PR number, or \"\" if none found" }
+        base: { type: string, description: "base branch (e.g. main)" }
+        title: { type: string }
+        state: { type: string, enum: ["OPEN", "MERGED", "CLOSED"] }
+        mergeable: { type: string, enum: ["MERGEABLE", "CONFLICTING", "UNKNOWN"] }
+      required: [pr, state, mergeable]
+
+  # 2. Nothing to do if there's no open PR (already merged/closed, or not found).
+  - id: abort-no-pr
+    category: planning
+    depends_on: [resolve-pr]
+    when: "$resolve-pr.output.state != 'OPEN'"
+    cancel: "No open PR to merge for this input (not found, or already merged/closed)."
+
+  # 3. Only when GitHub reports conflicts: bring the PR branch up to date with its
+  #    base and resolve them. Skipped for a cleanly-mergeable PR.
+  - id: resolve-conflicts
+    category: implementation
+    depends_on: [resolve-pr]
+    when: "$resolve-pr.output.mergeable == 'CONFLICTING'"
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      until: CONFLICTS_RESOLVED
+      max_iterations: 3
+      prompt: |
+        PR #$resolve-pr.output.pr ("$resolve-pr.output.title") has merge
+        conflicts with its base branch `$resolve-pr.output.base`. Resolve them:
+
+        1. Check the PR branch out into this worktree:
+           `gh pr checkout $resolve-pr.output.pr`
+        2. Bring in the latest base — follow the project's convention in
+           CLAUDE.md / AGENTS.md (merge vs rebase); default to
+           `git fetch origin && git merge origin/$resolve-pr.output.base`.
+        3. Resolve EVERY conflict correctly — preserve the intent of both sides.
+           Never delete code or tests just to silence a conflict. Honor the
+           project's prohibitions (no `--no-verify`, no skipped hooks, etc.).
+        4. Run the project's QUICK check (format / lint / build — see CLAUDE.md /
+           AGENTS.md) to confirm the merged branch still compiles. Do NOT run the
+           full test suite here.
+        5. Commit the merge and push to the PR's branch (`git push`).
+
+        When the branch is conflict-free, builds, and is pushed, emit the literal
+        signal:
+        <promise>CONFLICTS_RESOLVED</promise>
+        If you cannot resolve the conflicts safely, end your turn WITHOUT the
+        signal and explain what is blocked — the run then fails rather than
+        merging a broken branch.
+
+  # 4. Merge the (now conflict-free) PR. Runs whether conflicts were resolved or
+  #    never existed; never if an upstream step failed.
+  - id: merge
+    category: delivery
+    provider: claude
+    model: haiku
+    depends_on: [resolve-pr, resolve-conflicts]
+    trigger_rule: none_failed_min_one_success
+    prompt: |
+      Merge PR #$resolve-pr.output.pr into `$resolve-pr.output.base`.
+
+      1. Re-check its state now:
+         `gh pr view $resolve-pr.output.pr --json state,mergeable,mergeStateStatus`
+         - If it is no longer OPEN, report that and stop (already merged).
+         - If it is still CONFLICTING, do NOT merge — report the conflict.
+      2. Squash-merge and delete the branch:
+         `gh pr merge $resolve-pr.output.pr --squash --delete-branch`
+         If the repository REQUIRES passing checks and they are still running,
+         enable auto-merge instead so GitHub merges it once green:
+         `gh pr merge $resolve-pr.output.pr --squash --delete-branch --auto`
+      3. Never bypass branch protection, never admin-override, never `--no-verify`.
+
+      Emit ONLY this JSON verdict:
+    output_format:
+      type: object
+      properties:
+        merged: { type: boolean, description: "true if merged or auto-merge queued" }
+        summary: { type: string, description: "one line: merged / queued / why not" }
+      required: [merged, summary]
+
+  # 5. Human-readable wrap-up (always runs once merge reaches a terminal state).
+  - id: summary
+    category: delivery
+    provider: claude
+    model: haiku
+    depends_on: [merge]
+    trigger_rule: all_done
+    prompt: |
+      Summarize the outcome for PR #$resolve-pr.output.pr in 2-3 lines: whether
+      it merged (or auto-merge was queued), whether conflicts had to be resolved,
+      and anything a human still needs to do. Merge verdict:
+      $merge.output.summary

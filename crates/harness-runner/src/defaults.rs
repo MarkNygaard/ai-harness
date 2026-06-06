@@ -13,10 +13,16 @@ use std::path::Path;
 pub const DEFAULT_WORKFLOW: &str = "idea-to-pr";
 
 /// Bundled workflows by name.
-const WORKFLOWS: &[(&str, &str)] = &[(
-    DEFAULT_WORKFLOW,
-    include_str!("../defaults/workflows/idea-to-pr.yaml"),
-)];
+const WORKFLOWS: &[(&str, &str)] = &[
+    (
+        DEFAULT_WORKFLOW,
+        include_str!("../defaults/workflows/idea-to-pr.yaml"),
+    ),
+    (
+        "merge-pr",
+        include_str!("../defaults/workflows/merge-pr.yaml"),
+    ),
+];
 
 /// Bundled command bodies by (de-prefixed) name.
 const COMMANDS: &[(&str, &str)] = &[
@@ -161,5 +167,18 @@ mod tests {
     fn resolve_unknown_name_errors() {
         let err = resolve_workflow_source("ghost-workflow", &std::env::temp_dir()).unwrap_err();
         assert!(err.contains("ghost-workflow"));
+    }
+
+    #[test]
+    fn every_bundled_workflow_parses() {
+        for (name, yaml) in WORKFLOWS {
+            let wf = harness_dag::parse_workflow(yaml)
+                .unwrap_or_else(|e| panic!("bundled workflow `{name}` failed to parse: {e}"));
+            assert!(!wf.nodes.is_empty(), "`{name}` has no nodes");
+        }
+        // Both the default and merge-pr are present.
+        let names = list_default_workflows();
+        assert!(names.contains(&DEFAULT_WORKFLOW));
+        assert!(names.contains(&"merge-pr"));
     }
 }
