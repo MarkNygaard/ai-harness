@@ -44,6 +44,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             secret_key,
         ))
     };
+    // Periodically reap runs whose lease has gone stale (crashed/orphaned), so a
+    // lost run doesn't linger as `running`. Live runs heartbeat and are skipped.
+    runs_routes::spawn_reaper(runs_state.clone());
     Router::new()
         .route("/", get(crate::dashboard::index))
         .route("/overview", get(crate::overview::index))

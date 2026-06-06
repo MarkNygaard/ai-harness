@@ -32,6 +32,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex, OnceCell};
 use tokio_stream::wrappers::BroadcastStream;
 
+/// How often a running executor renews its run lease (`heartbeat_at`).
+const HEARTBEAT_SECS: u64 = 30;
+/// A run whose lease is older than this — i.e. no executor is heartbeating it —
+/// is treated as orphaned and reaped. Comfortably larger than `HEARTBEAT_SECS`
+/// so a live, actively-heartbeating run is never mistaken for stale.
+const RECONCILE_STALE_SECS: u64 = 180;
+/// How often the server sweeps for stale-lease runs (the periodic reaper).
+const RECONCILE_EVERY_SECS: u64 = 60;
+
 /// Self-contained state for the runs API.
 pub struct RunsState {
     db_url: Option<String>,
@@ -44,6 +53,10 @@ pub struct RunsState {
     category_store: OnceCell<harness_persist::CategoryStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
+    /// This server instance's identity, stamped as the `owner` of every run it
+    /// starts (lease attribution). Unique per process so a restart/replica is
+    /// distinguishable.
+    instance_id: String,
     /// Live runs → their event broadcast + task abort handle (present only while
     /// executing). Used by `/stream` to subscribe and by `cancel` to stop the task.
     live: Mutex<HashMap<String, LiveRun>>,
@@ -72,6 +85,12 @@ impl RunsState {
                     .map(|p| p.join("projects"))
                     .unwrap_or_else(|| project_root.join("projects"))
             });
+        // Identity for run-lease attribution: the pod name (k8s sets HOSTNAME)
+        // plus a start stamp, so two pods — and a restart of the same pod — get
+        // distinct owners.
+        let host =
+            std::env::var("HOSTNAME").unwrap_or_else(|_| format!("pid{}", std::process::id()));
+        let instance_id = format!("{host}-{}", now_millis());
         Self {
             db_url,
             store: OnceCell::new(),
@@ -81,6 +100,7 @@ impl RunsState {
             project_store: OnceCell::new(),
             category_store: OnceCell::new(),
             projects_dir,
+            instance_id,
             live: Mutex::new(HashMap::new()),
         }
     }
@@ -130,9 +150,13 @@ impl RunsState {
         self.store
             .get_or_try_init(|| async {
                 let store = RunStore::connect(url).await.map_err(|e| e.to_string())?;
-                // First connect after (re)start: any run still marked `running`
-                // is orphaned — no run survives a process restart — so cancel it.
-                match store.reconcile_orphaned_runs().await {
+                // First connect after (re)start: reap runs whose lease has gone
+                // stale (no executor heartbeating them). Lease-scoped — never
+                // touches a run another live instance is actively heartbeating.
+                match store
+                    .reconcile_orphaned_runs(std::time::Duration::from_secs(RECONCILE_STALE_SECS))
+                    .await
+                {
                     Ok(n) if n > 0 => {
                         tracing::info!("reconciled {n} orphaned run(s) → cancelled")
                     }
@@ -202,6 +226,36 @@ fn now_millis() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)
+}
+
+/// Spawn the periodic stale-lease reaper: every `RECONCILE_EVERY_SECS` it cancels
+/// runs whose lease is older than `RECONCILE_STALE_SECS` (no executor renewing
+/// them) — so a run orphaned by a task panic or a lost pod doesn't linger as
+/// `running` forever. Best-effort; a no-op when called outside a Tokio runtime
+/// (e.g. a synchronous router-build test).
+pub(crate) fn spawn_reaper(state: Arc<RunsState>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(RECONCILE_EVERY_SECS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            if let Ok(store) = state.store().await {
+                match store
+                    .reconcile_orphaned_runs(std::time::Duration::from_secs(RECONCILE_STALE_SECS))
+                    .await
+                {
+                    Ok(n) if n > 0 => {
+                        tracing::info!("reaper: cancelled {n} stale-lease run(s)")
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("reaper: reconcile failed: {e}"),
+                }
+            }
+        }
+    });
 }
 
 /// `GET /runs` — list recent runs.
@@ -379,6 +433,7 @@ async fn execute_run_task(
                         Some(&project),
                         0,
                         &[],
+                        Some(&state.instance_id),
                     )
                     .await;
                 let _ = store
@@ -466,6 +521,7 @@ async fn execute_run_task(
     let persist_run_id = run_id.clone();
     let persist_title = title.clone();
     let persist_project = Some(project.clone());
+    let persist_owner = state.instance_id.clone();
     let forwarder = tokio::spawn(async move {
         let mut ordinals: HashMap<String, i32> = HashMap::new();
         while let Some(ev) = rx.next().await {
@@ -487,6 +543,7 @@ async fn execute_run_task(
                                 persist_project.as_deref(),
                                 *total_nodes,
                                 nodes,
+                                Some(&persist_owner),
                             )
                             .await;
                     }
@@ -519,9 +576,30 @@ async fn execute_run_task(
         }
     });
 
+    // Renew this run's lease while it executes, so the reaper (which only
+    // cancels runs whose lease has gone stale) never reaps it mid-flight.
+    let hb_state = state.clone();
+    let hb_run_id = run_id.clone();
+    let heartbeat = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_SECS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            match hb_state.store().await {
+                Ok(store) => {
+                    if store.heartbeat_run(&hb_run_id).await.is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
     let report = run_workflow_streaming(&workflow, &runner, &vars, Some(&tx)).await;
     drop(tx); // end the forwarder
     let _ = forwarder.await;
+    heartbeat.abort();
 
     // Final authoritative snapshot (reconciles nodes + sets terminal status).
     if let Ok(report) = &report {
