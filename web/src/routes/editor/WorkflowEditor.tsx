@@ -150,7 +150,7 @@ function Editor() {
       const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
       const prebuiltId = e.dataTransfer.getData("application/harness-prebuilt-step");
       if (prebuiltId) {
-        const step = catalog.data?.prebuilt_steps.find((s) => s.id === prebuiltId);
+        const step = catalog.data?.prebuilt_steps?.find((s) => s.id === prebuiltId);
         if (step) addPrebuiltNode(step, pos);
         return;
       }

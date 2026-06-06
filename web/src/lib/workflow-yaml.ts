@@ -42,10 +42,11 @@ export function emptyNode(kind: NodeKindId, id: string): EditorNode {
       return { ...base, prompt: "" };
   }
 }
-/** Clone a prebuilt step's node spec with a fresh id and no inbound deps
- *  (canvas edges define dependencies). Mirrors `emptyNode`. */
+/** Clone a prebuilt step's node spec with a fresh id and no inbound deps or
+ *  conditional wiring (canvas edges and the user define those). Mirrors `emptyNode`. */
 export function prebuiltNode(step: PrebuiltStep, id: string): EditorNode {
-  return { ...step.node, id, depends_on: [] };
+  const { when: _when, ...rest } = step.node;
+  return { ...rest, id, depends_on: [] };
 }
 
 /** Drop undefined/null, empty strings, and empty arrays so the YAML stays terse. */

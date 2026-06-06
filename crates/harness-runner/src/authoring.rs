@@ -12,11 +12,13 @@
 //! `.harness/workflows/<name>.yaml` shadows a bundled default of the same name.
 
 use std::path::Path;
+use std::sync::LazyLock;
 
 use harness_dag::{parse_workflow, NodeKind, Workflow};
 use serde::{Deserialize, Serialize};
 
 use crate::defaults;
+
 
 /// Where a workflow or command came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -464,36 +466,37 @@ pub fn list_commands(project_root: &Path) -> Vec<CommandInfo> {
 
 /// Curated node templates for the editor's "Prebuilt steps" palette section,
 /// distilled from the bundled `idea-to-pr` pipeline so the prompts/configs stay
-/// a single source of truth. Each is returned as a self-contained node spec with
-/// its pipeline-specific wiring (`depends_on`, `when`) stripped, so a dropped
-/// node starts unconnected and immediately valid.
-fn prebuilt_steps() -> Vec<PrebuiltStep> {
-    // (node id in idea-to-pr.yaml, palette label, one-line description)
-    const CURATED: &[(&str, &str, &str)] = &[
-        ("explore", "Explore codebase",
-         "Read-only Sonnet pass that maps the code a task touches and writes exploration notes."),
-        ("create-plan", "Create plan",
-         "Opus planner that turns the task + exploration into a concrete implementation plan."),
-        ("install-deps", "Install dependencies",
-         "Auto-detects the project's package manager and installs locked dependencies."),
-        ("implement-tasks", "Implement tasks",
-         "Runs the bundled implement-tasks command to write the code for the plan."),
-        ("validate", "Validate",
-         "Runs the validate command and emits a {passed, summary} verdict downstream nodes gate on."),
-        ("pi-review-fix-loop", "Review & fix loop",
-         "Self-review-and-fix loop (up to 5 passes) that commits fixes until the PR is clean."),
-        ("finalize-pr", "Open PR",
-         "Runs the finalize-pr command to push the branch and open the pull request."),
-        ("final-verify-loop", "Final verify gate",
-         "Final build gate (up to 3 passes) that re-runs the full verify chain before merge."),
-    ];
+/// a single source of truth.
+static PREBUILT_CURATED: &[(&str, &str, &str)] = &[
+    ("explore", "Explore codebase",
+     "Read-only Sonnet pass that maps the code a task touches and writes exploration notes."),
+    ("create-plan", "Create plan",
+     "Opus planner that turns the task + exploration into a concrete implementation plan."),
+    ("install-deps", "Install dependencies",
+     "Auto-detects the project's package manager and installs locked dependencies."),
+    ("implement-tasks", "Implement tasks",
+     "Runs the bundled implement-tasks command to write the code for the plan."),
+    ("validate", "Validate",
+     "Runs the validate command and emits a {passed, summary} verdict downstream nodes gate on."),
+    ("pi-review-fix-loop", "Review & fix loop",
+     "Self-review-and-fix loop (up to 5 passes) that commits fixes until the PR is clean."),
+    ("finalize-pr", "Open PR",
+     "Runs the finalize-pr command to push the branch and open the pull request."),
+    ("final-verify-loop", "Final verify gate",
+     "Final build gate (up to 3 passes) that re-runs the full verify chain before merge."),
+];
 
+static PREBUILT_STEPS_CACHE: LazyLock<Vec<PrebuiltStep>> = LazyLock::new(|| {
     let Some(yaml) = defaults::default_workflow(defaults::DEFAULT_WORKFLOW) else {
+        tracing::warn!("bundled default workflow not found; prebuilt steps unavailable");
         return Vec::new();
     };
     let doc: serde_yaml::Value = match serde_yaml::from_str(yaml) {
         Ok(v) => v,
-        Err(_) => return Vec::new(),
+        Err(e) => {
+            tracing::warn!("failed to parse bundled idea-to-pr.yaml: {e}");
+            return Vec::new();
+        }
     };
     let empty = Vec::new();
     let nodes = doc
@@ -501,7 +504,7 @@ fn prebuilt_steps() -> Vec<PrebuiltStep> {
         .and_then(|n| n.as_sequence())
         .unwrap_or(&empty);
 
-    CURATED
+    PREBUILT_CURATED
         .iter()
         .filter_map(|&(id, label, description)| {
             let node_yaml = nodes.iter().find(|n| node_id(n) == Some(id))?;
@@ -520,7 +523,12 @@ fn prebuilt_steps() -> Vec<PrebuiltStep> {
             })
         })
         .collect()
+});
+
+fn prebuilt_steps() -> Vec<PrebuiltStep> {
+    PREBUILT_STEPS_CACHE.clone()
 }
+
 /// The building-blocks catalog: the editor palette + the drawer's option lists.
 pub fn catalog(project_root: &Path) -> Catalog {
     Catalog {
@@ -736,8 +744,9 @@ nodes:
         let tmp = tempfile::tempdir().unwrap();
         let cat = catalog(tmp.path());
 
-        // The curated set is present.
-        assert!(cat.prebuilt_steps.len() >= 5);
+        // Every curated step must be present (if one is renamed in the bundled
+        // YAML and the list isn't updated, this fails loud and clear).
+        assert_eq!(cat.prebuilt_steps.len(), PREBUILT_CURATED.len());
         for want in [
             "explore",
             "create-plan",

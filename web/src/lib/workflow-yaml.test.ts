@@ -109,7 +109,7 @@ nodes:
 });
 
 describe("prebuiltNode", () => {
-  it("clones the template node with a fresh id and no inbound deps", () => {
+  it("clones the template node with a fresh id and no inbound deps or when", () => {
     const step: PrebuiltStep = {
       id: "validate",
       label: "Validate",
@@ -120,15 +120,20 @@ describe("prebuiltNode", () => {
         category: "validation",
         provider: "pi",
         model: "kimi-code/kimi-for-coding",
+        depends_on: ["upstream"],
+        when: "$upstream.output.passed == 'true'",
       },
     };
     const node = prebuiltNode(step, "validate-2");
     expect(node.id).toBe("validate-2");
     expect(node.depends_on).toEqual([]);
+    expect(node.when).toBeUndefined();
     expect(nodeKind(node)).toBe("command");
     expect(node.command).toBe("validate");
     expect(node.category).toBe("validation");
     // The template object is not mutated.
     expect(step.node.id).toBe("validate");
+    expect(step.node.depends_on).toEqual(["upstream"]);
+    expect(step.node.when).toBe("$upstream.output.passed == 'true'");
   });
 });
