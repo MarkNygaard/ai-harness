@@ -165,6 +165,33 @@ fn gql_data<T: serde::de::DeserializeOwned>(json: &[u8]) -> Result<T, LinearErro
     serde_json::from_value(data).map_err(|e| LinearError(format!("bad response: {e}")))
 }
 
+/// Summarize an error response body for inclusion in a `LinearError`. Linear
+/// returns a JSON `{ "errors": [{ "message": … }] }` even on HTTP 4xx (e.g. an
+/// invalid API key yields a 400, not a 401), so surfacing those messages is the
+/// difference between a useless "HTTP 400" and an actionable cause. Falls back
+/// to a truncated raw body when it isn't the expected shape.
+fn error_detail(bytes: &[u8]) -> String {
+    if let Ok(v) = serde_json::from_slice::<serde_json::Value>(bytes) {
+        if let Some(msgs) = v.get("errors").and_then(|e| e.as_array()) {
+            let joined = msgs
+                .iter()
+                .filter_map(|e| e.get("message").and_then(|m| m.as_str()))
+                .collect::<Vec<_>>()
+                .join("; ");
+            if !joined.is_empty() {
+                return joined;
+            }
+        }
+    }
+    let raw = String::from_utf8_lossy(bytes);
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        "(empty response body)".to_string()
+    } else {
+        trimmed.chars().take(300).collect()
+    }
+}
+
 /// Parse a discovery response body into clean types.
 pub fn parse_discovery(json: &[u8]) -> Result<Discovery, LinearError> {
     let data: DiscoveryData = gql_data(json)?;
@@ -259,7 +286,11 @@ impl LinearClient {
             .await
             .map_err(|e| LinearError(format!("read body failed: {e}")))?;
         if !status.is_success() {
-            return Err(LinearError(format!("HTTP {} from Linear", status.as_u16())));
+            return Err(LinearError(format!(
+                "HTTP {} from Linear: {}",
+                status.as_u16(),
+                error_detail(&bytes)
+            )));
         }
         Ok(bytes.to_vec())
     }
@@ -368,6 +399,24 @@ mod tests {
         let json = br#"{"errors":[{"message":"authentication required"}]}"#;
         let err = parse_discovery(json).unwrap_err();
         assert!(err.0.contains("authentication required"));
+    }
+
+    #[test]
+    fn error_detail_extracts_graphql_messages() {
+        // Linear returns this shape even on HTTP 400 (e.g. a bad API key).
+        let body = br#"{"errors":[{"message":"Authentication required, not authenticated"}]}"#;
+        assert_eq!(
+            error_detail(body),
+            "Authentication required, not authenticated"
+        );
+    }
+
+    #[test]
+    fn error_detail_falls_back_to_truncated_raw_body() {
+        assert_eq!(error_detail(b""), "(empty response body)");
+        assert_eq!(error_detail(b"  Bad Request  "), "Bad Request");
+        let long = vec![b'x'; 500];
+        assert_eq!(error_detail(&long).len(), 300);
     }
 
     #[test]
