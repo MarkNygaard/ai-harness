@@ -19,6 +19,7 @@ harness-exec = { workspace = true }
 harness-dag = { workspace = true }
 harness-runner = { workspace = true }
 harness-persist = { workspace = true }
+harness-sources = { workspace = true }
 tokio = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }

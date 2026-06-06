@@ -1525,6 +1525,7 @@ dependencies = [
  "harness-rules",
  "harness-runner",
  "harness-skills",
+ "harness-sources",
  "harness-workflow",
  "hmac",
  "http-body-util",
@@ -1561,6 +1562,16 @@ dependencies = [
  "thiserror 2.0.18",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "harness-sources"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

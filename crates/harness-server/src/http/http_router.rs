@@ -10,9 +10,9 @@ use super::{
     auth, categories_routes, credentials_routes, get_issue_workflow_by_issue,
     get_issue_workflow_by_pr, get_project_workflow_by_project, get_task, get_task_artifacts,
     get_task_prompts, get_task_proof, get_workflow_runtime_tree, github_webhook, handle_rpc,
-    health_check, ingest_signal, intake_status, list_tasks, mcp_routes, password_reset,
-    project_authoring_routes, project_queue_stats, runs_routes, state::AppState, stream_task_sse,
-    task_mutation_routes, task_routes, workflows_routes,
+    health_check, ingest_signal, intake_status, linear_routes, list_tasks, mcp_routes,
+    password_reset, project_authoring_routes, project_queue_stats, runs_routes, state::AppState,
+    stream_task_sse, task_mutation_routes, task_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -185,6 +185,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // Authoring + run control for editors via `{ "type": "http", "url":
         // ".../mcp" }`. Behind the global bearer-token middleware.
         .route("/mcp", post(mcp_routes::handle_mcp))
+        // ── Linear read-only discovery (Phase 8, Slice 1) ───────────────────
+        .route("/api/linear/discovery", get(linear_routes::discovery))
+        .route("/api/linear/preview", get(linear_routes::preview))
         // ── Step categories (global registry for overview grouping/colour) ──
         .route("/api/categories", get(categories_routes::list_categories))
         .route(

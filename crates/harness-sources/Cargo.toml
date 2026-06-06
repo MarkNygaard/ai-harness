@@ -1,0 +1,13 @@
+[package]
+name = "harness-sources"
+version.workspace = true
+edition.workspace = true
+description = "External issue sources (Linear, …) that trigger Harness workflow runs"
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
