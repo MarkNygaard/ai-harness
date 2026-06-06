@@ -304,7 +304,7 @@ nodes:
       property. Title only.
 
   - id: pi-review-fix-loop
-    category: review
+    category: validation
     depends_on: [verify-pr-title]
     loop:
       provider: pi
@@ -399,7 +399,7 @@ nodes:
         PR is the goal.
 
   - id: codex-review-fix
-    category: review
+    category: validation
     depends_on: [pi-review-fix-loop]
     provider: codex
     model: gpt-5.3-codex
@@ -440,7 +440,7 @@ nodes:
       When done, output: <promise>CODEX-REVIEW-DONE</promise>
 
   - id: sonnet-final-review
-    category: review
+    category: validation
     depends_on: [codex-review-fix]
     provider: claude
     model: sonnet

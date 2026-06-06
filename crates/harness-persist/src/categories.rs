@@ -36,9 +36,8 @@ const SEED: &[(&str, &str, &str, i32)] = &[
         "oklch(0.75 0.09 130)", // olive-green
         2,
     ),
-    ("validation", "Validation", "oklch(0.76 0.09 70)", 3), // amber
-    ("review", "Review", "oklch(0.68 0.10 300)", 4),        // violet
-    ("delivery", "Delivery", "oklch(0.70 0.10 20)", 5),     // rose
+    ("validation", "Validation", "oklch(0.76 0.09 70)", 3), // amber (incl. reviews)
+    ("delivery", "Delivery", "oklch(0.70 0.10 20)", 4),     // rose
 ];
 
 /// A category (matches `harness_categories`).
