@@ -425,25 +425,104 @@ on ai-harness instead of Archon.
 
 ## Phase 8 — Linear source + cron triggers — ⬜ not started (LAST, by design)
 
-**Goal:** a cron job polls Linear and triggers workflows; status flows back.
-Linear sources are configured **per project** (Phase 5.0) — a saved filter maps
-to a project + workflow. **Deliberately the final phase:** everything else
-(projects, k8s execution, toolchains, the rich overview, hardening) is built and
-proven end-to-end via UI/API triggers first; Linear is just another trigger on
-top of an already-working system.
+**Goal:** a cron job polls Linear, fires workflow runs from eligible issues one
+at a time, and flows status back to the issue as the run progresses. **Deliberately
+the final phase:** everything else is built and proven end-to-end via UI/API
+triggers first; Linear is just another trigger on top of an already-working
+system.
 
-- [ ] `harness-sources`: Linear GraphQL client; saved filter → workflow+args
-  mapping; interval poller in the control plane; dedupe by Linear issue id
-  (cursor in `linear_sources`).
-- [ ] Write-back: comment/transition Linear issue on run start / PR open / verdict.
-- [ ] UI: **Linear sources panel** (configure filter, schedule, target workflow).
-- [ ] Manual/AI trigger via MCP server method (`run/start`).
+### Design principle — the workflow stays Linear-agnostic
 
-**Exit:** create/label a Linear issue → within one poll interval a run starts,
-and the issue gets a comment linking the run + resulting PR.
+Linear is **not** steps inside a workflow. `idea-to-pr` (and any workflow) runs
+identically whether triggered manually, from GitHub, or from Linear. Linear is
+layered *around* a run as two pieces:
 
-> ⚠️ Needs author input first: exact Linear filter semantics + desired write-back
-> (status transition vs comment). See PLAN §12.2.
+1. a **source/trigger** that creates a run from an eligible issue, and
+2. a **status-sync listener** that maps the run's lifecycle events
+   (`RunStarted` / `NodeFinished` / `RunFinished`) to Linear status transitions.
+
+This keeps the pipeline portable and avoids littering every non-Linear run with
+skipped Linear nodes. (Executable in-DAG "set Linear status" nodes are a possible
+*future* opt-in, `when:`-gated so they no-op without Linear — but not the model
+here.) Targets the **runs** surface (harness-dag + `RunEvent`), not the legacy
+`tasks` intake, because the runs path emits the lifecycle events status-sync needs.
+
+### 8.1 — Discovery & credentials
+
+- Linear GraphQL client (`api.linear.app/graphql`). Fetch **teams**, each team's
+  **`workflowStates`** (each has a `type`: backlog/unstarted/started/completed/
+  canceled), and **`issueLabels`** — used to populate the UI dropdowns so the
+  operator picks real states, never free text.
+- The Linear **API key lives in the encrypted credential store** (same place as
+  provider creds), never in a workflow YAML or a `linear_sources` row.
+
+### 8.2 — The Linear *trigger block* (builder) + `linear_sources` binding
+
+- A **Linear block in the workflow builder** — a declarative *trigger/binding*
+  block (think "on:" lane above the DAG), **not** an executing node. It edits a
+  project-scoped **`linear_sources`** record so workspace-specific IDs stay out of
+  the portable workflow YAML. A binding holds:
+  - team + **source status(es)** to poll + **eligibility label** (e.g. `AI Eligible`)
+  - target **workflow** + project (+ base branch)
+  - **status map**: in-progress / review / ready (functional-testing) states;
+    failure → restore the issue's *original* state (remembered at claim time)
+  - **poll interval** (the cron frequency, UI-set) and an enabled toggle
+- Build for a **list of rules** per project from the start (multiple team/status →
+  workflow bindings); it's cheap.
+
+### 8.3 — Poller + claim (one at a time)
+
+- Interval job in the control plane (same shape as the run reaper): query Linear
+  for issues in a source status carrying the label, not already claimed.
+- **Concurrency = 1, configurable, scoped per source** (per team/status rule): if
+  a Linear-originated run for that source is still active, skip claiming.
+- Claiming = moving the issue to **In Progress** (which is itself the dedupe
+  signal) and recording the linkage `run_id ↔ issue_id ↔ original_state`; then
+  fire the run via the normal `start_run` path with the issue title/description
+  (+ comments) as the task. Dedupe cursor in `linear_sources`.
+
+### 8.4 — Event-driven status sync
+
+| Run lifecycle | Linear transition |
+|---|---|
+| claim / `RunStarted` | source state → **In Progress** (remember original) |
+| first `delivery`-category node (`finalize-pr`) succeeds | → **Review** |
+| `RunFinished{success}` | → **Functional testing** (PR ready to merge) |
+| `RunFinished{failed}` or cancelled | → **back to original state** + failure comment |
+| *(stretch)* PR merged (GitHub webhook) | → **Done** |
+
+The "PR opened → Review" signal keys off the existing **node `category`** (no
+workflow change). The map is configurable; these are the defaults.
+
+### 8.5 — Write-back & 8.6 — close the loop
+
+- **Comment on every transition** (reads like a status thread): run link on
+  start, PR URL on open, why-it-failed on failure, verdict on success.
+- Store the Linear issue URL on the run and the run URL on the issue (bi-di link).
+- PR **merged** (existing GitHub webhook) → move issue to **Done**.
+
+### Safety rails
+
+Opt-in label required; never touch issues outside the configured source state;
+one-at-a-time prevents runaway; a **"preview eligible issues"** action before
+enabling a binding; optional estimate/priority gating. Webhooks are a later
+latency upgrade — the cron poll is the reliable baseline (no inbound endpoint).
+
+### Implementation
+
+- [ ] `harness-sources`: Linear GraphQL client (discovery + transitions + comments).
+- [ ] `linear_sources` table + per-project bindings; API key via credential store.
+- [ ] Builder **Linear trigger block** + UI to edit a binding (team/status/label/
+  status-map/interval), with team/state/label dropdowns from discovery.
+- [ ] Interval poller + claim (one-at-a-time, dedupe cursor) → `start_run`.
+- [ ] Status-sync listener on `RunEvent` → state transitions per the map.
+- [ ] Write-back comments (start / PR-open / verdict) + bi-di links.
+- [ ] (stretch) PR-merged → Done via GitHub webhook.
+- [ ] Manual/AI trigger via MCP `run_trigger` (already shipped — see `/mcp`).
+
+**Exit:** label a Linear issue in the configured state → within one poll interval
+a run starts and the issue moves In Progress → Review → Functional testing (or
+back to its original state on failure), with comments linking the run + PR.
 
 ---
 
@@ -459,7 +538,11 @@ and the issue gets a comment linking the run + resulting PR.
 - **Web build is stub-only in dev** here (bun not producing a real bundle); the
   full UI rebuild happens in Phase 2. `sdk/typescript` retained because `web/`
   imports its types.
-- **Open inputs needed before** Phase 8 (Linear filter/write-back semantics).
+- **Phase 8 author input captured** — filter (team + source status + eligibility
+  label), one-at-a-time claim, status map (In Progress → Review on the `delivery`
+  node → Functional testing on success → original state on failure), comment on
+  every transition, UI-set poll interval, configured via a builder **Linear
+  trigger block** editing a project-scoped `linear_sources` binding. See Phase 8.
   Phase 6 cluster is now mapped from `home-ops` (PLAN §14); only namespace,
   internal/external exposure, and warm-cache storage choice remain.
 - **Target cluster = `home-ops`** (Talos + Flux + Envoy Gateway + CloudNativePG +
