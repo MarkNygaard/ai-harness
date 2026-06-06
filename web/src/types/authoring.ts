@@ -47,6 +47,12 @@ export interface CommandInfo {
   name: string;
   source: AuthoringSource;
 }
+export interface PrebuiltStep {
+  id: string;
+  label: string;
+  description: string;
+  node: EditorNode;
+}
 
 export interface Catalog {
   node_kinds: NodeKindInfo[];
@@ -54,6 +60,7 @@ export interface Catalog {
   commands: CommandInfo[];
   context_modes: string[];
   trigger_rules: string[];
+  prebuilt_steps: PrebuiltStep[];
 }
 
 /** The node-kind discriminators (the single body each editor node carries). */
