@@ -59,6 +59,49 @@ export function useSaveLinearSource(project: string | null) {
   });
 }
 
+interface ProjectCredential {
+  provider: string;
+  configured: boolean;
+}
+
+/** Whether this project has a project-scoped `linear` API key configured. */
+export function useProjectLinearKey(project: string | null) {
+  return useQuery<boolean, Error>({
+    queryKey: ["project-credentials", project, "linear"],
+    enabled: !!project,
+    queryFn: async ({ signal }) => {
+      const creds = await apiJson<ProjectCredential[]>(
+        `/api/projects/${encodeURIComponent(project!)}/credentials`,
+        { signal },
+      );
+      return creds.some((c) => c.provider === "linear" && c.configured);
+    },
+  });
+}
+
+/** Set this project's Linear API key (project-scoped, overrides the global one). */
+export function useSetProjectLinearKey(project: string | null) {
+  const qc = useQueryClient();
+  return useMutation<unknown, Error, string>({
+    mutationFn: (apiKey) =>
+      apiJson(
+        `/api/projects/${encodeURIComponent(project!)}/credentials/linear`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fields: { api_key: apiKey } }),
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({
+        queryKey: ["project-credentials", project, "linear"],
+      });
+      // Discovery uses the key — refetch so the dropdowns populate.
+      qc.invalidateQueries({ queryKey: ["linear", "discovery", project] });
+    },
+  });
+}
+
 export function useDeleteLinearSource(project: string | null) {
   const qc = useQueryClient();
   return useMutation<{ deleted: boolean; workflow: string }, Error, string>({
