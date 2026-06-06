@@ -190,6 +190,7 @@ impl CodeAgent for ClaudeCodeAgent {
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
         crate::strip_claude_env(&mut cmd);
+        crate::strip_control_plane_env(&mut cmd);
         cmd.envs(&req.env_vars);
 
         let child = cmd.spawn().map_err(|e| {
@@ -292,6 +293,7 @@ impl CodeAgent for ClaudeCodeAgent {
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
         crate::strip_claude_env(&mut cmd);
+        crate::strip_control_plane_env(&mut cmd);
         cmd.envs(&req.env_vars);
 
         // ETXTBSY (error 26) occurs on Linux when a security scanner or indexer

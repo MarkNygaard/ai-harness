@@ -186,6 +186,11 @@ mod tests {
             eprintln!("skipping: HARNESS_DATABASE_URL not set");
             return;
         };
+        // Only ever touch an obvious test database, never production.
+        if !crate::is_test_db(&url) {
+            eprintln!("skipping: HARNESS_DATABASE_URL is not a test database");
+            return;
+        }
         let store = CredentialStore::connect(&url, [3u8; 32])
             .await
             .expect("connect");
