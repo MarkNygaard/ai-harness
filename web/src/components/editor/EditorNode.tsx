@@ -57,7 +57,7 @@ export function EditorNode({ id, data }: NodeProps) {
     >
       <Handle
         type="target"
-        position={Position.Left}
+        position={Position.Top}
         className="!h-2 !w-2 !border-0 !bg-border"
       />
       <div className="flex items-center gap-2 px-3 py-2">
@@ -99,7 +99,7 @@ export function EditorNode({ id, data }: NodeProps) {
       </div>
       <Handle
         type="source"
-        position={Position.Right}
+        position={Position.Bottom}
         className="!h-2 !w-2 !border-0 !bg-border"
       />
     </div>
