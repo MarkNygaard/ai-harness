@@ -19,6 +19,7 @@ import {
   useSetProjectCredential,
 } from "@/lib/credentials";
 import { useDeleteProject, useProjects, useRegisterProject } from "@/lib/projects";
+import { ProjectLinearDialog } from "@/components/projects/ProjectLinearDialog";
 import type { Project } from "@/types/project";
 
 /** Display metadata for each per-project credential provider. */
@@ -107,6 +108,7 @@ function ProjectRow({ project }: { project: Project }) {
             </div>
           )}
         </div>
+        <ProjectLinearDialog project={project.name} />
         <ProjectCredentialsDialog project={project.name} />
         <Button
           variant="ghost"

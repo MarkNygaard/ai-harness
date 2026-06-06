@@ -32,7 +32,6 @@ import { EditorNode as EditorNodeView } from "@/components/editor/EditorNode";
 import { EditorActionsContext } from "@/components/editor/context";
 import { Palette } from "@/components/editor/Palette";
 import { PropertiesDrawer } from "@/components/editor/PropertiesDrawer";
-import { LinearTriggerPanel } from "@/components/editor/LinearTriggerPanel";
 import {
   type EditorNodeData,
   fromGraph,
@@ -265,7 +264,6 @@ function Editor() {
             {save.error.message}
           </div>
         )}
-        <LinearTriggerPanel workflow={meta.name} />
         <div className="flex min-h-0 flex-1">
           <Palette
             kinds={catalog.data?.node_kinds ?? []}
