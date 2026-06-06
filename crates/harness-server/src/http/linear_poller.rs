@@ -166,8 +166,31 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
             return;
         }
     };
-    let Some(issue) = issues.into_iter().next() else {
-        return; // nothing eligible
+    // Pick the first eligible issue that hasn't already exhausted its retries.
+    // This is the hard loop-guard: an issue is never claimed more than
+    // MAX_CLAIM_ATTEMPTS times, regardless of which column it currently sits in
+    // (so even a misconfigured binding — e.g. In Progress == source — can't loop).
+    let mut chosen = None;
+    for issue in issues {
+        match claim_store.attempts_for_issue(&issue.id).await {
+            Ok(n) if n >= MAX_CLAIM_ATTEMPTS => {
+                tracing::debug!(
+                    "linear poller: {}/{} — skipping {} (hit retry cap {})",
+                    b.project,
+                    b.workflow,
+                    issue.identifier,
+                    n
+                );
+            }
+            Ok(_) => {
+                chosen = Some(issue);
+                break;
+            }
+            Err(e) => tracing::warn!("linear poller: attempts lookup failed: {e}"),
+        }
+    }
+    let Some(issue) = chosen else {
+        return; // nothing eligible (or all eligible issues exhausted retries)
     };
 
     // Move to In Progress first — this is also the claim signal (it leaves the
