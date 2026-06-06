@@ -277,6 +277,143 @@ pub fn save_workflow(project_root: &Path, name: &str, yaml: &str) -> Result<(), 
     Ok(())
 }
 
+// ── Structured (node-level) authoring ────────────────────────────────────────
+//
+// These let an MCP client build a workflow incrementally — one targeted change
+// per call — instead of authoring raw YAML. Each operation loads the workflow,
+// applies one mutation, then routes through `save_workflow` (which validates and
+// rejects a broken DAG), so a bad call fails atomically without corrupting the
+// file. Mutations happen on the YAML document (`serde_yaml::Value`) so the flat
+// node shape the parser expects is preserved exactly.
+
+/// Serialize a YAML document and save it (validates first via `save_workflow`).
+fn save_doc(project_root: &Path, name: &str, doc: &serde_yaml::Value) -> Result<(), String> {
+    let yaml = serde_yaml::to_string(doc).map_err(|e| format!("serialize workflow: {e}"))?;
+    save_workflow(project_root, name, &yaml)
+}
+
+/// Parse a workflow's current YAML into a mutable document. Bundled defaults are
+/// editable too — the save lands in the project, shadowing the default.
+fn load_doc(project_root: &Path, name: &str) -> Result<serde_yaml::Value, String> {
+    let src = get_workflow(project_root, name)?;
+    serde_yaml::from_str(&src.yaml).map_err(|e| format!("parse workflow `{name}`: {e}"))
+}
+
+/// Borrow the document's `nodes:` sequence, creating it if absent.
+fn nodes_mut(doc: &mut serde_yaml::Value) -> Result<&mut Vec<serde_yaml::Value>, String> {
+    let map = doc
+        .as_mapping_mut()
+        .ok_or_else(|| "workflow is not a mapping".to_string())?;
+    let key = serde_yaml::Value::from("nodes");
+    if !map.contains_key(&key) {
+        map.insert(key.clone(), serde_yaml::Value::Sequence(Vec::new()));
+    }
+    map.get_mut(&key)
+        .and_then(|v| v.as_sequence_mut())
+        .ok_or_else(|| "`nodes` is not a sequence".to_string())
+}
+
+fn node_id(node: &serde_yaml::Value) -> Option<&str> {
+    node.get("id").and_then(|v| v.as_str())
+}
+
+/// Create a new, empty workflow in the project. Errors if one already exists
+/// there (so it never clobbers — edit existing ones with the node ops).
+pub fn create_workflow(
+    project_root: &Path,
+    name: &str,
+    description: Option<&str>,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Result<(), String> {
+    if !is_safe_name(name) {
+        return Err(format!("invalid workflow name `{name}`"));
+    }
+    let project_file = project_root
+        .join(".harness")
+        .join("workflows")
+        .join(format!("{name}.yaml"));
+    if project_file.is_file() {
+        return Err(format!("workflow `{name}` already exists in this project"));
+    }
+    let mut map = serde_yaml::Mapping::new();
+    map.insert("name".into(), name.into());
+    for (k, v) in [
+        ("description", description),
+        ("provider", provider),
+        ("model", model),
+    ] {
+        if let Some(val) = v.filter(|s| !s.is_empty()) {
+            map.insert(k.into(), val.into());
+        }
+    }
+    map.insert("nodes".into(), serde_yaml::Value::Sequence(Vec::new()));
+    save_doc(project_root, name, &serde_yaml::Value::Mapping(map))
+}
+
+/// Add or replace a node (matched by `id`) from a JSON object describing it —
+/// the same fields the YAML node accepts (`prompt`/`bash`/`command`/`script`/
+/// `loop`/`approval`/`cancel` body, plus `depends_on`/`when`/`category`/…). The
+/// save validates exactly-one-body, resolvable refs, and no cycles.
+pub fn set_node(project_root: &Path, name: &str, node: serde_json::Value) -> Result<(), String> {
+    let id = node
+        .get("id")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "node must have a non-empty `id`".to_string())?
+        .to_string();
+    let node_yaml: serde_yaml::Value =
+        serde_yaml::to_value(&node).map_err(|e| format!("convert node: {e}"))?;
+
+    let mut doc = load_doc(project_root, name)?;
+    let nodes = nodes_mut(&mut doc)?;
+    match nodes.iter_mut().find(|n| node_id(n) == Some(id.as_str())) {
+        Some(existing) => *existing = node_yaml,
+        None => nodes.push(node_yaml),
+    }
+    save_doc(project_root, name, &doc)
+}
+
+/// Remove a node by id and strip it from every other node's `depends_on`.
+pub fn remove_node(project_root: &Path, name: &str, id: &str) -> Result<(), String> {
+    let mut doc = load_doc(project_root, name)?;
+    let nodes = nodes_mut(&mut doc)?;
+    let before = nodes.len();
+    nodes.retain(|n| node_id(n) != Some(id));
+    if nodes.len() == before {
+        return Err(format!("no node `{id}` in workflow `{name}`"));
+    }
+    for n in nodes.iter_mut() {
+        if let Some(deps) = n.get_mut("depends_on").and_then(|d| d.as_sequence_mut()) {
+            deps.retain(|d| d.as_str() != Some(id));
+        }
+    }
+    save_doc(project_root, name, &doc)
+}
+
+/// Add a dependency edge: `to` now `depends_on` `from` (deduped). Unknown ids
+/// are caught by the validating save.
+pub fn connect_nodes(project_root: &Path, name: &str, from: &str, to: &str) -> Result<(), String> {
+    let mut doc = load_doc(project_root, name)?;
+    let nodes = nodes_mut(&mut doc)?;
+    let target = nodes
+        .iter_mut()
+        .find(|n| node_id(n) == Some(to))
+        .ok_or_else(|| format!("no node `{to}` in workflow `{name}`"))?;
+    let map = target
+        .as_mapping_mut()
+        .ok_or_else(|| "node is not a mapping".to_string())?;
+    let deps = map
+        .entry("depends_on".into())
+        .or_insert_with(|| serde_yaml::Value::Sequence(Vec::new()))
+        .as_sequence_mut()
+        .ok_or_else(|| "`depends_on` is not a sequence".to_string())?;
+    if !deps.iter().any(|d| d.as_str() == Some(from)) {
+        deps.push(from.into());
+    }
+    save_doc(project_root, name, &doc)
+}
+
 /// List commands available to `command:` nodes: bundled defaults plus project
 /// `.harness/commands/*.md` (project shadows bundled).
 pub fn list_commands(project_root: &Path) -> Vec<CommandInfo> {
@@ -516,5 +653,61 @@ nodes:
         assert!(cat.providers.iter().any(|p| p.id == "pi"));
         // Bundled commands surface in the catalog.
         assert!(cat.commands.iter().any(|c| c.name == "implement-tasks"));
+    }
+
+    #[test]
+    fn structured_authoring_create_set_connect_remove() {
+        use serde_json::json;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        create_workflow(root, "built", Some("via tools"), Some("pi"), None).unwrap();
+        // Can't create twice.
+        assert!(create_workflow(root, "built", None, None, None).is_err());
+
+        // Add two nodes, then connect them.
+        set_node(root, "built", json!({ "id": "explore", "prompt": "look" })).unwrap();
+        set_node(
+            root,
+            "built",
+            json!({ "id": "plan", "prompt": "plan it", "category": "planning" }),
+        )
+        .unwrap();
+        connect_nodes(root, "built", "explore", "plan").unwrap();
+
+        let wf = parse_workflow(&get_workflow(root, "built").unwrap().yaml).unwrap();
+        assert_eq!(wf.nodes.len(), 2);
+        assert_eq!(
+            wf.node("plan").unwrap().depends_on,
+            vec!["explore".to_string()]
+        );
+
+        // set_node replaces by id (here: swap plan's body to a command).
+        set_node(
+            root,
+            "built",
+            json!({ "id": "plan", "command": "create-plan", "depends_on": ["explore"] }),
+        )
+        .unwrap();
+        let wf = parse_workflow(&get_workflow(root, "built").unwrap().yaml).unwrap();
+        assert!(matches!(
+            wf.node("plan").unwrap().kind,
+            NodeKind::Command(_)
+        ));
+
+        // A node whose body is invalid (two bodies) is rejected atomically.
+        assert!(set_node(
+            root,
+            "built",
+            json!({ "id": "bad", "prompt": "x", "bash": "y" }),
+        )
+        .is_err());
+
+        // Removing a node also strips it from dependents' depends_on.
+        remove_node(root, "built", "explore").unwrap();
+        let wf = parse_workflow(&get_workflow(root, "built").unwrap().yaml).unwrap();
+        assert_eq!(wf.nodes.len(), 1);
+        assert!(wf.node("plan").unwrap().depends_on.is_empty());
+        assert!(remove_node(root, "built", "explore").is_err());
     }
 }
