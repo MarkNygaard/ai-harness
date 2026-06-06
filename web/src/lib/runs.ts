@@ -314,10 +314,16 @@ export interface RunView {
   workflow: string | null;
   /** The task title (persisted); null until/unless set. */
   title: string | null;
+  /** The task spec (persisted); null until/unless set. */
+  description: string | null;
   status: RunStatus;
   nodes: NodeView[];
   /** True while the run is executing (driven by SSE, not yet persisted). */
   live: boolean;
+  /** Project the run executed in; null for older/CLI runs. */
+  project: string | null;
+  /** When the run row was last recorded (ISO); null if not yet persisted. */
+  recordedAt: string | null;
 }
 
 /**
@@ -390,9 +396,12 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
     return {
       workflow: d?.workflow_name ?? state.workflow ?? null,
       title: d?.title ?? null,
+      description: d?.description ?? null,
       status,
       nodes,
       live: status === "running",
+      project: d?.project ?? null,
+      recordedAt: d?.recorded_at ?? null,
     };
   }, [detail.data, state, liveTerminal]);
 }

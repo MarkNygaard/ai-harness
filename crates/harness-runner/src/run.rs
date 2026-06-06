@@ -155,7 +155,7 @@ pub async fn execute_run(opts: RunOptions) -> Result<RunReport, String> {
             now_millis()
         );
         match RunStore::connect(&url).await {
-            Ok(store) => match store.record_run(&run_id, None, None, &report).await {
+            Ok(store) => match store.record_run(&run_id, None, None, None, &report).await {
                 Ok(()) => println!("\n✔ persisted run `{run_id}`"),
                 Err(e) => eprintln!("\n⚠ persist failed: {e}"),
             },

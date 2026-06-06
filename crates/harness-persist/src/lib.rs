@@ -25,13 +25,16 @@ pub use projects::{Project, ProjectInput, ProjectStore};
 mod categories;
 pub use categories::{Category, CategoryInput, CategoryStore};
 
-/// A run row for listing (matches `harness_workflow_runs`).
+/// A run row (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunSummary {
     pub id: String,
     pub workflow_name: String,
     /// Human task name (the trigger title); `None` for older/CLI runs.
     pub title: Option<String>,
+    /// The task spec submitted with the run. Populated by detail reads; redacted
+    /// from list reads to avoid repeatedly shipping long or sensitive prompts.
+    pub description: Option<String>,
     pub status: String,
     pub project: Option<String>,
     pub node_count: i32,
@@ -85,6 +88,7 @@ CREATE TABLE IF NOT EXISTS harness_workflow_runs (
     id            text PRIMARY KEY,
     workflow_name text NOT NULL,
     title         text,
+    description   text,
     status        text NOT NULL,
     project       text,
     node_count    int  NOT NULL DEFAULT 0,
@@ -99,6 +103,8 @@ const ALTER_RUNS_GRAPH: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS graph jsonb NOT NULL DEFAULT '[]'::jsonb";
 const ALTER_RUNS_TITLE: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS title text";
+const ALTER_RUNS_DESCRIPTION: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS description text";
 /// Run-lease columns: `owner` stamps the server instance that started a run and
 /// `heartbeat_at` is renewed while it executes, so reconcile can reap only runs
 /// whose lease has gone stale — never a live run owned by another instance.
@@ -155,6 +161,9 @@ impl RunStore {
         sqlx::query(CREATE_RUNS).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_GRAPH).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_TITLE).execute(&self.pool).await?;
+        sqlx::query(ALTER_RUNS_DESCRIPTION)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(ALTER_RUNS_OWNER).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_HEARTBEAT)
             .execute(&self.pool)
@@ -162,25 +171,26 @@ impl RunStore {
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
         Ok(())
     }
-
     /// Persist a run and its per-node records. Idempotent on `run_id`: the run
     /// row is upserted and its node rows are replaced.
     pub async fn record_run(
         &self,
         run_id: &str,
         title: Option<&str>,
+        description: Option<&str>,
         project: Option<&str>,
         report: &RunReport,
     ) -> Result<(), PersistError> {
         let mut tx = self.pool.begin().await?;
 
-        // COALESCE keeps a title set at start time if this final write passes None.
+        // COALESCE keeps a title/description set at start time if this final write passes None.
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, title, status, project, node_count, graph, recorded_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, recorded_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 title         = COALESCE(excluded.title, harness_workflow_runs.title),
+                description   = COALESCE(excluded.description, harness_workflow_runs.description),
                 status        = excluded.status,
                 project       = excluded.project,
                 node_count    = excluded.node_count,
@@ -190,6 +200,7 @@ impl RunStore {
         .bind(run_id)
         .bind(&report.workflow)
         .bind(title)
+        .bind(description)
         .bind(run_status_str(report.status))
         .bind(project)
         .bind(report.nodes.len() as i32)
@@ -245,6 +256,7 @@ impl RunStore {
         run_id: &str,
         workflow: &str,
         title: Option<&str>,
+        description: Option<&str>,
         project: Option<&str>,
         total_nodes: usize,
         graph: &[NodeMeta],
@@ -254,11 +266,12 @@ impl RunStore {
         // claimed by the current instance and protected from reconcile until its
         // heartbeat goes stale.
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, title, status, project, node_count, graph, owner, heartbeat_at, recorded_at)
-             VALUES ($1, $2, $3, 'running', $4, $5, $6, $7, now(), now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, owner, heartbeat_at, recorded_at)
+             VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8, now(), now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 title         = COALESCE(excluded.title, harness_workflow_runs.title),
+                description   = COALESCE(excluded.description, harness_workflow_runs.description),
                 node_count    = excluded.node_count,
                 graph         = excluded.graph,
                 owner         = excluded.owner,
@@ -267,6 +280,7 @@ impl RunStore {
         .bind(run_id)
         .bind(workflow)
         .bind(title)
+        .bind(description)
         .bind(project)
         .bind(total_nodes as i32)
         .bind(Json(graph))
@@ -481,7 +495,7 @@ impl RunStore {
     /// List the most recently recorded runs (newest first).
     pub async fn list_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, title, status, project, node_count, recorded_at
+            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
              FROM harness_workflow_runs
              ORDER BY recorded_at DESC
              LIMIT $1",
@@ -495,7 +509,7 @@ impl RunStore {
     /// Fetch a run plus its node rows (ordered by declaration order).
     pub async fn get_run(&self, run_id: &str) -> Result<Option<RunDetail>, PersistError> {
         let run = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, title, status, project, node_count, recorded_at
+            "SELECT id, workflow_name, title, description, status, project, node_count, recorded_at
              FROM harness_workflow_runs WHERE id = $1",
         )
         .bind(run_id)
@@ -635,7 +649,13 @@ mod tests {
         let report = sample_report();
 
         store
-            .record_run(&run_id, Some("My task"), Some("proj-a"), &report)
+            .record_run(
+                &run_id,
+                Some("My task"),
+                Some("Implement X end to end"),
+                Some("proj-a"),
+                &report,
+            )
             .await
             .expect("record");
 
@@ -647,14 +667,27 @@ mod tests {
 
         // Idempotent re-record keeps node count stable.
         store
-            .record_run(&run_id, Some("My task"), Some("proj-a"), &report)
+            .record_run(
+                &run_id,
+                Some("My task"),
+                Some("Implement X end to end"),
+                Some("proj-a"),
+                &report,
+            )
             .await
             .unwrap();
         assert_eq!(store.node_count(&run_id).await.unwrap(), 2);
 
-        // list_runs includes it; get_run returns ordered node detail.
+        // list_runs includes metadata only; get_run returns ordered node detail and description.
         let listed = store.list_runs(50).await.unwrap();
-        assert!(listed.iter().any(|r| r.id == run_id && r.node_count == 2));
+        let listed_run = listed
+            .iter()
+            .find(|r| r.id == run_id && r.node_count == 2)
+            .expect("listed run");
+        assert!(
+            listed_run.description.is_none(),
+            "list_runs must redact long task descriptions"
+        );
         let detail = store.get_run(&run_id).await.unwrap().expect("detail");
         assert_eq!(detail.run.status, "completed");
         assert_eq!(detail.nodes.len(), 2);
@@ -666,6 +699,10 @@ mod tests {
         assert_eq!(detail.graph.len(), 2);
         assert_eq!(detail.graph[1].id, "review");
         assert_eq!(detail.graph[1].depends_on, vec!["build".to_string()]);
+        assert_eq!(
+            detail.run.description.as_deref(),
+            Some("Implement X end to end")
+        );
         assert!(store.get_run("does-not-exist").await.unwrap().is_none());
     }
 
@@ -689,6 +726,7 @@ mod tests {
                 &run_id,
                 &report.workflow,
                 Some("Incremental task"),
+                Some("Incremental description"),
                 None,
                 report.nodes.len(),
                 &report.graph,
@@ -703,6 +741,10 @@ mod tests {
             .expect("running detail");
         assert_eq!(detail.run.status, "running");
         assert_eq!(detail.run.title.as_deref(), Some("Incremental task"));
+        assert_eq!(
+            detail.run.description.as_deref(),
+            Some("Incremental description")
+        );
         assert_eq!(detail.run.node_count, 2);
         assert_eq!(detail.graph.len(), 2);
         assert!(detail.nodes.is_empty(), "no nodes finished yet");
@@ -715,6 +757,18 @@ mod tests {
         let detail = store.get_run(&run_id).await.unwrap().unwrap();
         assert_eq!(detail.nodes.len(), 1);
         assert_eq!(detail.nodes[0].node_id, "build");
+
+        // record_run with None description must NOT clobber the start-time value (COALESCE).
+        store
+            .record_run(&run_id, None, None, None, &report)
+            .await
+            .unwrap();
+        let detail = store.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(
+            detail.run.description.as_deref(),
+            Some("Incremental description"),
+            "COALESCE must preserve start-time description"
+        );
 
         // finish_run → terminal status.
         store
@@ -744,6 +798,7 @@ mod tests {
             .start_run(
                 &run_id,
                 &report.workflow,
+                None,
                 None,
                 None,
                 2,
@@ -789,7 +844,7 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap()
         );
         store
-            .record_run(&run_id, None, None, &sample_report())
+            .record_run(&run_id, None, None, None, &sample_report())
             .await
             .unwrap();
         assert!(store.delete_run(&run_id).await.unwrap(), "deleted");
@@ -819,6 +874,7 @@ mod tests {
             .start_run(
                 &run_id,
                 &report.workflow,
+                None,
                 None,
                 None,
                 2,
