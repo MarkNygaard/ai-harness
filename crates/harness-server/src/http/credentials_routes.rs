@@ -160,6 +160,20 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/home/harness"))
 }
 
+/// Remove a stale top-level `auth_mode` field from a codex `auth.json` blob.
+/// The codex CLI parses `auth_mode` as an enum and rejects the old `"ChatGPT"`
+/// value; the canonical file omits it (mode is inferred from `tokens`). Returns
+/// the input unchanged if it isn't a JSON object.
+fn strip_codex_auth_mode(json: &str) -> String {
+    match serde_json::from_str::<serde_json::Value>(json) {
+        Ok(serde_json::Value::Object(mut map)) if map.contains_key("auth_mode") => {
+            map.remove("auth_mode");
+            serde_json::Value::Object(map).to_string()
+        }
+        _ => json.to_string(),
+    }
+}
+
 fn write_secret_file(path: PathBuf, contents: &str) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -194,7 +208,13 @@ pub async fn materialize(store: &CredentialStore) {
     }
     if let Ok(Some(codex)) = store.get("codex").await {
         if let Some(json) = codex.get("auth_json").filter(|v| !v.is_empty()) {
-            write_secret_file(home.join(".codex").join("auth.json"), json);
+            // Defensive: older Connect Codex wrote an `auth_mode` field the codex
+            // CLI rejects ("unknown variant ChatGPT"). Strip it so credentials
+            // stored before the fix still work without a reconnect.
+            write_secret_file(
+                home.join(".codex").join("auth.json"),
+                &strip_codex_auth_mode(json),
+            );
         }
     }
     if let Ok(Some(pi)) = store.get("pi").await {
