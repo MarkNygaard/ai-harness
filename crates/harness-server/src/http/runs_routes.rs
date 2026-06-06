@@ -122,7 +122,7 @@ impl RunsState {
     }
 
     /// Lazily connect (and migrate) the persistence store.
-    async fn store(&self) -> Result<&RunStore, String> {
+    pub(crate) async fn store(&self) -> Result<&RunStore, String> {
         let url = self
             .db_url
             .as_deref()
@@ -237,6 +237,19 @@ pub async fn create_run(
     Extension(state): Extension<Arc<RunsState>>,
     Json(req): Json<CreateRunRequest>,
 ) -> Response {
+    match start_run(&state, req).await {
+        Ok(run_id) => (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response(),
+        Err((status, msg)) => err(status, msg),
+    }
+}
+
+/// Validate, resolve, and spawn a run in the background — the shared core behind
+/// both `POST /api/runs` and the MCP `run_trigger` tool. Returns the `run_id` or
+/// a `(status, message)` pair the caller renders however it likes.
+pub(crate) async fn start_run(
+    state: &Arc<RunsState>,
+    req: CreateRunRequest,
+) -> Result<String, (StatusCode, String)> {
     // A run must live in a project — the project's checkout is the workspace
     // (there is no global project root). Reject a missing/unknown project.
     let project = match req
@@ -246,21 +259,21 @@ pub async fn create_run(
         .filter(|p| !p.is_empty())
     {
         Some(p) => p.to_string(),
-        None => return err(StatusCode::BAD_REQUEST, "project is required"),
+        None => return Err((StatusCode::BAD_REQUEST, "project is required".to_string())),
     };
-    let store = match state.project_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
+    let store = state
+        .project_store()
+        .await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
     let project_row = match store.get(&project).await {
         Ok(Some(p)) => p,
         Ok(None) => {
-            return err(
+            return Err((
                 StatusCode::BAD_REQUEST,
                 format!("unknown project `{project}`"),
-            )
+            ))
         }
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     };
 
     // Empty `workflow` → the project's default; base branch → request or project.
@@ -283,15 +296,10 @@ pub async fn create_run(
     // Resolve `workflow` against the project's checkout (its `.harness/workflows`)
     // then bundled defaults.
     let workflow_root = state.projects_dir.join(&project);
-    let (yaml, _label) =
-        match harness_runner::resolve_workflow_source(&workflow_name, &workflow_root) {
-            Ok(v) => v,
-            Err(e) => return err(StatusCode::BAD_REQUEST, e),
-        };
-    let workflow = match parse_workflow(&yaml) {
-        Ok(w) => w,
-        Err(e) => return err(StatusCode::BAD_REQUEST, format!("invalid workflow: {e}")),
-    };
+    let (yaml, _label) = harness_runner::resolve_workflow_source(&workflow_name, &workflow_root)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let workflow = parse_workflow(&yaml)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid workflow: {e}")))?;
 
     let run_id = format!(
         "{}-{}",
@@ -336,7 +344,7 @@ pub async fn create_run(
         },
     );
 
-    (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response()
+    Ok(run_id)
 }
 
 #[allow(clippy::too_many_arguments)]
