@@ -114,7 +114,7 @@ rand = "0.8"
 serial_test = "3"
 
 # HTTP client (for Anthropic API)
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
 url = "2"
 
 # System info (memory pressure monitoring)
