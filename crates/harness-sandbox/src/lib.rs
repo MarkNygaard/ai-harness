@@ -1,3 +1,6 @@
+pub mod fs_guard;
+pub use fs_guard::restrict_self_writes;
+
 use harness_core::config::agents::SandboxMode;
 use harness_core::error::SandboxError;
 use std::ffi::OsString;

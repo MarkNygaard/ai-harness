@@ -93,6 +93,10 @@ starlark = "0.13"
 thiserror = "2"
 anyhow = "1"
 
+# Filesystem sandbox (Linux LSM; no-op elsewhere). Restricts agent writes so a
+# tool can't overwrite shared toolchains/system binaries (see harness-sandbox).
+landlock = "0.4"
+
 # Async trait
 async-trait = "0.1"
 
