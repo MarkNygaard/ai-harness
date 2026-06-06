@@ -402,7 +402,12 @@ nodes:
     category: validation
     depends_on: [pi-review-fix-loop]
     provider: codex
-    model: gpt-5.3-codex
+    # ChatGPT-account auth doesn't expose the `-codex` variants (gpt-5.3-codex →
+    # 400 "not supported when using Codex with a ChatGPT account", confirmed via
+    # both the codex CLI and omp). gpt-5.5 is the frontier general model the
+    # account does expose. If a given account lacks it, run `codex` → `/model`
+    # to see that account's list and set the model accordingly.
+    model: gpt-5.5
     context: fresh
     prompt: |
       You are reviewing a PR that an upstream agent already authored
