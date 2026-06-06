@@ -17,6 +17,7 @@ members = [
     "crates/harness-dag",
     "crates/harness-runner",
     "crates/harness-persist",
+    "crates/harness-sources",
 ]
 
 [workspace.package]
@@ -43,6 +44,7 @@ harness-workflow = { path = "crates/harness-workflow", version = "0.1.0" }
 harness-dag = { path = "crates/harness-dag", version = "0.1.0" }
 harness-runner = { path = "crates/harness-runner", version = "0.1.0" }
 harness-persist = { path = "crates/harness-persist", version = "0.1.0" }
+harness-sources = { path = "crates/harness-sources", version = "0.1.0" }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
