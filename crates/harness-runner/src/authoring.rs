@@ -504,7 +504,9 @@ pub fn catalog(project_root: &Path) -> Catalog {
             ProviderInfo {
                 id: "codex",
                 label: "Codex",
-                models: vec!["gpt-5.3-codex", "gpt-5-codex"],
+                // gpt-5-codex first: it's the model ChatGPT-account auth allows
+                // (gpt-5.3-codex requires an API-key account).
+                models: vec!["gpt-5-codex", "gpt-5.3-codex"],
             },
             ProviderInfo {
                 id: "pi",

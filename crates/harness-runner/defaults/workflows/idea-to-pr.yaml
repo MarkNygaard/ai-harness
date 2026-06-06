@@ -402,7 +402,10 @@ nodes:
     category: validation
     depends_on: [pi-review-fix-loop]
     provider: codex
-    model: gpt-5.3-codex
+    # ChatGPT-account auth only exposes a subset of Codex models — gpt-5.3-codex
+    # is rejected (400 "not supported when using Codex with a ChatGPT account").
+    # gpt-5-codex is the ChatGPT-account-allowed model.
+    model: gpt-5-codex
     context: fresh
     prompt: |
       You are reviewing a PR that an upstream agent already authored
