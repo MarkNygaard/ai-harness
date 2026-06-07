@@ -1,17 +1,18 @@
 # ai-harness — Agent & Contributor Rules
 
 This is the canonical guide for both humans and AI agents working in this repo.
-`CLAUDE.md` points here.
 
 ## Project
 
 `ai-harness` is a Rust-native orchestration layer for AI coding agents. It
 constructs prompts and manages lifecycle — the agents (Claude Code, Codex,
-Pi/Kimi) decide how to execute. It is **seeded from
-[majiayu000/harness](https://github.com/majiayu000/harness) (MIT)** and is being
-re-targeted to: run **in Kubernetes**, be triggered by **AI or cron-polled
-Linear**, execute **user-authored workflow DAGs**, and **provision toolchains
-from the UI**.
+Pi/Kimi) decide how to execute. It runs as a single container (Kubernetes **or**
+plain Docker) backed by Postgres; runs are triggered from the **web UI**, an
+**MCP-over-HTTP** endpoint, or a **cron-polled Linear poller**, execute
+**user-authored workflow DAGs** in an isolated git worktree, and provision
+per-project **toolchains on demand** via `mise`. Originally seeded from
+[majiayu000/harness](https://github.com/majiayu000/harness) (MIT); substantial
+portions of its runtime are still used.
 
 - Authoritative design: [docs/PLAN.md](docs/PLAN.md), [docs/PHASES.md](docs/PHASES.md).
 - Authoring workflow DAGs (node types, `when:`/`$node.output`/`output_format`,
@@ -72,9 +73,13 @@ Always: `cargo fmt --all` (or `cd web && bunx prettier`) before committing.
 
 ## Architecture & glossary
 
-The harness builds prompts and manages lifecycle; agents execute. New crates
-being added per the plan: `harness-dag` (DAG model + executor), `harness-sources`
-(Linear/GitHub triggers), `harness-toolchain`, `harness-k8s`. Existing terms:
+The harness builds prompts and manages lifecycle; agents execute. Key crates:
+`harness-dag` (DAG model + executor, `RunEvent`/`NodeMeta`), `harness-sources`
+(Linear client — discovery/preview/mutations), `harness-runner` (agent dispatch,
+`LocalRunner`, worktree isolation, bundled default workflows + commands),
+`harness-server` (HTTP/axum API, bundled web UI, runs/MCP/Linear routes + the
+poller), `harness-persist` (Postgres stores), `harness-agents` (Claude Code CLI
+adapters). Key terms:
 
 | Term | Meaning | Location |
 |---|---|---|
@@ -92,12 +97,19 @@ There is no type literally named `AgentRuntime`. Prefer the precise names above.
 
 ## Agent CLI specifics
 
-- **Claude CLI** `-p` takes its prompt as the NEXT token: `claude -p <PROMPT> [flags]`.
-  The prompt MUST immediately follow `-p`, or you get "Input must be provided".
-  Both `claude.rs` (CodeAgent) and `claude_adapter.rs` (AgentAdapter) spawn the
-  CLI — apply arg-construction changes to BOTH. Verify with
-  `cargo test --package harness-agents`.
-- **Pi/Kimi** adapter is not implemented yet (Phase 3 — see [docs/PLAN.md](docs/PLAN.md) §7.3).
+*Internal notes on how the harness spawns each provider's CLI — relevant only if
+you're editing the agent-adapter code, NOT instructions for how you (the agent
+reading this) should invoke tools. The invariants below are guarded by tests; the
+tests are the source of truth.*
+
+- **Claude Code CLI** runs headless via `-p` (`--print`): the prompt is the
+  *value* of `-p` (`claude -p "<prompt>" --model …`), not a trailing positional —
+  else "Input must be provided". Two paths spawn it and must stay in sync:
+  `claude.rs` (CodeAgent) and `claude_adapter.rs` (AgentAdapter). Verify with
+  `cargo test -p harness-agents`.
+- **Pi/Kimi (`omp`)** — `PiAgent` in `crates/harness-runner/src/pi.rs`
+  (`build_args` builds the `omp` invocation; `OMP_PLUGIN_DIRS` → `--plugin-dir`).
+  Verify with `cargo test -p harness-runner`.
 
 ## Server operation
 
