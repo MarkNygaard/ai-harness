@@ -1,24 +1,72 @@
 # ai-harness
 
-A Rust-native AI coding harness that runs **in Kubernetes**, is driven by **AI
-triggers or cron-polled Linear tasks**, executes **user-authored workflow DAGs**,
-and provisions project **toolchains from the UI** (no hand-built wrapper images).
+A Rust-native orchestration layer for AI coding agents. It turns a task — typed
+in a UI, sent over MCP, or pulled from a Linear column — into a run of a
+user-authored **workflow DAG**, drives coding agents (Claude Code, Codex,
+Pi/Kimi) through it in an isolated git worktree, and opens a pull request at the
+end. The control plane is a single binary backed by Postgres, and runs anywhere
+a container does (Kubernetes or plain Docker).
 
-It is seeded from [majiayu000/harness](https://github.com/majiayu000/harness)
-(MIT) and reuses its agent adapters, worktree isolation, Postgres runtime, and
-web shell, while replacing the workflow front-end with an Archon-style DAG engine
-and re-targeting execution at a cluster.
+## What it does
+
+- **Workflow DAGs.** Author multi-node pipelines (e.g. explore → plan →
+  implement → validate → PR → review loops) in YAML or the visual editor. Nodes
+  run different agents/models, with `when:` gating, `$node.output` wiring, and
+  loop/until constructs.
+- **Bundled workflows.** `idea-to-pr` (a task → a reviewed pull request) and
+  `merge-pr` (resolve conflicts + merge a ready PR) ship in the box, ready to
+  run or fork into a project's `.harness/workflows/`.
+- **Multiple agents in one pipeline.** Claude Code, Codex, and Pi/Kimi (`omp`)
+  nodes, each picking its own model.
+- **Three ways to trigger a run:**
+  - the **web UI**;
+  - an **MCP-over-HTTP** endpoint — `run_trigger` / `run_list` / `run_status`
+    plus the workflow-authoring tools — so an MCP-connected assistant can author
+    *and* fire workflows;
+  - a **Linear poller** — watches a column (plus an optional eligibility label),
+    claims one issue at a time, walks it through a configurable status map
+    (e.g. In Progress → In Review → Ready for merge), fires the bound workflow,
+    and tags the PR so Linear links it back to the issue. A per-binding `live`
+    flag gates dry-run vs. acting.
+- **Projects.** Register a git repo; runs operate on an isolated worktree off
+  its base branch. Per-project **Linear/GitHub API keys** (with global fallback)
+  are managed from the Projects page.
+- **Toolchain provisioning.** Declare a project's toolchains; `mise` installs
+  them on demand (cached on the data volume — no image rebuild).
+- **Secrets.** Credentials are encrypted at rest (AES-256-GCM), and
+  control-plane secrets are scrubbed from the agent processes a run spawns.
+
+## How it runs
+
+The control plane is a single `harness` binary (HTTP API + the bundled web UI)
+backed by Postgres. A run executes as **local child processes** inside the
+server's container — there is no per-run Kubernetes Job — so the same image runs
+under Kubernetes *or* plain Docker.
+
+- **Local dev:** `./start-server.sh` brings up Postgres (via the dev
+  `docker-compose.yml`) and runs the server. See [AGENTS.md](AGENTS.md) for the
+  build/verify commands.
+- **Container:** run the published image
+  (`ghcr.io/marknygaard/ai-harness`) with `HARNESS_DATABASE_URL`,
+  `HARNESS_SECRET_KEY` (the AES key for stored credentials — keep it stable), an
+  optional `HARNESS_API_TOKEN`, and a persistent volume for `HARNESS_DATA_DIR` /
+  `HARNESS_PROJECT_ROOT` (project checkouts). Deploy via Kubernetes or
+  `docker compose`. The image bundles the agent runtimes (`bun`, `mise`, `omp` +
+  the `pi-web-access` plugin) and listens on `:8080`.
 
 ## Documentation
 
-- [docs/PLAN.md](docs/PLAN.md) — architecture & design decisions
-- [docs/PHASES.md](docs/PHASES.md) — phased build roadmap
-
-## Status
-
-Early. Phase 0 (seed from majiayu-harness, green build) in progress.
+- **[AGENTS.md](AGENTS.md)** — the canonical guide for humans and agents:
+  build/verify commands, architecture glossary, server-operation & worktree
+  rules, and the PR workflow. **Start here.**
+- [docs/PLAN.md](docs/PLAN.md) — architecture & design decisions.
+- [docs/PHASES.md](docs/PHASES.md) — phased build roadmap.
+- [docs/authoring-workflows.md](docs/authoring-workflows.md) — authoring
+  workflow DAGs (node types, `when:` / `$node.output` / `output_format`,
+  `trigger_rule`, and good practices).
 
 ## Acknowledgements
 
-Built on [majiayu000/harness](https://github.com/majiayu000/harness) (MIT) — see
+Originally seeded from [majiayu000/harness](https://github.com/majiayu000/harness)
+(MIT); substantial portions of its runtime are still used. See
 [LICENSE](LICENSE).
