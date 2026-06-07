@@ -348,6 +348,134 @@ pub(crate) fn spawn_reaper(state: Arc<RunsState>) {
     });
 }
 
+/// How often the cargo-cache sweeper checks the shared build cache.
+const CACHE_SWEEP_EVERY_SECS: u64 = 6 * 60 * 60;
+/// Don't evict artifacts modified within this window — protects an in-progress
+/// build's fresh outputs (even one driven by another replica) from deletion.
+const CACHE_SWEEP_SAFETY_FLOOR_SECS: u64 = 2 * 60 * 60;
+/// Default size cap for the whole `.cargo-target` dir, in GiB. Override with
+/// `HARNESS_CARGO_TARGET_CAP_GB`; `0` disables the sweeper.
+const CACHE_CAP_GB_DEFAULT: u64 = 50;
+
+/// Periodically bound the shared cargo build cache so it can't fill the disk.
+///
+/// **Size-gated**: a cache under its cap is never touched, so an idle project
+/// stays fully warm — pruning only kicks in under real disk pressure (sustained
+/// growth past the cap). When it does, it evicts *oldest* artifacts first down
+/// to 80% of the cap, and skips anything modified within
+/// [`CACHE_SWEEP_SAFETY_FLOOR_SECS`] and skips entirely while a run is live on
+/// this instance — so it never deletes a build's in-flight outputs. Deleting a
+/// stale artifact only forces cargo to rebuild it; it can't corrupt the cache.
+/// Best-effort; a no-op outside a Tokio runtime.
+pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    let cap_gb = std::env::var("HARNESS_CARGO_TARGET_CAP_GB")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(CACHE_CAP_GB_DEFAULT);
+    if cap_gb == 0 {
+        tracing::info!("cache sweeper: disabled (HARNESS_CARGO_TARGET_CAP_GB=0)");
+        return;
+    }
+    let cap = cap_gb.saturating_mul(1024 * 1024 * 1024);
+    let target = cap / 5 * 4; // 80% — hysteresis so we don't churn at the edge
+    let root = state.projects_dir.join(".cargo-target");
+    tokio::spawn(async move {
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_secs(CACHE_SWEEP_EVERY_SECS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            // Cheap early-out: never sweep while this instance has a live run.
+            if !state.live.lock().await.is_empty() {
+                continue;
+            }
+            let root = root.clone();
+            match tokio::task::spawn_blocking(move || {
+                sweep_cargo_cache(&root, cap, target, CACHE_SWEEP_SAFETY_FLOOR_SECS)
+            })
+            .await
+            {
+                Ok(Ok(Some((before, after)))) => tracing::info!(
+                    "cache sweeper: {:.1} GB -> {:.1} GB (cap {cap_gb} GB)",
+                    before as f64 / 1.073_741_824e9,
+                    after as f64 / 1.073_741_824e9,
+                ),
+                Ok(Ok(None)) => {}
+                Ok(Err(e)) => tracing::warn!("cache sweeper: {e}"),
+                Err(e) => tracing::warn!("cache sweeper: join error: {e}"),
+            }
+        }
+    });
+}
+
+/// Evict oldest files under `root` until total size ≤ `target`, but only when it
+/// currently exceeds `cap`, and never touching files modified within
+/// `floor_secs`. Returns `(before, after)` bytes when it acted, else `None`.
+fn sweep_cargo_cache(
+    root: &std::path::Path,
+    cap: u64,
+    target: u64,
+    floor_secs: u64,
+) -> std::io::Result<Option<(u64, u64)>> {
+    if !root.exists() {
+        return Ok(None);
+    }
+    let now = std::time::SystemTime::now();
+    let floor = std::time::Duration::from_secs(floor_secs);
+    let mut files: Vec<(std::path::PathBuf, u64, std::time::SystemTime)> = Vec::new();
+    let mut total: u64 = 0;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let rd = match std::fs::read_dir(&dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        for entry in rd.flatten() {
+            let ft = match entry.file_type() {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                if let Ok(meta) = entry.metadata() {
+                    total = total.saturating_add(meta.len());
+                    let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                    files.push((entry.path(), meta.len(), mtime));
+                }
+            }
+        }
+    }
+    if total <= cap {
+        return Ok(None);
+    }
+    files.sort_by_key(|(_, _, mtime)| *mtime); // oldest first
+    let mut remaining = total;
+    for (path, size, mtime) in files {
+        if remaining <= target {
+            break;
+        }
+        // Protect fresh artifacts — a (possibly cross-replica) active build.
+        if now
+            .duration_since(mtime)
+            .map(|age| age < floor)
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        if std::fs::remove_file(&path).is_ok() {
+            remaining = remaining.saturating_sub(size);
+        }
+    }
+    Ok(Some((total, remaining)))
+}
+
 /// `GET /runs` — list recent runs.
 pub async fn list_runs(Extension(state): Extension<Arc<RunsState>>) -> Response {
     let store = match state.store().await {
@@ -901,5 +1029,45 @@ mod tests {
         assert!(result.starts_with("€"));
         assert!(result.contains("[truncated: "));
         assert!(result.contains(" bytes total]"));
+    }
+
+    #[test]
+    fn sweep_cargo_cache_noop_under_cap() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("a"), vec![0u8; 1024]).unwrap();
+        // Cap far above contents → no action, file intact.
+        assert!(sweep_cargo_cache(dir.path(), 10 * 1024 * 1024, 8 * 1024 * 1024, 0)
+            .unwrap()
+            .is_none());
+        assert!(dir.path().join("a").exists());
+    }
+
+    #[test]
+    fn sweep_cargo_cache_evicts_down_to_target() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..10 {
+            std::fs::write(dir.path().join(format!("f{i}")), vec![0u8; 1024 * 1024]).unwrap();
+        }
+        // 10 MiB total; cap 5 MiB, target 4 MiB, floor 0 (protect nothing).
+        let (before, after) = sweep_cargo_cache(dir.path(), 5 * 1024 * 1024, 4 * 1024 * 1024, 0)
+            .unwrap()
+            .expect("acts when over cap");
+        assert!(before >= 10 * 1024 * 1024);
+        assert!(after <= 4 * 1024 * 1024, "after={after}");
+    }
+
+    #[test]
+    fn sweep_cargo_cache_safety_floor_protects_fresh() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..10 {
+            std::fs::write(dir.path().join(format!("f{i}")), vec![0u8; 1024 * 1024]).unwrap();
+        }
+        // Over cap, but a 1h floor protects the just-written (fresh) files →
+        // nothing is deleted.
+        let (_before, after) =
+            sweep_cargo_cache(dir.path(), 5 * 1024 * 1024, 4 * 1024 * 1024, 3600)
+                .unwrap()
+                .expect("acts (over cap) but protects fresh files");
+        assert!(after >= 10 * 1024 * 1024, "fresh files must be protected, after={after}");
     }
 }
