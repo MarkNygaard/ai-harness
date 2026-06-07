@@ -302,13 +302,18 @@ pub async fn clear_cache(
         return r;
     }
     let dir = state.projects_dir.join(".cargo-target").join(&name);
-    if !dir.exists() {
-        return Json(serde_json::json!({ "cleared": true, "bytes_freed": 0 })).into_response();
-    }
-    let size = cache::dir_size(&dir);
-    match spawn_blocking(move || std::fs::remove_dir_all(&dir)).await {
-        Ok(Ok(())) => {
-            Json(serde_json::json!({ "cleared": true, "bytes_freed": size })).into_response()
+    match spawn_blocking(move || {
+        if !dir.exists() {
+            return Ok((true, 0));
+        }
+        let size = cache::dir_size(&dir);
+        std::fs::remove_dir_all(&dir).map(|_| (true, size))
+    })
+    .await
+    {
+        Ok(Ok((cleared, bytes_freed))) => {
+            Json(serde_json::json!({ "cleared": cleared, "bytes_freed": bytes_freed }))
+                .into_response()
         }
         Ok(Err(e)) => err(
             StatusCode::INTERNAL_SERVER_ERROR,

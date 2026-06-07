@@ -202,6 +202,9 @@ function ProjectCacheDialog({ project }: { project: Project }) {
   const clear = useClearProjectCache();
   const [raw, setRaw] = useState(project.cargo_target_cap_gb?.toString() ?? "");
   const capGb = raw.trim() === "" ? null : Number(raw);
+  const isValid =
+    raw.trim() === "" ||
+    (Number.isFinite(capGb) && Number.isInteger(capGb) && (capGb ?? 0) > 0);
   const hasChanged =
     (project.cargo_target_cap_gb == null && raw.trim() !== "") ||
     (project.cargo_target_cap_gb != null &&
@@ -256,7 +259,7 @@ function ProjectCacheDialog({ project }: { project: Project }) {
               />
               <Button
                 size="sm"
-                disabled={!hasChanged || setCap.isPending}
+                disabled={!hasChanged || !isValid || setCap.isPending}
                 onClick={() => {
                   setCap.mutate({
                     name: project.name,
@@ -267,6 +270,11 @@ function ProjectCacheDialog({ project }: { project: Project }) {
                 Save
               </Button>
             </div>
+            {!isValid && raw.trim() !== "" && (
+              <div className="text-xs text-destructive">
+                Cap must be a positive whole number.
+              </div>
+            )}
             {setCap.error && (
               <div className="text-xs text-destructive">
                 {setCap.error.message}

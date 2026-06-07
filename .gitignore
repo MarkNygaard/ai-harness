@@ -28,3 +28,4 @@ sdk/typescript/bun.lock
 # stray omp capture files
 omp.jsonl
 *.jsonl
+.vite/

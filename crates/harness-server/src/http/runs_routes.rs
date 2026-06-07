@@ -1075,6 +1075,11 @@ mod tests {
         std::fs::create_dir(&sub).unwrap();
         std::fs::write(&a, "hello").unwrap();
         std::fs::write(sub.join("b.txt"), "world").unwrap();
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link.txt");
+            std::os::unix::fs::symlink(&a, &link).unwrap();
+        }
         assert_eq!(dir_size(dir.path()), 10);
     }
 
@@ -1084,6 +1089,22 @@ mod tests {
             dir_size(std::path::Path::new("/does/not/exist/for/sure")),
             0
         );
+    }
+
+    #[test]
+    fn resolve_cap_gb_prefers_project_setting() {
+        // When a positive per-project cap is set, it wins over everything.
+        assert_eq!(resolve_cap_gb(Some(42)), 42);
+    }
+
+    #[test]
+    fn resolve_cap_gb_falls_back_to_env_then_default() {
+        // No project cap → env default. We can't easily manipulate the real
+        // process environment here, so we test the two branches we control:
+        // None / non-positive project cap falls through to the env/default path.
+        assert_eq!(resolve_cap_gb(None), CACHE_CAP_GB_DEFAULT);
+        assert_eq!(resolve_cap_gb(Some(0)), CACHE_CAP_GB_DEFAULT);
+        assert_eq!(resolve_cap_gb(Some(-5)), CACHE_CAP_GB_DEFAULT);
     }
 
     #[test]
