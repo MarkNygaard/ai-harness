@@ -313,6 +313,22 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/projects/{name}",
             get(super::projects_routes::get_project).delete(super::projects_routes::delete_project),
         )
+        .route(
+            "/api/projects/{name}/cache-size",
+            get(super::projects_routes::get_cache_size),
+        )
+        .route(
+            "/api/projects/{name}/cache-cap",
+            axum::routing::put(super::projects_routes::set_cache_cap),
+        )
+        .route(
+            "/api/projects/{name}/cache/clear",
+            post(super::projects_routes::clear_cache),
+        )
+        .route(
+            "/api/projects/{name}/cache/sweep",
+            post(super::projects_routes::sweep_cache),
+        )
         // SPA fallback: serve the React shell for client-side routes
         // (`/runs/{id}`, `/editor`, …) so deep links / refreshes work.
         .fallback(crate::dashboard::spa_fallback)

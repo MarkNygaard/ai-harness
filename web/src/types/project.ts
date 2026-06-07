@@ -10,6 +10,8 @@ export interface Project {
   default_workflow: string | null;
   /** mise tool specs provisioned before runs (e.g. "rust", "node@22", "pnpm"). */
   toolchains: string[];
+  /** Per-project build-cache cap in GiB; `null` falls back to the env default. */
+  cargo_target_cap_gb: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -20,4 +22,11 @@ export interface RegisterProjectRequest {
   base_branch?: string;
   default_workflow?: string | null;
   toolchains?: string[];
+  /** Per-project build-cache cap in GiB; omitted/`null`/≤0 → env default. */
+  cargo_target_cap_gb?: number | null;
+}
+
+export interface CacheSize {
+  bytes: number;
+  cap_gb: number;
 }

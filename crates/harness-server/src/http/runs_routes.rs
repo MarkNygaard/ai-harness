@@ -349,15 +349,53 @@ pub(crate) fn spawn_reaper(state: Arc<RunsState>) {
 }
 
 /// How often the cargo-cache sweeper checks the shared build cache.
-const CACHE_SWEEP_EVERY_SECS: u64 = 6 * 60 * 60;
+pub(crate) const CACHE_SWEEP_EVERY_SECS: u64 = 6 * 60 * 60;
 /// Don't evict artifacts modified within this window — protects an in-progress
 /// build's fresh outputs (even one driven by another replica) from deletion.
-const CACHE_SWEEP_SAFETY_FLOOR_SECS: u64 = 2 * 60 * 60;
+pub(crate) const CACHE_SWEEP_SAFETY_FLOOR_SECS: u64 = 2 * 60 * 60;
 /// Default size cap **per project** cache dir (each immediate subdirectory of
 /// `.cargo-target/`), in GiB. Override with `HARNESS_CARGO_TARGET_CAP_GB`; `0`
 /// disables the sweeper. Per-project, so total disk scales with the number of
 /// projects but no single project's cache can balloon.
-const CACHE_CAP_GB_DEFAULT: u64 = 50;
+pub(crate) const CACHE_CAP_GB_DEFAULT: u64 = 50;
+/// Total size in bytes of all regular files under `root` (recursive, skipping
+/// symlinks). Returns 0 if `root` is absent/unreadable. Best-effort.
+pub(crate) fn dir_size(root: &std::path::Path) -> u64 {
+    let mut total: u64 = 0;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                if let Ok(meta) = entry.metadata() {
+                    total = total.saturating_add(meta.len());
+                }
+            }
+        }
+    }
+    total
+}
+
+/// Resolve a project's effective cache cap (GiB): per-project setting (when
+/// > 0) → `HARNESS_CARGO_TARGET_CAP_GB` env → [`CACHE_CAP_GB_DEFAULT`].
+pub(crate) fn resolve_cap_gb(project_cap: Option<i32>) -> u64 {
+    if let Some(v) = project_cap.filter(|&v| v > 0) {
+        return v as u64;
+    }
+    std::env::var("HARNESS_CARGO_TARGET_CAP_GB")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&v| v > 0)
+        .unwrap_or(CACHE_CAP_GB_DEFAULT)
+}
 
 /// Periodically bound each project's cargo build cache so none can fill the disk.
 ///
@@ -374,16 +412,14 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
     if tokio::runtime::Handle::try_current().is_err() {
         return;
     }
-    let cap_gb = std::env::var("HARNESS_CARGO_TARGET_CAP_GB")
+    let env_cap_gb = std::env::var("HARNESS_CARGO_TARGET_CAP_GB")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(CACHE_CAP_GB_DEFAULT);
-    if cap_gb == 0 {
+    if env_cap_gb == 0 {
         tracing::info!("cache sweeper: disabled (HARNESS_CARGO_TARGET_CAP_GB=0)");
         return;
     }
-    let cap = cap_gb.saturating_mul(1024 * 1024 * 1024);
-    let target = cap / 5 * 4; // 80% — hysteresis so we don't churn at the edge
     let root = state.projects_dir.join(".cargo-target");
     tokio::spawn(async move {
         let mut tick =
@@ -395,9 +431,23 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
             if !state.live.lock().await.is_empty() {
                 continue;
             }
+            let caps: std::collections::HashMap<String, i32> = match state.project_store().await {
+                Ok(store) => match store.list().await {
+                    Ok(ps) => ps
+                        .into_iter()
+                        .filter_map(|p| p.cargo_target_cap_gb.map(|c| (p.name, c)))
+                        .collect(),
+                    Err(e) => {
+                        tracing::warn!("cache sweeper: list projects: {e}");
+                        Default::default()
+                    }
+                },
+                Err(_) => Default::default(),
+            };
             let root = root.clone();
+            let caps = caps.clone();
             if let Err(e) = tokio::task::spawn_blocking(move || {
-                sweep_project_caches(&root, cap, target, CACHE_SWEEP_SAFETY_FLOOR_SECS, cap_gb)
+                sweep_project_caches(&root, CACHE_SWEEP_SAFETY_FLOOR_SECS, &caps)
             })
             .await
             {
@@ -408,14 +458,10 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
 }
 
 /// Sweep each project cache dir (an immediate subdirectory of `root`)
-/// independently against `cap`, logging any that were pruned. `cap_gb` is used
-/// only for the log line.
 fn sweep_project_caches(
     root: &std::path::Path,
-    cap: u64,
-    target: u64,
     floor_secs: u64,
-    cap_gb: u64,
+    caps: &std::collections::HashMap<String, i32>,
 ) {
     let rd = match std::fs::read_dir(root) {
         Ok(r) => r,
@@ -426,6 +472,12 @@ fn sweep_project_caches(
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
+        let cap_gb = resolve_cap_gb(caps.get(&name).copied());
+        if cap_gb == 0 {
+            continue;
+        }
+        let cap = cap_gb.saturating_mul(1024 * 1024 * 1024);
+        let target = cap / 5 * 4; // 80% — hysteresis so we don't churn at the edge
         match sweep_cargo_cache(&entry.path(), cap, target, floor_secs) {
             Ok(Some((before, after))) => tracing::info!(
                 "cache sweeper: {name} {:.1} GB -> {:.1} GB (cap {cap_gb} GB/project)",
@@ -441,7 +493,7 @@ fn sweep_project_caches(
 /// Evict oldest files under `root` until total size ≤ `target`, but only when it
 /// currently exceeds `cap`, and never touching files modified within
 /// `floor_secs`. Returns `(before, after)` bytes when it acted, else `None`.
-fn sweep_cargo_cache(
+pub(crate) fn sweep_cargo_cache(
     root: &std::path::Path,
     cap: u64,
     target: u64,
@@ -1015,6 +1067,25 @@ pub async fn delete_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dir_size_sums_regular_files_skips_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(&a, "hello").unwrap();
+        std::fs::write(sub.join("b.txt"), "world").unwrap();
+        assert_eq!(dir_size(dir.path()), 10);
+    }
+
+    #[test]
+    fn dir_size_missing_path_is_zero() {
+        assert_eq!(
+            dir_size(std::path::Path::new("/does/not/exist/for/sure")),
+            0
+        );
+    }
+
     #[test]
     fn read_declared_artifact_reads_file() {
         let dir = tempfile::tempdir().unwrap();

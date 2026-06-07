@@ -501,6 +501,19 @@ impl RunStore {
         Ok(row.map(|r| r.0))
     }
 
+    /// Count of runs for `project` currently in `running` status (cross-instance:
+    /// reads persisted state, not just this process's live map).
+    pub async fn count_active_runs(&self, project: &str) -> Result<i64, PersistError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM harness_workflow_runs
+             WHERE project = $1 AND status = 'running'",
+        )
+        .bind(project)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     /// Count persisted node rows for a run.
     pub async fn node_count(&self, run_id: &str) -> Result<i64, PersistError> {
         let row: (i64,) =

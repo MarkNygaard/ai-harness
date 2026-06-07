@@ -21,7 +21,8 @@ use axum::Json;
 use harness_persist::ProjectInput;
 use serde::Deserialize;
 
-use super::runs_routes::RunsState;
+use super::runs_routes::{self as cache, RunsState};
+use tokio::task::spawn_blocking;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
@@ -77,6 +78,9 @@ pub struct RegisterProjectRequest {
     /// `mise` tool specs to provision before runs (e.g. `rust`, `node@22`, `pnpm`).
     #[serde(default)]
     pub toolchains: Vec<String>,
+    /// Per-project build-cache cap in GiB; omitted/`null`/≤0 → env default.
+    #[serde(default)]
+    pub cargo_target_cap_gb: Option<i32>,
 }
 
 /// `POST /api/projects` — register/update a project and ensure its repo is
@@ -169,6 +173,7 @@ pub async fn register_project(
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty())
             .collect(),
+        cargo_target_cap_gb: req.cargo_target_cap_gb.filter(|v| *v > 0),
     };
     let project = match store.upsert(&req.name, &input).await {
         Ok(p) => p,
@@ -206,4 +211,162 @@ pub async fn delete_project(
         let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dest)).await;
     }
     Json(serde_json::json!({ "deleted": true, "project": name })).into_response()
+}
+
+/// `Err(Response)` (409) when a run is active for `project`, else `Ok(())`.
+async fn ensure_idle(state: &RunsState, project: &str) -> Result<(), Response> {
+    let store = state
+        .store()
+        .await
+        .map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    match store.count_active_runs(project).await {
+        Ok(0) => Ok(()),
+        Ok(_) => Err(err(
+            StatusCode::CONFLICT,
+            "a run is active for this project; try again when idle",
+        )),
+        Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+/// `GET /api/projects/{name}/cache-size` — current cache bytes + effective cap.
+pub async fn get_cache_size(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    if !valid_name(&name) {
+        return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    let store = match state.project_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let project = match store.get(&name).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return err(StatusCode::NOT_FOUND, format!("project `{name}` not found")),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let dir = state.projects_dir.join(".cargo-target").join(&name);
+    let bytes = match spawn_blocking(move || cache::dir_size(&dir)).await {
+        Ok(n) => n,
+        Err(e) => {
+            return err(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("dir_size failed: {e}"),
+            )
+        }
+    };
+    Json(serde_json::json!({
+        "bytes": bytes,
+        "cap_gb": cache::resolve_cap_gb(project.cargo_target_cap_gb),
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetCapRequest {
+    #[serde(default)]
+    pub cap_gb: Option<i32>,
+}
+
+/// `PUT /api/projects/{name}/cache-cap` — set or clear the per-project cap.
+pub async fn set_cache_cap(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(name): AxumPath<String>,
+    Json(req): Json<SetCapRequest>,
+) -> Response {
+    if !valid_name(&name) {
+        return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    let cap = req.cap_gb.filter(|&v| v > 0);
+    let store = match state.project_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.set_cargo_target_cap(&name, cap).await {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => err(StatusCode::NOT_FOUND, format!("project `{name}` not found")),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `POST /api/projects/{name}/cache/clear` — delete the project's cache dir.
+pub async fn clear_cache(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    if !valid_name(&name) {
+        return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    if let Err(r) = ensure_idle(&state, &name).await {
+        return r;
+    }
+    let dir = state.projects_dir.join(".cargo-target").join(&name);
+    if !dir.exists() {
+        return Json(serde_json::json!({ "cleared": true, "bytes_freed": 0 })).into_response();
+    }
+    let size = cache::dir_size(&dir);
+    match spawn_blocking(move || std::fs::remove_dir_all(&dir)).await {
+        Ok(Ok(())) => {
+            Json(serde_json::json!({ "cleared": true, "bytes_freed": size })).into_response()
+        }
+        Ok(Err(e)) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("remove_dir_all failed: {e}"),
+        ),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task failed: {e}"),
+        ),
+    }
+}
+
+/// `POST /api/projects/{name}/cache/sweep` — run the sweeper on demand.
+pub async fn sweep_cache(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(name): AxumPath<String>,
+) -> Response {
+    if !valid_name(&name) {
+        return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    if let Err(r) = ensure_idle(&state, &name).await {
+        return r;
+    }
+    let store = match state.project_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let project = match store.get(&name).await {
+        Ok(Some(p)) => p,
+        Ok(None) => return err(StatusCode::NOT_FOUND, format!("project `{name}` not found")),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let cap_gb = cache::resolve_cap_gb(project.cargo_target_cap_gb);
+    if cap_gb == 0 {
+        return Json(serde_json::json!({ "swept": false })).into_response();
+    }
+    let cap = cap_gb.saturating_mul(1024 * 1024 * 1024);
+    let target = cap / 5 * 4;
+    let dir = state.projects_dir.join(".cargo-target").join(&name);
+    match spawn_blocking(move || {
+        cache::sweep_cargo_cache(&dir, cap, target, cache::CACHE_SWEEP_SAFETY_FLOOR_SECS)
+    })
+    .await
+    {
+        Ok(Ok(Some((before, after)))) => Json(serde_json::json!({
+            "swept": true,
+            "before": before,
+            "after": after,
+        }))
+        .into_response(),
+        Ok(Ok(None)) => Json(serde_json::json!({ "swept": false })).into_response(),
+        Ok(Err(e)) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("sweep failed: {e}"),
+        ),
+        Err(e) => err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("task failed: {e}"),
+        ),
+    }
 }
