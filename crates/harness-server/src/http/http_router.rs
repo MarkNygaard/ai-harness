@@ -47,6 +47,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // Periodically reap runs whose lease has gone stale (crashed/orphaned), so a
     // lost run doesn't linger as `running`. Live runs heartbeat and are skipped.
     runs_routes::spawn_reaper(runs_state.clone());
+    // Bound the shared cargo build cache (size-gated) so it can't fill the disk.
+    runs_routes::spawn_cache_sweeper(runs_state.clone());
     // Linear poller (Slice 3a, dry-run): logs which eligible issues each enabled
     // binding WOULD fire — no claim, no transition, no run triggered.
     super::linear_poller::spawn_poller(runs_state.clone());
