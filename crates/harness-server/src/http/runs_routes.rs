@@ -1036,9 +1036,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("a"), vec![0u8; 1024]).unwrap();
         // Cap far above contents → no action, file intact.
-        assert!(sweep_cargo_cache(dir.path(), 10 * 1024 * 1024, 8 * 1024 * 1024, 0)
-            .unwrap()
-            .is_none());
+        assert!(
+            sweep_cargo_cache(dir.path(), 10 * 1024 * 1024, 8 * 1024 * 1024, 0)
+                .unwrap()
+                .is_none()
+        );
         assert!(dir.path().join("a").exists());
     }
 
@@ -1068,6 +1070,9 @@ mod tests {
             sweep_cargo_cache(dir.path(), 5 * 1024 * 1024, 4 * 1024 * 1024, 3600)
                 .unwrap()
                 .expect("acts (over cap) but protects fresh files");
-        assert!(after >= 10 * 1024 * 1024, "fresh files must be protected, after={after}");
+        assert!(
+            after >= 10 * 1024 * 1024,
+            "fresh files must be protected, after={after}"
+        );
     }
 }
