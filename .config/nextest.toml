@@ -1,9 +1,9 @@
-# Postgres-backed tests do `CREATE SCHEMA IF NOT EXISTS`. serial_test's
-# #[serial] only serializes within a single process, but nextest runs each
-# test in its own process and can run tests from multiple crates at once —
-# so concurrent CREATE SCHEMA across processes races (duplicate-key). Cap the
-# group to one thread so at most one DB test runs at a time, workspace-wide.
-# (This is the isolation that reverted nextest in #77; do not remove it.)
+# Postgres-backed tests also use in-process serial guards and semaphores to
+# avoid DDL and connection-pool contention. nextest runs each test in its own
+# process, so those guards do not coordinate across tests or crates. Cap the
+# group to one thread so the known DB-heavy crates/modules still run one at a
+# time, workspace-wide.
+# (This is the isolation shape that reverted nextest in #77; do not remove it.)
 [test-groups]
 serial-db = { max-threads = 1 }
 
