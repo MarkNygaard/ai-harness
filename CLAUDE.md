@@ -52,12 +52,12 @@ Always: `cargo fmt --all` (or `cd web && bunx prettier`) before committing.
   --all-targets`, `cargo build --workspace`. Fast; catches format/lint/compile
   breakage without paying for the whole test run.
 - **Full gate — run it once, at the end, not per-edit.** Before a PR is finalized
-  `RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets`, then
+  run: `RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets`, then
   `cargo nextest run --workspace`. (No separate `cargo check` — `clippy --all-targets`
   already type-checks every target, so a preceding `check` is redundant work.)
   nextest must be installed (`cargo install cargo-nextest --locked`);
   `.config/nextest.toml` defines the `serial-db` group that serializes
-  Postgres-backed tests (harness-persist + harness-core `db::tests` and `db_pg_tests`)
+  Postgres-backed tests (harness-persist + harness-core `db::tests` and `db_pg::tests`)
   to avoid `CREATE SCHEMA` races.
   This is the single authoritative gate; the per-edit loop above stays scoped
   and fast.
