@@ -267,6 +267,9 @@ mod tests {
 
     #[tokio::test]
     async fn post_tool_use_returns_violations_when_guard_fires() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _env_lock = CI_ENV_LOCK.lock().await;
         let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
@@ -297,6 +300,9 @@ mod tests {
 
     #[tokio::test]
     async fn post_tool_use_disabled_passes_through() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _env_lock = CI_ENV_LOCK.lock().await;
         let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
@@ -322,6 +328,9 @@ mod tests {
 
     #[tokio::test]
     async fn post_tool_use_empty_files_returns_clean() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _env_lock = CI_ENV_LOCK.lock().await;
         let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
@@ -342,6 +351,9 @@ mod tests {
 
     #[tokio::test]
     async fn post_tool_use_logs_event_to_store() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _env_lock = CI_ENV_LOCK.lock().await;
         let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
@@ -375,6 +387,9 @@ mod tests {
 
     #[tokio::test]
     async fn post_tool_use_no_guards_passes_through() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _env_lock = CI_ENV_LOCK.lock().await;
         let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
@@ -398,6 +413,9 @@ mod tests {
 
     #[tokio::test]
     async fn interceptor_name_is_hook_enforcer() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
         let dir = tempdir()?;
         let events = make_event_store(dir.path()).await;
@@ -409,6 +427,9 @@ mod tests {
 
     #[tokio::test]
     async fn circuit_breaker_opens_after_repeated_blocks() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _env_lock = CI_ENV_LOCK.lock().await;
         let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
@@ -449,6 +470,9 @@ mod tests {
 
     #[tokio::test]
     async fn ci_env_skips_enforcement() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _env_lock = CI_ENV_LOCK.lock().await;
         let _ci_guard = with_ci_env(Some("true"));
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;

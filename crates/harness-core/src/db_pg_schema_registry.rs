@@ -99,10 +99,13 @@ struct PgSchemaInventoryRow {
 }
 
 pub async fn ensure_pg_schema_registry(pool: &PgPool) -> anyhow::Result<()> {
+    crate::db_pg::validate_schema_name(PG_SCHEMA_REGISTRY_SCHEMA)?;
+    let mut tx = pool.begin().await?;
+    crate::db_pg::pg_advisory_schema_ddl_lock(&mut tx, PG_SCHEMA_REGISTRY_SCHEMA).await?;
     sqlx::query(&format!(
         "CREATE SCHEMA IF NOT EXISTS \"{PG_SCHEMA_REGISTRY_SCHEMA}\""
     ))
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     sqlx::query(&format!(
         "CREATE TABLE IF NOT EXISTS \"{PG_SCHEMA_REGISTRY_SCHEMA}\".\"{PG_SCHEMA_REGISTRY_TABLE}\" (
@@ -115,8 +118,9 @@ pub async fn ensure_pg_schema_registry(pool: &PgPool) -> anyhow::Result<()> {
             last_seen_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
         )"
     ))
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 

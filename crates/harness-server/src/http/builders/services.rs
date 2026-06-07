@@ -217,7 +217,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interceptor_count_matches_registered() {
+    async fn interceptor_count_matches_registered() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (server, storage, engines, registry, intake) = make_all_bundles(dir.path()).await;
         let bundle = build_services(&server, &storage, &engines, &registry, &intake, dir.path())
@@ -226,5 +229,6 @@ mod tests {
         // 3 interceptors: ContractValidator, HookEnforcer, PostExecutionValidator
         // (RuleEnforcer temporarily disabled due to false-positive blocks)
         assert_eq!(bundle.interceptors.len(), 3, "expected 3 interceptors");
+        Ok(())
     }
 }

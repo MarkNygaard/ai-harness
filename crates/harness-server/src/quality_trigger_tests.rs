@@ -188,6 +188,9 @@ fn pass_event() -> Event {
 
 #[tokio::test]
 async fn grade_d_triggers_gc_by_default() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 300).await;
     assert!(trigger.grade_triggers_gc(Grade::D));
@@ -195,6 +198,9 @@ async fn grade_d_triggers_gc_by_default() {
 
 #[tokio::test]
 async fn grade_a_does_not_trigger_gc_by_default() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 300).await;
     assert!(!trigger.grade_triggers_gc(Grade::A));
@@ -202,6 +208,9 @@ async fn grade_a_does_not_trigger_gc_by_default() {
 
 #[tokio::test]
 async fn grade_b_does_not_trigger_gc_by_default() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 300).await;
     assert!(!trigger.grade_triggers_gc(Grade::B));
@@ -209,6 +218,9 @@ async fn grade_b_does_not_trigger_gc_by_default() {
 
 #[tokio::test]
 async fn grade_c_does_not_trigger_gc_by_default() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 300).await;
     assert!(!trigger.grade_triggers_gc(Grade::C));
@@ -216,6 +228,9 @@ async fn grade_c_does_not_trigger_gc_by_default() {
 
 #[tokio::test]
 async fn configuring_c_and_d_both_trigger() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::C, Grade::D], 300).await;
     assert!(trigger.grade_triggers_gc(Grade::C));
@@ -226,6 +241,9 @@ async fn configuring_c_and_d_both_trigger() {
 
 #[tokio::test]
 async fn empty_auto_gc_grades_never_triggers() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![], 300).await;
     assert!(!trigger.grade_triggers_gc(Grade::A));
@@ -238,6 +256,9 @@ async fn empty_auto_gc_grades_never_triggers() {
 
 #[tokio::test]
 async fn cooldown_elapsed_when_never_triggered() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 300).await;
     assert!(trigger.cooldown_elapsed());
@@ -245,6 +266,9 @@ async fn cooldown_elapsed_when_never_triggered() {
 
 #[tokio::test]
 async fn cooldown_not_elapsed_immediately_after_trigger() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 300).await;
     trigger.last_triggered.store(unix_now(), Ordering::Relaxed);
@@ -253,6 +277,9 @@ async fn cooldown_not_elapsed_immediately_after_trigger() {
 
 #[tokio::test]
 async fn zero_cooldown_always_elapsed() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 0).await;
     trigger.last_triggered.store(unix_now(), Ordering::Relaxed);
@@ -263,6 +290,9 @@ async fn zero_cooldown_always_elapsed() {
 
 #[tokio::test]
 async fn check_logs_quality_grade_event() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 300).await;
 
@@ -300,6 +330,9 @@ async fn check_logs_quality_grade_event() {
 // Scenario 1: challenger=None, task_ctx=None → existing behavior, one quality_grade event
 #[tokio::test]
 async fn no_challenger_no_ctx_baseline() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 300).await;
     trigger.events.log(&pass_event()).await.unwrap();
@@ -318,6 +351,9 @@ async fn no_challenger_no_ctx_baseline() {
 // Scenario 2: challenger=Some, grade=A → cross-review skipped
 #[tokio::test]
 async fn challenger_grade_a_skips_cross_review() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger_with_challenger(
         dir.path(),
@@ -351,6 +387,9 @@ async fn challenger_grade_a_skips_cross_review() {
 // Scenario 3: challenger=Some, grade=B, verdict=APPROVED → grade stays B
 #[tokio::test]
 async fn challenger_grade_b_approved_stays_b() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger_with_challenger(
         dir.path(),
@@ -394,6 +433,9 @@ async fn challenger_grade_b_approved_stays_b() {
 // Scenario 4: challenger=Some, grade=B, verdict=NOT_CONVERGED → downgraded to C
 #[tokio::test]
 async fn challenger_grade_b_not_converged_downgraded_to_c() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger_with_challenger(
         dir.path(),
@@ -437,6 +479,9 @@ async fn challenger_grade_b_not_converged_downgraded_to_c() {
 // Scenario 5: challenger=Some, grade=C, NOT_CONVERGED → D, GC triggered
 #[tokio::test]
 async fn challenger_grade_c_not_converged_triggers_gc() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger_with_challenger(
         dir.path(),
@@ -480,6 +525,9 @@ async fn challenger_grade_c_not_converged_triggers_gc() {
 // Scenario 6: task_ctx=None, challenger=Some → cross-review skipped, numeric grade only
 #[tokio::test]
 async fn challenger_no_ctx_skips_cross_review() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger_with_challenger(
         dir.path(),
@@ -506,6 +554,9 @@ async fn challenger_no_ctx_skips_cross_review() {
 // grade unchanged (WritePrimaryMock.execute panics if called, proving the guard fires).
 #[tokio::test]
 async fn write_primary_skips_cross_review() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger_with_challenger(
         dir.path(),
@@ -556,6 +607,9 @@ async fn write_primary_skips_cross_review() {
 // events remain visible regardless of when they were logged.
 #[tokio::test]
 async fn gc_receives_full_event_history_not_just_grading_window() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let trigger = make_trigger(dir.path(), vec![Grade::D], 0).await;
 

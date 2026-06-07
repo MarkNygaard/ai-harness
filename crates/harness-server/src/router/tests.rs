@@ -137,6 +137,9 @@ async fn make_test_state_with_config_and_registry(
 
 #[tokio::test]
 async fn initialized_returns_success() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -162,6 +165,9 @@ async fn initialized_returns_success() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn initialize_then_initialized_succeeds() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut state = make_test_state(dir.path()).await?;
     // Start uninitialised to test the full handshake.
@@ -206,6 +212,9 @@ async fn initialize_then_initialized_succeeds() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn gc_adopt_response_includes_task_id() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     use harness_core::types::{
         Artifact, ArtifactType, Draft, DraftId, DraftStatus, ProjectId, RemediationType, Signal,
         SignalType,
@@ -463,6 +472,9 @@ async fn run_gc_adopt_and_wait_for_failure_turn(max_rounds: u32) -> anyhow::Resu
 
 #[tokio::test]
 async fn gc_adopt_spawns_task_when_agent_registered() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     use harness_core::types::{
         Artifact, ArtifactType, Draft, DraftId, DraftStatus, ProjectId, RemediationType, Signal,
         SignalType,
@@ -530,6 +542,9 @@ async fn gc_adopt_spawns_task_when_agent_registered() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn gc_adopt_schedule_changes_with_gc_config() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let short_max_rounds = 1;
     let long_max_rounds = 3;
     let short_schedule_turn = run_gc_adopt_and_wait_for_failure_turn(short_max_rounds).await?;
@@ -554,6 +569,9 @@ async fn gc_adopt_schedule_changes_with_gc_config() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn rule_check_returns_warning_when_no_guards_loaded() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
@@ -605,6 +623,9 @@ async fn rule_check_returns_warning_when_no_guards_loaded() -> anyhow::Result<()
 
 #[tokio::test]
 async fn metrics_query_counts_rule_violations_from_events() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -655,6 +676,9 @@ async fn metrics_query_counts_rule_violations_from_events() -> anyhow::Result<()
 
 #[tokio::test]
 async fn metrics_query_sees_violations_written_via_handler_entry() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
     let project_root = dir.path().join("project");
@@ -725,6 +749,9 @@ async fn metrics_query_sees_violations_written_via_handler_entry() -> anyhow::Re
 
 #[tokio::test]
 async fn thread_start_persists_to_db() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
@@ -763,6 +790,9 @@ async fn thread_start_persists_to_db() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_log_then_query_roundtrip() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
     let session_id = harness_core::types::SessionId::new();
@@ -834,6 +864,9 @@ async fn event_log_then_query_roundtrip() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn pre_init_request_rejected() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut state = make_test_state(dir.path()).await?;
     state.notifications.initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -856,6 +889,9 @@ async fn pre_init_request_rejected() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn double_initialize_rejected() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
     // state.notifications.initialized is already true from make_test_state
@@ -874,6 +910,9 @@ async fn double_initialize_rejected() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn initialized_without_initialize_rejected() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut state = make_test_state(dir.path()).await?;
     // Simulate a fresh server where the handshake has not started.
@@ -901,6 +940,9 @@ async fn initialized_without_initialize_rejected() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn handshake_unlocks_methods() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut state = make_test_state(dir.path()).await?;
     state.notifications.initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -946,6 +988,9 @@ async fn handshake_unlocks_methods() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_log_records_event() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
     let session_id = harness_core::types::SessionId::new();
@@ -982,6 +1027,9 @@ async fn event_log_records_event() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn event_query_returns_logged_events() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
     let session_id = harness_core::types::SessionId::new();
@@ -1024,6 +1072,9 @@ async fn event_query_returns_logged_events() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn skill_create_and_get() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -1074,6 +1125,9 @@ async fn skill_create_and_get() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn skill_list_returns_created_skills() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -1115,6 +1169,9 @@ async fn skill_list_returns_created_skills() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn skill_delete_removes_skill() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -1153,6 +1210,9 @@ async fn skill_delete_removes_skill() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn thread_resume_errors_for_unknown_thread() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -1175,6 +1235,9 @@ async fn thread_resume_errors_for_unknown_thread() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn thread_fork_errors_for_unknown_thread() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -1198,6 +1261,9 @@ async fn thread_fork_errors_for_unknown_thread() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn thread_compact_errors_for_unknown_thread() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -1220,6 +1286,9 @@ async fn thread_compact_errors_for_unknown_thread() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn turn_steer_returns_not_found_for_unknown_turn() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -1248,6 +1317,9 @@ async fn turn_steer_returns_not_found_for_unknown_turn() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn stats_query_returns_expected_shape() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -1283,6 +1355,9 @@ async fn stats_query_returns_expected_shape() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn learn_rules_returns_zero_when_no_adopted_drafts() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
@@ -1319,6 +1394,9 @@ async fn learn_rules_returns_zero_when_no_adopted_drafts() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn learn_skills_returns_zero_when_no_adopted_drafts() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
@@ -1480,6 +1558,9 @@ async fn make_test_state_with_plan_db(dir: &std::path::Path) -> anyhow::Result<A
 
 #[tokio::test]
 async fn exec_plan_init_persists_to_db() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let proj_dir = crate::test_helpers::tempdir_in_home("harness-exec-test-")?;
@@ -1521,6 +1602,9 @@ async fn exec_plan_init_persists_to_db() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn exec_plan_status_reads_plan_from_memory() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let proj_dir = crate::test_helpers::tempdir_in_home("harness-exec-test-")?;
@@ -1574,6 +1658,9 @@ async fn exec_plan_status_reads_plan_from_memory() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn exec_plan_update_persists_status_change() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let proj_dir = crate::test_helpers::tempdir_in_home("harness-exec-test-")?;
@@ -1635,6 +1722,9 @@ async fn exec_plan_update_persists_status_change() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn exec_plan_survives_simulated_restart() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let data_dir = tempfile::tempdir()?;
     let proj_dir = crate::test_helpers::tempdir_in_home("harness-exec-test-")?;
@@ -1709,6 +1799,9 @@ async fn exec_plan_survives_simulated_restart() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn exec_plan_status_fallback_to_db_when_not_in_memory() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let data_dir = tempfile::tempdir()?;
     let proj_dir = crate::test_helpers::tempdir_in_home("harness-exec-test-")?;

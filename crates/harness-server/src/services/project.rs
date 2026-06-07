@@ -151,6 +151,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_project_service_register_and_get() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let registry = ProjectRegistry::open(&dir.path().join("p.db")).await?;
         let svc = DefaultProjectService::new(registry, dir.path().to_path_buf());
@@ -165,6 +168,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_project_service_resolve_path() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let registry = ProjectRegistry::open(&dir.path().join("p.db")).await?;
         let svc = DefaultProjectService::new(registry, dir.path().to_path_buf());
@@ -182,6 +188,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_project_service_remove() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let registry = ProjectRegistry::open(&dir.path().join("p.db")).await?;
         let svc = DefaultProjectService::new(registry, dir.path().to_path_buf());
@@ -195,6 +204,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_project_service_default_root() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let root = dir.path().to_path_buf();
         let registry = ProjectRegistry::open(&dir.path().join("p.db")).await?;

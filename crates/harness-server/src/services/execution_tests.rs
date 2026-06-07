@@ -131,6 +131,9 @@ async fn enqueue_task_error_display() {
 
 #[tokio::test]
 async fn resolve_project_passes_through_none() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("t.db")).await?;
     let registry = ProjectRegistry::open(&dir.path().join("p.db")).await?;
@@ -143,6 +146,9 @@ async fn resolve_project_passes_through_none() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn resolve_project_passes_through_existing_dir() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("t.db")).await?;
     let registry = ProjectRegistry::open(&dir.path().join("p.db")).await?;
@@ -158,6 +164,9 @@ async fn resolve_project_passes_through_existing_dir() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn resolve_project_unknown_id_returns_bad_request() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("t.db")).await?;
     let registry = ProjectRegistry::open(&dir.path().join("p.db")).await?;
@@ -227,6 +236,9 @@ fn runtime_prompt_duplicate_allows_blocked_resubmission() {
 
 #[tokio::test]
 async fn check_allowed_roots_blocks_outside_root() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("t.db")).await?;
     let allowed = vec![PathBuf::from("/allowed/base")];
@@ -241,6 +253,9 @@ async fn check_allowed_roots_blocks_outside_root() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn check_allowed_roots_permits_inside_root() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let base_dir = tempfile::tempdir()?;
     let project_dir = base_dir.path().join("project");
     std::fs::create_dir_all(&project_dir)?;
@@ -255,6 +270,9 @@ async fn check_allowed_roots_permits_inside_root() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn check_allowed_roots_empty_list_permits_all() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("t.db")).await?;
     let svc = make_svc_with_allowed_roots(store, vec![]).await;
@@ -266,6 +284,9 @@ async fn check_allowed_roots_empty_list_permits_all() -> anyhow::Result<()> {
 #[tokio::test]
 async fn enqueue_background_issue_submission_requires_workflow_runtime_store() -> anyhow::Result<()>
 {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let project_root = dir.path().join("project");
     std::fs::create_dir(&project_root)?;

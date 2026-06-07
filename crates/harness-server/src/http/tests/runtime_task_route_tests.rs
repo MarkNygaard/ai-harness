@@ -3,6 +3,9 @@ use super::*;
 #[tokio::test]
 async fn list_tasks_marks_runtime_submission_summaries_degraded_when_store_failed(
 ) -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;
     let state_mut =
@@ -559,6 +562,9 @@ async fn create_task_with_blocked_issue_returns_runtime_state() -> anyhow::Resul
 
 #[tokio::test]
 async fn create_task_empty_request_returns_bad_request() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some("s")).await?;
     let app = task_app(state);

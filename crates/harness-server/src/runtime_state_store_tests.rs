@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn build_app_state_restores_runtime_snapshot() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let project_root = crate::test_helpers::tempdir_in_home("runtime-state-root-")?;
     let data_dir = tempfile::tempdir()?;

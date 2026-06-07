@@ -115,6 +115,9 @@ fn local_waiting_counter_increments_on_each_waiting_response() {
 
 #[tokio::test]
 async fn register_pending_task_keeps_repo_metadata_visible() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 

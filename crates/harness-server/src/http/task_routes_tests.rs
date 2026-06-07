@@ -119,6 +119,9 @@ async fn resolve_project_from_registry_passes_through_existing_dir() {
 
 #[tokio::test]
 async fn resolve_project_from_registry_existing_dir_uses_registered_metadata() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let registry = crate::project_registry::ProjectRegistry::open(&dir.path().join("p.db"))
         .await
@@ -154,6 +157,9 @@ async fn resolve_project_from_registry_no_registry_passes_through_nondir() {
 
 #[tokio::test]
 async fn resolve_project_from_registry_resolves_id() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let registry = crate::project_registry::ProjectRegistry::open(&dir.path().join("p.db"))
         .await
@@ -181,6 +187,9 @@ async fn resolve_project_from_registry_resolves_id() {
 
 #[tokio::test]
 async fn resolve_project_from_registry_returns_default_agent_from_record() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let registry = crate::project_registry::ProjectRegistry::open(&dir.path().join("p.db"))
         .await
@@ -213,6 +222,9 @@ async fn resolve_project_from_registry_returns_default_agent_from_record() {
 
 #[tokio::test]
 async fn resolve_project_from_registry_resolves_name() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let registry = crate::project_registry::ProjectRegistry::open(&dir.path().join("p.db"))
         .await
@@ -245,6 +257,9 @@ async fn resolve_project_from_registry_resolves_name() {
 
 #[tokio::test]
 async fn resolve_project_from_registry_unknown_id_returns_bad_request() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let registry = crate::project_registry::ProjectRegistry::open(&dir.path().join("p.db"))
         .await

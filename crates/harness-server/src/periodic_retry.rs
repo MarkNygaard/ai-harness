@@ -492,6 +492,9 @@ mod tests {
 
     #[tokio::test]
     async fn no_stalled_tasks_returns_empty() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let db = TaskDb::open(&tmp.path().join("tasks.db")).await?;
         // Insert a Done task — should never be returned.
@@ -506,6 +509,9 @@ mod tests {
 
     #[tokio::test]
     async fn stalled_task_is_detected() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let db = TaskDb::open(&tmp.path().join("tasks.db")).await?;
         let task = stalled_task("t1", "issue:42", "/proj");
@@ -525,6 +531,9 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_tasks_excluded() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let db = TaskDb::open(&tmp.path().join("tasks.db")).await?;
         for (id, status) in [
@@ -552,6 +561,9 @@ mod tests {
 
     #[tokio::test]
     async fn null_external_id_skipped() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let db = TaskDb::open(&tmp.path().join("tasks.db")).await?;
         let mut task = stalled_task("t1", "issue:1", "/proj");
@@ -570,6 +582,9 @@ mod tests {
 
     #[tokio::test]
     async fn system_review_tasks_are_excluded_from_stalled_scan() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let db = TaskDb::open(&tmp.path().join("tasks.db")).await?;
         let mut task = stalled_task("t1", "issue:1", "/proj");
@@ -590,6 +605,9 @@ mod tests {
 
     #[tokio::test]
     async fn project_filter_scopes_results() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let db = TaskDb::open(&tmp.path().join("tasks.db")).await?;
         let t1 = stalled_task("t1", "issue:1", "/proj-a");
@@ -624,6 +642,9 @@ mod tests {
 
     #[tokio::test]
     async fn summary_event_is_persisted() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let events = EventStore::new(tmp.path()).await?;
         events.persist_retry_summary(5, 2, 1, 2).await;
@@ -645,6 +666,9 @@ mod tests {
 
     #[tokio::test]
     async fn summary_decision_is_warn_when_stuck_nonzero() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let events = EventStore::new(tmp.path()).await?;
         events.persist_retry_summary(1, 0, 1, 0).await;
@@ -661,6 +685,9 @@ mod tests {
 
     #[tokio::test]
     async fn summary_decision_is_pass_when_no_stuck() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let tmp = tempfile::tempdir()?;
         let events = EventStore::new(tmp.path()).await?;
         events.persist_retry_summary(3, 2, 0, 1).await;

@@ -142,17 +142,24 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn happy_path_both_dbs_open() {
+    async fn happy_path_both_dbs_open() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let bundle = build_storage(dir.path())
             .await
             .expect("build_storage should succeed");
         assert!(bundle.tasks.is_some(), "tasks store should be ready");
         drop(bundle.q_values);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn q_value_failure_is_recorded_as_optional() {
+    async fn q_value_failure_is_recorded_as_optional() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let bundle = super::super::with_forced_startup_failures(
             &[(
@@ -175,6 +182,7 @@ mod tests {
         assert!(bundle.startup_results[0].ready);
         assert!(!bundle.startup_results[1].ready);
         assert!(!bundle.startup_results[1].is_critical());
+        Ok(())
     }
 
     #[test]

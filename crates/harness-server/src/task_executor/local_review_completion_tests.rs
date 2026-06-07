@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn hosted_bot_disabled_completion_requires_validation_pass() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();
@@ -35,6 +38,9 @@ async fn hosted_bot_disabled_completion_requires_validation_pass() -> anyhow::Re
 
 #[tokio::test]
 async fn hosted_bot_disabled_completion_blocks_validation_failure() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();
@@ -77,6 +83,9 @@ async fn hosted_bot_disabled_completion_blocks_validation_failure() -> anyhow::R
 
 #[tokio::test]
 async fn hosted_bot_disabled_validation_failure_treats_merged_pr_as_done() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let project_root = dir.path().join("project");
@@ -278,6 +287,9 @@ async fn hosted_bot_disabled_completion_records_ready_to_merge_feedback() -> any
 
 #[tokio::test]
 async fn hosted_bot_disabled_rechecks_pr_state_after_ci_polling() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let project_root = dir.path().join("project");
@@ -340,6 +352,9 @@ async fn hosted_bot_disabled_rechecks_pr_state_after_ci_polling() -> anyhow::Res
 
 #[tokio::test]
 async fn hosted_bot_disabled_blocks_pr_head_change_after_local_approval() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let project_root = dir.path().join("project");
@@ -400,6 +415,9 @@ async fn hosted_bot_disabled_blocks_pr_head_change_after_local_approval() -> any
 
 #[tokio::test]
 async fn hosted_bot_disabled_blocks_pr_head_change_during_no_fix_review() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let project_root = dir.path().join("project");

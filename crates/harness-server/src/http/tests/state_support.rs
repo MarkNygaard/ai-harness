@@ -554,6 +554,9 @@ pub(super) async fn make_test_state_with_workflow_runtime_config_and_registry(
 
 #[tokio::test]
 async fn persist_runtime_state_is_serialized() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
     let lock_guard = state.runtime_state_persist_lock.lock().await;

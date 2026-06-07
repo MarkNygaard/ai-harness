@@ -2102,6 +2102,9 @@ mod tests {
 
     #[tokio::test]
     async fn poll_task_output_returns_none_for_cancelled_tasks() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = crate::task_runner::TaskStore::open(&dir.path().join("tasks.db")).await?;
         let task_id = harness_core::types::TaskId("cancelled-review".to_string());

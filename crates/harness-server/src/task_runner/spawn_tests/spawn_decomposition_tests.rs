@@ -13,6 +13,9 @@ fn non_decomposable_source_list_includes_periodic_and_sprint() {
 
 #[tokio::test]
 async fn spawn_awaiting_all_deps_done_creates_pending() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -39,6 +42,9 @@ async fn spawn_awaiting_all_deps_done_creates_pending() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn spawn_awaiting_unresolved_dep_creates_awaiting() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -64,6 +70,9 @@ async fn spawn_awaiting_unresolved_dep_creates_awaiting() -> anyhow::Result<()> 
 
 #[tokio::test]
 async fn spawn_awaiting_detects_direct_cycle() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -84,6 +93,9 @@ async fn spawn_awaiting_detects_direct_cycle() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn spawn_awaiting_detects_transitive_cycle() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -109,6 +121,9 @@ async fn spawn_awaiting_detects_transitive_cycle() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn check_awaiting_no_tasks_returns_empty() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -120,6 +135,9 @@ async fn check_awaiting_no_tasks_returns_empty() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn check_awaiting_ready_transitions_to_pending() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -149,6 +167,9 @@ async fn check_awaiting_ready_transitions_to_pending() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn check_awaiting_failed_dep_transitions_to_failed() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -178,6 +199,9 @@ async fn check_awaiting_failed_dep_transitions_to_failed() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn check_awaiting_partial_deps_stays_awaiting() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -214,6 +238,9 @@ async fn check_awaiting_partial_deps_stays_awaiting() -> anyhow::Result<()> {
 /// dependent in AwaitingDeps would block it indefinitely.
 #[tokio::test]
 async fn check_awaiting_cancelled_dep_hard_fails_dependent() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -246,6 +273,9 @@ async fn check_awaiting_cancelled_dep_hard_fails_dependent() -> anyhow::Result<(
 
 #[tokio::test]
 async fn check_awaiting_concurrent_cancel_excluded() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 

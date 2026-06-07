@@ -69,8 +69,8 @@ pub mod webhook;
 pub mod websocket;
 pub mod workspace;
 
-#[cfg(test)]
-pub(crate) mod test_helpers;
+#[doc(hidden)]
+pub mod test_helpers;
 
 #[cfg(test)]
 mod runtime_hosts_tests;

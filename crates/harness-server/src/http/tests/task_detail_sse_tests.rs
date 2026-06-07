@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn get_task_returns_not_found_for_missing_id() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
@@ -22,6 +25,9 @@ async fn get_task_returns_not_found_for_missing_id() -> anyhow::Result<()> {
 #[tokio::test]
 async fn get_task_returns_service_unavailable_when_required_workflow_runtime_store_missing(
 ) -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;
@@ -53,6 +59,9 @@ async fn get_task_returns_service_unavailable_when_required_workflow_runtime_sto
 #[tokio::test]
 async fn get_task_proof_returns_service_unavailable_when_required_workflow_runtime_store_missing(
 ) -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;
@@ -383,6 +392,9 @@ async fn create_tasks_batch_with_conflicting_runtime_prompts_adds_dependencies(
 
 #[tokio::test]
 async fn create_tasks_batch_with_issues_requires_workflow_runtime_store() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     init_fake_git_repo(dir.path())?;
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some("s")).await?;
@@ -471,6 +483,9 @@ async fn get_task_hides_internal_system_input_metadata() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn get_task_includes_round_telemetry_and_failure() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
@@ -520,6 +535,9 @@ async fn get_task_includes_round_telemetry_and_failure() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn closed_task_sse_replay_includes_observability_fields() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 

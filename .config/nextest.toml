@@ -1,0 +1,16 @@
+# Postgres-backed tests also use in-process serial guards and semaphores to
+# avoid DDL and connection-pool contention. nextest runs each test in its own
+# process, so those guards do not coordinate across tests or crates. Cap the
+# group to one thread so the known DB-heavy crates/modules still run one at a
+# time, workspace-wide.
+# (This is the isolation shape that reverted nextest in #77; do not remove it.)
+[test-groups]
+serial-db = { max-threads = 1 }
+
+[[profile.default.overrides]]
+# All harness-persist tests (the #[serial_test::serial] DB tests) + harness-core's
+# db::tests and db_pg::tests modules (both use an in-process process_env_lock()
+# that does NOT help across nextest processes). Both packages create schemas;
+# serialize them together.
+filter = 'package(harness-persist) | (package(harness-core) & (test(db::) | test(db_pg)))'
+test-group = 'serial-db'

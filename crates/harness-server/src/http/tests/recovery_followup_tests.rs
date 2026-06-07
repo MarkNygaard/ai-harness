@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn pr_recovery_marks_task_failed_when_pr_url_unparseable() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -78,6 +81,9 @@ async fn pr_recovery_marks_task_failed_when_pr_url_unparseable() -> anyhow::Resu
 
 #[tokio::test]
 async fn pr_recovery_redispatches_prompt_tasks_with_pr_urls() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -154,6 +160,9 @@ async fn pr_recovery_redispatches_prompt_tasks_with_pr_urls() -> anyhow::Result<
 
 #[tokio::test]
 async fn checkpoint_recovery_marks_prompt_task_failed() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -314,6 +323,9 @@ async fn get_task_exposes_workspace_lifecycle_metadata() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn pr_recovery_waits_for_runtime_host_lease_to_expire() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 
@@ -386,6 +398,9 @@ async fn pr_recovery_waits_for_runtime_host_lease_to_expire() -> anyhow::Result<
 
 #[tokio::test]
 async fn checkpoint_recovery_waits_for_runtime_host_lease_to_expire() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state(dir.path()).await?;
 

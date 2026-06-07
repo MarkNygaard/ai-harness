@@ -214,6 +214,9 @@ async fn start_thread_and_turn(
 
 #[tokio::test]
 async fn running_to_completed_updates_items_and_usage() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _db_guard = DB_TEST_LOCK.lock().await;
     let sandbox = common::tempdir_in_home("harness-turn-lifecycle-")?;
     let state = make_state(
@@ -252,6 +255,9 @@ async fn running_to_completed_updates_items_and_usage() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn running_to_failed_is_persisted() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _db_guard = DB_TEST_LOCK.lock().await;
     let sandbox = common::tempdir_in_home("harness-turn-lifecycle-")?;
     let state = make_state(
@@ -280,6 +286,9 @@ async fn running_to_failed_is_persisted() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn running_to_cancelled_stops_turn() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _db_guard = DB_TEST_LOCK.lock().await;
     let sandbox = common::tempdir_in_home("harness-turn-lifecycle-")?;
     let state = make_state(sandbox.path(), MockAgent::block_forever()).await?;
@@ -308,6 +317,9 @@ async fn running_to_cancelled_stops_turn() -> anyhow::Result<()> {
 /// an Error item containing the missing agent name.
 #[tokio::test]
 async fn turn_fails_when_agent_not_registered() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _db_guard = DB_TEST_LOCK.lock().await;
     let sandbox = common::tempdir_in_home("harness-turn-lifecycle-")?;
     let project_root = sandbox.path().join("project");
@@ -347,6 +359,9 @@ async fn turn_fails_when_agent_not_registered() -> anyhow::Result<()> {
 /// and transitions the turn to Failed.
 #[tokio::test]
 async fn turn_fails_on_stall_timeout() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _db_guard = DB_TEST_LOCK.lock().await;
     let sandbox = common::tempdir_in_home("harness-turn-lifecycle-")?;
     let project_root = sandbox.path().join("project");

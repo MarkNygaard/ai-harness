@@ -566,6 +566,9 @@ async fn inject_skills_empty_store_returns_empty_string() {
 
 #[tokio::test]
 async fn run_agent_streaming_records_first_token_latency_for_streaming_output() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let store = crate::task_runner::TaskStore::open(&dir.path().join("tasks.db"))
         .await
@@ -598,6 +601,9 @@ async fn run_agent_streaming_records_first_token_latency_for_streaming_output() 
 
 #[tokio::test]
 async fn run_agent_streaming_leaves_first_token_latency_empty_for_non_streaming_output() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let store = crate::task_runner::TaskStore::open(&dir.path().join("tasks.db"))
         .await
@@ -636,6 +642,9 @@ fn telemetry_for_timeout_omits_first_output() {
 
 #[tokio::test]
 async fn run_agent_streaming_classifies_upstream_failure() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let store = crate::task_runner::TaskStore::open(&dir.path().join("tasks.db"))
         .await
@@ -664,6 +673,9 @@ async fn run_agent_streaming_classifies_upstream_failure() {
 
 #[tokio::test]
 async fn run_agent_streaming_can_skip_artifact_persistence() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let dir = tempfile::tempdir().expect("tempdir");
     let store = crate::task_runner::TaskStore::open(&dir.path().join("tasks.db"))
         .await
@@ -762,6 +774,9 @@ fn make_skill_store_with_two_matching() -> harness_skills::store::SkillStore {
 
 #[tokio::test]
 async fn inject_skills_multiple_matches_all_usage_counts_incremented() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     let skills = RwLock::new(make_skill_store_with_two_matching());
     let events = EventStore::new_noop_for_tests();
     augment_prompt_with_skills(
@@ -783,6 +798,9 @@ async fn inject_skills_multiple_matches_all_usage_counts_incremented() {
 
 #[tokio::test]
 async fn inject_skills_retired_skill_not_included() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     // Drive a skill into Retired state via apply_governance_outcome.
     // Retired requires: scored_samples >= 30 AND quality_score < 0.30.
     // Starting from quality_score=0.5, 4 calls with fail=100 yields ~0.293 < 0.30.
@@ -827,6 +845,9 @@ async fn inject_skills_retired_skill_not_included() {
 
 #[tokio::test]
 async fn inject_skills_quarantine_injection_is_deterministic() {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return;
+    }
     // Drive a skill into Quarantine, then verify same prompt always produces
     // the same result (canary bucket is deterministic hash, not random).
     use harness_skills::store::SkillGovernanceInput;

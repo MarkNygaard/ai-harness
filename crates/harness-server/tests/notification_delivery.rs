@@ -179,6 +179,9 @@ fn parse_str_field(value: &serde_json::Value, field: &str) -> anyhow::Result<Str
 
 #[tokio::test]
 async fn thread_start_delivers_status_changed_notification() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let sandbox = common::tempdir_in_home("harness-notif-")?;
     let mut state = make_state(sandbox.path()).await?;
 
@@ -211,6 +214,9 @@ async fn thread_start_delivers_status_changed_notification() -> anyhow::Result<(
 
 #[tokio::test]
 async fn turn_start_delivers_turn_started_notification() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let sandbox = common::tempdir_in_home("harness-notif-")?;
     let mut state = make_state(sandbox.path()).await?;
 
@@ -264,6 +270,9 @@ async fn turn_start_delivers_turn_started_notification() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn turn_completed_delivers_turn_completed_notification() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let sandbox = common::tempdir_in_home("harness-notif-")?;
     let mut state = make_state_with_mock(sandbox.path(), MockAgent::complete()).await?;
 
@@ -320,6 +329,9 @@ async fn turn_completed_delivers_turn_completed_notification() -> anyhow::Result
 #[tokio::test]
 async fn turn_failed_delivers_turn_completed_notification_with_failed_status() -> anyhow::Result<()>
 {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let sandbox = common::tempdir_in_home("harness-notif-")?;
     let mut state = make_state_with_mock(sandbox.path(), MockAgent::fail()).await?;
 

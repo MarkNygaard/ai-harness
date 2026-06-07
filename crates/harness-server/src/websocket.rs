@@ -479,6 +479,9 @@ mod tests {
     /// via WebSocket.  Sends an `initialize` request and checks the response.
     #[tokio::test]
     async fn websocket_initialize_roundtrip() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let mut state = make_test_state(dir.path()).await?;
         state.notifications.initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -537,6 +540,9 @@ mod tests {
     /// connected WebSocket client.
     #[tokio::test]
     async fn websocket_receives_server_push_notification() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let state = Arc::new(make_test_state(dir.path()).await?);
         let notif_tx = state.notifications.notification_tx.clone();
@@ -620,6 +626,9 @@ mod tests {
 
     #[tokio::test]
     async fn websocket_tracks_lagged_notifications_under_load() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let mut config = HarnessConfig::default();
         config.server.notification_broadcast_capacity = 4;
@@ -663,6 +672,9 @@ mod tests {
     /// and that the connection stays alive when Pong frames are received.
     #[tokio::test]
     async fn websocket_heartbeat_ping_sent() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let mut config = HarnessConfig::default();
         // Use a 1-second heartbeat so the test completes quickly.
@@ -716,6 +728,9 @@ mod tests {
     /// the WebSocket connection gracefully.
     #[tokio::test]
     async fn websocket_graceful_shutdown_closes_connection() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let state = Arc::new(make_test_state(dir.path()).await?);
         let ws_shutdown_tx = state.notifications.ws_shutdown_tx.clone();

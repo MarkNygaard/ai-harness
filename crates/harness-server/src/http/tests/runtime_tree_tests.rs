@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn health_endpoint_returns_ok_and_task_count() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
@@ -17,6 +20,9 @@ async fn health_endpoint_returns_ok_and_task_count() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn health_degraded_when_subsystem_missing() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;

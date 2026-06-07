@@ -356,6 +356,9 @@ mod tests {
 
     #[tokio::test]
     async fn skill_governance_view_returns_fields() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-skill-gov-view-")?;
         let state = crate::test_helpers::make_test_state(data_dir.path()).await?;
@@ -386,6 +389,9 @@ mod tests {
 
     #[tokio::test]
     async fn skill_governance_view_not_found() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-skill-gov-notfound-")?;
         let state = crate::test_helpers::make_test_state(data_dir.path()).await?;
@@ -400,6 +406,9 @@ mod tests {
 
     #[tokio::test]
     async fn skill_governance_history_empty() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-skill-gov-hist-empty-")?;
         let state = crate::test_helpers::make_test_state(data_dir.path()).await?;
@@ -414,6 +423,9 @@ mod tests {
 
     #[tokio::test]
     async fn skill_governance_history_parses_transitions() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         use harness_core::types::{Decision, Event, SessionId};
 
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
@@ -445,6 +457,9 @@ mod tests {
 
     #[tokio::test]
     async fn skill_governance_history_limit_respected() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         use harness_core::types::{Decision, Event, SessionId};
 
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;

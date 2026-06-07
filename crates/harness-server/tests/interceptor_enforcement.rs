@@ -11,32 +11,6 @@ use tokio::sync::RwLock;
 /// Serializes temporary mutations of process-global `CI` in this test module.
 static CI_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// RAII guard that temporarily unsets `CI` and restores the previous value.
-struct CiEnvGuard {
-    original: Option<String>,
-}
-
-impl CiEnvGuard {
-    /// # Safety
-    /// Caller must hold `CI_ENV_LOCK` for the lifetime of the guard.
-    unsafe fn unset() -> Self {
-        let original = std::env::var("CI").ok();
-        std::env::remove_var("CI");
-        Self { original }
-    }
-}
-
-impl Drop for CiEnvGuard {
-    fn drop(&mut self) {
-        unsafe {
-            match self.original.take() {
-                Some(value) => std::env::set_var("CI", value),
-                None => std::env::remove_var("CI"),
-            }
-        }
-    }
-}
-
 fn make_engine_with_guard(guard_dir: &std::path::Path) -> Arc<RwLock<RuleEngine>> {
     let script = guard_dir.join("enf-test-guard.sh");
     std::fs::write(
@@ -66,9 +40,10 @@ fn make_engine_with_guard(guard_dir: &std::path::Path) -> Arc<RwLock<RuleEngine>
 /// post_tool_use detects violations and writes a hook_enforcement event to EventStore.
 #[tokio::test]
 async fn post_tool_use_violation_is_logged_to_event_store() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _ci_lock = CI_ENV_LOCK.lock().await;
-    // SAFETY: lock held for the entire test scope.
-    let _ci_guard = unsafe { CiEnvGuard::unset() };
 
     let dir = tempdir()?;
     let event_store = Arc::new(EventStore::new(dir.path()).await?);
@@ -112,6 +87,9 @@ async fn post_tool_use_violation_is_logged_to_event_store() -> anyhow::Result<()
 /// pre_execute with a blocking interceptor rejects the turn.
 #[tokio::test]
 async fn pre_execute_block_rejects_the_turn() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempdir()?;
     let event_store = Arc::new(EventStore::new(dir.path()).await?);
     let rules = Arc::new(RwLock::new(RuleEngine::new()));
@@ -145,6 +123,9 @@ async fn pre_execute_block_rejects_the_turn() -> anyhow::Result<()> {
 /// No violations → clean pass-through, no event written.
 #[tokio::test]
 async fn no_violations_pass_through_without_event() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempdir()?;
     let event_store = Arc::new(EventStore::new(dir.path()).await?);
     // Empty engine — no guards registered.

@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn intake_status_returns_three_channels() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = intake_app(state);
@@ -29,6 +32,9 @@ async fn intake_status_returns_three_channels() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn intake_status_github_disabled_by_default() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = intake_app(state);
@@ -52,6 +58,9 @@ async fn intake_status_github_disabled_by_default() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn intake_status_dashboard_always_enabled() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = intake_app(state);
@@ -75,6 +84,9 @@ async fn intake_status_dashboard_always_enabled() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn intake_status_shows_github_repo_when_configured() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut config = harness_core::config::HarnessConfig::default();
     config.intake.github = Some(harness_core::config::intake::GitHubIntakeConfig {
@@ -112,6 +124,9 @@ async fn intake_status_shows_github_repo_when_configured() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn intake_status_recent_dispatches_empty_initially() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = intake_app(state);
@@ -129,6 +144,9 @@ async fn intake_status_recent_dispatches_empty_initially() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn intake_status_disables_feishu_when_verification_token_missing() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state_with_feishu(dir.path(), None).await?;
     let app = intake_app(state);
@@ -170,6 +188,9 @@ fn authed_app(state: Arc<AppState>) -> Router {
 /// / is now exempt from auth — dashboard HTML embeds no secrets.
 #[tokio::test]
 async fn dashboard_exempt_from_auth_when_token_configured() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut config = harness_core::config::HarnessConfig::default();
     config.server.api_token = Some("secret123".to_string());
@@ -193,6 +214,9 @@ async fn dashboard_exempt_from_auth_when_token_configured() -> anyhow::Result<()
 /// Verify that query-param token no longer grants access to protected endpoints.
 #[tokio::test]
 async fn query_param_token_rejected_on_protected_endpoint() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut config = harness_core::config::HarnessConfig::default();
     config.server.api_token = Some("secret123".to_string());
@@ -218,6 +242,9 @@ async fn query_param_token_rejected_on_protected_endpoint() -> anyhow::Result<()
 
 #[tokio::test]
 async fn dashboard_no_auth_configured_remains_public() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = authed_app(state);
@@ -232,6 +259,9 @@ async fn dashboard_no_auth_configured_remains_public() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn list_tasks_exposes_task_kind_and_non_implementation_statuses() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = Router::new()
@@ -324,6 +354,9 @@ async fn list_tasks_exposes_task_kind_and_non_implementation_statuses() -> anyho
 
 #[tokio::test]
 async fn list_tasks_rejects_running_as_task_status() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = Router::new()
@@ -350,6 +383,9 @@ async fn list_tasks_rejects_running_as_task_status() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn list_tasks_rejects_invalid_limit() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = Router::new()
@@ -372,6 +408,9 @@ async fn list_tasks_rejects_invalid_limit() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn list_tasks_filters_by_scheduler_state_and_returns_envelope() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = Router::new()

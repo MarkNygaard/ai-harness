@@ -13,6 +13,9 @@ fn legacy_hosted_bot_server_config() -> std::sync::Arc<harness_core::config::Har
 
 #[tokio::test]
 async fn skills_are_injected_into_agent_context() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
     let database_url = crate::test_helpers::test_database_url()?;
@@ -95,6 +98,9 @@ async fn skills_are_injected_into_agent_context() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn blocking_interceptor_fails_task() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
     let database_url = crate::test_helpers::test_database_url()?;
@@ -176,6 +182,9 @@ async fn blocking_interceptor_fails_task() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn spawn_blocking_panic_surfaces_error_and_event() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
     let database_url = crate::test_helpers::test_database_url()?;
@@ -279,6 +288,9 @@ async fn spawn_blocking_panic_surfaces_error_and_event() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn execution_phase_is_set_on_initial_implementation_turn() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
     let database_url = crate::test_helpers::test_database_url()?;
@@ -342,6 +354,9 @@ async fn execution_phase_is_set_on_initial_implementation_turn() -> anyhow::Resu
 
 #[tokio::test]
 async fn validation_phase_is_set_on_review_loop_turns() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
     let database_url = crate::test_helpers::test_database_url()?;

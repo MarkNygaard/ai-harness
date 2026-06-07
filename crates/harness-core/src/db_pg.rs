@@ -1,5 +1,6 @@
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
 use sqlx::Acquire as _;
+use sqlx::{Postgres, Transaction};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
@@ -531,8 +532,23 @@ pub(crate) fn validate_schema_name(schema: &str) -> anyhow::Result<()> {
 /// regardless of which store calls it.
 pub async fn pg_create_schema_if_not_exists(pool: &PgPool, schema: &str) -> anyhow::Result<()> {
     validate_schema_name(schema)?;
+    let mut tx = pool.begin().await?;
+    pg_advisory_schema_ddl_lock(&mut tx, schema).await?;
     sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS \"{}\"", schema))
-        .execute(pool)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub(crate) async fn pg_advisory_schema_ddl_lock(
+    tx: &mut Transaction<'_, Postgres>,
+    schema: &str,
+) -> anyhow::Result<()> {
+    validate_schema_name(schema)?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind(schema)
+        .execute(&mut **tx)
         .await?;
     Ok(())
 }

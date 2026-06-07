@@ -448,7 +448,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn no_intake_config_produces_empty_intake() {
+    async fn no_intake_config_produces_empty_intake() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (server, storage, engines, registry) = make_minimal_bundles(dir.path()).await;
         let bundle = build_intake(
@@ -469,10 +472,14 @@ mod tests {
             bundle.github_pollers.is_empty(),
             "github_pollers should be empty without config"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn github_intake_is_owned_by_runtime_not_legacy_poller() {
+    async fn github_intake_is_owned_by_runtime_not_legacy_poller() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let mut config = HarnessConfig::default();
         config.intake.github = Some(harness_core::config::intake::GitHubIntakeConfig {
@@ -521,6 +528,7 @@ mod tests {
             bundle.completion_callback.is_some(),
             "quality trigger should still provide a completion callback without legacy GitHub polling"
         );
+        Ok(())
     }
 
     #[tokio::test]
@@ -647,7 +655,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_review_concurrency_uses_dedicated_domain() {
+    async fn runtime_review_concurrency_uses_dedicated_domain() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let mut server = HarnessServer::new(
             HarnessConfig::default(),
             ThreadManager::new(),
@@ -669,10 +680,14 @@ mod tests {
         assert_eq!(cfg.max_concurrent_tasks, 3);
         assert_eq!(cfg.per_project.get("/tmp/a"), Some(&1));
         assert!(cfg.per_project.values().all(|v| *v == 1));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn runtime_review_concurrency_falls_back_to_server_project_root() {
+    async fn runtime_review_concurrency_falls_back_to_server_project_root() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let mut server = HarnessServer::new(
             HarnessConfig::default(),
             ThreadManager::new(),
@@ -687,10 +702,14 @@ mod tests {
 
         assert_eq!(cfg.max_concurrent_tasks, 2);
         assert_eq!(cfg.per_project.get("/tmp/fallback"), Some(&1));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn runtime_review_concurrency_includes_registry_projects() {
+    async fn runtime_review_concurrency_includes_registry_projects() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let temp = tempfile::tempdir().expect("tempdir");
         let (server, _storage, _engines, registry) = make_minimal_bundles(temp.path()).await;
         let runtime_project_root = temp.path().join("runtime-project");
@@ -723,5 +742,6 @@ mod tests {
             ),
             Some(&1)
         );
+        Ok(())
     }
 }

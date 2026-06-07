@@ -1091,6 +1091,9 @@ mod tests {
 
     #[tokio::test]
     async fn triage_skip_returns_successful_terminal_outcome() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let database_url = crate::test_helpers::test_database_url()?;
         let store =

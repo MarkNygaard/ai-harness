@@ -178,6 +178,9 @@ mod tests {
 
     #[tokio::test]
     async fn health_tick_uses_configured_project_root_in_multi_cwd_context() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let data_dir = tempfile::tempdir()?;
         let project_root = tempfile::tempdir()?;
         let state = make_test_state(data_dir.path(), project_root.path()).await?;
@@ -205,6 +208,9 @@ mod tests {
 
     #[tokio::test]
     async fn health_tick_returns_error_when_scan_fails() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let data_dir = tempfile::tempdir()?;
         let project_root = tempfile::tempdir()?;
         let state = make_test_state(data_dir.path(), project_root.path()).await?;

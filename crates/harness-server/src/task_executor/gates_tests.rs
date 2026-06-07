@@ -85,6 +85,9 @@ fn review_prep_from_checkpoint_phase_recovers_rebase_state() {
 
 #[tokio::test]
 async fn fail_rebase_conflict_marks_task_failed_and_logs_event() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let events = Arc::new(harness_observe::event_store::EventStore::new(dir.path()).await?);

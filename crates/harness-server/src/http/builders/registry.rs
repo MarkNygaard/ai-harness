@@ -619,7 +619,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn empty_data_dir_produces_empty_project_registry() {
+    async fn empty_data_dir_produces_empty_project_registry() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (server, tasks) = make_test_server_and_tasks(dir.path()).await;
         let bundle = build_registry(&server, dir.path(), dir.path(), &tasks)
@@ -640,10 +643,14 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| dir.path().to_path_buf());
         assert_eq!(projects[0].id, canonical.to_string_lossy().as_ref());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn plan_cache_hydrated_from_db() {
+    async fn plan_cache_hydrated_from_db() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (server, tasks) = make_test_server_and_tasks(dir.path()).await;
 
@@ -666,10 +673,14 @@ mod tests {
             bundle.plan_cache.contains_key(&plan_id),
             "plan should be hydrated into cache"
         );
+        Ok(())
     }
 
     #[tokio::test]
-    async fn runtime_state_failure_is_recorded_as_optional() {
+    async fn runtime_state_failure_is_recorded_as_optional() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (server, tasks) = make_test_server_and_tasks(dir.path()).await;
         let bundle = super::super::with_forced_startup_failures(
@@ -697,10 +708,15 @@ mod tests {
             .expect("runtime_state_store startup result");
         assert!(!status.is_critical());
         assert!(!status.ready);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn invalid_workflow_schema_namespace_disables_optional_workflow_stores() {
+    async fn invalid_workflow_schema_namespace_disables_optional_workflow_stores(
+    ) -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::write(
             dir.path().join("WORKFLOW.md"),
@@ -729,6 +745,7 @@ mod tests {
             assert!(!status.is_critical());
             assert!(!status.ready);
         }
+        Ok(())
     }
 
     #[test]
@@ -744,7 +761,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn project_registry_failure_is_recorded_as_critical() {
+    async fn project_registry_failure_is_recorded_as_critical() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let (server, tasks) = make_test_server_and_tasks(dir.path()).await;
         let bundle = super::super::with_forced_startup_failures(
@@ -764,5 +784,6 @@ mod tests {
             .expect("project_registry startup result");
         assert!(status.is_critical());
         assert!(!status.ready);
+        Ok(())
     }
 }
