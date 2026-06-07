@@ -34,8 +34,20 @@ interface PiApi {
 
 declare const pi: PiApi;
 
-const raw = process.env.HARNESS_HOOKS;
-if (raw) {
+function testMatcher(matcher: string | undefined, toolName: string): boolean {
+  if (!matcher) return true;
+  try {
+    return new RegExp(matcher).test(toolName);
+  } catch {
+    console.error(`[harness-hooks] Invalid matcher regex: ${matcher}`);
+    return false;
+  }
+}
+
+function registerHooks(): void {
+  const raw = process.env.HARNESS_HOOKS;
+  if (!raw) return;
+
   let hooks: NodeHooks;
   try {
     hooks = JSON.parse(raw) as unknown as NodeHooks;
@@ -46,16 +58,6 @@ if (raw) {
   if (!hooks || typeof hooks !== "object") {
     console.error("[harness-hooks] HARNESS_HOOKS did not parse to an object; skipping hook registration.");
     return;
-  }
-
-  function testMatcher(matcher: string | undefined, toolName: string): boolean {
-    if (!matcher) return true;
-    try {
-      return new RegExp(matcher).test(toolName);
-    } catch {
-      console.error(`[harness-hooks] Invalid matcher regex: ${matcher}`);
-      return false;
-    }
   }
 
   if (hooks.pre_tool_use?.length) {
@@ -88,5 +90,7 @@ if (raw) {
     });
   }
 }
+
+registerHooks();
 
 export {};
