@@ -40,8 +40,12 @@ if (raw) {
   try {
     hooks = JSON.parse(raw) as unknown as NodeHooks;
   } catch {
-    console.error("[harness-hooks] HARNESS_HOOKS is not valid JSON; skipping.");
-    process.exit(1);
+    console.error("[harness-hooks] HARNESS_HOOKS is not valid JSON; skipping hook registration.");
+    return;
+  }
+  if (!hooks || typeof hooks !== "object") {
+    console.error("[harness-hooks] HARNESS_HOOKS did not parse to an object; skipping hook registration.");
+    return;
   }
 
   function testMatcher(matcher: string | undefined, toolName: string): boolean {

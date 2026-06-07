@@ -5,8 +5,8 @@ use harness_dag::model::{HookDecision, NodeHooks};
 use serde_json::{json, Value};
 
 /// Build the Claude Code settings.json value plus the decision payload files it
-/// references. Each hook command is `cat '<dir>/<file>'` (the caller writes the
-/// payloads into the same temp dir and substitutes the absolute path).
+/// references. Each hook command is `cat <shlex-quoted-path>` (the caller writes
+/// the payloads into the same temp dir and substitutes the absolute path).
 pub fn claude_settings(
     hooks: &NodeHooks,
     dir: &std::path::Path,
@@ -39,7 +39,11 @@ pub fn claude_settings(
         }
         payloads.push((path, serde_json::to_string_pretty(&payload).unwrap()));
         let matcher = rule.matcher.as_deref().unwrap_or("");
-        let cmd = format!("cat {}", shlex::try_quote(&dir.join(&filename).to_string_lossy()).unwrap_or(std::borrow::Cow::Borrowed("")));
+        let cmd = format!(
+            "cat {}",
+            shlex::try_quote(&dir.join(&filename).to_string_lossy())
+                .unwrap_or(std::borrow::Cow::Borrowed(""))
+        );
         pre_entries.push(json!({
             "matcher": matcher,
             "hooks": [{
@@ -65,7 +69,11 @@ pub fn claude_settings(
         }
         payloads.push((path, serde_json::to_string_pretty(&payload).unwrap()));
         let matcher = rule.matcher.as_deref().unwrap_or("");
-        let cmd = format!("cat {}", shlex::try_quote(&dir.join(&filename).to_string_lossy()).unwrap_or(std::borrow::Cow::Borrowed("")));
+        let cmd = format!(
+            "cat {}",
+            shlex::try_quote(&dir.join(&filename).to_string_lossy())
+                .unwrap_or(std::borrow::Cow::Borrowed(""))
+        );
         post_entries.push(json!({
             "matcher": matcher,
             "hooks": [{
@@ -164,6 +172,36 @@ mod tests {
         let dir = std::path::Path::new("/tmp/d");
         let (settings, _) = claude_settings(&hooks, dir);
         assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "");
+    }
+
+    #[test]
+    fn omp_hooks_env_has_both_arrays_for_extension() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("blocked".into()),
+                additional_context: Some("ctx".into()),
+                system_message: Some("sys".into()),
+            }],
+            post_tool_use: vec![HookRule {
+                matcher: Some("Edit".into()),
+                decision: None,
+                reason: None,
+                additional_context: Some("post-ctx".into()),
+                system_message: Some("post-sys".into()),
+            }],
+        };
+        let json = omp_hooks_env(&hooks);
+        let v: Value = serde_json::from_str(&json).unwrap();
+        assert!(v.get("pre_tool_use").is_some());
+        assert!(v.get("post_tool_use").is_some());
+        let pre = v["pre_tool_use"][0].as_object().unwrap();
+        assert_eq!(pre["matcher"], "Write");
+        assert_eq!(pre["decision"], "deny");
+        assert_eq!(pre["reason"], "blocked");
+        assert_eq!(pre["additional_context"], "ctx");
+        assert_eq!(pre["system_message"], "sys");
     }
 
     #[test]
