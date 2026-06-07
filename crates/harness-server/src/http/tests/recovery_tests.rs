@@ -43,6 +43,9 @@ async fn wait_for_task_to_leave_pending(
 
 #[tokio::test]
 async fn orphan_issue_task_is_redispatched_using_existing_task_row() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
     let settings =
@@ -98,6 +101,9 @@ async fn orphan_issue_task_is_redispatched_using_existing_task_row() -> anyhow::
 
 #[tokio::test]
 async fn orphan_pr_task_is_redispatched_using_existing_task_row() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
     let settings =
@@ -154,6 +160,9 @@ async fn orphan_pr_task_is_redispatched_using_existing_task_row() -> anyhow::Res
 #[tokio::test]
 async fn orphan_issue_task_is_redispatched_when_external_id_is_noncanonical() -> anyhow::Result<()>
 {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
     let settings =
@@ -209,6 +218,9 @@ async fn orphan_issue_task_is_redispatched_when_external_id_is_noncanonical() ->
 
 #[tokio::test]
 async fn orphan_pr_task_is_redispatched_when_external_id_is_noncanonical() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
     let settings =
@@ -265,6 +277,9 @@ async fn orphan_pr_task_is_redispatched_when_external_id_is_noncanonical() -> an
 #[tokio::test]
 async fn orphan_issue_task_with_prompt_context_fails_when_identifier_is_missing(
 ) -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
 
@@ -326,6 +341,9 @@ async fn orphan_issue_task_with_prompt_context_fails_when_identifier_is_missing(
 #[tokio::test]
 async fn orphan_prompt_only_task_fails_closed_when_prompt_was_not_persisted() -> anyhow::Result<()>
 {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
 
@@ -379,6 +397,9 @@ async fn orphan_prompt_only_task_fails_closed_when_prompt_was_not_persisted() ->
 #[tokio::test]
 async fn orphan_prompt_only_task_waits_for_runtime_host_lease_to_expire_before_failing(
 ) -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
 
@@ -440,6 +461,9 @@ async fn orphan_prompt_only_task_waits_for_runtime_host_lease_to_expire_before_f
 
 #[tokio::test]
 async fn orphan_recovery_excludes_pr_checkpoint_and_non_pending_rows() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
 

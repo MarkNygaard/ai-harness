@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn feishu_webhook_returns_service_unavailable_when_token_missing() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state_with_feishu(dir.path(), None).await?;
     let app = webhook_app(state);
@@ -24,6 +27,9 @@ async fn feishu_webhook_returns_service_unavailable_when_token_missing() -> anyh
 
 #[tokio::test]
 async fn feishu_webhook_returns_service_unavailable_when_token_is_empty() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state_with_feishu(dir.path(), Some("")).await?;
     let app = webhook_app(state);
@@ -48,6 +54,9 @@ async fn feishu_webhook_returns_service_unavailable_when_token_is_empty() -> any
 
 #[tokio::test]
 async fn feishu_webhook_accepts_challenge_with_valid_token() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state_with_feishu(dir.path(), Some("secret-123")).await?;
     let app = webhook_app(state);
@@ -72,6 +81,9 @@ async fn feishu_webhook_accepts_challenge_with_valid_token() -> anyhow::Result<(
 
 #[tokio::test]
 async fn feishu_webhook_rejects_invalid_token() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_test_state_with_feishu(dir.path(), Some("secret-123")).await?;
     let app = webhook_app(state);
@@ -94,6 +106,9 @@ async fn feishu_webhook_rejects_invalid_token() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn webhook_issues_opened_with_mention_schedules_runtime_issue() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     init_fake_git_repo(dir.path())?;
     let secret = "secret";
@@ -155,6 +170,9 @@ async fn webhook_issues_opened_with_mention_schedules_runtime_issue() -> anyhow:
 
 #[tokio::test]
 async fn webhook_issues_opened_requires_workflow_runtime_store() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     init_fake_git_repo(dir.path())?;
     let secret = "secret";
@@ -206,6 +224,9 @@ async fn webhook_issues_opened_requires_workflow_runtime_store() -> anyhow::Resu
 
 #[tokio::test]
 async fn webhook_routes_runtime_issue_to_repo_specific_project_root() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let repo_a_dir = crate::test_helpers::tempdir_in_home("webhook-repo-a-")?;
     let repo_b_dir = crate::test_helpers::tempdir_in_home("webhook-repo-b-")?;
@@ -341,6 +362,9 @@ async fn webhook_routes_runtime_prompt_to_repo_specific_project_root() -> anyhow
 
 #[tokio::test]
 async fn webhook_ignores_issue_tasks_when_repo_is_unmapped() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let repo_a_dir = crate::test_helpers::tempdir_in_home("webhook-fallback-a-")?;
     let repo_b_dir = crate::test_helpers::tempdir_in_home("webhook-fallback-b-")?;
     let secret = "secret";
@@ -463,6 +487,9 @@ async fn webhook_pull_request_review_changes_requested_creates_runtime_prompt_su
 
 #[tokio::test]
 async fn webhook_ping_event_returns_accepted_without_creating_task() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let secret = "secret";
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some(secret)).await?;
@@ -498,6 +525,9 @@ async fn webhook_ping_event_returns_accepted_without_creating_task() -> anyhow::
 
 #[tokio::test]
 async fn build_router_health_route_returns_ok() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = super::http_router::build_router(state);
@@ -512,6 +542,9 @@ async fn build_router_health_route_returns_ok() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn build_router_auth_middleware_blocks_unauthenticated_requests() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut config = harness_core::config::HarnessConfig::default();
     config.server.api_token = Some("test-token-abc".to_string());
@@ -538,6 +571,9 @@ async fn build_router_auth_middleware_blocks_unauthenticated_requests() -> anyho
 
 #[tokio::test]
 async fn build_router_webhook_body_limit_enforced() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let secret = "secret";
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some(secret)).await?;

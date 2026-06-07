@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn webhook_issue_mention_schedules_runtime_issue() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let secret = "secret";
     let mut config = harness_core::config::HarnessConfig::default();
@@ -181,6 +184,9 @@ async fn webhook_fix_ci_on_pr_creates_runtime_prompt_submission() -> anyhow::Res
 
 #[tokio::test]
 async fn webhook_secret_requires_signature_header() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
     let app = webhook_app(state);
@@ -209,6 +215,9 @@ async fn webhook_secret_requires_signature_header() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn webhook_secret_rejects_invalid_signature_value() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some("secret")).await?;
     let app = webhook_app(state);
@@ -241,6 +250,9 @@ async fn webhook_secret_rejects_invalid_signature_value() -> anyhow::Result<()> 
 
 #[tokio::test]
 async fn webhook_empty_secret_configuration_fails_closed() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some("")).await?;
     let app = webhook_app(state);
@@ -269,6 +281,9 @@ async fn webhook_empty_secret_configuration_fails_closed() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn webhook_missing_secret_configuration_fails_closed() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, _agent) = make_test_state_with_agent(dir.path(), None).await?;
     let app = webhook_app(state);
@@ -297,6 +312,9 @@ async fn webhook_missing_secret_configuration_fails_closed() -> anyhow::Result<(
 
 #[tokio::test]
 async fn webhook_rejects_invalid_event_header() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let secret = "secret";
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some(secret)).await?;
@@ -329,6 +347,9 @@ async fn webhook_rejects_invalid_event_header() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn webhook_body_limit_rejects_large_payload() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let secret = "secret";
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some(secret)).await?;
@@ -355,6 +376,9 @@ async fn webhook_body_limit_rejects_large_payload() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn create_task_with_prompt_requires_workflow_runtime_store() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some("s")).await?;
     let before_count = state.core.tasks.count();
@@ -504,6 +528,9 @@ async fn create_task_with_prompt_returns_workflow_runtime_submission() -> anyhow
 
 #[tokio::test]
 async fn create_task_with_issue_requires_workflow_runtime_store() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     init_fake_git_repo(dir.path())?;
     let (state, _agent) = make_test_state_with_agent(dir.path(), Some("s")).await?;
