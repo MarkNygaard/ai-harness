@@ -24,6 +24,9 @@ impl Drop for CwdGuard {
 
 #[tokio::test]
 async fn gc_run_uses_configured_project_root_across_cwd() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let sandbox = tempfile::tempdir()?;
     let project_root = sandbox.path().join("project-root");
     let other_cwd = sandbox.path().join("other-cwd");

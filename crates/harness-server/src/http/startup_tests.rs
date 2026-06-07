@@ -13,6 +13,9 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn persisted_skills_survive_restart() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     // Hold the shared HOME_LOCK so no sibling test races on HOME.
     let _lock = HOME_LOCK.lock().await;
     let _ = crate::test_helpers::test_database_url()?;
@@ -95,6 +98,9 @@ async fn persisted_skills_survive_restart() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn build_app_state_auto_registers_builtin_guard() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = HOME_LOCK.lock().await;
     let sandbox = tempfile::tempdir()?;
     let project_root = sandbox.path().join("project");
@@ -124,6 +130,9 @@ async fn build_app_state_auto_registers_builtin_guard() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn build_app_state_registers_startup_project_metadata() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = HOME_LOCK.lock().await;
     let sandbox = tempfile::tempdir()?;
     let project_root = sandbox.path().join("project");
@@ -162,6 +171,9 @@ async fn build_app_state_registers_startup_project_metadata() -> anyhow::Result<
 #[tokio::test]
 async fn build_app_state_registers_default_project_metadata_from_startup_entry(
 ) -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = HOME_LOCK.lock().await;
     let sandbox = tempfile::tempdir()?;
     let project_root = sandbox.path().join("project");
@@ -200,6 +212,9 @@ async fn build_app_state_registers_default_project_metadata_from_startup_entry(
 
 #[tokio::test]
 async fn build_app_state_preserves_partial_startup_project_metadata() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = HOME_LOCK.lock().await;
     let sandbox = tempfile::tempdir()?;
     let project_root = sandbox.path().join("project");

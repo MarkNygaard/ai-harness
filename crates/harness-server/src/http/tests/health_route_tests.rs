@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn health_degraded_when_runtime_state_dirty() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     use std::sync::atomic::Ordering;
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
@@ -15,6 +18,9 @@ async fn health_degraded_when_runtime_state_dirty() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn health_runtime_logs_redacts_absolute_path() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;
     let state_mut = Arc::get_mut(&mut state).expect("unique state");
@@ -41,6 +47,9 @@ async fn health_runtime_logs_redacts_absolute_path() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn health_runtime_logs_can_report_degraded_without_raw_error_text() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;
     let state_mut = Arc::get_mut(&mut state).expect("unique state");
@@ -63,6 +72,9 @@ async fn health_runtime_logs_can_report_degraded_without_raw_error_text() -> any
 
 #[tokio::test]
 async fn health_startup_errors_are_redacted() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;
@@ -91,6 +103,9 @@ async fn health_startup_errors_are_redacted() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn health_degraded_multiple_subsystems() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;
@@ -114,6 +129,9 @@ async fn health_degraded_multiple_subsystems() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn health_degraded_both_conditions() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     use std::sync::atomic::Ordering;
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
@@ -132,6 +150,9 @@ async fn health_degraded_both_conditions() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn health_reports_critical_store_failure_details() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = tempfile::tempdir()?;
     let mut state = make_read_only_route_test_state(dir.path()).await?;
@@ -151,6 +172,9 @@ async fn health_reports_critical_store_failure_details() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn token_usage_route_is_registered() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let state = make_read_only_route_test_state(dir.path()).await?;
     let app = token_usage_app(state);

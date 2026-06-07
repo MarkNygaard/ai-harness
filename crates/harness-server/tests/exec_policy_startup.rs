@@ -6,6 +6,9 @@ use std::sync::Arc;
 
 #[tokio::test]
 async fn check_command_policy_startup_loads_exec_policy_and_requirements() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let sandbox = tempfile::tempdir()?;
     let project_root = sandbox.path().join("project-root");
     let policy_path = sandbox.path().join("policy.star");

@@ -66,6 +66,9 @@ where
 /// reviewing, waiting) must become Failed; Pending/Done/Failed are left unchanged.
 #[tokio::test]
 async fn restart_no_checkpoint_fails_interrupted_tasks() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         db.insert(&make_task("t-impl", TaskStatus::Implementing))
             .await?;
@@ -134,6 +137,9 @@ async fn restart_no_checkpoint_fails_interrupted_tasks() -> anyhow::Result<()> {
 /// error message referencing the PR URL.
 #[tokio::test]
 async fn restart_with_pr_url_resumes_task() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         let mut task = make_task("t-impl-pr", TaskStatus::Implementing);
         task.pr_url = Some("https://github.com/owner/repo/pull/42".to_string());
@@ -167,6 +173,9 @@ async fn restart_with_pr_url_resumes_task() -> anyhow::Result<()> {
 /// Restart with a checkpoint PR URL (checkpoint table, not tasks table): task resumes.
 #[tokio::test]
 async fn restart_with_checkpoint_pr_url_resumes_task() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         db.insert(&make_task("t-ck-pr", TaskStatus::AgentReview))
             .await?;
@@ -202,6 +211,9 @@ async fn restart_with_checkpoint_pr_url_resumes_task() -> anyhow::Result<()> {
 /// Restart with a plan checkpoint: task resumes to Pending.
 #[tokio::test]
 async fn restart_with_plan_checkpoint_resumes_task() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         db.insert(&make_task("t-plan", TaskStatus::Implementing))
             .await?;
@@ -237,6 +249,9 @@ async fn restart_with_plan_checkpoint_resumes_task() -> anyhow::Result<()> {
 /// Restart with a triage-only checkpoint: task resumes to Pending.
 #[tokio::test]
 async fn restart_with_triage_checkpoint_resumes_task() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         db.insert(&make_task("t-triage", TaskStatus::Implementing))
             .await?;
@@ -271,6 +286,9 @@ async fn restart_with_triage_checkpoint_resumes_task() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn restart_review_task_without_system_input_fails() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         let mut task = make_task("t-review-missing-input", TaskStatus::ReviewGenerating);
         task.task_kind = TaskKind::Review;
@@ -296,6 +314,9 @@ async fn restart_review_task_without_system_input_fails() -> anyhow::Result<()> 
 /// "retrying after transient failure") must become Failed on restart.
 #[tokio::test]
 async fn restart_transient_retry_task_fails() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         let mut task = make_task("t-transient", TaskStatus::Pending);
         task.error = Some("retrying after transient failure (attempt 2)".to_string());
@@ -344,6 +365,9 @@ async fn restart_transient_retry_task_fails() -> anyhow::Result<()> {
 /// Mixed scenario: some tasks resume, some fail — recovery counts are correct.
 #[tokio::test]
 async fn restart_mixed_recovery_counts() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         // Will be resumed: has plan checkpoint.
         db.insert(&make_task("t-resumable-plan", TaskStatus::Implementing))
@@ -398,6 +422,9 @@ async fn restart_mixed_recovery_counts() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn restart_marks_resumed_task_as_recovering_in_scheduler_state() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let store = setup_store(|db| async move {
         db.insert(&make_task("t-recovering", TaskStatus::Implementing))
             .await?;

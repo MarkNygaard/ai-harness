@@ -45,6 +45,9 @@ fn make_task(id: &str) -> TaskState {
 /// not `Ok(Some(_))` with silently-defaulted empty rounds.
 #[tokio::test]
 async fn get_distinguishes_missing_task_from_corrupted_rounds() -> anyhow::Result<()> {
+    if !harness_server::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let tmp = tempfile::tempdir()?;
     let db_path = tmp.path().join("tasks.db");
     let db = TaskDb::open(&db_path).await?;
