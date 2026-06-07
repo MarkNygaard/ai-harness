@@ -46,6 +46,9 @@ const ARTIFACT_MAX_BYTES: usize = 65_536;
 /// rejecting traversal/absolute paths and truncating on a char boundary.
 /// `None` when undeclared, escaping, or not produced (graceful).
 fn read_declared_artifact(artifacts_dir: &Path, rel: &str) -> Option<String> {
+    if rel.is_empty() {
+        return None;
+    }
     let p = Path::new(rel);
     if p.components().any(|c| !matches!(c, Component::Normal(_))) {
         return None; // reject `..`, absolute, prefix
@@ -850,6 +853,11 @@ mod tests {
             read_declared_artifact(dir.path(), "does-not-exist.md"),
             None
         );
+    }
+    #[test]
+    fn read_declared_artifact_rejects_empty_string() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_declared_artifact(dir.path(), ""), None);
     }
     #[test]
     fn read_declared_artifact_truncates_on_char_boundary() {

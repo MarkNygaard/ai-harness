@@ -27,6 +27,35 @@ describe("liveReducer", () => {
     expect(state.order).toEqual(["a", "b"]);
     expect(state.nodes.a.status).toBe("pending");
     expect(state.nodes.b.depends_on).toEqual(["a"]);
+    expect(state.nodes.a.artifact).toBeNull();
+    expect(state.nodes.b.artifact).toBeNull();
+  });
+  it("seeds artifact from run_started and propagates artifact_content on node_finished", () => {
+    const state = reduce([
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [], artifact: "exploration.md" }],
+      },
+      {
+        type: "node_finished",
+        node: {
+          id: "a",
+          status: "success",
+          provider: null,
+          model: null,
+          output: "ok",
+          usage: { input: 0, output: 0, cache_read: null, cache_write: null },
+          iterations: 1,
+          converged: null,
+          note: null,
+          artifact_content: "# Explore\nsample",
+        },
+      },
+    ]);
+    expect(state.nodes.a.artifact).toBe("exploration.md");
+    expect(state.nodes.a.artifact_content).toBe("# Explore\nsample");
   });
 
   it("marks a node running then merges its finished record", () => {
