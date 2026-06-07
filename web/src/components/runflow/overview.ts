@@ -100,6 +100,7 @@ export const TOKEN_OUTPUT_COLOR = "oklch(0.75 0.09 130)";
 /** Break a summed usage into ordered, non-zero segments for a stacked bar. */
 export function usageByType(usage: Usage): TokenSegment[] {
   // Muted, Factory-style palette (teal / slate / peach / olive) — deliberately
+  // desaturated and independent of the semantic status colors.
   const defs: Array<Omit<TokenSegment, "value">> = [
     { key: "input", label: "Input", color: TOKEN_INPUT_COLOR },
     { key: "cache_read", label: "Cache read", color: "oklch(0.68 0.03 250)" },
