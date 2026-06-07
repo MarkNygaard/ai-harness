@@ -167,12 +167,14 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
         }
     };
     // Pick the first eligible issue that hasn't already exhausted its retries.
-    // This is the hard loop-guard: an issue is never claimed more than
-    // MAX_CLAIM_ATTEMPTS times, regardless of which column it currently sits in
-    // (so even a misconfigured binding — e.g. In Progress == source — can't loop).
+    // This is the hard loop-guard: a single binding never claims an issue more
+    // than MAX_CLAIM_ATTEMPTS times (so even a misconfigured binding — e.g. In
+    // Progress == source — can't loop). The cap is per (issue, workflow), so an
+    // issue that legitimately moves through several bindings across pipeline
+    // stages (idea-to-pr → merge-pr) isn't exhausted by an earlier binding.
     let mut chosen = None;
     for issue in issues {
-        match claim_store.attempts_for_issue(&issue.id).await {
+        match claim_store.attempts_for_issue(&issue.id, &b.workflow).await {
             Ok(n) if n >= MAX_CLAIM_ATTEMPTS => {
                 tracing::debug!(
                     "linear poller: {}/{} — skipping {} (hit retry cap {})",
@@ -338,9 +340,10 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                 tracing::info!("linear poller: {} — run completed → ready", c.identifier);
             }
             "failed" | "cancelled" => {
-                // How many times this issue has been attempted (incl. this run).
+                // How many times this issue has been attempted for this workflow
+                // (incl. this run).
                 let attempts = claim_store
-                    .attempts_for_issue(&c.issue_id)
+                    .attempts_for_issue(&c.issue_id, &c.workflow)
                     .await
                     .unwrap_or(MAX_CLAIM_ATTEMPTS);
                 if attempts >= MAX_CLAIM_ATTEMPTS {

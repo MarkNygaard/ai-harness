@@ -120,15 +120,26 @@ impl LinearClaimStore {
         Ok(rows)
     }
 
-    /// How many times this issue has been claimed (one row per attempt) — the
-    /// retry counter the poller uses to stop a perpetually-failing issue from
-    /// looping back into the source column forever.
-    pub async fn attempts_for_issue(&self, issue_id: &str) -> Result<i64, PersistError> {
-        let row: (i64,) =
-            sqlx::query_as("SELECT count(*) FROM harness_linear_claims WHERE issue_id = $1")
-                .bind(issue_id)
-                .fetch_one(&self.pool)
-                .await?;
+    /// How many times this issue has been claimed **for `workflow`** (one row per
+    /// attempt) — the retry counter the poller uses to stop a perpetually-failing
+    /// issue from looping back into a binding's source column forever.
+    ///
+    /// Scoped per `(issue, workflow)`, not per issue: the cap guards a *single*
+    /// binding from looping, but must not exhaust an issue that legitimately
+    /// flows through several bindings across pipeline stages (e.g. `idea-to-pr`
+    /// claims it in `Todo`, then `merge-pr` claims it in `Ready for merge`).
+    pub async fn attempts_for_issue(
+        &self,
+        issue_id: &str,
+        workflow: &str,
+    ) -> Result<i64, PersistError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM harness_linear_claims WHERE issue_id = $1 AND workflow = $2",
+        )
+        .bind(issue_id)
+        .bind(workflow)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 
@@ -140,5 +151,55 @@ impl LinearClaimStore {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn db_url() -> Option<String> {
+        let url = std::env::var("HARNESS_DATABASE_URL").ok()?;
+        crate::is_test_db(&url).then_some(url)
+    }
+
+    /// The retry cap is per `(issue, workflow)`: claims for one binding's
+    /// workflow must not count against another's, so an issue can flow
+    /// `idea-to-pr → merge-pr` without an earlier binding exhausting it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn attempts_are_scoped_per_workflow() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = LinearClaimStore::connect(&url).await.expect("connect");
+        let issue = format!(
+            "issue-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+
+        // Two idea-to-pr claims for this issue (e.g. one retry).
+        store
+            .record("run-a", "proj", "idea-to-pr", &issue, "PROJ-1", "todo")
+            .await
+            .unwrap();
+        store
+            .record("run-b", "proj", "idea-to-pr", &issue, "PROJ-1", "todo")
+            .await
+            .unwrap();
+
+        // idea-to-pr sees both; a different binding's workflow sees zero.
+        assert_eq!(
+            store
+                .attempts_for_issue(&issue, "idea-to-pr")
+                .await
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            store.attempts_for_issue(&issue, "merge-pr").await.unwrap(),
+            0
+        );
     }
 }
