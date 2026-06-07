@@ -45,6 +45,7 @@ fn classify_command(cmd: &str) -> &'static str {
     }
     // Test: test runner commands
     if cmd.contains("cargo test")
+        || cmd.contains("cargo nextest")
         || cmd.contains("go test")
         || cmd.contains("pytest")
         || cmd.contains("bun test")
@@ -655,6 +656,7 @@ mod tests {
         for cmd in &[
             "cargo test",
             "cargo test -- --nocapture",
+            "cargo nextest run --workspace",
             "go test ./...",
             "pytest",
             "bun test",
