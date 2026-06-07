@@ -192,6 +192,9 @@ mod tests {
 
     #[tokio::test]
     async fn returns_200_with_all_top_level_keys() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -228,6 +231,9 @@ mod tests {
 
     #[tokio::test]
     async fn last_tick_null_on_fresh_server() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-notick-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -252,6 +258,9 @@ mod tests {
 
     #[tokio::test]
     async fn stalled_tasks_empty_on_fresh_server() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-nostall-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -276,6 +285,9 @@ mod tests {
 
     #[tokio::test]
     async fn recent_failures_empty_on_fresh_server() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-nofail-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -360,6 +372,9 @@ mod tests {
 
     #[tokio::test]
     async fn malformed_retry_counters_fallback_to_zero() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-bad-tick-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -394,6 +409,9 @@ mod tests {
 
     #[tokio::test]
     async fn last_tick_falls_back_to_older_summary_event() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-old-tick-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -427,6 +445,9 @@ mod tests {
 
     #[tokio::test]
     async fn recent_failures_capped_at_max() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-cap-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -491,6 +512,9 @@ mod tests {
 
     #[tokio::test]
     async fn long_error_is_truncated() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-trunc-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -557,6 +581,9 @@ mod tests {
     /// is_char_boundary walk-back in the truncation logic.
     #[tokio::test]
     async fn unicode_error_truncation_does_not_panic() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-unicode-")?;
         let state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -620,6 +647,9 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_logs_returns_full_active_path_when_enabled() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-runtime-log-")?;
         let mut state = Arc::new(test_helpers::make_test_state(dir.path()).await?);
@@ -660,6 +690,9 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_logs_reports_degraded_state_without_active_path() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = test_helpers::HOME_LOCK.lock().await;
         let dir = test_helpers::tempdir_in_home("harness-test-op-snap-runtime-log-degraded-")?;
         let mut state = Arc::new(test_helpers::make_test_state(dir.path()).await?);

@@ -121,6 +121,9 @@ mod tests {
 
     #[tokio::test]
     async fn rule_check_returns_warning_when_no_guards_registered() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         // Hold HOME_LOCK so a concurrent persisted_skills_survive_restart cannot
         // change HOME between tempdir_in_home() and validate_project_root().
         let _lock = HOME_LOCK.lock().await;
@@ -162,6 +165,9 @@ mod tests {
 
     #[tokio::test]
     async fn rule_check_with_guard_returns_violations() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         // Hold HOME_LOCK for the same reason as rule_check_returns_warning_when_no_guards_registered.
         let _lock = HOME_LOCK.lock().await;
         let dir = tempdir_in_home("rule-check-violations-")?;
@@ -215,6 +221,9 @@ mod tests {
 
     #[tokio::test]
     async fn rule_check_returns_warning_for_empty_scan_input() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = HOME_LOCK.lock().await;
         let dir = tempdir_in_home("rule-check-empty-input-")?;
         let state = make_test_state(dir.path()).await?;
@@ -261,6 +270,9 @@ mod tests {
     /// guard is released before scan, so the writer acquires the lock in <50 ms.
     #[tokio::test]
     async fn rule_check_does_not_block_concurrent_writer() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _lock = HOME_LOCK.lock().await;
         let dir = tempdir_in_home("rule-check-concurrent-write-")?;
         let state = make_test_state(dir.path()).await?;
