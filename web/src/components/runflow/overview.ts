@@ -93,11 +93,11 @@ export interface TokenSegment {
   color: string;
 }
 
-/** Break a summed usage into ordered, non-zero segments for a stacked bar. */
 /** Token-segment colors, shared by the by-type and by-step token bars. */
 export const TOKEN_INPUT_COLOR = "oklch(0.64 0.07 200)";
 export const TOKEN_OUTPUT_COLOR = "oklch(0.75 0.09 130)";
 
+/** Break a summed usage into ordered, non-zero segments for a stacked bar. */
 export function usageByType(usage: Usage): TokenSegment[] {
   // Muted, Factory-style palette (teal / slate / peach / olive) — deliberately
   const defs: Array<Omit<TokenSegment, "value">> = [
