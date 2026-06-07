@@ -21,12 +21,12 @@ pub mod authoring;
 mod code_agent;
 pub mod defaults;
 mod dispatch;
+mod hooks;
 mod local;
 mod pi;
 mod registry;
 mod run;
 mod worktree;
-
 pub use code_agent::CodeAgentRunner;
 pub use defaults::{default_command, default_workflow, resolve_workflow_source, DEFAULT_WORKFLOW};
 pub use dispatch::DispatchAgent;
@@ -52,6 +52,8 @@ pub struct PromptRequest {
     pub iteration: u32,
     /// Additional environment variables to pass to the agent subprocess.
     pub env_vars: HashMap<String, String>,
+    /// Provider-agnostic tool hooks translated per provider at dispatch.
+    pub hooks: Option<harness_dag::NodeHooks>,
 }
 
 /// The result of an AI prompt invocation.
@@ -119,6 +121,7 @@ mod tests {
                 session: None,
                 iteration: 1,
                 env_vars: Default::default(),
+                hooks: None,
             })
             .await
             .unwrap();

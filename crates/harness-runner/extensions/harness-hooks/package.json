@@ -1,0 +1,6 @@
+{
+  "name": "harness-hooks",
+  "version": "0.1.0",
+  "description": "oh-my-pi extension for per-node tool hooks",
+  "main": "index.ts"
+}

@@ -88,6 +88,8 @@ pub struct NodeRequest<'a> {
     /// Optional JSON schema the agent's output should conform to (AI bodies
     /// only). The runner instructs the agent to emit matching JSON.
     pub output_format: Option<&'a serde_json::Value>,
+    /// Provider-agnostic tool hooks translated per provider at dispatch.
+    pub hooks: Option<&'a crate::model::NodeHooks>,
 }
 
 /// What a [`NodeRunner`] returns from one invocation.
@@ -705,6 +707,7 @@ async fn execute_body<R: NodeRunner>(
         timeout: node.timeout,
         vars,
         output_format: node.output_format.as_ref(),
+        hooks: node.hooks.as_ref(),
     };
     match runner.execute(req).await {
         Ok(out) => {
@@ -805,6 +808,7 @@ async fn run_loop<R: NodeRunner>(
             timeout: node.timeout,
             vars: &iter_vars,
             output_format: node.output_format.as_ref(),
+            hooks: node.hooks.as_ref(),
         };
 
         match runner.execute(req).await {
@@ -858,6 +862,7 @@ async fn run_loop<R: NodeRunner>(
                         timeout: node.timeout,
                         vars: &iter_vars,
                         output_format: None,
+                        hooks: None,
                     };
                     match runner.execute(bash_req).await {
                         Ok(check) => {

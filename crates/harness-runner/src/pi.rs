@@ -26,9 +26,13 @@ use tokio::process::Command;
 
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
 
+/// Embedded omp hook extension source, materialized to a temp dir at runtime.
+const OMP_HOOK_EXTENSION_TS: &str = include_str!("../extensions/harness-hooks/index.ts");
+const OMP_HOOK_EXTENSION_PKG: &str = include_str!("../extensions/harness-hooks/package.json");
+
 /// Default model when a `pi` node declares no `model` (or only a bare name).
-/// `kimi-for-coding` is the model *id* (its display name is "Kimi-k2.6").
 const DEFAULT_MODEL: &str = "kimi-code/kimi-for-coding";
+
 /// Model-namespace prefix for `omp --model provider/model` (bare model names are
 /// prefixed with this). Note: the *auth* provider is `kimi-coding`, but models
 /// are addressed under `kimi-code/`.
@@ -148,14 +152,38 @@ impl PiAgent {
 impl PromptAgent for PiAgent {
     async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
         let model = self.resolve_model(req.model.as_deref());
-        let args = self.build_args(&req.prompt, &model, req.session.as_deref());
+        let mut args = self.build_args(&req.prompt, &model, req.session.as_deref());
+
+        let _hooks_dir = if let Some(_hooks) = req.hooks.as_ref() {
+            let dir = tempfile::Builder::new()
+                .prefix("harness-omp-hooks-")
+                .tempdir()
+                .map_err(|e| AgentError(e.to_string()))?;
+            std::fs::write(dir.path().join("index.ts"), OMP_HOOK_EXTENSION_TS)
+                .map_err(|e| AgentError(e.to_string()))?;
+            std::fs::write(dir.path().join("package.json"), OMP_HOOK_EXTENSION_PKG)
+                .map_err(|e| AgentError(e.to_string()))?;
+            args.push("--plugin-dir".to_string());
+            args.push(dir.path().to_string_lossy().into_owned());
+            Some(dir)
+        } else {
+            None
+        };
+
+        let env_vars = if let Some(hooks) = req.hooks.as_ref() {
+            let mut cloned = req.env_vars.clone();
+            cloned.insert("HARNESS_HOOKS".into(), crate::hooks::omp_hooks_env(hooks));
+            cloned
+        } else {
+            req.env_vars.clone()
+        };
 
         // One automatic retry, but ONLY on a stall (a transient dropped LLM
         // connection that omp doesn't time out). A clean non-zero exit (e.g.
         // tests failed) is deterministic — never retried. Capped at 1 → no loop.
         let mut attempt = 0u32;
         let output = loop {
-            match self.run_attempt(&args, &req.cwd, &req.env_vars).await? {
+            match self.run_attempt(&args, &req.cwd, &env_vars).await? {
                 Attempt::Done {
                     stdout,
                     stderr,

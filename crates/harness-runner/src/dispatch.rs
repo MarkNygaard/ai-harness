@@ -77,6 +77,7 @@ mod tests {
             session: None,
             iteration: 1,
             env_vars: Default::default(),
+            hooks: None,
         }
     }
 

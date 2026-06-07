@@ -11,7 +11,8 @@ use serde::Deserialize;
 
 use crate::error::DagError;
 use crate::model::{
-    ApprovalConfig, ContextMode, LoopConfig, Node, NodeKind, ScriptRuntime, TriggerRule, Workflow,
+    ApprovalConfig, ContextMode, LoopConfig, Node, NodeHooks, NodeKind, ScriptRuntime, TriggerRule,
+    Workflow,
 };
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +51,8 @@ struct RawNode {
     timeout: Option<u64>,
     #[serde(default)]
     output_format: Option<serde_json::Value>,
+    #[serde(default)]
+    hooks: Option<NodeHooks>,
 
     // Mutually exclusive body discriminators.
     #[serde(default)]
@@ -97,6 +100,7 @@ impl RawNode {
             artifact,
             timeout,
             output_format,
+            hooks,
         } = self;
 
         let mut found: Vec<&'static str> = Vec::new();
@@ -166,6 +170,7 @@ impl RawNode {
                 artifact,
                 timeout,
                 output_format,
+                hooks,
             },
         ))
     }
@@ -185,6 +190,7 @@ struct NodeKindParts {
     artifact: Option<String>,
     timeout: Option<u64>,
     output_format: Option<serde_json::Value>,
+    hooks: Option<NodeHooks>,
 }
 
 /// Parse a workflow from YAML, validating node uniqueness, body exclusivity,
@@ -213,6 +219,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             artifact: parts.artifact,
             timeout: parts.timeout,
             output_format: parts.output_format,
+            hooks: parts.hooks,
             kind: parts.kind,
         });
     }

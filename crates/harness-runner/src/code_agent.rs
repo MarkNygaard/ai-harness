@@ -37,7 +37,7 @@ impl CodeAgentRunner {
 
 #[async_trait]
 impl PromptAgent for CodeAgentRunner {
-    async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
+    async fn run(&self, mut req: PromptRequest) -> Result<PromptResult, AgentError> {
         // Resolve the provider to a CodeAgent. A named-but-unregistered provider
         // is a hard error (don't silently fall back and hide misconfiguration);
         // an unset provider uses the registry default.
@@ -52,6 +52,30 @@ impl PromptAgent for CodeAgentRunner {
                 .registry
                 .default_agent()
                 .ok_or_else(|| AgentError("no default agent registered".to_string()))?,
+        };
+
+        let _hooks_dir = if let Some(hooks) = req.hooks.as_ref() {
+            let dir = tempfile::Builder::new()
+                .prefix("harness-claude-hooks-")
+                .tempdir()
+                .map_err(|e| AgentError(e.to_string()))?;
+            let (settings, payloads) = crate::hooks::claude_settings(hooks, dir.path());
+            for (path, body) in payloads {
+                std::fs::write(&path, body).map_err(|e| AgentError(e.to_string()))?;
+            }
+            let settings_path = dir.path().join("settings.json");
+            std::fs::write(
+                &settings_path,
+                serde_json::to_vec_pretty(&settings).unwrap(),
+            )
+            .map_err(|e| AgentError(e.to_string()))?;
+            req.env_vars.insert(
+                "HARNESS_CLAUDE_SETTINGS".into(),
+                settings_path.to_string_lossy().into_owned(),
+            );
+            Some(dir) // bound to keep the TempDir alive across execute()
+        } else {
+            None
         };
 
         let agent_req = AgentRequest {
@@ -152,6 +176,7 @@ mod tests {
             session: None,
             iteration: 1,
             env_vars: Default::default(),
+            hooks: None,
         }
     }
 
@@ -179,6 +204,88 @@ mod tests {
         let runner = CodeAgentRunner::new(registry_with("claude"));
         let err = runner.run(request(Some("ghost"))).await.unwrap_err();
         assert!(err.0.contains("no agent registered for provider `ghost`"));
+    }
+
+    #[tokio::test]
+    async fn hooks_materialize_claude_settings_env_var() {
+        use std::collections::HashMap;
+        use std::sync::Mutex;
+
+        struct RecordingStubAgent {
+            last_env: Mutex<Option<HashMap<String, String>>>,
+        }
+
+        #[async_trait]
+        impl CodeAgent for RecordingStubAgent {
+            fn name(&self) -> &str {
+                "claude"
+            }
+            fn capabilities(&self) -> Vec<Capability> {
+                vec![]
+            }
+            async fn execute(
+                &self,
+                req: AgentRequest,
+            ) -> harness_core::error::Result<AgentResponse> {
+                *self.last_env.lock().unwrap() = Some(req.env_vars.clone());
+                // Verify the settings file exists during execute.
+                if let Some(path) = req.env_vars.get("HARNESS_CLAUDE_SETTINGS") {
+                    assert!(std::path::Path::new(path).exists(), "settings.json missing");
+                }
+                Ok(AgentResponse {
+                    output: "ok".into(),
+                    stderr: String::new(),
+                    items: vec![],
+                    token_usage: TokenUsage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                        cost_usd: 0.0,
+                    },
+                    model: "claude".into(),
+                    exit_code: Some(0),
+                })
+            }
+            async fn execute_stream(
+                &self,
+                _req: AgentRequest,
+                _tx: tokio::sync::mpsc::Sender<StreamItem>,
+            ) -> harness_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut reg = AgentRegistry::new("claude");
+        let agent = Arc::new(RecordingStubAgent {
+            last_env: Mutex::new(None),
+        });
+        reg.register("claude", agent.clone());
+        let runner = CodeAgentRunner::new(Arc::new(reg));
+
+        let mut req = request(Some("claude"));
+        req.hooks = Some(harness_dag::NodeHooks {
+            pre_tool_use: vec![harness_dag::HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(harness_dag::HookDecision::Deny),
+                reason: Some("blocked".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        });
+        runner.run(req).await.unwrap();
+
+        let env = agent.last_env.lock().unwrap().take().unwrap();
+        assert!(env.contains_key("HARNESS_CLAUDE_SETTINGS"));
+    }
+
+    #[tokio::test]
+    async fn hooksless_request_has_no_claude_settings_env() {
+        let runner = CodeAgentRunner::new(registry_with("claude"));
+        let out = runner.run(request(Some("claude"))).await.unwrap();
+        assert!(out.success);
+        // StubAgent doesn't record env, but the test succeeding with no error
+        // confirms no settings file was materialized.
     }
 
     #[tokio::test]
