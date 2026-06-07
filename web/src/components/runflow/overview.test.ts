@@ -26,7 +26,6 @@ function node(
   };
 }
 
-
 describe("usageByModel", () => {
   it("groups by model, sums usage, and sorts by total desc", () => {
     const rows = usageByModel([
