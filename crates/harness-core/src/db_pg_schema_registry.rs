@@ -1,6 +1,5 @@
 use serde::Serialize;
 use sqlx::postgres::PgPool;
-use sqlx::Acquire as _;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
