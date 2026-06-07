@@ -1,6 +1,6 @@
-@import 'tailwindcss';
-@import 'tw-animate-css';
-@import 'shadcn/tailwind.css';
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -119,7 +119,8 @@
 
   /* Fonts (Geist via @fontsource-variable, imported in main.tsx). */
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
-  --font-geist-mono: "Geist Mono Variable", ui-monospace, "JetBrains Mono", monospace;
+  --font-geist-mono:
+    "Geist Mono Variable", ui-monospace, "JetBrains Mono", monospace;
 
   /* Status palette (mode-independent). */
   --status-running: var(--accent-orange);
@@ -197,6 +198,14 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* Native <select> option popups don't inherit the page theme — the browser
+     opens them with its default (light) background, making options unreadable
+     in dark mode (white text on white). Theme them explicitly with the popover
+     tokens so they're legible in both modes. */
+  select option {
+    background-color: var(--popover);
+    color: var(--popover-foreground);
   }
 }
 
