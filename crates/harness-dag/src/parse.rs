@@ -45,6 +45,8 @@ struct RawNode {
     #[serde(default)]
     category: Option<String>,
     #[serde(default)]
+    artifact: Option<String>,
+    #[serde(default)]
     timeout: Option<u64>,
     #[serde(default)]
     output_format: Option<serde_json::Value>,
@@ -92,6 +94,7 @@ impl RawNode {
             model,
             context,
             category,
+            artifact,
             timeout,
             output_format,
         } = self;
@@ -160,6 +163,7 @@ impl RawNode {
                 model,
                 context,
                 category,
+                artifact,
                 timeout,
                 output_format,
             },
@@ -178,6 +182,7 @@ struct NodeKindParts {
     model: Option<String>,
     context: ContextMode,
     category: Option<String>,
+    artifact: Option<String>,
     timeout: Option<u64>,
     output_format: Option<serde_json::Value>,
 }
@@ -205,6 +210,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             model: parts.model,
             context: parts.context,
             category: parts.category,
+            artifact: parts.artifact,
             timeout: parts.timeout,
             output_format: parts.output_format,
             kind: parts.kind,

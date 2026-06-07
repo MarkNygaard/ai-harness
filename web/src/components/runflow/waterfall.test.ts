@@ -30,6 +30,8 @@ function node(
     started_at: startedAt,
     ended_at: endedAt,
     category,
+    artifact: null,
+    artifact_content: null,
   };
 }
 

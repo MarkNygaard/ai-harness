@@ -186,6 +186,26 @@ nodes:
 }
 
 #[test]
+fn parses_and_propagates_node_artifact() {
+    let yaml = r#"
+name: artifacts
+nodes:
+  - id: explore
+    artifact: exploration.md
+    prompt: "explore"
+  - id: build
+    depends_on: [explore]
+    prompt: "build it"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    assert_eq!(
+        wf.node("explore").unwrap().artifact.as_deref(),
+        Some("exploration.md")
+    );
+    assert_eq!(wf.node("build").unwrap().artifact, None);
+}
+
+#[test]
 fn rejects_node_without_body() {
     let yaml = r#"
 name: nobody

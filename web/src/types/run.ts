@@ -33,6 +33,8 @@ export interface NodeMeta {
   depends_on: string[];
   /** Optional category id for overview grouping/colouring. */
   category?: string | null;
+  /** Declared artifact path (relative to the run's artifacts dir). */
+  artifact?: string | null;
 }
 
 /** A run row for the list view (matches `RunSummary`). */
@@ -66,6 +68,7 @@ export interface PersistedNode {
   cache_write: number | null;
   started_at: string | null;
   ended_at: string | null;
+  artifact_content: string | null;
 }
 
 /** A run plus its task spec, node rows, and topology (matches `RunDetail`). */
@@ -85,6 +88,7 @@ export interface NodeRun {
   iterations: number;
   converged: boolean | null;
   note: string | null;
+  artifact_content?: string | null;
   started_at?: string | null;
   ended_at?: string | null;
 }
@@ -141,4 +145,6 @@ export interface NodeView {
   ended_at: string | null;
   /** Category id (from the DAG topology), for overview grouping/colouring. */
   category: string | null;
+  artifact: string | null;
+  artifact_content: string | null;
 }

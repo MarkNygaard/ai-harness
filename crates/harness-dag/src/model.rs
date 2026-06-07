@@ -155,6 +155,10 @@ pub struct Node {
     /// registry at render time. `None` → the node falls back to status colour.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Optional artifact this node produces — a path relative to the run's
+    /// artifacts dir (e.g. `exploration.md`). Surfaced in the step popup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
     /// Timeout in milliseconds (for `bash`/`script` bodies).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,

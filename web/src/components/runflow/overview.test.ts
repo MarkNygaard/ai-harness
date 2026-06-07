@@ -21,6 +21,8 @@ function node(
     started_at: null,
     ended_at: null,
     category: null,
+    artifact: null,
+    artifact_content: null,
   };
 }
 

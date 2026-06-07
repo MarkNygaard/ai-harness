@@ -27,6 +27,35 @@ describe("liveReducer", () => {
     expect(state.order).toEqual(["a", "b"]);
     expect(state.nodes.a.status).toBe("pending");
     expect(state.nodes.b.depends_on).toEqual(["a"]);
+    expect(state.nodes.a.artifact).toBeNull();
+    expect(state.nodes.b.artifact).toBeNull();
+  });
+  it("seeds artifact from run_started and propagates artifact_content on node_finished", () => {
+    const state = reduce([
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [], artifact: "exploration.md" }],
+      },
+      {
+        type: "node_finished",
+        node: {
+          id: "a",
+          status: "success",
+          provider: null,
+          model: null,
+          output: "ok",
+          usage: { input: 0, output: 0, cache_read: null, cache_write: null },
+          iterations: 1,
+          converged: null,
+          note: null,
+          artifact_content: "# Explore\nsample",
+        },
+      },
+    ]);
+    expect(state.nodes.a.artifact).toBe("exploration.md");
+    expect(state.nodes.a.artifact_content).toBe("# Explore\nsample");
   });
 
   it("marks a node running then merges its finished record", () => {
@@ -105,6 +134,7 @@ describe("nodesFromDetail", () => {
           cache_write: null,
           started_at: null,
           ended_at: null,
+          artifact_content: null,
         },
         {
           node_id: "review",
@@ -122,6 +152,7 @@ describe("nodesFromDetail", () => {
           cache_write: null,
           started_at: null,
           ended_at: null,
+          artifact_content: null,
         },
       ],
     };
@@ -165,6 +196,7 @@ describe("nodesFromDetail", () => {
           cache_write: null,
           started_at: NOW,
           ended_at: NOW,
+          artifact_content: null,
         },
       ],
     };
@@ -175,5 +207,79 @@ describe("nodesFromDetail", () => {
     expect(views[1].status).toBe("pending");
     expect(views[2].status).toBe("pending");
     expect(views[2].depends_on).toEqual(["plan"]);
+  });
+
+  it("carries artifact from topology and artifact_content from persisted row", () => {
+    const detail: RunDetail = {
+      id: "r3",
+      workflow_name: "demo",
+      title: null,
+      description: null,
+      status: "completed",
+      project: null,
+      node_count: 1,
+      recorded_at: NOW,
+      graph: [{ id: "explore", depends_on: [], artifact: "exploration.md" }],
+      nodes: [
+        {
+          node_id: "explore",
+          ordinal: 0,
+          status: "success",
+          provider: "claude",
+          model: "sonnet",
+          output: "done",
+          iterations: 1,
+          converged: null,
+          note: null,
+          input_tokens: 10,
+          output_tokens: 5,
+          cache_read: null,
+          cache_write: null,
+          started_at: null,
+          ended_at: null,
+          artifact_content: "# Explore\nsample",
+        },
+      ],
+    };
+    const views = nodesFromDetail(detail);
+    expect(views[0].artifact).toBe("exploration.md");
+    expect(views[0].artifact_content).toBe("# Explore\nsample");
+  });
+
+  it("falls back to null artifact fields when absent", () => {
+    const detail: RunDetail = {
+      id: "r4",
+      workflow_name: "demo",
+      title: null,
+      description: null,
+      status: "completed",
+      project: null,
+      node_count: 1,
+      recorded_at: NOW,
+      graph: [{ id: "build", depends_on: [] }],
+      nodes: [
+        {
+          node_id: "build",
+          ordinal: 0,
+          status: "success",
+          provider: null,
+          model: null,
+          output: "",
+          iterations: 1,
+          converged: null,
+          note: null,
+          input_tokens: null,
+          output_tokens: null,
+          cache_read: null,
+          cache_write: null,
+          started_at: null,
+          ended_at: null,
+          artifact_content: null,
+        },
+      ],
+    };
+    const views = nodesFromDetail(detail);
+    expect(views[0].artifact).toBeNull();
+    expect(views[0].artifact_content).toBeNull();
   });
 });

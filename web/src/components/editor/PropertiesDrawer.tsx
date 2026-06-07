@@ -322,6 +322,15 @@ export function PropertiesDrawer({
             ))}
           </select>
         </Field>
+        <Field label="Artifact">
+          <input
+            type="text"
+            className={inputCls}
+            placeholder="e.g. exploration.md"
+            value={node.artifact ?? ""}
+            onChange={(e) => set({ artifact: e.target.value || undefined })}
+          />
+        </Field>
         {(kind === "bash" || kind === "script") && (
           <Field label="Timeout (ms)">
             <input

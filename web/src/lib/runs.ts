@@ -196,6 +196,8 @@ function seedNode(meta: NodeMeta): NodeView {
     started_at: null,
     ended_at: null,
     category: meta.category ?? null,
+    artifact: meta.artifact ?? null,
+    artifact_content: null,
   };
 }
 
@@ -252,6 +254,7 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
             output: n.output,
             started_at: n.started_at ?? prev.started_at,
             ended_at: n.ended_at ?? now,
+            artifact_content: n.artifact_content ?? prev.artifact_content,
           },
         },
       };
@@ -280,13 +283,15 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
         id: g.id,
         depends_on: g.depends_on,
         category: g.category ?? null,
+        artifact: g.artifact ?? null,
       }))
     : detail.nodes.map((n) => ({
         id: n.node_id,
         depends_on: [] as string[],
         category: null,
+        artifact: null,
       }));
-  return skeleton.map(({ id, depends_on, category }) => {
+  return skeleton.map(({ id, depends_on, category, artifact }) => {
     const n = byId.get(id);
     return {
       id,
@@ -306,6 +311,8 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
       started_at: n?.started_at ?? null,
       ended_at: n?.ended_at ?? null,
       category,
+      artifact: artifact ?? null,
+      artifact_content: n?.artifact_content ?? null,
     };
   });
 }
@@ -340,17 +347,29 @@ export function useRunView(id: string | null): RunView {
     nodes: {},
     order: [],
   });
-
+  const qc = useQueryClient();
+  const wasRunning = useRef(true);
   // Reset the accumulator when the run id changes.
   useEffect(() => {
     dispatch({ type: "reset" });
+    wasRunning.current = true;
   }, [id]);
-
   const handleEvent = useCallback((event: RunEvent) => {
     dispatch({ type: "event", event, now: new Date().toISOString() });
   }, []);
   useRunStream(id, handleEvent);
-
+  // When the live stream reports the run is finished, invalidate the cached
+  // detail so the UI picks up the final persisted state (including artifact
+  // content captured after the workflow completes but before record_run).
+  useEffect(() => {
+    if (wasRunning.current && state.status !== "running" && id) {
+      wasRunning.current = false;
+      qc.invalidateQueries({ queryKey: ["run", id] });
+    }
+    if (state.status === "running") {
+      wasRunning.current = true;
+    }
+  }, [state.status, id, qc]);
   // Keep polling the persisted detail until *either* the live stream or the
   // persisted row reports a terminal status (covers a refresh after finish).
   return useRunViewMemo(state, id);
