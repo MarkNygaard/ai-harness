@@ -74,15 +74,11 @@ fn read_declared_artifact(artifacts_dir: &Path, rel: &str) -> Option<String> {
     buf.truncate(read);
 
     match std::str::from_utf8(&buf) {
-        Ok(content) => Some(format!(
-            "{content}\n[truncated: {bytes} bytes total]"
-        )),
+        Ok(content) => Some(format!("{content}\n[truncated: {bytes} bytes total]")),
         Err(e) if e.error_len().is_none() => {
             let b = e.valid_up_to();
             let content = std::str::from_utf8(&buf[..b]).ok()?;
-            Some(format!(
-                "{content}\n[truncated: {bytes} bytes total]"
-            ))
+            Some(format!("{content}\n[truncated: {bytes} bytes total]"))
         }
         Err(_) => None,
     }

@@ -717,7 +717,10 @@ mod tests {
         assert_eq!(detail.nodes.len(), 2);
         assert_eq!(detail.nodes[0].node_id, "build");
         assert_eq!(detail.nodes[0].input_tokens, Some(100));
-        assert_eq!(detail.nodes[0].artifact_content.as_deref(), Some("# explore\nsample"));
+        assert_eq!(
+            detail.nodes[0].artifact_content.as_deref(),
+            Some("# explore\nsample")
+        );
         assert_eq!(detail.nodes[1].artifact_content, None);
         assert_eq!(detail.nodes[1].node_id, "review");
         assert_eq!(detail.nodes[1].status, "skipped");
