@@ -608,30 +608,63 @@ nodes:
         compile even though `validate` reported green. Re-verify the
         FINAL state.
 
-        Steps:
-        1. `git log --oneline -8` — see the fixes that landed after validate.
-        2. Run the project's COMPLETE verify chain. The exact commands
-           live in `CLAUDE.md` / `AGENTS.md` (auto-loaded into your
-           context). Run the WHOLE chain — format check, lint with
-           warnings-as-errors, build, and the full test suite — not a
-           scoped subset. This is the last gate before merge.
-        3. If everything passes with nothing to change, push nothing and
-           output the literal signal:
-           <promise>FINAL_VERIFY_CLEAN</promise>
-        4. If anything fails (compile error, lint, format, test):
-           - Fix the root cause. Never disable a check, never use
-             `--no-verify`, never skip hooks, never run DB migrations.
-           - Commit the fix with a conventional-commit message and push
-             to the PR branch.
-           - End your turn WITHOUT the signal — the loop runs again so
-             you re-verify from a clean slate.
-        5. Only emit <promise>FINAL_VERIFY_CLEAN</promise> once the full
-           chain passes clean.
+        ## Step A — see what landed
+
+        `git log --oneline -8` — understand the fixes that landed after validate.
+
+        ## Step B — scope the chain to the diff
+
+        Compute the changed set:
+        `git diff --name-only origin/$BASE_BRANCH...HEAD`
+
+        - **Web-only** (every path starts with `web/`): run **only**
+          `cd web && bunx tsc --noEmit && bunx vitest run && bunx vite build`.
+          Run **no cargo**. This is what turns a web-only PR from ~32 min to ~3 min.
+        - **Rust-touching** (any path under `crates/`, `Cargo.toml`, or `Cargo.lock`):
+          run the Rust full gate —
+          `RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets` then
+          `cargo nextest run --workspace`.
+        - **Mixed**: run both chains.
+        - **Empty diff or root-only files** (`Cargo.toml`, `Cargo.lock` with no
+          crate paths): treat as Rust+web full gate fallback — do not emit clean
+          blindly.
+
+        ## Step C — iteration scoping
+
+        This loop runs up to 3 iterations. The scoping rule depends on whether
+        this iteration is the authoritative pass or a fix re-check:
+
+        - **First pass, or the pass that declares clean** → run the FULL chain
+          for the detected scope above (the authoritative gate).
+        - **A pass that runs only because the previous iteration pushed a fix**
+          → you may scope to the crates your fix touched to check it fast:
+          compute them from `git diff --name-only HEAD~1...HEAD`, map each
+          `crates/<name>/...` path to its crate, then run
+          `cargo nextest run -p <crate>` + `cargo clippy -p <crate>
+          --all-targets` for each. (Web-only fixes re-run only the bun chain.)
+          If the fix touched `Cargo.toml` or `Cargo.lock` with no single crate,
+          fall back to the full workspace gate for that iteration.
+        - **Convergence rule**: only emit `<promise>FINAL_VERIFY_CLEAN</promise>`
+          after a pass where you ran the FULL authoritative chain for the
+          detected scope AND it was clean AND you pushed nothing this iteration.
+          If your last action was a scoped re-check that passed, do one full
+          authoritative pass before emitting the signal.
+
+        ## Step D — on failure
+
+        If anything fails (compile error, lint, format, test):
+        - Fix the root cause. Never disable a check, never use `--no-verify`,
+          never skip hooks, never run DB migrations.
+        - Commit the fix with a conventional-commit message and push to the
+          PR branch.
+        - End your turn WITHOUT the signal — the loop runs again so you
+          re-verify from a clean slate.
+
+        ## Step E — final-iteration failure
 
         If the chain still fails on the final iteration, do NOT emit the
-        signal. The run will fail — that is the correct outcome: the
-        branch HEAD is broken and a human needs to look. Summarize what's
-        still red.
+        signal. The run will fail — that is the correct outcome: the branch
+        HEAD is broken and a human needs to look. Summarize what's still red.
 
   - id: workflow-summary
     category: delivery

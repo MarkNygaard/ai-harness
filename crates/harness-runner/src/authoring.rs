@@ -505,7 +505,7 @@ static PREBUILT_CURATED: &[(&str, &str, &str)] = &[
     (
         "final-verify-loop",
         "Final verify gate",
-        "Final build gate (up to 3 passes) that re-runs the full verify chain before merge.",
+        "Final build gate (up to 3 passes) that re-runs the verify chain scoped to the PR's diff before merge.",
     ),
 ];
 
