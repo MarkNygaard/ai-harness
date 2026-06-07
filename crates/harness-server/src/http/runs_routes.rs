@@ -111,6 +111,8 @@ pub struct RunsState {
 struct LiveRun {
     tx: broadcast::Sender<RunEvent>,
     abort: tokio::task::AbortHandle,
+    /// The project this run belongs to (for per-project idle guards).
+    project: String,
 }
 
 impl RunsState {
@@ -275,6 +277,15 @@ impl RunsState {
                     .map_err(|e| e.to_string())
             })
             .await
+    }
+
+    /// True if this instance currently has an in-memory live run for `project`.
+    pub(crate) async fn has_live_run_for_project(&self, project: &str) -> bool {
+        self.live
+            .lock()
+            .await
+            .values()
+            .any(|r| r.project == project)
     }
 }
 
@@ -672,6 +683,7 @@ pub(crate) async fn start_run(
         req.description
     };
     let title = req.title.filter(|t| !t.trim().is_empty());
+    let live_project = project.clone();
     let handle = tokio::spawn(async move {
         execute_run_task(
             task_state,
@@ -692,6 +704,7 @@ pub(crate) async fn start_run(
         LiveRun {
             tx: live_tx,
             abort: handle.abort_handle(),
+            project: live_project,
         },
     );
 

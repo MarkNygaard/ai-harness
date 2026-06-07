@@ -215,6 +215,12 @@ pub async fn delete_project(
 
 /// `Err(Response)` (409) when a run is active for `project`, else `Ok(())`.
 async fn ensure_idle(state: &RunsState, project: &str) -> Result<(), Response> {
+    if state.has_live_run_for_project(project).await {
+        return Err(err(
+            StatusCode::CONFLICT,
+            "a run is active for this project; try again when idle",
+        ));
+    }
     let store = state
         .store()
         .await
