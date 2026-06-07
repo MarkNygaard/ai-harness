@@ -7,10 +7,6 @@ Pi/Kimi) through it in an isolated git worktree, and opens a pull request at the
 end. The control plane is a single binary backed by Postgres, and runs anywhere
 a container does (Kubernetes or plain Docker).
 
-It is seeded from [majiayu000/harness](https://github.com/majiayu000/harness)
-(MIT) — reusing its agent adapters, worktree isolation, Postgres runtime, and
-web shell — with the workflow front-end replaced by an Archon-style DAG engine.
-
 ## What it does
 
 - **Workflow DAGs.** Author multi-node pipelines (e.g. explore → plan →
@@ -71,5 +67,6 @@ under Kubernetes *or* plain Docker.
 
 ## Acknowledgements
 
-Built on [majiayu000/harness](https://github.com/majiayu000/harness) (MIT) — see
+Originally seeded from [majiayu000/harness](https://github.com/majiayu000/harness)
+(MIT); substantial portions of its runtime are still used. See
 [LICENSE](LICENSE).
