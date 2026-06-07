@@ -542,6 +542,9 @@ async fn gc_adopt_spawns_task_when_agent_registered() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn gc_adopt_schedule_changes_with_gc_config() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let short_max_rounds = 1;
     let long_max_rounds = 3;
     let short_schedule_turn = run_gc_adopt_and_wait_for_failure_turn(short_max_rounds).await?;

@@ -400,6 +400,9 @@ async fn setup_issue_task_harness() -> anyhow::Result<(
 
 #[tokio::test]
 async fn actionable_review_issue_skip_is_promoted_to_plan() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new(
         "Looks abstract.\nCOMPLEXITY=low\nTRIAGE_REASON=agent_skip_review_label\nTRIAGE=SKIP",
@@ -449,6 +452,9 @@ async fn actionable_review_issue_skip_is_promoted_to_plan() -> anyhow::Result<()
 
 #[tokio::test]
 async fn actionable_issue_without_labels_skip_is_promoted_to_plan() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new(
         "Skip.\nCOMPLEXITY=medium\nTRIAGE_REASON=agent_skip\nTRIAGE=SKIP",
@@ -495,6 +501,9 @@ async fn actionable_issue_without_labels_skip_is_promoted_to_plan() -> anyhow::R
 
 #[tokio::test]
 async fn abstract_issue_skip_stays_skipped() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new("Not actionable.\nCOMPLEXITY=low\nTRIAGE=SKIP");
 
@@ -533,6 +542,9 @@ async fn abstract_issue_skip_stays_skipped() -> anyhow::Result<()> {
 #[tokio::test]
 async fn skip_on_review_label_true_keeps_legacy_skip_reason_for_non_actionable_issue(
 ) -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new("Skip.\nCOMPLEXITY=low\nTRIAGE=SKIP");
     let triage_config = ProjectTriageConfig {
@@ -572,6 +584,9 @@ async fn skip_on_review_label_true_keeps_legacy_skip_reason_for_non_actionable_i
 
 #[tokio::test]
 async fn github_fetch_failure_falls_back_to_agent_skip() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new(
         "Skip.\nCOMPLEXITY=low\nTRIAGE_REASON=agent_skip\nTRIAGE=SKIP",

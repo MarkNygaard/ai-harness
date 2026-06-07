@@ -196,7 +196,6 @@ async fn deregister_releases_scheduler_owned_pending_tasks() -> anyhow::Result<(
     let Some(state) = make_test_state(dir.path()).await? else {
         return Ok(());
     };
-    let state = Arc::new(state);
     let mut task = crate::task_runner::TaskState {
         id: crate::task_runner::TaskId::new(),
         status: crate::task_runner::TaskStatus::Pending,
@@ -699,7 +698,6 @@ async fn deregister_keeps_host_registered_when_claim_release_fails() -> anyhow::
     let Some(state) = make_test_state(dir.path()).await? else {
         return Ok(());
     };
-    let state = Arc::new(state);
     let mut task = crate::task_runner::TaskState {
         id: crate::task_runner::TaskId::new(),
         status: crate::task_runner::TaskStatus::Pending,
