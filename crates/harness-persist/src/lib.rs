@@ -540,7 +540,8 @@ impl RunStore {
                 .await?;
         let nodes = sqlx::query_as::<_, PersistedNode>(
             "SELECT node_id, ordinal, status, provider, model, output, iterations, converged,
-                    note, input_tokens, output_tokens, cache_read, cache_write, started_at, ended_at
+                    note, input_tokens, output_tokens, cache_read, cache_write, started_at, ended_at,
+                    artifact_content
              FROM harness_run_nodes WHERE run_id = $1 ORDER BY ordinal",
         )
         .bind(run_id)
@@ -712,6 +713,8 @@ mod tests {
         assert_eq!(detail.nodes.len(), 2);
         assert_eq!(detail.nodes[0].node_id, "build");
         assert_eq!(detail.nodes[0].input_tokens, Some(100));
+        assert_eq!(detail.nodes[0].artifact_content.as_deref(), Some("# explore\nsample"));
+        assert_eq!(detail.nodes[1].artifact_content, None);
         assert_eq!(detail.nodes[1].node_id, "review");
         assert_eq!(detail.nodes[1].status, "skipped");
         // Topology round-trips: review depends on build.
