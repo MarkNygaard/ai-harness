@@ -11,32 +11,6 @@ use tokio::sync::RwLock;
 /// Serializes temporary mutations of process-global `CI` in this test module.
 static CI_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-/// RAII guard that temporarily unsets `CI` and restores the previous value.
-struct CiEnvGuard {
-    original: Option<String>,
-}
-
-impl CiEnvGuard {
-    /// # Safety
-    /// Caller must hold `CI_ENV_LOCK` for the lifetime of the guard.
-    unsafe fn unset() -> Self {
-        let original = std::env::var("CI").ok();
-        std::env::remove_var("CI");
-        Self { original }
-    }
-}
-
-impl Drop for CiEnvGuard {
-    fn drop(&mut self) {
-        unsafe {
-            match self.original.take() {
-                Some(value) => std::env::set_var("CI", value),
-                None => std::env::remove_var("CI"),
-            }
-        }
-    }
-}
-
 fn make_engine_with_guard(guard_dir: &std::path::Path) -> Arc<RwLock<RuleEngine>> {
     let script = guard_dir.join("enf-test-guard.sh");
     std::fs::write(
