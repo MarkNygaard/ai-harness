@@ -375,3 +375,80 @@ nodes:
     let back: crate::model::Workflow = serde_json::from_str(&json).unwrap();
     assert_eq!(wf, back);
 }
+
+#[test]
+fn parses_node_hooks() {
+    let yaml = r#"
+name: hooks
+nodes:
+  - id: a
+    prompt: "hi"
+    hooks:
+      pre_tool_use:
+        - matcher: "Write|Edit"
+          decision: deny
+          reason: "read-only"
+      post_tool_use:
+        - matcher: "Read"
+          additional_context: "check"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let node = wf.nodes.iter().find(|n| n.id == "a").unwrap();
+    let hooks = node.hooks.as_ref().unwrap();
+    assert_eq!(hooks.pre_tool_use.len(), 1);
+    assert_eq!(hooks.pre_tool_use[0].matcher.as_deref(), Some("Write|Edit"));
+    assert_eq!(
+        hooks.pre_tool_use[0].decision,
+        Some(crate::model::HookDecision::Deny)
+    );
+    assert_eq!(hooks.pre_tool_use[0].reason.as_deref(), Some("read-only"));
+    assert_eq!(hooks.post_tool_use.len(), 1);
+    assert_eq!(
+        hooks.post_tool_use[0].additional_context.as_deref(),
+        Some("check")
+    );
+}
+
+#[test]
+fn node_without_hooks_is_none() {
+    let yaml = r#"
+name: no-hooks
+nodes:
+  - id: a
+    prompt: "hi"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    assert!(wf.nodes[0].hooks.is_none());
+}
+
+#[test]
+fn node_hooks_round_trips_through_json() {
+    let yaml = r#"
+name: hooks-rt
+nodes:
+  - id: a
+    prompt: "hi"
+    hooks:
+      pre_tool_use:
+        - matcher: "Bash"
+          decision: deny
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let json = serde_json::to_string(&wf).unwrap();
+    assert!(!json.contains("\"hooks\":null"));
+    let back: crate::model::Workflow = serde_json::from_str(&json).unwrap();
+    assert_eq!(wf, back);
+}
+
+#[test]
+fn hooks_less_node_serializes_without_hooks_key() {
+    let yaml = r#"
+name: no-hooks
+nodes:
+  - id: a
+    prompt: "hi"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let json = serde_json::to_string(&wf).unwrap();
+    assert!(!json.contains("\"hooks\""));
+}

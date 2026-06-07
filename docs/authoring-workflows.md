@@ -292,6 +292,56 @@ hard-validated against the reply — it shapes the agent, it doesn't reject it.
 Use it on any node whose output a downstream `when:` reads, and on verdict nodes
 (see the `validate` → `finalize-pr` gate in `idea-to-pr.yaml`).
 
+## Per-node hooks
+
+An optional `hooks:` block on any node lets you intercept tool calls **before**
+they run (`pre_tool_use`) or inject non-blocking context **after** they run
+(`post_tool_use`). The hook config is provider-agnostic; the runner translates it
+per provider at dispatch.
+
+```yaml
+- id: plan
+  provider: claude
+  prompt: "Investigate and propose a plan. Do not edit files."
+  hooks:
+    pre_tool_use:
+      - matcher: "Write|Edit"
+        decision: deny
+        reason: "This node is read-only; edits are out of plan."
+- id: implement
+  depends_on: [plan]
+  provider: pi
+  prompt: "Implement the plan."
+  hooks:
+    post_tool_use:
+      - matcher: "Write|Edit"
+        additional_context: "Run `cargo check`. If this isn't actually simpler, justify or revert."
+```
+
+### Hook rule shape
+
+| Field | Meaning |
+|---|---|
+| `matcher` | Regex over the tool name (e.g. `Write\|Edit`, `Bash`). Absent/empty = match every tool. |
+| `decision` | `deny` blocks the call (pre_tool_use only). `allow`/`ask` or omitted = observe/inject. |
+| `reason` | Text surfaced to the agent when a call is denied. |
+| `additional_context` | Non-blocking text injected into the agent's context. |
+| `system_message` | Non-blocking message surfaced to the user/agent. |
+
+### Provider mappings
+
+- **`claude` nodes** — hooks become Claude Code `settings.json` hooks delivered
+  via `--settings`. A `deny` rule produces a `PreToolUse` hook that returns
+  `permissionDecision: deny`; a `post_tool_use` rule produces a `PostToolUse`
+  hook that injects `additionalContext`.
+- **`pi` / `omp` nodes** — hooks become the `harness-hooks` omp extension loaded
+  via `--plugin-dir`. The serialized config is passed in the `HARNESS_HOOKS`
+  environment variable. `deny` rules block via `{ block: true, reason }`;
+  `post_tool_use` rules emit `sendMessage(..., { deliverAs: "steer" })`.
+- **`codex` nodes** — codex has no hook mechanism; hooks are silently ignored.
+- **`bash`/`script`/`approval`/`cancel` nodes** — parsed and stored but never
+  delivered (no agent to intercept).
+
 ## Good practices
 
 1. **Deterministic work → `bash`/`script`, not a prompt.** "Run the tests" is a

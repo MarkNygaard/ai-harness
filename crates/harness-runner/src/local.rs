@@ -248,10 +248,10 @@ impl LocalRunner {
                 session: req.session.clone(),
                 iteration: req.iteration,
                 env_vars: self.env_vars.clone(),
+                hooks: req.hooks.cloned(),
             })
             .await
             .map_err(|e| RunnerError(e.to_string()))?;
-
         Ok(NodeOutput {
             text: result.text,
             session: result.session,
@@ -362,6 +362,7 @@ mod tests {
     #[derive(Default)]
     struct MockAgent {
         last_prompt: Mutex<Option<String>>,
+        last_hooks: Mutex<Option<harness_dag::NodeHooks>>,
         reply: Mutex<PromptResultSpec>,
     }
 
@@ -388,6 +389,7 @@ mod tests {
     impl PromptAgent for MockAgent {
         async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
             *self.last_prompt.lock().unwrap() = Some(req.prompt.clone());
+            *self.last_hooks.lock().unwrap() = req.hooks.clone();
             let spec = self.reply.lock().unwrap().clone();
             Ok(PromptResult {
                 text: spec.text,
@@ -414,6 +416,7 @@ mod tests {
             timeout: None,
             vars,
             output_format: None,
+            hooks: None,
         }
     }
 
@@ -571,6 +574,27 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.0.contains("invalid command name"), "got: {}", err.0);
+    }
+
+    #[tokio::test]
+    async fn prompt_node_with_hooks_reaches_agent() {
+        let dir = TempDir::new().unwrap();
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        let vars = VarContext::new();
+        let mut req = request(NodeBody::Prompt("do the thing".into()), &vars);
+        let hooks = harness_dag::NodeHooks {
+            pre_tool_use: vec![harness_dag::HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(harness_dag::HookDecision::Deny),
+                reason: Some("blocked".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        req.hooks = Some(&hooks);
+        runner.execute(req).await.unwrap();
+        assert!(agent.last_hooks.lock().unwrap().is_some());
     }
 
     #[tokio::test]

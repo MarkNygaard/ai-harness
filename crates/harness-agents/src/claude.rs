@@ -128,6 +128,11 @@ impl ClaudeCodeAgent {
             base_args.push(OsString::from(budget.to_string()));
         }
 
+        if let Some(path) = req.env_vars.get("HARNESS_CLAUDE_SETTINGS") {
+            base_args.push(OsString::from("--settings"));
+            base_args.push(OsString::from(path));
+        }
+
         base_args
     }
 }

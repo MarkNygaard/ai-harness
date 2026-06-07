@@ -81,7 +81,6 @@ pub struct LoopConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_message: Option<String>,
 }
-
 /// Configuration for a human [`NodeKind::Approval`] gate.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApprovalConfig {
@@ -93,6 +92,46 @@ pub struct ApprovalConfig {
     /// Node id to route to if the human rejects (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub on_reject: Option<String>,
+}
+
+/// Provider-agnostic per-node tool hooks (Archon-shaped). Translated by the
+/// runner into Claude Code settings.json hooks or the omp hook extension.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct NodeHooks {
+    /// Fired before a tool runs; a `deny` decision blocks the call.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pre_tool_use: Vec<HookRule>,
+    /// Fired after a tool runs; used for non-blocking steering / context.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub post_tool_use: Vec<HookRule>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookRule {
+    /// Regex over the tool name (e.g. "Write|Edit", "Bash", "Read").
+    /// Absent/empty = match every tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    /// Decision for matching tools (pre_tool_use only). `None` = observe/inject.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<HookDecision>,
+    /// Reason surfaced to the agent when denied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Extra context injected for the agent (non-blocking).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additional_context: Option<String>,
+    /// System-level message surfaced to the user/agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookDecision {
+    Allow,
+    Deny,
+    Ask,
 }
 
 /// The executable body of a node. Exactly one variant per node.
@@ -168,6 +207,9 @@ pub struct Node {
     /// conditions read a stable shape. Ignored for deterministic bodies.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_format: Option<serde_json::Value>,
+    /// Provider-agnostic tool hooks translated per provider at dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<NodeHooks>,
     /// The executable body.
     pub kind: NodeKind,
 }

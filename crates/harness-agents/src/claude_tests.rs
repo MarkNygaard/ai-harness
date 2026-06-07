@@ -266,6 +266,40 @@ fn with_reasoning_budget_sets_field() {
     .with_reasoning_budget(budget);
     assert!(agent.reasoning_budget.is_some());
 }
+#[test]
+fn base_args_includes_settings_when_harness_claude_settings_present() {
+    let agent = ClaudeCodeAgent::new(
+        PathBuf::from("claude"),
+        "test-model".to_string(),
+        SandboxMode::DangerFullAccess,
+    );
+    let mut req = AgentRequest::default();
+    req.env_vars.insert(
+        "HARNESS_CLAUDE_SETTINGS".into(),
+        "/tmp/harness-claude-hooks-xyz/settings.json".into(),
+    );
+    let args = args_to_strings(&agent.base_args(&req));
+    let pos = args
+        .iter()
+        .position(|a| a == "--settings")
+        .expect("--settings flag missing");
+    assert_eq!(
+        args.get(pos + 1),
+        Some(&"/tmp/harness-claude-hooks-xyz/settings.json".to_string())
+    );
+}
+
+#[test]
+fn base_args_omits_settings_when_harness_claude_settings_absent() {
+    let agent = ClaudeCodeAgent::new(
+        PathBuf::from("claude"),
+        "test-model".to_string(),
+        SandboxMode::DangerFullAccess,
+    );
+    let req = AgentRequest::default();
+    let args = args_to_strings(&agent.base_args(&req));
+    assert!(!args.contains(&"--settings".to_string()));
+}
 
 #[test]
 fn parse_claude_stream_output_records_result_usage() {
