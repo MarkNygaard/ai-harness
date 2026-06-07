@@ -1,7 +1,7 @@
 //! Pure translation helpers: turn provider-agnostic [`NodeHooks`] into
 //! provider-specific artifacts (Claude Code settings.json, omp extension config).
 
-use harness_dag::model::NodeHooks;
+use harness_dag::model::{HookDecision, NodeHooks};
 use serde_json::{json, Value};
 
 /// Build the Claude Code settings.json value plus the decision payload files it
@@ -18,10 +18,16 @@ pub fn claude_settings(
     for (i, rule) in hooks.pre_tool_use.iter().enumerate() {
         let filename = format!("pre-{i}.json");
         let path = dir.join(&filename);
+        let decision = match rule.decision {
+            Some(HookDecision::Allow) => "allow",
+            Some(HookDecision::Deny) => "deny",
+            Some(HookDecision::Ask) => "ask",
+            None => "allow",
+        };
         let mut payload = json!({
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
+                "permissionDecision": decision,
                 "permissionDecisionReason": rule.reason.as_deref().unwrap_or("blocked by node hook"),
             }
         });
@@ -32,13 +38,13 @@ pub fn claude_settings(
             payload["systemMessage"] = json!(msg);
         }
         payloads.push((path, serde_json::to_string_pretty(&payload).unwrap()));
-
         let matcher = rule.matcher.as_deref().unwrap_or("");
+        let cmd = format!("cat {}", shlex::try_quote(&dir.join(&filename).to_string_lossy()).unwrap_or(std::borrow::Cow::Borrowed("")));
         pre_entries.push(json!({
             "matcher": matcher,
             "hooks": [{
                 "type": "command",
-                "command": format!("cat '{}'", dir.join(&filename).display()),
+                "command": cmd,
             }]
         }));
     }
@@ -58,13 +64,13 @@ pub fn claude_settings(
             payload["systemMessage"] = json!(msg);
         }
         payloads.push((path, serde_json::to_string_pretty(&payload).unwrap()));
-
         let matcher = rule.matcher.as_deref().unwrap_or("");
+        let cmd = format!("cat {}", shlex::try_quote(&dir.join(&filename).to_string_lossy()).unwrap_or(std::borrow::Cow::Borrowed("")));
         post_entries.push(json!({
             "matcher": matcher,
             "hooks": [{
                 "type": "command",
-                "command": format!("cat '{}'", dir.join(&filename).display()),
+                "command": cmd,
             }]
         }));
     }
@@ -240,5 +246,84 @@ mod tests {
             "post-extra"
         );
         assert_eq!(post_payload["systemMessage"], "post-sys");
+    }
+    #[test]
+    fn claude_settings_allow_and_ask_decisions() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![
+                HookRule {
+                    matcher: Some("Read".into()),
+                    decision: Some(HookDecision::Allow),
+                    reason: Some("allowed".into()),
+                    additional_context: None,
+                    system_message: None,
+                },
+                HookRule {
+                    matcher: Some("Edit".into()),
+                    decision: Some(HookDecision::Ask),
+                    reason: Some("ask user".into()),
+                    additional_context: None,
+                    system_message: None,
+                },
+            ],
+            post_tool_use: vec![],
+        };
+        let dir = std::path::Path::new("/tmp/d");
+        let (settings, payloads) = claude_settings(&hooks, dir);
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "cat /tmp/d/pre-0.json"
+        );
+        let pre0: Value = serde_json::from_str(&payloads[0].1).unwrap();
+        assert_eq!(pre0["hookSpecificOutput"]["permissionDecision"], "allow");
+        let pre1: Value = serde_json::from_str(&payloads[1].1).unwrap();
+        assert_eq!(pre1["hookSpecificOutput"]["permissionDecision"], "ask");
+    }
+
+    #[test]
+    fn claude_settings_no_decision_defaults_to_allow() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: None,
+                reason: None,
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let dir = std::path::Path::new("/tmp/d");
+        let (settings, payloads) = claude_settings(&hooks, dir);
+        assert_eq!(
+            settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"],
+            "cat /tmp/d/pre-0.json"
+        );
+        let pre_payload: Value = serde_json::from_str(&payloads[0].1).unwrap();
+        assert_eq!(
+            pre_payload["hookSpecificOutput"]["permissionDecision"],
+            "allow"
+        );
+    }
+
+    #[test]
+    fn claude_settings_escaped_path_with_single_quotes() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("blocked".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let dir = std::path::Path::new("/tmp/harness-claude-hooks-xyz");
+        let (settings, _) = claude_settings(&hooks, dir);
+        let cmd = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        // shlex quoting should produce a safe shell command
+        assert!(cmd.starts_with("cat "));
+        assert!(cmd.contains("pre-0.json"));
     }
 }
