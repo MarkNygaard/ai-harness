@@ -197,7 +197,8 @@ function ProjectCredentialsDialog({ project }: { project: string }) {
 }
 /** A "Cache" button that opens a dialog to view/set the build-cache cap and clear it. */
 function ProjectCacheDialog({ project }: { project: Project }) {
-  const size = useProjectCacheSize(project.name);
+  const [open, setOpen] = useState(false);
+  const size = useProjectCacheSize(project.name, open);
   const setCap = useSetProjectCacheCap();
   const clear = useClearProjectCache();
   const [raw, setRaw] = useState(project.cargo_target_cap_gb?.toString() ?? "");
@@ -213,7 +214,7 @@ function ProjectCacheDialog({ project }: { project: Project }) {
   const gb = (n: number) => (n / 1_073_741_824).toFixed(1);
 
   return (
-    <Dialog>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
           <Button variant="ghost" size="sm" title="Build cache settings" />

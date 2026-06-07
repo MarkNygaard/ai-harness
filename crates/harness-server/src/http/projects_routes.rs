@@ -304,6 +304,15 @@ pub async fn clear_cache(
     if !valid_name(&name) {
         return err(StatusCode::BAD_REQUEST, "invalid project name");
     }
+    let store = match state.project_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.get(&name).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return err(StatusCode::NOT_FOUND, format!("project `{name}` not found")),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
     if let Err(r) = ensure_idle(&state, &name).await {
         return r;
     }

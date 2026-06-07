@@ -61,7 +61,7 @@ export function useDeleteProject() {
   });
 }
 
-export function useProjectCacheSize(name: string) {
+export function useProjectCacheSize(name: string, enabled = true) {
   return useQuery<CacheSize, Error>({
     queryKey: ["project-cache-size", name],
     queryFn: ({ signal }) =>
@@ -72,6 +72,7 @@ export function useProjectCacheSize(name: string) {
         },
       ),
     staleTime: 30_000,
+    enabled,
   });
 }
 

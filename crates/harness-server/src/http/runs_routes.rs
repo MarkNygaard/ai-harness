@@ -398,14 +398,20 @@ pub(crate) fn dir_size(root: &std::path::Path) -> u64 {
 /// Resolve a project's effective cache cap (GiB): per-project setting (when
 /// > 0) → `HARNESS_CARGO_TARGET_CAP_GB` env → [`CACHE_CAP_GB_DEFAULT`].
 pub(crate) fn resolve_cap_gb(project_cap: Option<i32>) -> u64 {
+    resolve_cap_gb_with_env(
+        project_cap,
+        std::env::var("HARNESS_CARGO_TARGET_CAP_GB").ok().as_deref(),
+    )
+}
+
+fn resolve_cap_gb_with_env(project_cap: Option<i32>, env_cap: Option<&str>) -> u64 {
     if let Some(v) = project_cap.filter(|&v| v > 0) {
         return v as u64;
     }
-    std::env::var("HARNESS_CARGO_TARGET_CAP_GB")
-        .ok()
-        .and_then(|v| v.trim().parse::<u64>().ok())
-        .filter(|&v| v > 0)
-        .unwrap_or(CACHE_CAP_GB_DEFAULT)
+    match env_cap.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(v) => v,
+        None => CACHE_CAP_GB_DEFAULT,
+    }
 }
 
 /// Periodically bound each project's cargo build cache so none can fill the disk.
@@ -768,7 +774,15 @@ async fn execute_run_task(
     // inherits this, so the first run compiles and later runs reuse artifacts.
     let cargo_target = state.projects_dir.join(".cargo-target").join(&project);
     let _ = std::fs::create_dir_all(&cargo_target);
-    std::env::set_var("CARGO_TARGET_DIR", &cargo_target);
+    let mut run_env = std::collections::HashMap::from([
+        (
+            "CARGO_TARGET_DIR".to_string(),
+            cargo_target.display().to_string(),
+        ),
+        ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
+        ("CARGO_PROFILE_DEV_DEBUG".to_string(), "1".to_string()),
+        ("CARGO_PROFILE_TEST_DEBUG".to_string(), "1".to_string()),
+    ]);
 
     // Keep that shared cache from ballooning (it grew to ~128 GB on the cluster).
     // The two dominant size drivers of debug builds are full debuginfo and
@@ -778,10 +792,6 @@ async fn execute_run_task(
     // disable incremental compilation. Set via env so it applies to every cargo
     // invocation a run spawns, for any project, without editing the project's
     // `Cargo.toml` and without affecting developers' local builds.
-    std::env::set_var("CARGO_INCREMENTAL", "0");
-    std::env::set_var("CARGO_PROFILE_DEV_DEBUG", "1");
-    std::env::set_var("CARGO_PROFILE_TEST_DEBUG", "1");
-
     // Provision the project's toolchains via mise (cached on the PV — no image
     // rebuild), then put mise's shims on PATH so cargo/pnpm/etc. resolve for every
     // node. Best-effort: a failure is logged; the dependent build step will then
@@ -796,7 +806,9 @@ async fn execute_run_task(
                     let shims_s = shims.display().to_string();
                     let path = std::env::var("PATH").unwrap_or_default();
                     if !path.split(':').any(|p| p == shims_s) {
-                        std::env::set_var("PATH", format!("{shims_s}:{path}"));
+                        let path = format!("{shims_s}:{path}");
+                        std::env::set_var("PATH", &path);
+                        run_env.insert("PATH".to_string(), path);
                     }
                 }
             }
@@ -821,7 +833,7 @@ async fn execute_run_task(
     } else {
         Arc::new(EchoAgent)
     };
-    let runner = LocalRunner::new(workspace, command_dirs, agent);
+    let runner = LocalRunner::new(workspace, command_dirs, agent).with_env_vars(run_env);
 
     // The task spec feeds `$ARGUMENTS`/`$USER_MESSAGE`/`$TASK_DESCRIPTION`; the
     // title is exposed separately as `$TASK_TITLE` (option 1).
@@ -1112,12 +1124,19 @@ mod tests {
 
     #[test]
     fn resolve_cap_gb_falls_back_to_env_then_default() {
-        // No project cap → env default. We can't easily manipulate the real
-        // process environment here, so we test the two branches we control:
-        // None / non-positive project cap falls through to the env/default path.
-        assert_eq!(resolve_cap_gb(None), CACHE_CAP_GB_DEFAULT);
-        assert_eq!(resolve_cap_gb(Some(0)), CACHE_CAP_GB_DEFAULT);
-        assert_eq!(resolve_cap_gb(Some(-5)), CACHE_CAP_GB_DEFAULT);
+        assert_eq!(resolve_cap_gb_with_env(None, Some("25")), 25);
+        assert_eq!(resolve_cap_gb_with_env(Some(0), Some("25")), 25);
+        assert_eq!(resolve_cap_gb_with_env(Some(-5), Some("25")), 25);
+        assert_eq!(resolve_cap_gb_with_env(None, None), CACHE_CAP_GB_DEFAULT);
+        assert_eq!(
+            resolve_cap_gb_with_env(None, Some("invalid")),
+            CACHE_CAP_GB_DEFAULT
+        );
+    }
+
+    #[test]
+    fn resolve_cap_gb_allows_env_zero_to_disable_sweeping() {
+        assert_eq!(resolve_cap_gb_with_env(None, Some("0")), 0);
     }
 
     #[test]

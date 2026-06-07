@@ -11,6 +11,7 @@
 //! not), so the driver's `context: shared` threading works; a real adapter that
 //! wraps the agent CLIs implements this trait.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -49,6 +50,8 @@ pub struct PromptRequest {
     pub session: Option<String>,
     /// 1-based iteration (`> 1` only inside loops).
     pub iteration: u32,
+    /// Additional environment variables to pass to the agent subprocess.
+    pub env_vars: HashMap<String, String>,
 }
 
 /// The result of an AI prompt invocation.
@@ -115,6 +118,7 @@ mod tests {
                 cwd: PathBuf::from("."),
                 session: None,
                 iteration: 1,
+                env_vars: Default::default(),
             })
             .await
             .unwrap();

@@ -5,6 +5,7 @@
 //! workspace, `command` bodies resolved from `.harness/commands/` and dispatched
 //! as prompts, and `prompt`/loop bodies dispatched to a [`PromptAgent`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -51,6 +52,7 @@ pub struct LocalRunner {
     command_dirs: Vec<PathBuf>,
     agent: Arc<dyn PromptAgent>,
     shell: Shell,
+    env_vars: HashMap<String, String>,
 }
 
 impl LocalRunner {
@@ -66,7 +68,14 @@ impl LocalRunner {
             command_dirs,
             agent,
             shell: Shell::platform_default(),
+            env_vars: HashMap::new(),
         }
+    }
+
+    /// Add environment variables for every subprocess this runner starts.
+    pub fn with_env_vars(mut self, env_vars: HashMap<String, String>) -> Self {
+        self.env_vars = env_vars;
+        self
     }
 
     /// Override the shell used for `bash` bodies.
@@ -91,6 +100,7 @@ impl LocalRunner {
         // `bash`/`script` nodes run task-authored commands — keep the control
         // plane's DB URL / secrets out of their environment.
         harness_agents::strip_control_plane_env(&mut cmd);
+        cmd.envs(&self.env_vars);
 
         let fut = cmd.output();
         let output = match timeout {
@@ -237,6 +247,7 @@ impl LocalRunner {
                 cwd: self.workspace.clone(),
                 session: req.session.clone(),
                 iteration: req.iteration,
+                env_vars: self.env_vars.clone(),
             })
             .await
             .map_err(|e| RunnerError(e.to_string()))?;

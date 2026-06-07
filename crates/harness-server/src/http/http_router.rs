@@ -319,7 +319,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/projects/{name}/cache-cap",
-            axum::routing::put(super::projects_routes::set_cache_cap),
+            post(super::projects_routes::set_cache_cap).put(super::projects_routes::set_cache_cap),
         )
         .route(
             "/api/projects/{name}/cache/clear",

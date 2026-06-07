@@ -58,6 +58,7 @@ impl PromptAgent for CodeAgentRunner {
             prompt: req.prompt,
             project_root: req.cwd,
             model: req.model,
+            env_vars: req.env_vars,
             ..AgentRequest::default()
         };
 
@@ -150,6 +151,7 @@ mod tests {
             cwd: std::path::PathBuf::from("."),
             session: None,
             iteration: 1,
+            env_vars: Default::default(),
         }
     }
 

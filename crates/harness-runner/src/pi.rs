@@ -14,6 +14,7 @@
 //! per-token Moonshot API (`moonshotai/*`). The server materializes these from the
 //! credential store before a run; we don't manage them here.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -154,7 +155,7 @@ impl PromptAgent for PiAgent {
         // tests failed) is deterministic — never retried. Capped at 1 → no loop.
         let mut attempt = 0u32;
         let output = loop {
-            match self.run_attempt(&args, &req.cwd).await? {
+            match self.run_attempt(&args, &req.cwd, &req.env_vars).await? {
                 Attempt::Done {
                     stdout,
                     stderr,
@@ -217,7 +218,12 @@ impl PiAgent {
     /// long but actively-producing step. Spawn failures / the optional
     /// wall-clock cap / read errors are returned as `Err` (not retried); a stall
     /// returns `Attempt::Stalled` (retried once by `run`).
-    async fn run_attempt(&self, args: &[String], cwd: &Path) -> Result<Attempt, AgentError> {
+    async fn run_attempt(
+        &self,
+        args: &[String],
+        cwd: &Path,
+        env_vars: &HashMap<String, String>,
+    ) -> Result<Attempt, AgentError> {
         let mut cmd = Command::new(&self.cli_path);
         cmd.args(args)
             .current_dir(cwd)
@@ -228,6 +234,7 @@ impl PiAgent {
         // Never let the agent (or any tool it spawns, e.g. `cargo test`) inherit
         // the control plane's DB URL / secrets.
         harness_agents::strip_control_plane_env(&mut cmd);
+        cmd.envs(env_vars);
 
         // Opt-in filesystem sandbox (`HARNESS_FS_SANDBOX`): confine the agent and
         // every tool it spawns to writing only under the worktree + build caches,
@@ -673,7 +680,10 @@ mod tests {
         // Prints one line, then goes silent for 30s — the watchdog must fire fast.
         let args = vec!["-c".to_string(), "printf 'a\\n'; sleep 30".to_string()];
         let started = std::time::Instant::now();
-        let out = agent.run_attempt(&args, Path::new(".")).await.unwrap();
+        let out = agent
+            .run_attempt(&args, Path::new("."), &Default::default())
+            .await
+            .unwrap();
         assert!(matches!(out, Attempt::Stalled));
         assert!(
             started.elapsed() < Duration::from_secs(5),
@@ -692,7 +702,10 @@ mod tests {
             "for i in 1 2 3 4 5 6 7 8 9 10; do printf 'line %s\\n' \"$i\"; sleep 0.1; done"
                 .to_string(),
         ];
-        let out = agent.run_attempt(&args, Path::new(".")).await.unwrap();
+        let out = agent
+            .run_attempt(&args, Path::new("."), &Default::default())
+            .await
+            .unwrap();
         match out {
             Attempt::Done { stdout, status, .. } => {
                 assert!(status.success());
