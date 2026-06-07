@@ -1,6 +1,6 @@
 use sqlx::postgres::{PgConnectOptions, PgPool, PgPoolOptions};
-use sqlx::{Postgres, Transaction};
 use sqlx::Acquire as _;
+use sqlx::{Postgres, Transaction};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
