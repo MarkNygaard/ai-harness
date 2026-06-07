@@ -11,6 +11,8 @@
 //! doesn't entangle the large shared `AppState`.
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -53,16 +55,36 @@ fn read_declared_artifact(artifacts_dir: &Path, rel: &str) -> Option<String> {
     if p.components().any(|c| !matches!(c, Component::Normal(_))) {
         return None; // reject `..`, absolute, prefix
     }
-    let content = std::fs::read_to_string(artifacts_dir.join(p)).ok()?;
-    if content.len() > ARTIFACT_MAX_BYTES {
-        let b = content.floor_char_boundary(ARTIFACT_MAX_BYTES);
-        Some(format!(
-            "{}\n[truncated: {} bytes total]",
-            &content[..b],
-            content.len()
-        ))
-    } else {
-        Some(content)
+    let path = artifacts_dir.join(p);
+    let bytes = std::fs::metadata(&path).ok()?.len();
+    if bytes <= ARTIFACT_MAX_BYTES as u64 {
+        return std::fs::read_to_string(path).ok();
+    }
+
+    let mut file = File::open(path).ok()?;
+    let mut buf = vec![0; ARTIFACT_MAX_BYTES];
+    let mut read = 0;
+    while read < buf.len() {
+        let n = file.read(&mut buf[read..]).ok()?;
+        if n == 0 {
+            break;
+        }
+        read += n;
+    }
+    buf.truncate(read);
+
+    match std::str::from_utf8(&buf) {
+        Ok(content) => Some(format!(
+            "{content}\n[truncated: {bytes} bytes total]"
+        )),
+        Err(e) if e.error_len().is_none() => {
+            let b = e.valid_up_to();
+            let content = std::str::from_utf8(&buf[..b]).ok()?;
+            Some(format!(
+                "{content}\n[truncated: {bytes} bytes total]"
+            ))
+        }
+        Err(_) => None,
     }
 }
 
@@ -862,13 +884,13 @@ mod tests {
     #[test]
     fn read_declared_artifact_truncates_on_char_boundary() {
         let dir = tempfile::tempdir().unwrap();
-        // 4-byte UTF-8 character repeated; truncating at ARTIFACT_MAX_BYTES
-        // lands inside a character — floor_char_boundary snaps to the previous boundary.
-        let content = "🎉".repeat(ARTIFACT_MAX_BYTES / 2 + 1);
+        // 3-byte UTF-8 character repeated; truncating at ARTIFACT_MAX_BYTES
+        // lands inside a character and must snap to the previous boundary.
+        let content = "€".repeat(ARTIFACT_MAX_BYTES / 2 + 1);
         let path = dir.path().join("big-artifact.txt");
         std::fs::write(&path, &content).unwrap();
         let result = read_declared_artifact(dir.path(), "big-artifact.txt").unwrap();
-        assert!(result.starts_with("🎉"));
+        assert!(result.starts_with("€"));
         assert!(result.contains("[truncated: "));
         assert!(result.contains(" bytes total]"));
     }

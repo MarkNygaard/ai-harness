@@ -203,7 +203,11 @@ impl RunStore {
                 workflow_name = excluded.workflow_name,
                 title         = COALESCE(excluded.title, harness_workflow_runs.title),
                 description   = COALESCE(excluded.description, harness_workflow_runs.description),
-                status        = excluded.status,
+                status        = CASE
+                                  WHEN harness_workflow_runs.status = 'cancelled'
+                                  THEN harness_workflow_runs.status
+                                  ELSE excluded.status
+                                END,
                 project       = excluded.project,
                 node_count    = excluded.node_count,
                 graph         = excluded.graph,
@@ -845,6 +849,17 @@ mod tests {
         // finish_run must NOT resurrect a cancelled run.
         store
             .finish_run(&run_id, RunStatus::Completed)
+            .await
+            .unwrap();
+        assert_eq!(
+            store.run_status(&run_id).await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+
+        // A late final snapshot must not resurrect a run cancelled by the API
+        // or stale-lease reaper.
+        store
+            .record_run(&run_id, None, None, None, &report)
             .await
             .unwrap();
         assert_eq!(
