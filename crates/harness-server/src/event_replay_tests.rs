@@ -403,6 +403,7 @@ fn compact_lock_is_not_stale_for_live_process_with_correct_start_time() {
 #[tokio::test]
 async fn replay_and_recover_integration() -> anyhow::Result<()> {
     let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
+    let _ = crate::test_helpers::ensure_test_database_url_override()?;
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("tasks.db");
     let db = TaskDb::open(&db_path).await?;
@@ -450,6 +451,7 @@ async fn replay_and_recover_integration() -> anyhow::Result<()> {
 #[tokio::test]
 async fn replay_skips_phantom_task_not_in_db() -> anyhow::Result<()> {
     let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
+    let _ = crate::test_helpers::ensure_test_database_url_override()?;
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("tasks.db");
     let db = TaskDb::open(&db_path).await?;
@@ -475,6 +477,7 @@ async fn replay_skips_phantom_task_not_in_db() -> anyhow::Result<()> {
 #[tokio::test]
 async fn replay_event_log_has_pr_url_checkpoint_has_none() -> anyhow::Result<()> {
     let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
+    let _ = crate::test_helpers::ensure_test_database_url_override()?;
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("tasks.db");
     let db = TaskDb::open(&db_path).await?;
@@ -504,6 +507,7 @@ async fn replay_event_log_has_pr_url_checkpoint_has_none() -> anyhow::Result<()>
 #[tokio::test]
 async fn replay_terminal_failed_overrides_implementing() -> anyhow::Result<()> {
     let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
+    let _ = crate::test_helpers::ensure_test_database_url_override()?;
     let dir = tempfile::tempdir()?;
     let db_path = dir.path().join("tasks.db");
     let db = TaskDb::open(&db_path).await?;
