@@ -353,20 +353,23 @@ const CACHE_SWEEP_EVERY_SECS: u64 = 6 * 60 * 60;
 /// Don't evict artifacts modified within this window — protects an in-progress
 /// build's fresh outputs (even one driven by another replica) from deletion.
 const CACHE_SWEEP_SAFETY_FLOOR_SECS: u64 = 2 * 60 * 60;
-/// Default size cap for the whole `.cargo-target` dir, in GiB. Override with
-/// `HARNESS_CARGO_TARGET_CAP_GB`; `0` disables the sweeper.
+/// Default size cap **per project** cache dir (each immediate subdirectory of
+/// `.cargo-target/`), in GiB. Override with `HARNESS_CARGO_TARGET_CAP_GB`; `0`
+/// disables the sweeper. Per-project, so total disk scales with the number of
+/// projects but no single project's cache can balloon.
 const CACHE_CAP_GB_DEFAULT: u64 = 50;
 
-/// Periodically bound the shared cargo build cache so it can't fill the disk.
+/// Periodically bound each project's cargo build cache so none can fill the disk.
 ///
-/// **Size-gated**: a cache under its cap is never touched, so an idle project
-/// stays fully warm — pruning only kicks in under real disk pressure (sustained
-/// growth past the cap). When it does, it evicts *oldest* artifacts first down
-/// to 80% of the cap, and skips anything modified within
-/// [`CACHE_SWEEP_SAFETY_FLOOR_SECS`] and skips entirely while a run is live on
-/// this instance — so it never deletes a build's in-flight outputs. Deleting a
-/// stale artifact only forces cargo to rebuild it; it can't corrupt the cache.
-/// Best-effort; a no-op outside a Tokio runtime.
+/// **Per-project + size-gated**: every immediate subdirectory of `.cargo-target/`
+/// (one per project) is capped independently. A project's cache under its cap is
+/// never touched, so an idle project stays fully warm; pruning only kicks in for
+/// a project that grows past the cap, evicting *that project's* oldest artifacts
+/// first down to 80% of the cap. Projects never evict each other. Skips files
+/// modified within [`CACHE_SWEEP_SAFETY_FLOOR_SECS`] and skips entirely while a
+/// run is live on this instance — so it never deletes a build's in-flight
+/// outputs. Deleting a stale artifact only forces a rebuild; it can't corrupt
+/// the cache. Best-effort; a no-op outside a Tokio runtime.
 pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
     if tokio::runtime::Handle::try_current().is_err() {
         return;
@@ -393,22 +396,46 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
                 continue;
             }
             let root = root.clone();
-            match tokio::task::spawn_blocking(move || {
-                sweep_cargo_cache(&root, cap, target, CACHE_SWEEP_SAFETY_FLOOR_SECS)
+            if let Err(e) = tokio::task::spawn_blocking(move || {
+                sweep_project_caches(&root, cap, target, CACHE_SWEEP_SAFETY_FLOOR_SECS, cap_gb)
             })
             .await
             {
-                Ok(Ok(Some((before, after)))) => tracing::info!(
-                    "cache sweeper: {:.1} GB -> {:.1} GB (cap {cap_gb} GB)",
-                    before as f64 / 1.073_741_824e9,
-                    after as f64 / 1.073_741_824e9,
-                ),
-                Ok(Ok(None)) => {}
-                Ok(Err(e)) => tracing::warn!("cache sweeper: {e}"),
-                Err(e) => tracing::warn!("cache sweeper: join error: {e}"),
+                tracing::warn!("cache sweeper: join error: {e}");
             }
         }
     });
+}
+
+/// Sweep each project cache dir (an immediate subdirectory of `root`)
+/// independently against `cap`, logging any that were pruned. `cap_gb` is used
+/// only for the log line.
+fn sweep_project_caches(
+    root: &std::path::Path,
+    cap: u64,
+    target: u64,
+    floor_secs: u64,
+    cap_gb: u64,
+) {
+    let rd = match std::fs::read_dir(root) {
+        Ok(r) => r,
+        Err(_) => return, // no cache root yet
+    };
+    for entry in rd.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        match sweep_cargo_cache(&entry.path(), cap, target, floor_secs) {
+            Ok(Some((before, after))) => tracing::info!(
+                "cache sweeper: {name} {:.1} GB -> {:.1} GB (cap {cap_gb} GB/project)",
+                before as f64 / 1.073_741_824e9,
+                after as f64 / 1.073_741_824e9,
+            ),
+            Ok(None) => {}
+            Err(e) => tracing::warn!("cache sweeper: {name}: {e}"),
+        }
+    }
 }
 
 /// Evict oldest files under `root` until total size ≤ `target`, but only when it
