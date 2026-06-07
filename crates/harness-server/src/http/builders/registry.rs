@@ -712,7 +712,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_workflow_schema_namespace_disables_optional_workflow_stores() -> anyhow::Result<()> {
+    async fn invalid_workflow_schema_namespace_disables_optional_workflow_stores(
+    ) -> anyhow::Result<()> {
         if !crate::test_helpers::db_tests_enabled().await {
             return Ok(());
         }
