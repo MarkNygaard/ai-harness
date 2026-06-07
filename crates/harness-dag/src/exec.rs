@@ -148,6 +148,10 @@ pub struct NodeRun {
     pub converged: Option<bool>,
     /// Human-readable note (skip reason, error, cancel reason).
     pub note: Option<String>,
+    /// Captured contents of the node's declared artifact file (filled by the
+    /// server after the node runs; `None` if undeclared or not produced).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_content: Option<String>,
     /// When the node started executing (`None` for skipped/cancelled nodes that
     /// never ran). Drives the UI elapsed-time badge and the task-overview
     /// waterfall.
@@ -169,6 +173,10 @@ pub struct NodeMeta {
     /// back-compat with graphs persisted before categories existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Optional artifact path this node produces (relative to the run's
+    /// artifacts dir), for the step popup. Back-compat defaulted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact: Option<String>,
 }
 
 /// The result of driving a workflow to completion.
@@ -261,6 +269,7 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
             id: n.id.clone(),
             depends_on: n.depends_on.clone(),
             category: n.category.clone(),
+            artifact: n.artifact.clone(),
         })
         .collect();
     emit(
@@ -449,6 +458,7 @@ fn skipped_run(node: &Node, note: String, status: NodeStatus) -> NodeRunResult {
             iterations: 0,
             converged: None,
             note: Some(note),
+            artifact_content: None,
             started_at: None,
             ended_at: None,
         },
@@ -532,6 +542,7 @@ async fn execute_node<R: NodeRunner>(
                     iterations: 1,
                     converged: None,
                     note: Some(format!("cancel: {reason}")),
+                    artifact_content: None,
                     started_at: None,
                     ended_at: None,
                 },
@@ -713,6 +724,7 @@ async fn execute_body<R: NodeRunner>(
                     iterations: iteration,
                     converged: None,
                     note: None,
+                    artifact_content: None,
                     started_at: None,
                     ended_at: None,
                 },
@@ -921,6 +933,7 @@ fn loop_run(
         iterations,
         converged: Some(converged),
         note,
+        artifact_content: None,
         started_at: None,
         ended_at: None,
     }
@@ -937,6 +950,7 @@ fn failed_run(node: &Node, provider: Option<&str>, model: Option<&str>, note: St
         iterations: 1,
         converged: None,
         note: Some(note),
+        artifact_content: None,
         started_at: None,
         ended_at: None,
     }
@@ -958,6 +972,7 @@ fn skipped_run_inline(
         iterations: 0,
         converged: None,
         note: Some(note),
+        artifact_content: None,
         started_at: None,
         ended_at: None,
     }

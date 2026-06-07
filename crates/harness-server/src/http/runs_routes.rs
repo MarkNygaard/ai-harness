@@ -11,7 +11,7 @@
 //! doesn't entangle the large shared `AppState`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -40,6 +40,28 @@ const HEARTBEAT_SECS: u64 = 30;
 const RECONCILE_STALE_SECS: u64 = 180;
 /// How often the server sweeps for stale-lease runs (the periodic reaper).
 const RECONCILE_EVERY_SECS: u64 = 60;
+const ARTIFACT_MAX_BYTES: usize = 65_536;
+
+/// Read a node's declared artifact (relative to the run's artifacts dir),
+/// rejecting traversal/absolute paths and truncating on a char boundary.
+/// `None` when undeclared, escaping, or not produced (graceful).
+fn read_declared_artifact(artifacts_dir: &Path, rel: &str) -> Option<String> {
+    let p = Path::new(rel);
+    if p.components().any(|c| !matches!(c, Component::Normal(_))) {
+        return None; // reject `..`, absolute, prefix
+    }
+    let content = std::fs::read_to_string(artifacts_dir.join(p)).ok()?;
+    if content.len() > ARTIFACT_MAX_BYTES {
+        let b = content.floor_char_boundary(ARTIFACT_MAX_BYTES);
+        Some(format!(
+            "{}\n[truncated: {} bytes total]",
+            &content[..b],
+            content.len()
+        ))
+    } else {
+        Some(content)
+    }
+}
 
 /// Self-contained state for the runs API.
 pub struct RunsState {
@@ -645,10 +667,27 @@ async fn execute_run_task(
         }
     });
 
-    let report = run_workflow_streaming(&workflow, &runner, &vars, Some(&tx)).await;
+    let mut report = run_workflow_streaming(&workflow, &runner, &vars, Some(&tx)).await;
     drop(tx); // end the forwarder
     let _ = forwarder.await;
     heartbeat.abort();
+    // Capture declared artifact contents while the worktree still exists.
+    if let Ok(report) = &mut report {
+        for node in &mut report.nodes {
+            if node.status != harness_dag::NodeStatus::Success {
+                continue;
+            }
+            let Some(rel) = workflow
+                .nodes
+                .iter()
+                .find(|n| n.id == node.id)
+                .and_then(|n| n.artifact.as_deref())
+            else {
+                continue;
+            };
+            node.artifact_content = read_declared_artifact(&artifacts, rel);
+        }
+    }
     // Final authoritative snapshot (reconciles nodes + sets terminal status).
     if let Ok(report) = &report {
         if let Ok(store) = state.store().await {
@@ -783,5 +822,46 @@ pub async fn delete_run(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => err(StatusCode::NOT_FOUND, format!("run `{id}` not found")),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn read_declared_artifact_reads_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test-artifact.txt");
+        std::fs::write(&path, "hello artifact").unwrap();
+        assert_eq!(
+            read_declared_artifact(dir.path(), "test-artifact.txt"),
+            Some("hello artifact".into())
+        );
+    }
+    #[test]
+    fn read_declared_artifact_rejects_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(read_declared_artifact(dir.path(), "../etc/passwd"), None);
+        assert_eq!(read_declared_artifact(dir.path(), "/etc/passwd"), None);
+    }
+    #[test]
+    fn read_declared_artifact_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(
+            read_declared_artifact(dir.path(), "does-not-exist.md"),
+            None
+        );
+    }
+    #[test]
+    fn read_declared_artifact_truncates_on_char_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        // 4-byte UTF-8 character repeated; truncating at ARTIFACT_MAX_BYTES
+        // lands inside a character — floor_char_boundary snaps to the previous boundary.
+        let content = "🎉".repeat(ARTIFACT_MAX_BYTES / 2 + 1);
+        let path = dir.path().join("big-artifact.txt");
+        std::fs::write(&path, &content).unwrap();
+        let result = read_declared_artifact(dir.path(), "big-artifact.txt").unwrap();
+        assert!(result.starts_with("🎉"));
+        assert!(result.contains("[truncated: "));
+        assert!(result.contains(" bytes total]"));
     }
 }

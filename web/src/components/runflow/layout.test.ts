@@ -16,6 +16,8 @@ function view(id: string, depends_on: string[], status: NodeView["status"] = "su
     started_at: null,
     ended_at: null,
     category: null,
+    artifact: null,
+    artifact_content: null,
   };
 }
 

@@ -25,6 +25,7 @@ model: kimi-code/kimi-for-coding
 nodes:
   - id: explore
     category: planning
+    artifact: exploration.md
     provider: claude
     model: sonnet
     context: fresh

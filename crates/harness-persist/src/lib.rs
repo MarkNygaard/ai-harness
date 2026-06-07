@@ -64,6 +64,7 @@ pub struct PersistedNode {
     pub cache_write: Option<i64>,
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
+    pub artifact_content: Option<String>,
 }
 
 /// A run plus its node rows, for the run-detail endpoint.
@@ -117,6 +118,8 @@ const ALTER_RUNS_OWNER: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS owner text";
 const ALTER_RUNS_HEARTBEAT: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz";
+const ALTER_NODES_ARTIFACT: &str =
+    "ALTER TABLE harness_run_nodes ADD COLUMN IF NOT EXISTS artifact_content text";
 
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
@@ -136,6 +139,7 @@ CREATE TABLE IF NOT EXISTS harness_run_nodes (
     cache_write   bigint,
     started_at    timestamptz,
     ended_at      timestamptz,
+    artifact_content text,
     PRIMARY KEY (run_id, node_id)
 )";
 
@@ -174,6 +178,9 @@ impl RunStore {
             .execute(&self.pool)
             .await?;
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
+        sqlx::query(ALTER_NODES_ARTIFACT)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
     /// Persist a run and its per-node records. Idempotent on `run_id`: the run
@@ -224,8 +231,8 @@ impl RunStore {
                 "INSERT INTO harness_run_nodes
                    (run_id, ordinal, node_id, status, provider, model, output, iterations,
                     converged, note, input_tokens, output_tokens, cache_read, cache_write,
-                    started_at, ended_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
+                    started_at, ended_at, artifact_content)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
             )
             .bind(run_id)
             .bind(ordinal as i32)
@@ -243,6 +250,7 @@ impl RunStore {
             .bind(node.usage.cache_write.map(|v| v as i64))
             .bind(node.started_at)
             .bind(node.ended_at)
+            .bind(node.artifact_content.as_deref())
             .execute(&mut *tx)
             .await?;
         }
@@ -352,15 +360,16 @@ impl RunStore {
             "INSERT INTO harness_run_nodes
                (run_id, ordinal, node_id, status, provider, model, output, iterations,
                 converged, note, input_tokens, output_tokens, cache_read, cache_write,
-                started_at, ended_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+                started_at, ended_at, artifact_content)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
              ON CONFLICT (run_id, node_id) DO UPDATE SET
                 ordinal=excluded.ordinal, status=excluded.status, provider=excluded.provider,
                 model=excluded.model, output=excluded.output, iterations=excluded.iterations,
                 converged=excluded.converged, note=excluded.note,
                 input_tokens=excluded.input_tokens, output_tokens=excluded.output_tokens,
                 cache_read=excluded.cache_read, cache_write=excluded.cache_write,
-                started_at=excluded.started_at, ended_at=excluded.ended_at",
+                started_at=excluded.started_at, ended_at=excluded.ended_at,
+                artifact_content=excluded.artifact_content",
         )
         .bind(run_id)
         .bind(ordinal)
@@ -378,6 +387,7 @@ impl RunStore {
         .bind(node.usage.cache_write.map(|v| v as i64))
         .bind(node.started_at)
         .bind(node.ended_at)
+        .bind(node.artifact_content.as_deref())
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -596,11 +606,13 @@ mod tests {
                     id: "build".into(),
                     depends_on: vec![],
                     category: Some("implementation".into()),
+                    artifact: None,
                 },
                 harness_dag::NodeMeta {
                     id: "review".into(),
                     depends_on: vec!["build".into()],
                     category: None,
+                    artifact: None,
                 },
             ],
             nodes: vec![
@@ -621,6 +633,7 @@ mod tests {
                     note: None,
                     started_at: Some(chrono::Utc::now()),
                     ended_at: Some(chrono::Utc::now()),
+                    artifact_content: Some("# explore\nsample".into()),
                 },
                 NodeRun {
                     id: "review".into(),
@@ -634,6 +647,7 @@ mod tests {
                     note: Some("dependency failed".into()),
                     started_at: None,
                     ended_at: None,
+                    artifact_content: None,
                 },
             ],
         }

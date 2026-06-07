@@ -77,12 +77,13 @@ describe("toYaml / fromYaml round-trip", () => {
     expect(fromYaml("").name).toBe("untitled");
   });
 
-  it("round-trips cancel, when, category, and output_format (the idea-to-pr gate)", () => {
+  it("round-trips cancel, when, category, artifact, and output_format (the idea-to-pr gate)", () => {
     const yaml = `name: gated
 nodes:
   - id: validate
     command: validate
     category: validation
+    artifact: exploration.md
     output_format:
       type: object
       properties:
@@ -104,7 +105,9 @@ nodes:
     expect(abort.cancel).toBe("validation failed");
     expect(abort.when).toBe("$validate.output.passed != 'true'");
     expect(validate.category).toBe("validation");
+    expect(validate.artifact).toBe("exploration.md");
     expect(validate.output_format).toMatchObject({ type: "object" });
+    expect(abort.artifact).toBeUndefined();
   });
 });
 
@@ -136,4 +139,26 @@ describe("prebuiltNode", () => {
     expect(step.node.depends_on).toEqual(["upstream"]);
     expect(step.node.when).toBe("$upstream.output.passed == 'true'");
   });
+});
+
+it("round-trips artifact through toYaml/fromYaml", () => {
+  const wf: EditorWorkflow = {
+    name: "demo",
+    nodes: [
+      {
+        id: "explore",
+        prompt: "explore",
+        artifact: "exploration.md",
+      },
+      {
+        id: "build",
+        prompt: "build",
+      },
+    ],
+  };
+  const yaml = toYaml(wf);
+  expect(yaml).toContain("artifact: exploration.md");
+  const back = fromYaml(yaml);
+  expect(back.nodes[0].artifact).toBe("exploration.md");
+  expect(back.nodes[1].artifact).toBeUndefined();
 });

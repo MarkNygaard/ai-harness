@@ -196,6 +196,8 @@ function seedNode(meta: NodeMeta): NodeView {
     started_at: null,
     ended_at: null,
     category: meta.category ?? null,
+    artifact: meta.artifact ?? null,
+    artifact_content: null,
   };
 }
 
@@ -280,13 +282,15 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
         id: g.id,
         depends_on: g.depends_on,
         category: g.category ?? null,
+        artifact: g.artifact ?? null,
       }))
     : detail.nodes.map((n) => ({
         id: n.node_id,
         depends_on: [] as string[],
         category: null,
+        artifact: null,
       }));
-  return skeleton.map(({ id, depends_on, category }) => {
+  return skeleton.map(({ id, depends_on, category, artifact }) => {
     const n = byId.get(id);
     return {
       id,
@@ -306,6 +310,8 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
       started_at: n?.started_at ?? null,
       ended_at: n?.ended_at ?? null,
       category,
+      artifact: artifact ?? null,
+      artifact_content: n?.artifact_content ?? null,
     };
   });
 }

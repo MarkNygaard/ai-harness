@@ -112,6 +112,8 @@ export interface EditorNode {
   timeout?: number;
   /** Category id for overview grouping/colouring (from the categories registry). */
   category?: string;
+  /** Artifact file this node produces (relative to the artifacts dir). */
+  artifact?: string;
   /** Conditional-execution expression evaluated after trigger_rule. */
   when?: string;
   /** JSON schema the AI body's output should match (prompt/command nodes). */
