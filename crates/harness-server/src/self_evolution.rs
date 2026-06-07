@@ -204,6 +204,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_tick_logs_summary_event_when_no_adopted_drafts() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-self-evo-data-")?;
         let project_root = crate::test_helpers::tempdir_in_home("harness-self-evo-project-")?;
@@ -246,6 +249,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_tick_counts_pending_drafts() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-self-evo-pending-")?;
         let project_root = crate::test_helpers::tempdir_in_home("harness-self-evo-pending-proj-")?;
@@ -265,6 +271,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_tick_counts_adopted_in_window() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-self-evo-adopted-")?;
         let project_root = crate::test_helpers::tempdir_in_home("harness-self-evo-adopted-proj-")?;
@@ -293,6 +302,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_tick_counts_skills_in_window() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-self-evo-skills-")?;
         let project_root = crate::test_helpers::tempdir_in_home("harness-self-evo-skills-proj-")?;

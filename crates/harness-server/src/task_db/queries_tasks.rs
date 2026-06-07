@@ -855,6 +855,9 @@ mod tests {
 
     #[tokio::test]
     async fn pending_orphan_tasks_returns_only_true_orphans() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let db = TaskDb::open(&dir.path().join("tasks.db")).await?;
 

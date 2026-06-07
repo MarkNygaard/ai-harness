@@ -307,6 +307,9 @@ async fn build_app_state_ignores_stale_default_project_metadata_for_different_ro
 
 #[tokio::test]
 async fn startup_grade_uses_latest_rule_scan_session_for_violation_count() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let sandbox = tempfile::tempdir()?;
     let project_root = sandbox.path().join("project");
     std::fs::create_dir_all(&project_root)?;

@@ -273,6 +273,9 @@ fn task_needs_pr_url_false_for_prompt_only_task() {
 
 #[tokio::test]
 async fn pr_task_nonempty_output_no_pr_url_marks_failed() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();
@@ -327,6 +330,9 @@ async fn pr_task_nonempty_output_no_pr_url_marks_failed() -> anyhow::Result<()> 
 
 #[tokio::test]
 async fn prompt_only_nonempty_output_no_pr_stays_done() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();

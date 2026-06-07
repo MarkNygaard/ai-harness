@@ -2,6 +2,9 @@ use super::*;
 
 #[tokio::test]
 async fn hosted_bot_disabled_completion_blocks_pr_ci_failure() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let project_root = dir.path().join("project");
@@ -60,6 +63,9 @@ async fn hosted_bot_disabled_completion_blocks_pr_ci_failure() -> anyhow::Result
 
 #[tokio::test]
 async fn hosted_bot_disabled_treats_merged_pr_as_done_after_ci_failure() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let project_root = dir.path().join("project");
@@ -127,6 +133,9 @@ async fn hosted_bot_disabled_treats_merged_pr_as_done_after_ci_failure() -> anyh
 #[tokio::test]
 async fn hosted_bot_disabled_completion_blocks_stale_pr_head_after_local_fix() -> anyhow::Result<()>
 {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let project_root = dir.path().join("project");
@@ -192,6 +201,9 @@ async fn hosted_bot_disabled_completion_blocks_stale_pr_head_after_local_fix() -
 #[tokio::test]
 async fn hosted_bot_disabled_pr_head_lookup_failure_does_not_record_feedback() -> anyhow::Result<()>
 {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let runtime_store = match harness_core::db::resolve_database_url(None) {
         Ok(database_url) => {
@@ -265,6 +277,9 @@ async fn hosted_bot_disabled_pr_head_lookup_failure_does_not_record_feedback() -
 
 #[tokio::test]
 async fn hosted_bot_disabled_completion_blocks_closed_pr() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let runtime_store = match harness_core::db::resolve_database_url(None) {
         Ok(database_url) => {
@@ -347,6 +362,9 @@ async fn hosted_bot_disabled_completion_blocks_closed_pr() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn hosted_bot_disabled_completion_treats_merged_pr_as_done() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let runtime_store = match harness_core::db::resolve_database_url(None) {
         Ok(database_url) => {
@@ -434,6 +452,9 @@ async fn hosted_bot_disabled_completion_treats_merged_pr_as_done() -> anyhow::Re
 
 #[tokio::test]
 async fn hosted_bot_disabled_requires_local_review_approval() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();

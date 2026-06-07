@@ -169,6 +169,9 @@ mod tests {
 
     #[tokio::test]
     async fn governance_tick_quarantines_poor_performing_skill() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-skill-gov-data-")?;
         let project_root = crate::test_helpers::tempdir_in_home("harness-skill-gov-project-")?;
@@ -228,6 +231,9 @@ mod tests {
 
     #[tokio::test]
     async fn governance_tick_treats_cancelled_as_unknown() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-skill-gov-cancel-data-")?;
         let project_root =
@@ -289,6 +295,9 @@ mod tests {
 
     #[tokio::test]
     async fn governance_tick_does_not_double_count_without_new_events() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let _home_lock = crate::test_helpers::HOME_LOCK.lock().await;
         let data_dir = crate::test_helpers::tempdir_in_home("harness-skill-gov-dedup-data-")?;
         let project_root =

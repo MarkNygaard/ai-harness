@@ -1692,6 +1692,9 @@ mod tests {
     #[tokio::test]
     async fn list_active_summaries_filters_terminal_history_and_cache_overrides(
     ) -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -1733,6 +1736,9 @@ mod tests {
 
     #[tokio::test]
     async fn task_stream_subscribe_and_publish() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let id = harness_core::types::TaskId("stream-test".to_string());
@@ -1775,6 +1781,9 @@ mod tests {
 
     #[tokio::test]
     async fn task_stream_backpressure_drops_oldest_on_lag() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let id = harness_core::types::TaskId("backpressure-test".to_string());
@@ -1806,6 +1815,9 @@ mod tests {
 
     #[tokio::test]
     async fn list_children_returns_subtasks_for_parent() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -1854,6 +1866,9 @@ mod tests {
 
     #[tokio::test]
     async fn list_siblings_returns_active_tasks_for_same_project() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let project = std::path::PathBuf::from("/repo/project");
@@ -2049,6 +2064,9 @@ mod tests {
 
     #[tokio::test]
     async fn count_by_project_empty() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         assert!(store.count_for_dashboard().await.by_project.is_empty());
@@ -2057,6 +2075,9 @@ mod tests {
 
     #[tokio::test]
     async fn count_by_project_none_root_excluded() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -2074,6 +2095,9 @@ mod tests {
 
     #[tokio::test]
     async fn count_by_project_groups_correctly() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -2112,6 +2136,9 @@ mod tests {
 
     #[tokio::test]
     async fn count_by_project_excludes_cancelled_from_failed_totals() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -2139,6 +2166,9 @@ mod tests {
     #[tokio::test]
     async fn restore_status_preserve_staleness_mirrors_version_in_cache_and_db(
     ) -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let task_id = harness_core::types::TaskId("restore-version".to_string());
@@ -2168,6 +2198,9 @@ mod tests {
     #[tokio::test]
     async fn overwrite_external_id_auto_fix_mirrors_version_in_cache_and_db() -> anyhow::Result<()>
     {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let task_id = harness_core::types::TaskId("auto-fix-version".to_string());
@@ -2199,6 +2232,9 @@ mod tests {
     #[tokio::test]
     async fn mutate_and_persist_rolls_back_cache_on_optimistic_lock_conflict() -> anyhow::Result<()>
     {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let task_id = harness_core::types::TaskId("mutate-conflict".to_string());
@@ -2246,6 +2282,9 @@ mod tests {
 
     #[tokio::test]
     async fn mutate_and_persist_does_not_rollback_over_newer_cache_state() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = std::sync::Arc::new(TaskStore::open(&dir.path().join("tasks.db")).await?);
         let task_id = harness_core::types::TaskId("mutate-newer-cache".to_string());
@@ -2321,6 +2360,9 @@ mod tests {
 
     #[tokio::test]
     async fn release_runtime_host_claims_clears_pending_scheduler_owner() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -2370,6 +2412,9 @@ mod tests {
 
     #[tokio::test]
     async fn claim_for_runtime_host_blocks_scheduler_owned_pending_tasks() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -2429,6 +2474,9 @@ mod tests {
 
     #[tokio::test]
     async fn claim_for_runtime_host_blocks_live_runtime_host_leases() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -2469,6 +2517,9 @@ mod tests {
 
     #[tokio::test]
     async fn claim_for_runtime_host_reclaims_expired_runtime_host_leases() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -2512,6 +2563,9 @@ mod tests {
 
     #[tokio::test]
     async fn claim_for_runtime_host_rolls_back_cache_when_persist_fails() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
 
@@ -2545,6 +2599,9 @@ mod tests {
 
     #[tokio::test]
     async fn wait_for_rate_limit_no_op_when_none() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         tokio::time::timeout(
@@ -2560,6 +2617,9 @@ mod tests {
 
     #[tokio::test]
     async fn rate_limit_cleared_after_deadline() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         store
@@ -2582,6 +2642,9 @@ mod tests {
     /// nor overwrite it with a different terminal status.
     #[tokio::test]
     async fn update_status_does_not_overwrite_cancelled_terminal() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let task_id = harness_core::types::TaskId("cancelled-task".to_string());
@@ -2610,6 +2673,9 @@ mod tests {
     /// Idempotent: writing the same terminal status is a no-op (no error).
     #[tokio::test]
     async fn update_status_idempotent_on_same_terminal() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let task_id = harness_core::types::TaskId("done-task".to_string());

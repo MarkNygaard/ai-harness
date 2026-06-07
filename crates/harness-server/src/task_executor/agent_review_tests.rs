@@ -173,6 +173,9 @@ fn step_tracker(tracker: &mut Option<(Vec<String>, u32)>, issues: &[String]) -> 
 
 #[tokio::test]
 async fn reviewer_request_uses_read_only_network_sandbox() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();
@@ -231,6 +234,9 @@ async fn reviewer_request_uses_read_only_network_sandbox() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn claude_reviewer_request_uses_configured_sandbox() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();
@@ -277,6 +283,9 @@ async fn claude_reviewer_request_uses_configured_sandbox() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn unresolved_issues_after_max_rounds_fail_local_review() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();
@@ -331,6 +340,9 @@ async fn unresolved_issues_after_max_rounds_fail_local_review() -> anyhow::Resul
 
 #[tokio::test]
 async fn final_impasse_round_does_not_push_unreviewed_fix() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();
@@ -408,6 +420,9 @@ async fn final_impasse_round_does_not_push_unreviewed_fix() -> anyhow::Result<()
 
 #[tokio::test]
 async fn changed_fix_round_requires_pr_head_advance() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let project = dir.path().join("project");
     std::fs::create_dir(&project)?;
@@ -460,6 +475,9 @@ async fn changed_fix_round_requires_pr_head_advance() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn changed_fix_round_rejects_false_noop_marker() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let project = dir.path().join("project");
     std::fs::create_dir(&project)?;
@@ -520,6 +538,9 @@ async fn changed_fix_round_rejects_false_noop_marker() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn noop_fix_round_ignores_validation_cache_artifacts() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let project = dir.path().join("project");
     std::fs::create_dir(&project)?;
@@ -575,6 +596,9 @@ async fn noop_fix_round_ignores_validation_cache_artifacts() -> anyhow::Result<(
 
 #[tokio::test]
 async fn noop_fix_round_rejects_validation_source_artifacts() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let project = dir.path().join("project");
     std::fs::create_dir(&project)?;
@@ -638,6 +662,9 @@ async fn noop_fix_round_rejects_validation_source_artifacts() -> anyhow::Result<
 
 #[tokio::test]
 async fn malformed_reviewer_output_fails_local_review() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let dir = tempfile::tempdir()?;
     let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
     let task_id = TaskId::new();

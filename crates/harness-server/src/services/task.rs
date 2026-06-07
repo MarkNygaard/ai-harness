@@ -122,6 +122,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_task_service_empty_on_open() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let svc = DefaultTaskService::new(store);
@@ -133,6 +136,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_task_service_get_after_insert() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let svc = DefaultTaskService::new(store.clone());
@@ -181,6 +187,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_task_service_list_children() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let svc = DefaultTaskService::new(store.clone());
@@ -264,6 +273,9 @@ mod tests {
 
     #[tokio::test]
     async fn default_task_service_subscribe_stream() -> anyhow::Result<()> {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = TaskStore::open(&dir.path().join("tasks.db")).await?;
         let svc = DefaultTaskService::new(store.clone());

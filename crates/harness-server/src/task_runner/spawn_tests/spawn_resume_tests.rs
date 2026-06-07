@@ -10,6 +10,9 @@ fn legacy_hosted_bot_server_config() -> std::sync::Arc<harness_core::config::Har
 
 #[tokio::test]
 async fn resumed_pr_manual_conflict_fails_before_review_loop() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
     let database_url = crate::test_helpers::test_database_url()?;
@@ -85,6 +88,9 @@ async fn resumed_pr_manual_conflict_fails_before_review_loop() -> anyhow::Result
 
 #[tokio::test]
 async fn resumed_pr_clean_conflict_gate_enters_review_loop() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
     let database_url = crate::test_helpers::test_database_url()?;
@@ -151,6 +157,9 @@ async fn resumed_pr_clean_conflict_gate_enters_review_loop() -> anyhow::Result<(
 
 #[tokio::test]
 async fn resumed_pr_rebase_push_requires_fresh_review_prompt() -> anyhow::Result<()> {
+    if !crate::test_helpers::db_tests_enabled().await {
+        return Ok(());
+    }
     let _lock = crate::test_helpers::HOME_LOCK.lock().await;
     let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
     let database_url = crate::test_helpers::test_database_url()?;

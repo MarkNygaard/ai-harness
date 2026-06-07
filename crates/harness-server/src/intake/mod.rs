@@ -1544,6 +1544,9 @@ mod tests {
     #[tokio::test]
     async fn completed_issue_numbers_for_project_uses_repo_and_latest_status() -> anyhow::Result<()>
     {
+        if !crate::test_helpers::db_tests_enabled().await {
+            return Ok(());
+        }
         let dir = tempfile::tempdir()?;
         let store = crate::task_runner::TaskStore::open(&dir.path().join("tasks.db")).await?;
         let project_root = std::path::PathBuf::from("/projects/alpha");
