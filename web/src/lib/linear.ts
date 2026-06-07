@@ -23,6 +23,18 @@ export function useLinearDiscovery(project: string | null) {
   });
 }
 
+export function useLinearSources(project: string | null) {
+  return useQuery<LinearSource[], Error>({
+    queryKey: ["linear", "sources", project],
+    enabled: !!project,
+    queryFn: ({ signal }) =>
+      apiJson<LinearSource[]>(
+        `/api/projects/${encodeURIComponent(project!)}/linear-sources`,
+        { signal },
+      ),
+  });
+}
+
 export function useLinearSource(
   project: string | null,
   workflow: string | null,
