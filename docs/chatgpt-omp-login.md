@@ -1,0 +1,32 @@
+# ChatGPT Plus/Pro (Codex) via omp
+
+This runbook covers connecting the harness to a **ChatGPT Plus or Pro subscription** so that workflow nodes can run OpenAI models (e.g. `openai/gpt-5.5`) through `omp` without per-token API-key billing.
+
+## One-time setup
+
+1. Open a **standalone terminal** on the cluster container (not inside an agent session — `CLAUDECODE` env vars propagate and can cause `SIGTRAP`).
+2. Run `omp /login`.
+3. Select **"ChatGPT Plus/Pro (Codex)"**.
+4. Approve the login in your browser.
+5. Verify the models available to your account: run `omp`, then `/model`.
+
+The credential is stored in omp's `~/.omp/agent/agent.db` SQLite store and auto-refreshes. It persists on the cluster PV, so the one-time login survives restarts.
+
+## Model addressing
+
+When authoring a workflow node that uses this credential, set:
+
+```yaml
+provider: pi
+model: openai/gpt-5.5
+```
+
+The model id **must** be namespace-qualified (`openai/...`). A bare name like `gpt-5.5` would be mis-prefixed to `kimi-code/gpt-5.5` by the `pi` provider.
+
+**ChatGPT-account scope**: the subscription exposes the general `gpt-5.x` models (`gpt-5.5`, `gpt-5.4`) but **not** the `-codex` variants. Those require API-key / non-ChatGPT auth and should still use the dedicated `codex` provider.
+
+## How it works
+
+- No `OPENAI_API_KEY` is set; billing rides the subscription.
+- `omp` reads the OAuth row from `~/.omp/agent/agent.db` and self-refreshes.
+- Token usage (including `cacheRead`) is reported through `omp`'s native JSON event stream, so the run overview shows realistic input/output/cache splits.

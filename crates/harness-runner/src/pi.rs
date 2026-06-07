@@ -664,6 +664,19 @@ mod tests {
     }
 
     #[test]
+    fn resolve_model_passes_through_openai_namespace() {
+        let agent = PiAgent::from_env();
+        // Namespace-qualified OpenAI model → passed through unchanged (ChatGPT
+        // subscription via omp). This is why the workflow uses `openai/gpt-5.5`,
+        // not a bare `gpt-5.5` (which would be mis-prefixed to kimi-code/).
+        assert_eq!(
+            agent.resolve_model(Some("openai/gpt-5.5")),
+            "openai/gpt-5.5"
+        );
+        assert_eq!(agent.resolve_model(Some("gpt-5.5")), "kimi-code/gpt-5.5");
+    }
+
+    #[test]
     fn build_args_adds_resume_when_session_present() {
         let agent = PiAgent {
             cli_path: PathBuf::from("omp"),

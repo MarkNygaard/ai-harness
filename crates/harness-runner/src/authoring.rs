@@ -616,7 +616,12 @@ pub fn catalog(project_root: &Path) -> Catalog {
             ProviderInfo {
                 id: "pi",
                 label: "Pi / Kimi",
-                models: vec!["kimi-code/kimi-for-coding", "kimi-code/kimi-k2.6"],
+                models: vec![
+                    "kimi-code/kimi-for-coding",
+                    "kimi-code/kimi-k2.6",
+                    "openai/gpt-5.5",
+                    "openai/gpt-5.4",
+                ],
             },
             ProviderInfo {
                 id: "anthropic-api",
