@@ -42,7 +42,7 @@ pub fn claude_settings(
         let cmd = format!(
             "cat {}",
             shlex::try_quote(&dir.join(&filename).to_string_lossy())
-                .unwrap_or(std::borrow::Cow::Borrowed(""))
+                .expect("tempdir path must not contain NUL bytes")
         );
         pre_entries.push(json!({
             "matcher": matcher,
@@ -72,7 +72,7 @@ pub fn claude_settings(
         let cmd = format!(
             "cat {}",
             shlex::try_quote(&dir.join(&filename).to_string_lossy())
-                .unwrap_or(std::borrow::Cow::Borrowed(""))
+                .expect("tempdir path must not contain NUL bytes")
         );
         post_entries.push(json!({
             "matcher": matcher,
