@@ -94,14 +94,17 @@ export interface TokenSegment {
 }
 
 /** Break a summed usage into ordered, non-zero segments for a stacked bar. */
+/** Token-segment colors, shared by the by-type and by-step token bars. */
+export const TOKEN_INPUT_COLOR = "oklch(0.64 0.07 200)";
+export const TOKEN_OUTPUT_COLOR = "oklch(0.75 0.09 130)";
+
 export function usageByType(usage: Usage): TokenSegment[] {
   // Muted, Factory-style palette (teal / slate / peach / olive) — deliberately
-  // desaturated and independent of the semantic status colors.
   const defs: Array<Omit<TokenSegment, "value">> = [
-    { key: "input", label: "Input", color: "oklch(0.64 0.07 200)" },
+    { key: "input", label: "Input", color: TOKEN_INPUT_COLOR },
     { key: "cache_read", label: "Cache read", color: "oklch(0.68 0.03 250)" },
     { key: "cache_write", label: "Cache write", color: "oklch(0.76 0.09 70)" },
-    { key: "output", label: "Output", color: "oklch(0.75 0.09 130)" },
+    { key: "output", label: "Output", color: TOKEN_OUTPUT_COLOR },
   ];
   return defs
     .map((d) => ({ ...d, value: usage[d.key] ?? 0 }))
@@ -184,4 +187,27 @@ export function timeByStep(nodes: NodeView[], now: number): StepTime[] {
     }))
     .filter((r): r is StepTime => r.durationMs != null)
     .sort((a, b) => b.durationMs - a.durationMs);
+}
+/** Per-step token usage (input/output/total), sorted heaviest-first. */
+export interface StepTokens {
+  id: string;
+  status: NodeView["status"];
+  category: string | null;
+  input: number;
+  output: number;
+  total: number;
+}
+
+export function tokensByStep(nodes: NodeView[]): StepTokens[] {
+  return nodes
+    .map((n) => ({
+      id: n.id,
+      status: n.status,
+      category: n.category,
+      input: n.usage.input ?? 0,
+      output: n.usage.output ?? 0,
+      total: totalTokens(n.usage),
+    }))
+    .filter((r) => r.total > 0)
+    .sort((a, b) => b.total - a.total);
 }

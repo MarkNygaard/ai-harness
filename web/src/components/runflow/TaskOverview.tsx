@@ -13,6 +13,9 @@ import {
   nodeColor,
   timeByCategory,
   timeByStep,
+  tokensByStep,
+  TOKEN_INPUT_COLOR,
+  TOKEN_OUTPUT_COLOR,
   usageByModel,
   usageByType,
   waterfall,
@@ -42,9 +45,11 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
   const now = Date.now();
   const byModel = useMemo(() => usageByModel(nodes), [nodes]);
   const totals = useMemo(() => sumUsage(nodes.map((n) => n.usage)), [nodes]);
+  const segments = useMemo(() => usageByType(totals), [totals]);
+  const tokenSteps = useMemo(() => tokensByStep(nodes), [nodes]);
+  const heaviest = tokenSteps[0]?.total ?? 0;
   const bars = useMemo(() => waterfall(nodes, now), [nodes, now]);
   const steps = useMemo(() => timeByStep(nodes, now), [nodes, now]);
-  const segments = useMemo(() => usageByType(totals), [totals]);
 
   // Category colours + time-by-category (uncategorized steps keep status colour).
   const cats = useCategories();
@@ -202,6 +207,72 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
                       </span>
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+          </Section>
+
+          <Section title="Tokens by step">
+            {tokenSteps.length === 0 ? (
+              <Empty>No token usage reported yet.</Empty>
+            ) : (
+              <div className="border border-border p-3">
+                <div className="flex flex-col gap-2">
+                  {tokenSteps.map((s) => (
+                    <div
+                      key={s.id}
+                      className="flex items-center gap-3 text-[12px]"
+                    >
+                      <div
+                        className="w-40 shrink-0 truncate font-medium"
+                        title={s.id}
+                      >
+                        {s.id}
+                      </div>
+                      <div className="h-3 flex-1 overflow-hidden bg-secondary/50">
+                        <div
+                          className="flex h-full"
+                          style={{
+                            width: `${heaviest > 0 ? (s.total / heaviest) * 100 : 0}%`,
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${s.total > 0 ? (s.input / s.total) * 100 : 0}%`,
+                              backgroundColor: TOKEN_INPUT_COLOR,
+                            }}
+                            title={`Input: ${formatTokens(s.input)}`}
+                          />
+                          <div
+                            style={{
+                              width: `${s.total > 0 ? (s.output / s.total) * 100 : 0}%`,
+                              backgroundColor: TOKEN_OUTPUT_COLOR,
+                            }}
+                            title={`Output: ${formatTokens(s.output)}`}
+                          />
+                        </div>
+                      </div>
+                      <div className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">
+                        {formatTokens(s.total)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1.5 text-[12px]">
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="size-2.5 rounded-full"
+                      style={{ backgroundColor: TOKEN_INPUT_COLOR }}
+                    />
+                    <span className="text-muted-foreground">Input</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span
+                      className="size-2.5 rounded-full"
+                      style={{ backgroundColor: TOKEN_OUTPUT_COLOR }}
+                    />
+                    <span className="text-muted-foreground">Output</span>
+                  </div>
                 </div>
               </div>
             )}

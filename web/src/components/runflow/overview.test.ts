@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { usageByModel } from "./overview";
+import { usageByModel, tokensByStep } from "./overview";
 import type { NodeView } from "@/types/run";
 
 function node(
@@ -43,5 +43,17 @@ describe("usageByModel", () => {
   it("excludes steps with no reported tokens", () => {
     const rows = usageByModel([node("a", "sonnet", 0, 0)]);
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe("tokensByStep", () => {
+  it("sorts by total desc and drops zero-usage steps", () => {
+    const rows = tokensByStep([
+      node("light", "sonnet", 100, 20),
+      node("heavy", "opus", 300, 90),
+      node("idle", "sonnet", 0, 0),
+    ]);
+    expect(rows.map((r) => r.id)).toEqual(["heavy", "light"]);
+    expect(rows[0]).toMatchObject({ input: 300, output: 90, total: 390 });
   });
 });
