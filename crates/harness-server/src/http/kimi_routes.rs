@@ -264,9 +264,6 @@ pub async fn connect_poll(
     }
 }
 
-/// Write the Kimi-for-Coding credential into omp's `~/.omp/agent/agent.db`
-/// (SQLite, schema v4) so `omp` reads it like a native `/login`. Replaces any
-/// existing `kimi-code` row; omp self-refreshes the tokens from there on.
 /// Write an OAuth credential into omp's `~/.omp/agent/agent.db` (SQLite, schema v4)
 /// so `omp` reads it like a native `/login`. Replaces any existing row for
 /// `provider`; omp self-refreshes the tokens from there on.

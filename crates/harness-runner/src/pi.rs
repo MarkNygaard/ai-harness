@@ -8,11 +8,13 @@
 //! `message.content[]` carries the assistant text, and a final `agent_end` whose
 //! `telemetry.usage` gives full token fidelity incl. cache (PLAN §7.3/§10.1).
 //!
-//! Models are namespaced `kimi-code/*` (e.g. `kimi-code/kimi-k2.6`); auth for the
-//! Kimi-for-Coding subscription is the `kimi-coding` provider — `KIMI_API_KEY` or a
-//! `~/.pi/agent/auth.json` from `omp /login`. `MOONSHOT_API_KEY` covers the
-//! per-token Moonshot API (`moonshotai/*`). The server materializes these from the
-//! credential store before a run; we don't manage them here.
+//! Models are namespaced `kimi-code/*` (e.g. `kimi-code/kimi-k2.6`) or
+//! `openai/*` (e.g. `openai/gpt-5.5` for the ChatGPT-subscription path); auth
+//! for the Kimi-for-Coding subscription is the `kimi-coding` provider —
+//! `KIMI_API_KEY` or a `~/.pi/agent/auth.json` from `omp /login`.
+//! `MOONSHOT_API_KEY` covers the per-token Moonshot API (`moonshotai/*`).
+//! The server materializes these from the credential store before a run; we
+//! don't manage them here.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

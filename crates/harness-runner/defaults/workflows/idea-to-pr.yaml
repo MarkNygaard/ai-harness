@@ -5,7 +5,7 @@ description: |
 
   Flow: Claude plans (a read-only Sonnet `explore` feeding a lean Opus
   `create-plan`), Kimi (via Pi, on the Kimi-for-Coding subscription)
-  implements and self-reviews up to 5x, Codex does a second-pass review
+  implements and self-reviews up to 5x, gpt-5.x via omp does a second-pass review
   with fixes, and Claude Sonnet signs off — then a final build gate.
 
   Output: a PR against the project's base branch (auto-detected from
@@ -411,7 +411,7 @@ nodes:
           <promise>PI_REVIEW_CLEAN</promise>
 
         Be honest: emitting PI_REVIEW_CLEAN prematurely shifts cost onto
-        the Codex and Sonnet phases that follow. Emitting it on a clean
+        the gpt-review-fix and Sonnet phases that follow. Emitting it on a clean
         PR is the goal.
 
   - id: gpt-review-fix
@@ -603,7 +603,7 @@ nodes:
       prompt: |
         Final build gate — the last node that can touch code before the
         run completes. Every fix-capable node upstream (implement, the
-        kimi self-review loop, codex, sonnet) has already pushed its
+        kimi self-review loop, gpt-review-fix, sonnet) has already pushed its
         changes. CRITICAL: the `validate` node ran much EARLIER in the
         pipeline, before those review fixes — so the branch HEAD may not
         compile even though `validate` reported green. Re-verify the
@@ -676,7 +676,7 @@ nodes:
     prompt: |
       Post a short "workflow complete" PR comment that reflects what
       ACTUALLY happened in this run. Don't suggest running review
-      agents — three review passes (kimi self-review loop, codex, sonnet)
+      agents — three review passes (kimi self-review loop, gpt-review-fix, sonnet)
       already ran in this same workflow. Sonnet's verdict comment and
       the PR label are the authoritative signal for the human; your
       summary is a thin status line, not a second review.
@@ -705,7 +705,7 @@ nodes:
 
       **Commit breakdown**:
       - Implementation + kimi self-review: <N> commits
-      - Codex fix-pass: <N> commits (or "none — nothing to fix")
+      - gpt-review-fix pass: <N> commits (or "none — nothing to fix")
       - Sonnet fix-pass: <N> commits (or "none — nothing to fix")
       ```
 
