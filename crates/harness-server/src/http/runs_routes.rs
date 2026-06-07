@@ -550,6 +550,18 @@ async fn execute_run_task(
     let _ = std::fs::create_dir_all(&cargo_target);
     std::env::set_var("CARGO_TARGET_DIR", &cargo_target);
 
+    // Keep that shared cache from ballooning (it grew to ~128 GB on the cluster).
+    // The two dominant size drivers of debug builds are full debuginfo and
+    // incremental-compilation state, and cargo never prunes either across runs.
+    // Trim debuginfo to line tables only (`debug = 1` — still enough for
+    // backtraces; the numeric form is accepted by every cargo version) and
+    // disable incremental compilation. Set via env so it applies to every cargo
+    // invocation a run spawns, for any project, without editing the project's
+    // `Cargo.toml` and without affecting developers' local builds.
+    std::env::set_var("CARGO_INCREMENTAL", "0");
+    std::env::set_var("CARGO_PROFILE_DEV_DEBUG", "1");
+    std::env::set_var("CARGO_PROFILE_TEST_DEBUG", "1");
+
     // Provision the project's toolchains via mise (cached on the PV — no image
     // rebuild), then put mise's shims on PATH so cargo/pnpm/etc. resolve for every
     // node. Best-effort: a failure is logged; the dependent build step will then
