@@ -29,6 +29,10 @@ CREATE TABLE IF NOT EXISTS harness_projects (
 /// Bring older `harness_projects` tables up to date. Idempotent.
 const ALTER_PROJECTS_TOOLCHAINS: &str =
     "ALTER TABLE harness_projects ADD COLUMN IF NOT EXISTS toolchains jsonb NOT NULL DEFAULT '[]'::jsonb";
+/// Per-project cargo build-cache size cap, in GiB. NULL = use the env
+/// default (`HARNESS_CARGO_TARGET_CAP_GB`, else 50 GiB). Idempotent.
+const ALTER_PROJECTS_CAP: &str =
+    "ALTER TABLE harness_projects ADD COLUMN IF NOT EXISTS cargo_target_cap_gb integer";
 
 /// A registered project (matches `harness_projects`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -45,6 +49,8 @@ pub struct Project {
     /// `pnpm`). Installed on demand onto the persistent volume — no image rebuild.
     #[sqlx(json)]
     pub toolchains: Vec<String>,
+    /// Per-project build-cache cap in GiB; `None` falls back to the env default.
+    pub cargo_target_cap_gb: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -56,6 +62,7 @@ pub struct ProjectInput {
     pub base_branch: String,
     pub default_workflow: Option<String>,
     pub toolchains: Vec<String>,
+    pub cargo_target_cap_gb: Option<i32>,
 }
 
 /// Postgres-backed registry of projects.
@@ -80,13 +87,14 @@ impl ProjectStore {
         sqlx::query(ALTER_PROJECTS_TOOLCHAINS)
             .execute(&store.pool)
             .await?;
+        sqlx::query(ALTER_PROJECTS_CAP).execute(&store.pool).await?;
         Ok(store)
     }
 
     /// All projects, alphabetical.
     pub async fn list(&self) -> Result<Vec<Project>, PersistError> {
         let rows = sqlx::query_as::<_, Project>(
-            "SELECT name, git_url, base_branch, default_workflow, toolchains, created_at, updated_at
+            "SELECT name, git_url, base_branch, default_workflow, toolchains, cargo_target_cap_gb, created_at, updated_at
              FROM harness_projects ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -97,7 +105,7 @@ impl ProjectStore {
     /// One project by name, if present.
     pub async fn get(&self, name: &str) -> Result<Option<Project>, PersistError> {
         let row = sqlx::query_as::<_, Project>(
-            "SELECT name, git_url, base_branch, default_workflow, toolchains, created_at, updated_at
+            "SELECT name, git_url, base_branch, default_workflow, toolchains, cargo_target_cap_gb, created_at, updated_at
              FROM harness_projects WHERE name = $1",
         )
         .bind(name)
@@ -110,22 +118,43 @@ impl ProjectStore {
     /// on update; `updated_at` always advances.
     pub async fn upsert(&self, name: &str, input: &ProjectInput) -> Result<Project, PersistError> {
         let row = sqlx::query_as::<_, Project>(
-            "INSERT INTO harness_projects (name, git_url, base_branch, default_workflow, toolchains, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, now(), now())
+            "INSERT INTO harness_projects (name, git_url, base_branch, default_workflow, toolchains, cargo_target_cap_gb, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, now(), now())
              ON CONFLICT (name) DO UPDATE SET
-                git_url          = excluded.git_url,
-                base_branch      = excluded.base_branch,
-                default_workflow = excluded.default_workflow,
-                toolchains       = excluded.toolchains,
-                updated_at       = now()
-             RETURNING name, git_url, base_branch, default_workflow, toolchains, created_at, updated_at",
+                git_url               = excluded.git_url,
+                base_branch           = excluded.base_branch,
+                default_workflow      = excluded.default_workflow,
+                toolchains            = excluded.toolchains,
+                cargo_target_cap_gb   = excluded.cargo_target_cap_gb,
+                updated_at            = now()
+             RETURNING name, git_url, base_branch, default_workflow, toolchains, cargo_target_cap_gb, created_at, updated_at",
         )
         .bind(name)
         .bind(&input.git_url)
         .bind(&input.base_branch)
         .bind(input.default_workflow.as_deref())
         .bind(sqlx::types::Json(&input.toolchains))
+        .bind(input.cargo_target_cap_gb)
         .fetch_one(&self.pool)
+        .await?;
+        Ok(row)
+    }
+    /// Set or clear (`None`) a project's build-cache cap. Returns the updated
+    /// row, or `None` if the project doesn't exist.
+    pub async fn set_cargo_target_cap(
+        &self,
+        name: &str,
+        cap_gb: Option<i32>,
+    ) -> Result<Option<Project>, PersistError> {
+        let row = sqlx::query_as::<_, Project>(
+            "UPDATE harness_projects SET cargo_target_cap_gb = $2, updated_at = now()
+             WHERE name = $1
+             RETURNING name, git_url, base_branch, default_workflow, toolchains,
+                       cargo_target_cap_gb, created_at, updated_at",
+        )
+        .bind(name)
+        .bind(cap_gb)
+        .fetch_optional(&self.pool)
         .await?;
         Ok(row)
     }
@@ -171,6 +200,7 @@ mod tests {
                     base_branch: "main".into(),
                     default_workflow: None,
                     toolchains: vec![],
+                    cargo_target_cap_gb: None,
                 },
             )
             .await
@@ -178,6 +208,7 @@ mod tests {
         assert_eq!(created.git_url, "https://github.com/me/ticket0.git");
         assert_eq!(created.base_branch, "main");
         assert!(created.toolchains.is_empty());
+        assert_eq!(created.cargo_target_cap_gb, None);
 
         // Update changes fields + advances updated_at, preserves created_at.
         let updated = store
@@ -188,6 +219,7 @@ mod tests {
                     base_branch: "develop".into(),
                     default_workflow: Some("idea-to-pr".into()),
                     toolchains: vec!["rust".into(), "pnpm".into()],
+                    cargo_target_cap_gb: None,
                 },
             )
             .await
@@ -196,8 +228,32 @@ mod tests {
         assert_eq!(updated.created_at, created.created_at);
         assert_eq!(updated.default_workflow.as_deref(), Some("idea-to-pr"));
         assert_eq!(updated.toolchains, vec!["rust", "pnpm"]);
+        assert_eq!(updated.cargo_target_cap_gb, None);
 
-        assert!(store.list().await.unwrap().iter().any(|p| p.name == name));
+        let with_cap = store
+            .set_cargo_target_cap(&name, Some(20))
+            .await
+            .expect("set cap")
+            .expect("project exists");
+        assert_eq!(with_cap.cargo_target_cap_gb, Some(20));
+        assert_eq!(
+            store.get(&name).await.unwrap().unwrap().cargo_target_cap_gb,
+            Some(20)
+        );
+
+        let cleared = store
+            .set_cargo_target_cap(&name, None)
+            .await
+            .expect("clear cap")
+            .expect("project exists");
+        assert_eq!(cleared.cargo_target_cap_gb, None);
+
+        assert!(store
+            .list()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.name == name && p.cargo_target_cap_gb.is_none()));
         assert!(store.get(&name).await.unwrap().is_some());
 
         store.delete(&name).await.unwrap();

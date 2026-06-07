@@ -1,5 +1,11 @@
 import { useState } from "react";
-import { IconFolderCog, IconKey, IconPlus, IconTrash } from "@tabler/icons-react";
+import {
+  IconDatabase,
+  IconFolderCog,
+  IconKey,
+  IconPlus,
+  IconTrash,
+} from "@tabler/icons-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,13 +18,21 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   PROJECT_CREDENTIALS,
   useDeleteProjectCredential,
   useProjectCredentials,
   useSetProjectCredential,
 } from "@/lib/credentials";
-import { useDeleteProject, useProjects, useRegisterProject } from "@/lib/projects";
+import {
+  useClearProjectCache,
+  useDeleteProject,
+  useProjectCacheSize,
+  useProjects,
+  useRegisterProject,
+  useSetProjectCacheCap,
+} from "@/lib/projects";
 import { ProjectLinearDialog } from "@/components/projects/ProjectLinearDialog";
 import type { Project } from "@/types/project";
 
@@ -51,9 +65,10 @@ export function ProjectsPage() {
             <IconFolderCog className="size-5 text-accent-orange" /> Projects
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            A project scopes runs to a git repo. Registering one clones it onto the control plane;
-            runs you trigger for it operate on an isolated worktree off its base branch. Private
-            repos use the global GitHub token from the Credentials page.
+            A project scopes runs to a git repo. Registering one clones it onto
+            the control plane; runs you trigger for it operate on an isolated
+            worktree off its base branch. Private repos use the global GitHub
+            token from the Credentials page.
           </p>
         </div>
 
@@ -63,17 +78,23 @@ export function ProjectsPage() {
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Registered projects
           </h2>
-          {projects.isLoading && <p className="text-sm text-muted-foreground">Loading…</p>}
+          {projects.isLoading && (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          )}
           {projects.isError && (
             <p className="text-sm text-destructive">
               Failed to load projects: {projects.error.message}
             </p>
           )}
           {projects.data?.length === 0 && (
-            <p className="text-sm text-muted-foreground">No projects yet. Register one above.</p>
+            <p className="text-sm text-muted-foreground">
+              No projects yet. Register one above.
+            </p>
           )}
           <div className="flex flex-col gap-2">
-            {projects.data?.map((p) => <ProjectRow key={p.name} project={p} />)}
+            {projects.data?.map((p) => (
+              <ProjectRow key={p.name} project={p} />
+            ))}
           </div>
         </section>
       </div>
@@ -89,10 +110,14 @@ function ProjectRow({ project }: { project: Project }) {
         <IconFolderCog className="size-5 shrink-0 text-accent-orange" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate font-mono text-sm font-medium">{project.name}</span>
+            <span className="truncate font-mono text-sm font-medium">
+              {project.name}
+            </span>
             <Badge variant="outline">{project.base_branch}</Badge>
           </div>
-          <div className="truncate text-xs text-muted-foreground">{project.git_url}</div>
+          <div className="truncate text-xs text-muted-foreground">
+            {project.git_url}
+          </div>
           {project.default_workflow && (
             <div className="truncate text-[11px] text-muted-foreground">
               default: {project.default_workflow}
@@ -110,11 +135,14 @@ function ProjectRow({ project }: { project: Project }) {
         </div>
         <ProjectLinearDialog project={project.name} />
         <ProjectCredentialsDialog project={project.name} />
+        <ProjectCacheDialog project={project} />
         <Button
           variant="ghost"
           size="sm"
           onClick={() => {
-            if (confirm(`Deregister "${project.name}" and remove its checkout?`)) {
+            if (
+              confirm(`Deregister "${project.name}" and remove its checkout?`)
+            ) {
               del.mutate(project.name);
             }
           }}
@@ -134,7 +162,9 @@ function ProjectCredentialsDialog({ project }: { project: string }) {
   return (
     <Dialog>
       <DialogTrigger
-        render={<Button variant="ghost" size="sm" title="Project credentials" />}
+        render={
+          <Button variant="ghost" size="sm" title="Project credentials" />
+        }
       >
         <IconKey className="size-3.5" /> Keys
       </DialogTrigger>
@@ -154,11 +184,125 @@ function ProjectCredentialsDialog({ project }: { project: string }) {
               provider={provider}
               field={field}
               configured={
-                creds.data?.some((c) => c.provider === provider && c.configured) ??
-                false
+                creds.data?.some(
+                  (c) => c.provider === provider && c.configured,
+                ) ?? false
               }
             />
           ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+/** A "Cache" button that opens a dialog to view/set the build-cache cap and clear it. */
+function ProjectCacheDialog({ project }: { project: Project }) {
+  const [open, setOpen] = useState(false);
+  const size = useProjectCacheSize(project.name, open);
+  const setCap = useSetProjectCacheCap();
+  const clear = useClearProjectCache();
+  const [raw, setRaw] = useState(project.cargo_target_cap_gb?.toString() ?? "");
+  const capGb = raw.trim() === "" ? null : Number(raw);
+  const isValid =
+    raw.trim() === "" ||
+    (Number.isFinite(capGb) && Number.isInteger(capGb) && (capGb ?? 0) > 0);
+  const hasChanged =
+    (project.cargo_target_cap_gb == null && raw.trim() !== "") ||
+    (project.cargo_target_cap_gb != null &&
+      Number(project.cargo_target_cap_gb) !== capGb);
+
+  const gb = (n: number) => (n / 1_073_741_824).toFixed(1);
+
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button variant="ghost" size="sm" title="Build cache settings" />
+        }
+      >
+        <IconDatabase className="size-3.5" /> Cache
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="font-mono text-base">
+            {project.name} — cache
+          </DialogTitle>
+          <DialogDescription>
+            View size, set a per-project cap, or clear the build cache. Blank
+            cap falls back to the server default.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-4">
+          <div className="text-sm">
+            <span className="text-muted-foreground">Build cache: </span>
+            <span className="font-medium">
+              {size.isLoading || size.data == null
+                ? "—"
+                : `${gb(size.data.bytes)} GB / ${size.data.cap_gb} GB`}
+            </span>
+          </div>
+          <div className="flex flex-col gap-1">
+            <label
+              className="text-xs text-muted-foreground"
+              htmlFor={`cap-${project.name}`}
+            >
+              Cap (GiB)
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                id={`cap-${project.name}`}
+                type="number"
+                min={1}
+                placeholder={`default (${size.data?.cap_gb ?? 50} GB)`}
+                value={raw}
+                onChange={(e) => setRaw(e.target.value)}
+                className="h-8 w-32"
+              />
+              <Button
+                size="sm"
+                disabled={!hasChanged || !isValid || setCap.isPending}
+                onClick={() => {
+                  setCap.mutate({
+                    name: project.name,
+                    cap_gb: capGb,
+                  });
+                }}
+              >
+                Save
+              </Button>
+            </div>
+            {!isValid && raw.trim() !== "" && (
+              <div className="text-xs text-destructive">
+                Cap must be a positive whole number.
+              </div>
+            )}
+            {setCap.error && (
+              <div className="text-xs text-destructive">
+                {setCap.error.message}
+              </div>
+            )}
+          </div>
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={clear.isPending}
+            onClick={() => {
+              if (
+                confirm(
+                  `Clear build cache for "${project.name}"? The next run rebuilds from scratch (cold).`,
+                )
+              ) {
+                clear.mutate(project.name);
+              }
+            }}
+          >
+            <IconTrash className="size-3.5" /> Clear cache
+          </Button>
+          {clear.error && (
+            <div className="text-xs text-destructive">
+              {clear.error.message}
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>
@@ -193,8 +337,13 @@ function CredentialField({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
-        <span className="text-xs font-medium text-muted-foreground">{meta.label}</span>
-        <Badge variant={configured ? "success" : "outline"} className="text-[10px]">
+        <span className="text-xs font-medium text-muted-foreground">
+          {meta.label}
+        </span>
+        <Badge
+          variant={configured ? "success" : "outline"}
+          className="text-[10px]"
+        >
           {configured ? "set" : "not set"}
         </Badge>
       </div>
@@ -203,10 +352,16 @@ function CredentialField({
           type="password"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={configured ? "set — paste a new value to replace" : meta.placeholder}
+          placeholder={
+            configured ? "set — paste a new value to replace" : meta.placeholder
+          }
           className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
         />
-        <Button size="sm" onClick={save} disabled={!value.trim() || set.isPending}>
+        <Button
+          size="sm"
+          onClick={save}
+          disabled={!value.trim() || set.isPending}
+        >
           {set.isPending ? "Saving…" : "Save"}
         </Button>
         {configured && (
@@ -279,7 +434,9 @@ function RegisterForm() {
         <form onSubmit={submit} className="flex flex-col gap-3">
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">Name (slug)</span>
+              <span className="text-xs font-medium text-muted-foreground">
+                Name (slug)
+              </span>
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
@@ -300,7 +457,9 @@ function RegisterForm() {
             </label>
           </div>
           <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">Git URL</span>
+            <span className="text-xs font-medium text-muted-foreground">
+              Git URL
+            </span>
             <input
               value={gitUrl}
               onChange={(e) => setGitUrl(e.target.value)}
@@ -330,7 +489,8 @@ function RegisterForm() {
               className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
             <span className="text-[10px] text-muted-foreground">
-              Installed on demand with mise before each run (cached, no image rebuild).
+              Installed on demand with mise before each run (cached, no image
+              rebuild).
             </span>
           </label>
           <div className="flex items-center gap-2">
@@ -348,9 +508,13 @@ function RegisterForm() {
               </span>
             )}
             {register.isError && (
-              <span className="text-xs text-destructive">{register.error.message}</span>
+              <span className="text-xs text-destructive">
+                {register.error.message}
+              </span>
             )}
-            {warning && <span className="text-xs text-status-running">{warning}</span>}
+            {warning && (
+              <span className="text-xs text-status-running">{warning}</span>
+            )}
           </div>
         </form>
       </CardContent>

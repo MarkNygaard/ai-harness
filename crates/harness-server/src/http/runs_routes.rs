@@ -111,6 +111,8 @@ pub struct RunsState {
 struct LiveRun {
     tx: broadcast::Sender<RunEvent>,
     abort: tokio::task::AbortHandle,
+    /// The project this run belongs to (for per-project idle guards).
+    project: String,
 }
 
 impl RunsState {
@@ -276,6 +278,15 @@ impl RunsState {
             })
             .await
     }
+
+    /// True if this instance currently has an in-memory live run for `project`.
+    pub(crate) async fn has_live_run_for_project(&self, project: &str) -> bool {
+        self.live
+            .lock()
+            .await
+            .values()
+            .any(|r| r.project == project)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -349,15 +360,59 @@ pub(crate) fn spawn_reaper(state: Arc<RunsState>) {
 }
 
 /// How often the cargo-cache sweeper checks the shared build cache.
-const CACHE_SWEEP_EVERY_SECS: u64 = 6 * 60 * 60;
+pub(crate) const CACHE_SWEEP_EVERY_SECS: u64 = 6 * 60 * 60;
 /// Don't evict artifacts modified within this window — protects an in-progress
 /// build's fresh outputs (even one driven by another replica) from deletion.
-const CACHE_SWEEP_SAFETY_FLOOR_SECS: u64 = 2 * 60 * 60;
+pub(crate) const CACHE_SWEEP_SAFETY_FLOOR_SECS: u64 = 2 * 60 * 60;
 /// Default size cap **per project** cache dir (each immediate subdirectory of
 /// `.cargo-target/`), in GiB. Override with `HARNESS_CARGO_TARGET_CAP_GB`; `0`
 /// disables the sweeper. Per-project, so total disk scales with the number of
 /// projects but no single project's cache can balloon.
-const CACHE_CAP_GB_DEFAULT: u64 = 50;
+pub(crate) const CACHE_CAP_GB_DEFAULT: u64 = 50;
+/// Total size in bytes of all regular files under `root` (recursive, skipping
+/// symlinks). Returns 0 if `root` is absent/unreadable. Best-effort.
+pub(crate) fn dir_size(root: &std::path::Path) -> u64 {
+    let mut total: u64 = 0;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in rd.flatten() {
+            let Ok(ft) = entry.file_type() else { continue };
+            if ft.is_symlink() {
+                continue;
+            }
+            if ft.is_dir() {
+                stack.push(entry.path());
+            } else if ft.is_file() {
+                if let Ok(meta) = entry.metadata() {
+                    total = total.saturating_add(meta.len());
+                }
+            }
+        }
+    }
+    total
+}
+
+/// Resolve a project's effective cache cap (GiB): per-project setting (when
+/// > 0) → `HARNESS_CARGO_TARGET_CAP_GB` env → [`CACHE_CAP_GB_DEFAULT`].
+pub(crate) fn resolve_cap_gb(project_cap: Option<i32>) -> u64 {
+    resolve_cap_gb_with_env(
+        project_cap,
+        std::env::var("HARNESS_CARGO_TARGET_CAP_GB").ok().as_deref(),
+    )
+}
+
+fn resolve_cap_gb_with_env(project_cap: Option<i32>, env_cap: Option<&str>) -> u64 {
+    if let Some(v) = project_cap.filter(|&v| v > 0) {
+        return v as u64;
+    }
+    match env_cap.and_then(|v| v.trim().parse::<u64>().ok()) {
+        Some(v) => v,
+        None => CACHE_CAP_GB_DEFAULT,
+    }
+}
 
 /// Periodically bound each project's cargo build cache so none can fill the disk.
 ///
@@ -374,16 +429,14 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
     if tokio::runtime::Handle::try_current().is_err() {
         return;
     }
-    let cap_gb = std::env::var("HARNESS_CARGO_TARGET_CAP_GB")
+    let env_cap_gb = std::env::var("HARNESS_CARGO_TARGET_CAP_GB")
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(CACHE_CAP_GB_DEFAULT);
-    if cap_gb == 0 {
+    if env_cap_gb == 0 {
         tracing::info!("cache sweeper: disabled (HARNESS_CARGO_TARGET_CAP_GB=0)");
         return;
     }
-    let cap = cap_gb.saturating_mul(1024 * 1024 * 1024);
-    let target = cap / 5 * 4; // 80% — hysteresis so we don't churn at the edge
     let root = state.projects_dir.join(".cargo-target");
     tokio::spawn(async move {
         let mut tick =
@@ -395,9 +448,23 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
             if !state.live.lock().await.is_empty() {
                 continue;
             }
+            let caps: std::collections::HashMap<String, i32> = match state.project_store().await {
+                Ok(store) => match store.list().await {
+                    Ok(ps) => ps
+                        .into_iter()
+                        .filter_map(|p| p.cargo_target_cap_gb.map(|c| (p.name, c)))
+                        .collect(),
+                    Err(e) => {
+                        tracing::warn!("cache sweeper: list projects: {e}");
+                        Default::default()
+                    }
+                },
+                Err(_) => Default::default(),
+            };
             let root = root.clone();
+            let caps = caps.clone();
             if let Err(e) = tokio::task::spawn_blocking(move || {
-                sweep_project_caches(&root, cap, target, CACHE_SWEEP_SAFETY_FLOOR_SECS, cap_gb)
+                sweep_project_caches(&root, CACHE_SWEEP_SAFETY_FLOOR_SECS, &caps)
             })
             .await
             {
@@ -408,14 +475,10 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
 }
 
 /// Sweep each project cache dir (an immediate subdirectory of `root`)
-/// independently against `cap`, logging any that were pruned. `cap_gb` is used
-/// only for the log line.
 fn sweep_project_caches(
     root: &std::path::Path,
-    cap: u64,
-    target: u64,
     floor_secs: u64,
-    cap_gb: u64,
+    caps: &std::collections::HashMap<String, i32>,
 ) {
     let rd = match std::fs::read_dir(root) {
         Ok(r) => r,
@@ -426,6 +489,12 @@ fn sweep_project_caches(
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
+        let cap_gb = resolve_cap_gb(caps.get(&name).copied());
+        if cap_gb == 0 {
+            continue;
+        }
+        let cap = cap_gb.saturating_mul(1024 * 1024 * 1024);
+        let target = cap / 5 * 4; // 80% — hysteresis so we don't churn at the edge
         match sweep_cargo_cache(&entry.path(), cap, target, floor_secs) {
             Ok(Some((before, after))) => tracing::info!(
                 "cache sweeper: {name} {:.1} GB -> {:.1} GB (cap {cap_gb} GB/project)",
@@ -441,7 +510,7 @@ fn sweep_project_caches(
 /// Evict oldest files under `root` until total size ≤ `target`, but only when it
 /// currently exceeds `cap`, and never touching files modified within
 /// `floor_secs`. Returns `(before, after)` bytes when it acted, else `None`.
-fn sweep_cargo_cache(
+pub(crate) fn sweep_cargo_cache(
     root: &std::path::Path,
     cap: u64,
     target: u64,
@@ -620,6 +689,7 @@ pub(crate) async fn start_run(
         req.description
     };
     let title = req.title.filter(|t| !t.trim().is_empty());
+    let live_project = project.clone();
     let handle = tokio::spawn(async move {
         execute_run_task(
             task_state,
@@ -640,6 +710,7 @@ pub(crate) async fn start_run(
         LiveRun {
             tx: live_tx,
             abort: handle.abort_handle(),
+            project: live_project,
         },
     );
 
@@ -703,7 +774,15 @@ async fn execute_run_task(
     // inherits this, so the first run compiles and later runs reuse artifacts.
     let cargo_target = state.projects_dir.join(".cargo-target").join(&project);
     let _ = std::fs::create_dir_all(&cargo_target);
-    std::env::set_var("CARGO_TARGET_DIR", &cargo_target);
+    let mut run_env = std::collections::HashMap::from([
+        (
+            "CARGO_TARGET_DIR".to_string(),
+            cargo_target.display().to_string(),
+        ),
+        ("CARGO_INCREMENTAL".to_string(), "0".to_string()),
+        ("CARGO_PROFILE_DEV_DEBUG".to_string(), "1".to_string()),
+        ("CARGO_PROFILE_TEST_DEBUG".to_string(), "1".to_string()),
+    ]);
 
     // Keep that shared cache from ballooning (it grew to ~128 GB on the cluster).
     // The two dominant size drivers of debug builds are full debuginfo and
@@ -713,10 +792,6 @@ async fn execute_run_task(
     // disable incremental compilation. Set via env so it applies to every cargo
     // invocation a run spawns, for any project, without editing the project's
     // `Cargo.toml` and without affecting developers' local builds.
-    std::env::set_var("CARGO_INCREMENTAL", "0");
-    std::env::set_var("CARGO_PROFILE_DEV_DEBUG", "1");
-    std::env::set_var("CARGO_PROFILE_TEST_DEBUG", "1");
-
     // Provision the project's toolchains via mise (cached on the PV — no image
     // rebuild), then put mise's shims on PATH so cargo/pnpm/etc. resolve for every
     // node. Best-effort: a failure is logged; the dependent build step will then
@@ -731,7 +806,9 @@ async fn execute_run_task(
                     let shims_s = shims.display().to_string();
                     let path = std::env::var("PATH").unwrap_or_default();
                     if !path.split(':').any(|p| p == shims_s) {
-                        std::env::set_var("PATH", format!("{shims_s}:{path}"));
+                        let path = format!("{shims_s}:{path}");
+                        std::env::set_var("PATH", &path);
+                        run_env.insert("PATH".to_string(), path);
                     }
                 }
             }
@@ -756,7 +833,7 @@ async fn execute_run_task(
     } else {
         Arc::new(EchoAgent)
     };
-    let runner = LocalRunner::new(workspace, command_dirs, agent);
+    let runner = LocalRunner::new(workspace, command_dirs, agent).with_env_vars(run_env);
 
     // The task spec feeds `$ARGUMENTS`/`$USER_MESSAGE`/`$TASK_DESCRIPTION`; the
     // title is exposed separately as `$TASK_TITLE` (option 1).
@@ -1015,6 +1092,53 @@ pub async fn delete_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn dir_size_sums_regular_files_skips_symlinks() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        let sub = dir.path().join("sub");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(&a, "hello").unwrap();
+        std::fs::write(sub.join("b.txt"), "world").unwrap();
+        #[cfg(unix)]
+        {
+            let link = dir.path().join("link.txt");
+            std::os::unix::fs::symlink(&a, &link).unwrap();
+        }
+        assert_eq!(dir_size(dir.path()), 10);
+    }
+
+    #[test]
+    fn dir_size_missing_path_is_zero() {
+        assert_eq!(
+            dir_size(std::path::Path::new("/does/not/exist/for/sure")),
+            0
+        );
+    }
+
+    #[test]
+    fn resolve_cap_gb_prefers_project_setting() {
+        // When a positive per-project cap is set, it wins over everything.
+        assert_eq!(resolve_cap_gb(Some(42)), 42);
+    }
+
+    #[test]
+    fn resolve_cap_gb_falls_back_to_env_then_default() {
+        assert_eq!(resolve_cap_gb_with_env(None, Some("25")), 25);
+        assert_eq!(resolve_cap_gb_with_env(Some(0), Some("25")), 25);
+        assert_eq!(resolve_cap_gb_with_env(Some(-5), Some("25")), 25);
+        assert_eq!(resolve_cap_gb_with_env(None, None), CACHE_CAP_GB_DEFAULT);
+        assert_eq!(
+            resolve_cap_gb_with_env(None, Some("invalid")),
+            CACHE_CAP_GB_DEFAULT
+        );
+    }
+
+    #[test]
+    fn resolve_cap_gb_allows_env_zero_to_disable_sweeping() {
+        assert_eq!(resolve_cap_gb_with_env(None, Some("0")), 0);
+    }
+
     #[test]
     fn read_declared_artifact_reads_file() {
         let dir = tempfile::tempdir().unwrap();
