@@ -64,6 +64,8 @@ pub struct PiAgent {
     /// long *active* step is never stopped. Set via `OMP_TIMEOUT_SECS`.
     timeout: Option<Duration>,
     idle_timeout: Duration,
+    /// Optional `omp` plugin dirs (e.g. pi-web-access), loaded via `--plugin-dir`.
+    plugin_dirs: Vec<String>,
 }
 
 impl Default for PiAgent {
@@ -96,6 +98,16 @@ impl PiAgent {
             default_model: DEFAULT_MODEL.to_string(),
             timeout,
             idle_timeout,
+            plugin_dirs: std::env::var("OMP_PLUGIN_DIRS")
+                .ok()
+                .map(|d| {
+                    d.split(':')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 
@@ -119,15 +131,9 @@ impl PiAgent {
             "--model".to_string(),
             model.to_string(),
         ];
-        // Optional omp plugin dirs (e.g. pi-web-access), colon-separated in
-        // OMP_PLUGIN_DIRS. Baked into the image at a fixed path and loaded via
-        // `--plugin-dir` so they survive the PV-mounted $HOME. Unset (local dev)
-        // = no extra plugins.
-        if let Ok(dirs) = std::env::var("OMP_PLUGIN_DIRS") {
-            for dir in dirs.split(':').map(str::trim).filter(|d| !d.is_empty()) {
-                args.push("--plugin-dir".to_string());
-                args.push(dir.to_string());
-            }
+        for dir in &self.plugin_dirs {
+            args.push("--plugin-dir".to_string());
+            args.push(dir.clone());
         }
         if let Some(id) = session {
             args.push("--resume".to_string());
@@ -624,7 +630,13 @@ mod tests {
 
     #[test]
     fn build_args_adds_resume_when_session_present() {
-        let agent = PiAgent::from_env();
+        let agent = PiAgent {
+            cli_path: PathBuf::from("omp"),
+            default_model: DEFAULT_MODEL.to_string(),
+            timeout: None,
+            idle_timeout: Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+            plugin_dirs: vec![],
+        };
         let base = agent.build_args("do it", "kimi-code/kimi-k2.5", None);
         assert_eq!(
             base,
@@ -650,6 +662,7 @@ mod tests {
             default_model: DEFAULT_MODEL.to_string(),
             timeout: None, // no wall-clock cap — prove the idle watchdog alone works
             idle_timeout: idle,
+            plugin_dirs: vec![],
         }
     }
 
