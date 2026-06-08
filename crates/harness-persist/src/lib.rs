@@ -857,6 +857,57 @@ mod tests {
         assert_eq!(proj_a_completed, 2, "proj-a should have 2 completed runs");
         assert_eq!(proj_b_failed, 1, "proj-b should have 1 failed run");
         assert!(!any_running, "running runs must be excluded from aggregate");
+        for r in &rows {
+            assert_eq!(
+                r.day.time(),
+                chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                "day bucket must be at UTC midnight"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn runs_daily_summary_excludes_runs_outside_window() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+
+        let uid = |prefix: &str| {
+            format!(
+                "{prefix}-{}",
+                chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            )
+        };
+
+        let mut report = sample_report();
+        report.status = RunStatus::Completed;
+        let run_id = uid("test-dash-window");
+        store
+            .record_run(&run_id, Some("task"), None, Some("proj"), &report)
+            .await
+            .unwrap();
+
+        // Backdate the run so it falls outside a 1-hour window.
+        sqlx::query(
+            "UPDATE harness_workflow_runs SET recorded_at = now() - interval '2 hours' WHERE id = $1",
+        )
+        .bind(&run_id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        let rows = store
+            .runs_daily_summary(chrono::Utc::now() - chrono::Duration::hours(1))
+            .await
+            .unwrap();
+
+        assert!(
+            rows.iter().all(|r| r.project.as_deref() != Some("proj")),
+            "runs older than the since window must be excluded"
+        );
     }
 
     #[tokio::test]

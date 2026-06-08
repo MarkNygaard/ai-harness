@@ -26,7 +26,7 @@ export function DashboardPage() {
             Failed to load summary: {summary.error.message}
           </p>
         )}
-        {!summary.isLoading && projects.length === 0 && (
+        {!summary.isLoading && !summary.isError && projects.length === 0 && (
           <p className="text-sm text-muted-foreground">
             No completed runs in the last 14 days.{" "}
             <Link to="/runs" className="underline">

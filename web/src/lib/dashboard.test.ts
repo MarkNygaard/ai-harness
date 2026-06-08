@@ -111,4 +111,31 @@ describe("buildProjectSummaries", () => {
     expect(summaries[0].project).toBe("alpha");
     expect(summaries[1].project).toBe("zebra");
   });
+  it("buckets multiple days for the same project", () => {
+    const rows: RunDailyCount[] = [
+      {
+        project: "proj-a",
+        day: "2026-06-08T00:00:00Z",
+        status: "completed",
+        count: 2,
+      },
+      {
+        project: "proj-a",
+        day: "2026-06-07T00:00:00Z",
+        status: "completed",
+        count: 1,
+      },
+      {
+        project: "proj-a",
+        day: "2026-06-07T00:00:00Z",
+        status: "failed",
+        count: 1,
+      },
+    ];
+    const summaries = buildProjectSummaries(rows);
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0].total).toBe(3);
+    expect(summaries[0].byDay["2026-06-08"]).toEqual({ completed: 2, failed: 0 });
+    expect(summaries[0].byDay["2026-06-07"]).toEqual({ completed: 1, failed: 1 });
+  });
 });
