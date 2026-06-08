@@ -6,7 +6,6 @@ import { useRunsSummary } from "@/lib/runs";
 import {
   buildProjectSummaries,
   recentDayKeys,
-  utcDayKey,
   NO_PROJECT,
 } from "@/lib/dashboard";
 
@@ -14,16 +13,7 @@ export function DashboardPage() {
   const summary = useRunsSummary(14);
   const projects = buildProjectSummaries(summary.data ?? []);
   const now = new Date();
-  const today = utcDayKey(
-    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString()
-  );
-  const yesterday = utcDayKey(
-    new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1)
-    ).toISOString()
-  );
-  const days = recentDayKeys(now, 14);
-  const trailing = days.slice(2); // index 2..13
+  const [today, yesterday, ...trailing] = recentDayKeys(now, 14);
 
   return (
     <AppShell title="Dashboard">
@@ -69,7 +59,8 @@ export function DashboardPage() {
                   <div className="flex gap-1">
                     {trailing.map((d) => {
                       const b = ps.byDay[d];
-                      const hasFailed = (b?.failed ?? 0) > 0;
+                      const failed = b?.failed ?? 0;
+                      const hasFailed = failed > 0;
                       const completed = b?.completed ?? 0;
                       return (
                         <div
@@ -79,7 +70,9 @@ export function DashboardPage() {
                               ? "bg-status-success/15 text-status-success"
                               : "bg-muted text-muted-foreground"
                           } ${hasFailed ? "ring-1 ring-status-failed" : ""}`}
-                          title={`${d}: ${completed} completed${hasFailed ? `, ${b!.failed} failed` : ""}`}
+                          title={`${d}: ${completed} completed${
+                            hasFailed ? `, ${failed} failed` : ""
+                          }`}
                         >
                           {completed > 0 ? completed : "·"}
                         </div>
@@ -112,12 +105,8 @@ function DayRow({
     <div className="flex items-center justify-between">
       <span className="text-xs text-muted-foreground">{label}</span>
       <div className="flex items-center gap-2">
-        {completed > 0 && (
-          <Badge variant="success">{completed}</Badge>
-        )}
-        {failed > 0 && (
-          <Badge variant="failed">{failed}</Badge>
-        )}
+        {completed > 0 && <Badge variant="success">{completed}</Badge>}
+        {failed > 0 && <Badge variant="failed">{failed}</Badge>}
         {completed === 0 && failed === 0 && (
           <span className="text-xs text-muted-foreground">—</span>
         )}

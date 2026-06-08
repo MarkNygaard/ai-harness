@@ -790,14 +790,18 @@ mod tests {
         };
         let store = RunStore::connect(&url).await.expect("connect");
 
+        let uid = |prefix: &str| {
+            format!(
+                "{prefix}-{}",
+                chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            )
+        };
+
         // Two completed runs in proj-a.
         let mut report_a = sample_report();
         report_a.status = RunStatus::Completed;
-        for _ in 0..2 {
-            let run_id = format!(
-                "test-dash-a-{}",
-                chrono::Utc::now().timestamp_nanos_opt().unwrap()
-            );
+        for i in 0..2 {
+            let run_id = uid(&format!("test-dash-a-{i}"));
             store
                 .record_run(&run_id, Some("task-a"), None, Some("proj-a"), &report_a)
                 .await
@@ -807,20 +811,14 @@ mod tests {
         // One failed run in proj-b.
         let mut report_b = sample_report();
         report_b.status = RunStatus::Failed;
-        let run_id_b = format!(
-            "test-dash-b-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        );
+        let run_id_b = uid("test-dash-b");
         store
             .record_run(&run_id_b, Some("task-b"), None, Some("proj-b"), &report_b)
             .await
             .unwrap();
 
         // One running run (should be excluded from the aggregate).
-        let run_id_c = format!(
-            "test-dash-c-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        );
+        let run_id_c = uid("test-dash-c");
         store
             .start_run(
                 &run_id_c,

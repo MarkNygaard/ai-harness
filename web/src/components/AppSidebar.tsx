@@ -60,10 +60,8 @@ const SYSTEM: NavItem[] = [
   },
 ];
 function isActive(pathname: string, item: NavItem): boolean {
-  if (item.href === "/") return pathname === "/";
   return (
-    pathname === item.href ||
-    (item.match ? pathname.startsWith(item.match) : false)
+    pathname === item.href || (!!item.match && pathname.startsWith(item.match))
   );
 }
 

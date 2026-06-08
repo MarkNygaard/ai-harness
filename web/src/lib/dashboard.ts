@@ -12,7 +12,7 @@ export function recentDayKeys(now: Date, n: number): string[] {
   const keys: string[] = [];
   for (let i = 0; i < n; i++) {
     const d = new Date(
-      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i)
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - i),
     );
     keys.push(d.toISOString().slice(0, 10));
   }
@@ -31,12 +31,10 @@ export interface ProjectSummary {
 }
 
 /** Group rows → per-project, per-day buckets. Sorted by total completed desc. */
-export function buildProjectSummaries(
-  rows: RunDailyCount[]
-): ProjectSummary[] {
+export function buildProjectSummaries(rows: RunDailyCount[]): ProjectSummary[] {
   const map = new Map<string, ProjectSummary>();
   for (const r of rows) {
-    const project = r.project && r.project.trim() ? r.project : NO_PROJECT;
+    const project = r.project?.trim() || NO_PROJECT;
     const key = utcDayKey(r.day);
     const ps = map.get(project) ?? { project, total: 0, byDay: {} };
     const b = ps.byDay[key] ?? { completed: 0, failed: 0 };
@@ -50,6 +48,6 @@ export function buildProjectSummaries(
     map.set(project, ps);
   }
   return [...map.values()].sort(
-    (a, b) => b.total - a.total || a.project.localeCompare(b.project)
+    (a, b) => b.total - a.total || a.project.localeCompare(b.project),
   );
 }

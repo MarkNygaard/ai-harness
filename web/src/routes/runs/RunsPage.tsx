@@ -36,7 +36,7 @@ export function RunsPage() {
   const [params] = useSearchParams();
   const projectFilter = params.get("project");
   const filtered = runs.data?.filter(
-    (r) => !projectFilter || r.project === projectFilter
+    (r) => !projectFilter || r.project === projectFilter,
   );
   return (
     <AppShell title="Runs">
@@ -48,7 +48,7 @@ export function RunsPage() {
           </h2>
           {projectFilter && (
             <p className="text-sm">
-              Filtered by project: {" "}
+              Filtered by project:{" "}
               <span className="font-medium">{projectFilter}</span>{" "}
               <Link to="/runs" className="underline text-muted-foreground">
                 clear
