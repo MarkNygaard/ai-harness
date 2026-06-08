@@ -32,13 +32,13 @@ use crate::circuit_breaker::CircuitBreaker;
 ///
 /// ## CI guard
 ///
-/// When the `CI` environment variable is set the enforcer skips all
-/// enforcement unconditionally. Desktop-specific hooks must not run in CI
-/// environments (GitHub issue #3573).
-///
+/// When the `ci_skip` flag is set the enforcer skips all enforcement
+/// unconditionally. Desktop-specific hooks must not run in CI environments
+/// (GitHub issue #3573). The flag is wired from the `CI` env var once at
+/// startup in `build_services()`.
 /// The enforcer silently passes through when:
 /// - `enabled` is `false` (controlled by `rules.hook_enforcement` in config)
-/// - `CI` environment variable is set
+/// - the `ci_skip` flag is set (wired from the `CI` env var at startup)
 /// - no guards are registered
 /// - no affected files are supplied by telemetry
 /// - the circuit breaker is open (consecutive-block limit reached)
@@ -50,15 +50,22 @@ pub struct HookEnforcer {
     rules: Arc<RwLock<RuleEngine>>,
     events: Arc<EventStore>,
     enabled: bool,
+    ci_skip: bool,
     breaker: CircuitBreaker,
 }
 
 impl HookEnforcer {
-    pub fn new(rules: Arc<RwLock<RuleEngine>>, events: Arc<EventStore>, enabled: bool) -> Self {
+    pub fn new(
+        rules: Arc<RwLock<RuleEngine>>,
+        events: Arc<EventStore>,
+        enabled: bool,
+        ci_skip: bool,
+    ) -> Self {
         Self {
             rules,
             events,
             enabled,
+            ci_skip,
             breaker: CircuitBreaker::new(),
         }
     }
@@ -101,7 +108,7 @@ impl TurnInterceptor for HookEnforcer {
     /// `hook_enforcement` event to the [`EventStore`], and return violation
     /// feedback when violations are found.
     ///
-    /// Auto-passes (returns clean) when the CI environment variable is set or
+    /// Auto-passes (returns clean) when the CI `ci_skip` flag is set or
     /// when the per-session circuit breaker has opened due to repeated blocks.
     async fn post_tool_use(&self, event: &ToolUseEvent, project_root: &Path) -> PostToolUseResult {
         if !self.enabled {
@@ -109,7 +116,9 @@ impl TurnInterceptor for HookEnforcer {
         }
 
         // CI guard: skip all enforcement in CI environments (#3573).
-        if std::env::var("CI").is_ok() {
+        // Driven by an explicit flag set at construction (AIH-11) — not a runtime
+        // read of the global `CI` env var, which races tests under nextest.
+        if self.ci_skip {
             return PostToolUseResult::clean();
         }
 
@@ -191,45 +200,7 @@ mod tests {
     use super::*;
     use harness_core::{types::EventFilters, types::GuardId, types::Language};
     use harness_rules::engine::{Guard, RuleEngine};
-    use std::ffi::OsString;
     use tempfile::tempdir;
-    use tokio::sync::Mutex;
-
-    static CI_ENV_LOCK: Mutex<()> = Mutex::const_new(());
-
-    struct CiEnvGuard {
-        previous: Option<OsString>,
-    }
-
-    impl Drop for CiEnvGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(value) => {
-                    // SAFETY: tests run in a single process; caller serializes with CI_ENV_LOCK.
-                    unsafe { std::env::set_var("CI", value) };
-                }
-                None => {
-                    // SAFETY: tests run in a single process; caller serializes with CI_ENV_LOCK.
-                    unsafe { std::env::remove_var("CI") };
-                }
-            }
-        }
-    }
-
-    fn with_ci_env(value: Option<&str>) -> CiEnvGuard {
-        let previous = std::env::var_os("CI");
-        match value {
-            Some(v) => {
-                // SAFETY: tests run in a single process; caller serializes with CI_ENV_LOCK.
-                unsafe { std::env::set_var("CI", v) };
-            }
-            None => {
-                // SAFETY: tests run in a single process; caller serializes with CI_ENV_LOCK.
-                unsafe { std::env::remove_var("CI") };
-            }
-        }
-        CiEnvGuard { previous }
-    }
 
     async fn make_event_store(dir: &Path) -> Arc<EventStore> {
         Arc::new(EventStore::new(dir).await.unwrap())
@@ -270,8 +241,6 @@ mod tests {
         if !crate::test_helpers::db_tests_enabled().await {
             return Ok(());
         }
-        let _env_lock = CI_ENV_LOCK.lock().await;
-        let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
         let dir = tempdir()?;
         let events = make_event_store(dir.path()).await;
@@ -279,7 +248,7 @@ mod tests {
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project)?;
 
-        let enforcer = HookEnforcer::new(rules, events, true);
+        let enforcer = HookEnforcer::new(rules, events, true, true);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![PathBuf::from("src/main.rs")],
@@ -303,8 +272,6 @@ mod tests {
         if !crate::test_helpers::db_tests_enabled().await {
             return Ok(());
         }
-        let _env_lock = CI_ENV_LOCK.lock().await;
-        let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
         let dir = tempdir()?;
         let events = make_event_store(dir.path()).await;
@@ -312,7 +279,7 @@ mod tests {
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project)?;
 
-        let enforcer = HookEnforcer::new(rules, events, false);
+        let enforcer = HookEnforcer::new(rules, events, false, false);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![PathBuf::from("src/main.rs")],
@@ -331,14 +298,12 @@ mod tests {
         if !crate::test_helpers::db_tests_enabled().await {
             return Ok(());
         }
-        let _env_lock = CI_ENV_LOCK.lock().await;
-        let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
         let dir = tempdir()?;
         let events = make_event_store(dir.path()).await;
         let rules = make_engine_with_guard(dir.path(), "U-16", "medium");
 
-        let enforcer = HookEnforcer::new(rules, events, true);
+        let enforcer = HookEnforcer::new(rules, events, true, false);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![],
@@ -354,8 +319,6 @@ mod tests {
         if !crate::test_helpers::db_tests_enabled().await {
             return Ok(());
         }
-        let _env_lock = CI_ENV_LOCK.lock().await;
-        let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
         let dir = tempdir()?;
         let event_store = Arc::new(EventStore::new(dir.path()).await?);
@@ -363,7 +326,7 @@ mod tests {
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project)?;
 
-        let enforcer = HookEnforcer::new(rules, event_store.clone(), true);
+        let enforcer = HookEnforcer::new(rules, event_store.clone(), true, false);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![PathBuf::from("src/main.rs")],
@@ -390,14 +353,12 @@ mod tests {
         if !crate::test_helpers::db_tests_enabled().await {
             return Ok(());
         }
-        let _env_lock = CI_ENV_LOCK.lock().await;
-        let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
         let dir = tempdir()?;
         let events = make_event_store(dir.path()).await;
         let rules = Arc::new(RwLock::new(RuleEngine::new()));
 
-        let enforcer = HookEnforcer::new(rules, events, true);
+        let enforcer = HookEnforcer::new(rules, events, true, false);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![PathBuf::from("src/main.rs")],
@@ -420,7 +381,7 @@ mod tests {
         let dir = tempdir()?;
         let events = make_event_store(dir.path()).await;
         let rules = Arc::new(RwLock::new(RuleEngine::new()));
-        let enforcer = HookEnforcer::new(rules, events, false);
+        let enforcer = HookEnforcer::new(rules, events, false, false);
         assert_eq!(enforcer.name(), "hook_enforcer");
         Ok(())
     }
@@ -430,8 +391,6 @@ mod tests {
         if !crate::test_helpers::db_tests_enabled().await {
             return Ok(());
         }
-        let _env_lock = CI_ENV_LOCK.lock().await;
-        let _ci_guard = with_ci_env(None);
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
         let dir = tempdir()?;
         let events = make_event_store(dir.path()).await;
@@ -440,7 +399,7 @@ mod tests {
         std::fs::create_dir_all(&project)?;
 
         let sid = SessionId::new();
-        let enforcer = HookEnforcer::new(rules, events, true);
+        let enforcer = HookEnforcer::new(rules, events, true, false);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![PathBuf::from("src/main.rs")],
@@ -473,8 +432,6 @@ mod tests {
         if !crate::test_helpers::db_tests_enabled().await {
             return Ok(());
         }
-        let _env_lock = CI_ENV_LOCK.lock().await;
-        let _ci_guard = with_ci_env(Some("true"));
         let _db_guard = crate::test_helpers::acquire_db_state_guard().await;
         let dir = tempdir()?;
         let events = make_event_store(dir.path()).await;
@@ -482,7 +439,7 @@ mod tests {
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project)?;
 
-        let enforcer = HookEnforcer::new(rules, events, true);
+        let enforcer = HookEnforcer::new(rules, events, true, false);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![PathBuf::from("src/main.rs")],

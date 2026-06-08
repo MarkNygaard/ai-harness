@@ -65,6 +65,7 @@ pub(crate) async fn build_services(
             engines.rules.clone(),
             events.clone(),
             hook_enforcement,
+            std::env::var("CI").is_ok(),
         )),
         Arc::new(
             crate::post_validator::PostExecutionValidator::new_with_github_token(

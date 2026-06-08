@@ -8,9 +8,6 @@ use std::sync::Arc;
 use tempfile::tempdir;
 use tokio::sync::RwLock;
 
-/// Serializes temporary mutations of process-global `CI` in this test module.
-static CI_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 fn make_engine_with_guard(guard_dir: &std::path::Path) -> Arc<RwLock<RuleEngine>> {
     let script = guard_dir.join("enf-test-guard.sh");
     std::fs::write(
@@ -38,20 +35,11 @@ fn make_engine_with_guard(guard_dir: &std::path::Path) -> Arc<RwLock<RuleEngine>
 }
 
 /// post_tool_use detects violations and writes a hook_enforcement event to EventStore.
-// QUARANTINED (flaky in CI): `HookEnforcer::post_tool_use` branches on the
-// process-global `CI` env var (hook_enforcer.rs:112); this test unsets `CI` to
-// exercise the guard path, but that global-env dance races under nextest's
-// process model and intermittently yields no violation feedback. The behavior
-// is still covered by `hook_enforcer`'s in-crate unit tests
-// (`post_tool_use_returns_violations_when_guard_fires`). Re-enable once the
-// enforcer takes an explicit flag instead of reading `CI` — see tracking issue.
 #[tokio::test]
-#[ignore = "flaky: enforcer reads global CI env; covered by hook_enforcer unit tests; re-enable after env-flag fix"]
 async fn post_tool_use_violation_is_logged_to_event_store() -> anyhow::Result<()> {
     if !harness_server::test_helpers::db_tests_enabled().await {
         return Ok(());
     }
-    let _ci_lock = CI_ENV_LOCK.lock().await;
 
     let dir = tempdir()?;
     let event_store = Arc::new(EventStore::new(dir.path()).await?);
@@ -60,7 +48,7 @@ async fn post_tool_use_violation_is_logged_to_event_store() -> anyhow::Result<()
     std::fs::create_dir_all(&project)?;
 
     let session = SessionId::new();
-    let enforcer = HookEnforcer::new(rules, event_store.clone(), true);
+    let enforcer = HookEnforcer::new(rules, event_store.clone(), true, false);
     let event = ToolUseEvent {
         tool_name: "write_file".to_string(),
         affected_files: vec![PathBuf::from("src/lib.rs")],
@@ -105,7 +93,7 @@ async fn pre_execute_block_rejects_the_turn() -> anyhow::Result<()> {
     // HookEnforcer itself only blocks in pre_tool_use / post_tool_use;
     // pre_execute always passes through. We verify the contract here and
     // separately test a blocking interceptor via InterceptResult::block().
-    let enforcer = HookEnforcer::new(rules, event_store, true);
+    let enforcer = HookEnforcer::new(rules, event_store, true, false);
 
     let req = harness_core::agent::AgentRequest {
         prompt: "do something".to_string(),
@@ -141,7 +129,7 @@ async fn no_violations_pass_through_without_event() -> anyhow::Result<()> {
     let project = dir.path().join("project");
     std::fs::create_dir_all(&project)?;
 
-    let enforcer = HookEnforcer::new(rules, event_store.clone(), true);
+    let enforcer = HookEnforcer::new(rules, event_store.clone(), true, false);
     let event = ToolUseEvent {
         tool_name: "write_file".to_string(),
         affected_files: vec![PathBuf::from("src/lib.rs")],
