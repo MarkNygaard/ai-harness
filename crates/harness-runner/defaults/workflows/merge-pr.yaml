@@ -101,18 +101,26 @@ nodes:
          `gh pr view $resolve-pr.output.pr --json state,mergeable,mergeStateStatus`
          - If it is no longer OPEN, report that and stop (already merged).
          - If it is still CONFLICTING, do NOT merge — report the conflict.
-      2. Wait for CI to finish and PASS before merging. Conflict resolution above
-         may have pushed new commits that retriggered CI, so checks can still be
-         running — never merge on in-progress or red checks. Block on them:
+      2. Bring the branch up to date with its base if it's behind — branch
+         protection may require up-to-date branches, and CI should run against the
+         post-merge state. This is a no-op when the branch is already current:
+           `gh pr update-branch $resolve-pr.output.pr`
+         If it reports a conflict (the base moved in a conflicting way), do NOT
+         merge — report it; a fresh conflict-resolution pass is needed. When it
+         does update, it pushes a commit that retriggers CI, which step 3 waits on.
+      3. Wait for CI to finish and PASS before merging. Conflict resolution or the
+         branch update above may have pushed new commits that retriggered CI, so
+         checks can still be running — never merge on in-progress or red checks.
+         Block on them:
            `gh pr checks $resolve-pr.output.pr --watch --fail-fast`
          This waits until every check completes and exits non-zero the moment one
          fails.
          - If it exits non-zero (a check failed/was cancelled), or it reports that
            no checks exist at all: do NOT merge. Report the failing check(s) and
            stop — leave the PR for a human. Never merge a red or unverified PR.
-      3. Only after every check has passed, squash-merge and delete the branch:
+      4. Only after every check has passed, squash-merge and delete the branch:
            `gh pr merge $resolve-pr.output.pr --squash --delete-branch`
-      4. Never bypass branch protection, never admin-override, never `--no-verify`,
+      5. Never bypass branch protection, never admin-override, never `--no-verify`,
          and do not use `--auto` — confirm the checks are green here yourself.
 
       Emit ONLY this JSON verdict:
