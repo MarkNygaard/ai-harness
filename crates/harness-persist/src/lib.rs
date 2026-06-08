@@ -840,6 +840,11 @@ mod tests {
                 chrono::Utc::now().timestamp_nanos_opt().unwrap()
             )
         };
+        // Unique project names: `runs_daily_summary` buckets by project over a
+        // 1-day window of the SHARED test DB, so fixed names would also count
+        // rows other runs left behind (the "left: 3, right: 2" flake).
+        let proj_a = uid("proj-a");
+        let proj_b = uid("proj-b");
 
         // Two completed runs in proj-a.
         let mut report_a = sample_report();
@@ -847,7 +852,13 @@ mod tests {
         for i in 0..2 {
             let run_id = uid(&format!("test-dash-a-{i}"));
             store
-                .record_run(&run_id, Some("task-a"), None, Some("proj-a"), &report_a)
+                .record_run(
+                    &run_id,
+                    Some("task-a"),
+                    None,
+                    Some(proj_a.as_str()),
+                    &report_a,
+                )
                 .await
                 .unwrap();
         }
@@ -857,7 +868,13 @@ mod tests {
         report_b.status = RunStatus::Failed;
         let run_id_b = uid("test-dash-b");
         store
-            .record_run(&run_id_b, Some("task-b"), None, Some("proj-b"), &report_b)
+            .record_run(
+                &run_id_b,
+                Some("task-b"),
+                None,
+                Some(proj_b.as_str()),
+                &report_b,
+            )
             .await
             .unwrap();
 
@@ -869,7 +886,7 @@ mod tests {
                 &report_a.workflow,
                 Some("task-c"),
                 None,
-                Some("proj-a"),
+                Some(proj_a.as_str()),
                 2,
                 &report_a.graph,
                 None,
@@ -884,12 +901,12 @@ mod tests {
 
         let proj_a_completed: i64 = rows
             .iter()
-            .filter(|r| r.project.as_deref() == Some("proj-a") && r.status == "completed")
+            .filter(|r| r.project.as_deref() == Some(proj_a.as_str()) && r.status == "completed")
             .map(|r| r.count)
             .sum();
         let proj_b_failed: i64 = rows
             .iter()
-            .filter(|r| r.project.as_deref() == Some("proj-b") && r.status == "failed")
+            .filter(|r| r.project.as_deref() == Some(proj_b.as_str()) && r.status == "failed")
             .map(|r| r.count)
             .sum();
         let any_running = rows.iter().any(|r| r.status == "running");
