@@ -138,7 +138,7 @@ impl RunsState {
                     .unwrap_or_else(|| project_root.join("projects"))
             });
         let public_url = public_url
-            .map(|u| u.trim_end_matches('/').to_string())
+            .map(|u| u.trim().trim_end_matches('/').to_string())
             .filter(|u| !u.is_empty());
         // Identity for run-lease attribution: the pod name (k8s sets HOSTNAME)
         // plus a start stamp, so two pods — and a restart of the same pod — get
@@ -1234,5 +1234,63 @@ mod tests {
             after >= 10 * 1024 * 1024,
             "fresh files must be protected, after={after}"
         );
+    }
+    #[test]
+    fn public_url_trims_trailing_slashes() {
+        let reg = Arc::new(AgentRegistry::new("codex"));
+        let state = RunsState::new(
+            None,
+            reg,
+            std::path::PathBuf::from("/tmp"),
+            None,
+            Some("https://example.com/".to_string()),
+        );
+        assert_eq!(state.public_url, Some("https://example.com".to_string()));
+    }
+
+    #[test]
+    fn public_url_trims_all_trailing_slashes() {
+        let reg = Arc::new(AgentRegistry::new("codex"));
+        let state = RunsState::new(
+            None,
+            reg,
+            std::path::PathBuf::from("/tmp"),
+            None,
+            Some("https://example.com///".to_string()),
+        );
+        assert_eq!(state.public_url, Some("https://example.com".to_string()));
+    }
+
+    #[test]
+    fn public_url_rejects_whitespace_only() {
+        let reg = Arc::new(AgentRegistry::new("codex"));
+        let state = RunsState::new(
+            None,
+            reg,
+            std::path::PathBuf::from("/tmp"),
+            None,
+            Some("   ".to_string()),
+        );
+        assert_eq!(state.public_url, None);
+    }
+
+    #[test]
+    fn public_url_rejects_empty_string() {
+        let reg = Arc::new(AgentRegistry::new("codex"));
+        let state = RunsState::new(
+            None,
+            reg,
+            std::path::PathBuf::from("/tmp"),
+            None,
+            Some("".to_string()),
+        );
+        assert_eq!(state.public_url, None);
+    }
+
+    #[test]
+    fn public_url_none_when_input_none() {
+        let reg = Arc::new(AgentRegistry::new("codex"));
+        let state = RunsState::new(None, reg, std::path::PathBuf::from("/tmp"), None, None);
+        assert_eq!(state.public_url, None);
     }
 }
