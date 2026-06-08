@@ -219,7 +219,7 @@ mod tests {
         // on edit/shell tools.
         for id in ["analyze", "plan"] {
             let node = wf.nodes.iter().find(|n| n.id == id).unwrap();
-            let hooks = node.hooks.as_ref().expect("{id} has hooks");
+            let hooks = node.hooks.as_ref().expect(&format!("{id} has hooks"));
             assert!(
                 hooks
                     .pre_tool_use
