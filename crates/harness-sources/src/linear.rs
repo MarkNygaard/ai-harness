@@ -179,8 +179,9 @@ query Preview($teamId: ID!, $stateId: ID!) {
   }
 }"#;
 // A single issue's comments connection is flat (no nested connections), so
-// even first: 50 stays well under Linear's 10k complexity cap. Ordered
-// oldest→newest so the reviewer's narrative reads top-to-bottom.
+// even first: 50 stays well under Linear's 10k complexity cap. Linear returns
+// comments in createdAt order (oldest first in practice), so the reviewer's
+// narrative reads top-to-bottom.
 const COMMENTS_QUERY: &str = r#"
 query Comments($id: String!) {
   issue(id: $id) {
@@ -581,6 +582,12 @@ mod tests {
     #[test]
     fn parse_comments_handles_null_issue() {
         let json = br#"{"data":{"issue":null}}"#;
+        let comments = parse_comments(json).unwrap();
+        assert!(comments.is_empty());
+    }
+    #[test]
+    fn parse_comments_handles_empty_nodes() {
+        let json = br#"{"data":{"issue":{"comments":{"nodes":[]}}}}"#;
         let comments = parse_comments(json).unwrap();
         assert!(comments.is_empty());
     }

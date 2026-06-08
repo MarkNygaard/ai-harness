@@ -155,15 +155,28 @@ nodes:
     depends_on: [implement]
     trigger_rule: none_failed_min_one_success
     prompt: |
-      PR #$resolve-pr.output.pr has been revised and pushed. Read the commit
-      history since the base branch:
+      PR #$resolve-pr.output.pr may have been revised and pushed. Before
+      posting a summary comment, check whether the implement node actually
+      converged:
+
+      $implement.output
+
+      If the output above contains `<promise>REVISION_DONE</promise>`, post a
+      short comment via `gh pr comment $resolve-pr.output.pr --body "..."`
+      summarizing the revisions pushed this pass and noting that the PR is
+      ready for re-review.
+
+      If the promise is NOT present, the loop hit its iteration cap without
+      fully addressing every feedback item. In that case post a comment
+      explaining that this pass made partial progress but did not fully
+      converge, and that human follow-up is needed. Do NOT claim the PR is
+      ready for re-review.
+
+      Read the commit history since the base branch to ground the summary:
       `git log --oneline origin/$BASE_BRANCH..HEAD`
 
-      Post one short PR comment:
-        gh pr comment $resolve-pr.output.pr --body "..."
-      The comment should summarize the revisions pushed this pass and note that
-      the PR is ready for re-review. Do NOT change labels or title; the poller
-      will move the Linear card back to the review column on completion.
+      Do NOT change labels or title; the poller will move the Linear card back
+      to the review column on completion.
 
       End with: <promise>REVISE-SUMMARY-DONE</promise>
       Emit ONLY the comment + the promise token.
