@@ -1,11 +1,12 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, Play, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useCreateRun, useDeleteRun, useRuns } from "@/lib/runs";
+import { NO_PROJECT } from "@/lib/dashboard";
 import { useProjects } from "@/lib/projects";
 import type { RunStatus, RunSummary } from "@/types/run";
 
@@ -32,7 +33,16 @@ function relativeTime(iso: string): string {
 }
 
 export function RunsPage() {
-  const runs = useRuns();
+  const [params] = useSearchParams();
+  const projectFilter = params.get("project")?.trim() || null;
+  const unassignedParam = params.get("unassigned");
+  const unassignedFilter =
+    unassignedParam === "true" || unassignedParam === "1";
+  const activeFilterLabel = unassignedFilter ? NO_PROJECT : projectFilter;
+  const runs = useRuns({
+    project: projectFilter,
+    unassigned: unassignedFilter,
+  });
   return (
     <AppShell title="Runs">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
@@ -41,6 +51,15 @@ export function RunsPage() {
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Recent runs
           </h2>
+          {activeFilterLabel && (
+            <p className="text-sm">
+              Filtered by project:{" "}
+              <span className="font-medium">{activeFilterLabel}</span>{" "}
+              <Link to="/runs" className="underline text-muted-foreground">
+                clear
+              </Link>
+            </p>
+          )}
           {runs.isLoading && (
             <p className="text-sm text-muted-foreground">Loading…</p>
           )}
@@ -51,7 +70,9 @@ export function RunsPage() {
           )}
           {runs.data?.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              No runs yet. Submit a workflow above to start one.
+              {activeFilterLabel
+                ? "No runs match this project."
+                : "No runs yet. Submit a workflow above to start one."}
             </p>
           )}
           <div className="flex flex-col gap-1.5">

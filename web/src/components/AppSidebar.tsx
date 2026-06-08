@@ -4,6 +4,7 @@ import {
   IconFolderCog,
   IconHexagonalPrism,
   IconKey,
+  IconLayoutDashboard,
   IconRocket,
   IconTags,
 } from "@tabler/icons-react";
@@ -27,9 +28,9 @@ interface NavItem {
   /** Active when the path equals href, or (for prefixes) starts with `match`. */
   match?: string;
 }
-
 const OPERATIONS: NavItem[] = [
-  { href: "/", label: "Runs", icon: IconRocket, match: "/runs" },
+  { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
+  { href: "/runs", label: "Runs", icon: IconRocket, match: "/runs" },
   {
     href: "/projects",
     label: "Projects",
@@ -58,13 +59,9 @@ const SYSTEM: NavItem[] = [
     match: "/categories",
   },
 ];
-
 function isActive(pathname: string, item: NavItem): boolean {
-  if (item.href === "/")
-    return pathname === "/" || pathname.startsWith("/runs");
   return (
-    pathname === item.href ||
-    (item.match ? pathname.startsWith(item.match) : false)
+    pathname === item.href || (!!item.match && pathname.startsWith(item.match))
   );
 }
 

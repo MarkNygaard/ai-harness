@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Route, Routes } from "react-router-dom";
+import { DashboardPage } from "./routes/dashboard/DashboardPage";
 import { RunsPage } from "./routes/runs/RunsPage";
 import { RunDetailPage } from "./routes/runs/RunDetailPage";
 import { WorkflowEditor } from "./routes/editor/WorkflowEditor";
@@ -26,7 +27,8 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Routes>
-          <Route path="/" element={<RunsPage />} />
+          <Route path="/" element={<DashboardPage />} />
+          <Route path="/runs" element={<RunsPage />} />
           <Route path="/runs/:id" element={<RunDetailPage />} />
           <Route path="/projects" element={<ProjectsPage />} />
           <Route path="/editor" element={<WorkflowsList />} />

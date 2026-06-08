@@ -181,6 +181,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/runs",
             post(runs_routes::create_run).get(runs_routes::list_runs),
         )
+        .route("/api/runs/summary", get(runs_routes::runs_daily_summary))
         .route(
             "/api/runs/{id}",
             get(runs_routes::get_run).delete(runs_routes::delete_run),
