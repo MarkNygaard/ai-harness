@@ -18,6 +18,7 @@ import type {
   NodeMeta,
   NodeStatus,
   NodeView,
+  RunDailyCount,
   RunDetail,
   RunEvent,
   RunStatus,
@@ -50,6 +51,15 @@ export function useRuns() {
     queryKey: ["runs"],
     queryFn: ({ signal }) => apiJson<RunSummary[]>("/api/runs", { signal }),
     refetchInterval: 5_000,
+  });
+}
+
+export function useRunsSummary(days = 14) {
+  return useQuery<RunDailyCount[], Error>({
+    queryKey: ["runs-summary", days],
+    queryFn: ({ signal }) =>
+      apiJson<RunDailyCount[]>(`/api/runs/summary?days=${days}`, { signal }),
+    refetchInterval: 10_000,
   });
 }
 

@@ -10,6 +10,7 @@
 //! State is attached as an axum `Extension` (a self-contained `RunsState`) so it
 //! doesn't entangle the large shared `AppState`.
 
+use chrono::{Duration, Utc};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
@@ -17,7 +18,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use axum::extract::{Extension, Path as AxumPath};
+use axum::extract::{Extension, Path as AxumPath, Query};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -313,6 +314,13 @@ pub struct CreateRunRequest {
     pub project: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct SummaryQuery {
+    /// Trailing window in days (default 14, clamped 1..=90).
+    #[serde(default)]
+    pub days: Option<i64>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct CreateRunResponse {
     pub run_id: String,
@@ -580,6 +588,23 @@ pub async fn list_runs(Extension(state): Extension<Arc<RunsState>>) -> Response 
     };
     match store.list_runs(100).await {
         Ok(runs) => Json(runs).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `GET /runs/summary?days=N` — per-project, per-day finished-run counts.
+pub async fn runs_daily_summary(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<SummaryQuery>,
+) -> Response {
+    let days = q.days.unwrap_or(14).clamp(1, 90);
+    let since = Utc::now() - Duration::days(days);
+    let store = match state.store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.runs_daily_summary(since).await {
+        Ok(rows) => Json(rows).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }

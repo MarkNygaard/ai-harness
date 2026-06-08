@@ -45,6 +45,17 @@ pub struct RunSummary {
     pub node_count: i32,
     pub recorded_at: DateTime<Utc>,
 }
+/// One (project, day, status) tally for the dashboard aggregate.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct RunDailyCount {
+    /// Project the runs belong to; `None` for older/CLI runs.
+    pub project: Option<String>,
+    /// Day bucket (UTC, midnight) the runs were recorded in.
+    pub day: DateTime<Utc>,
+    /// Terminal run status: "completed" | "failed" | "cancelled".
+    pub status: String,
+    pub count: i64,
+}
 
 /// A persisted per-node row (matches `harness_run_nodes`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -538,6 +549,28 @@ impl RunStore {
         Ok(rows)
     }
 
+    /// Per-project, per-day counts of **finished** runs since `since`, for the
+    /// dashboard. Buckets on `recorded_at` (this table has no `ended_at`; on a
+    /// terminal transition `recorded_at` is set to `now()`), in UTC, and counts
+    /// only terminal statuses so in-flight runs don't inflate "what got done".
+    pub async fn runs_daily_summary(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<RunDailyCount>, PersistError> {
+        let rows = sqlx::query_as::<_, RunDailyCount>(
+            "SELECT project, date_trunc('day', recorded_at) AS day, status, count(*) AS count
+             FROM harness_workflow_runs
+             WHERE recorded_at >= $1
+               AND status IN ('completed', 'failed', 'cancelled')
+             GROUP BY project, day, status
+             ORDER BY day DESC",
+        )
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Fetch a run plus its node rows (ordered by declaration order).
     pub async fn get_run(&self, run_id: &str) -> Result<Option<RunDetail>, PersistError> {
         let run = sqlx::query_as::<_, RunSummary>(
@@ -746,6 +779,82 @@ mod tests {
             Some("Implement X end to end")
         );
         assert!(store.get_run("does-not-exist").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn runs_daily_summary_groups_by_project_day_and_status() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+
+        // Two completed runs in proj-a.
+        let mut report_a = sample_report();
+        report_a.status = RunStatus::Completed;
+        for _ in 0..2 {
+            let run_id = format!(
+                "test-dash-a-{}",
+                chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            );
+            store
+                .record_run(&run_id, Some("task-a"), None, Some("proj-a"), &report_a)
+                .await
+                .unwrap();
+        }
+
+        // One failed run in proj-b.
+        let mut report_b = sample_report();
+        report_b.status = RunStatus::Failed;
+        let run_id_b = format!(
+            "test-dash-b-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        store
+            .record_run(&run_id_b, Some("task-b"), None, Some("proj-b"), &report_b)
+            .await
+            .unwrap();
+
+        // One running run (should be excluded from the aggregate).
+        let run_id_c = format!(
+            "test-dash-c-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        store
+            .start_run(
+                &run_id_c,
+                &report_a.workflow,
+                Some("task-c"),
+                None,
+                Some("proj-a"),
+                2,
+                &report_a.graph,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let rows = store
+            .runs_daily_summary(chrono::Utc::now() - chrono::Duration::days(1))
+            .await
+            .unwrap();
+
+        let proj_a_completed: i64 = rows
+            .iter()
+            .filter(|r| r.project.as_deref() == Some("proj-a") && r.status == "completed")
+            .map(|r| r.count)
+            .sum();
+        let proj_b_failed: i64 = rows
+            .iter()
+            .filter(|r| r.project.as_deref() == Some("proj-b") && r.status == "failed")
+            .map(|r| r.count)
+            .sum();
+        let any_running = rows.iter().any(|r| r.status == "running");
+
+        assert_eq!(proj_a_completed, 2, "proj-a should have 2 completed runs");
+        assert_eq!(proj_b_failed, 1, "proj-b should have 1 failed run");
+        assert!(!any_running, "running runs must be excluded from aggregate");
     }
 
     #[tokio::test]

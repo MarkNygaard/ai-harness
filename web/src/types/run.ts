@@ -50,6 +50,13 @@ export interface RunSummary {
   node_count: number;
   recorded_at: string;
 }
+/** One (project, day, status) tally from GET /api/runs/summary (RunDailyCount). */
+export interface RunDailyCount {
+  project: string | null;
+  day: string; // ISO timestamp at UTC midnight
+  status: "completed" | "failed" | "cancelled";
+  count: number;
+}
 
 /** A persisted per-node row (matches `PersistedNode`). */
 export interface PersistedNode {

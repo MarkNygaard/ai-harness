@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, Play, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
@@ -33,6 +33,11 @@ function relativeTime(iso: string): string {
 
 export function RunsPage() {
   const runs = useRuns();
+  const [params] = useSearchParams();
+  const projectFilter = params.get("project");
+  const filtered = runs.data?.filter(
+    (r) => !projectFilter || r.project === projectFilter
+  );
   return (
     <AppShell title="Runs">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
@@ -41,6 +46,15 @@ export function RunsPage() {
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Recent runs
           </h2>
+          {projectFilter && (
+            <p className="text-sm">
+              Filtered by project: {" "}
+              <span className="font-medium">{projectFilter}</span>{" "}
+              <Link to="/runs" className="underline text-muted-foreground">
+                clear
+              </Link>
+            </p>
+          )}
           {runs.isLoading && (
             <p className="text-sm text-muted-foreground">Loading…</p>
           )}
@@ -49,13 +63,15 @@ export function RunsPage() {
               Failed to load runs: {runs.error.message}
             </p>
           )}
-          {runs.data?.length === 0 && (
+          {filtered?.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              No runs yet. Submit a workflow above to start one.
+              {projectFilter
+                ? "No runs match this project."
+                : "No runs yet. Submit a workflow above to start one."}
             </p>
           )}
           <div className="flex flex-col gap-1.5">
-            {runs.data?.map((run) => (
+            {filtered?.map((run) => (
               <RunRow key={run.id} run={run} />
             ))}
           </div>
