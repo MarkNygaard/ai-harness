@@ -1,0 +1,177 @@
+name: revise-pr
+description: |
+  Address reviewer feedback on an existing PR branch and push updates — no new
+  PR is opened. Use this when a Linear card has been moved to "Changes
+  requested" (or an equivalent trigger state) and the bound workflow is
+  `revise-pr`.
+
+  Binding configuration required for correct poller routing:
+  - `ready_state_id` must be the **review column** (e.g. "Functional testing"
+    / "In Review") so that when this workflow completes successfully the card
+    loops back to review, NOT to Done/merge.
+  - The trigger state is typically "Changes requested".
+
+  Feedback sources:
+  - **GitHub PR reviews / inline comments** are read inside the workflow via
+    `gh` (the token is available in the worktree).
+  - **Linear tester comments** are injected by the poller into `$ARGUMENTS`
+    under a "## Reviewer comments (Linear)" section.
+
+  On completion the poller returns the Linear card to the review column; on
+  failure it routes back to the source column under the existing retry cap.
+provider: pi
+model: kimi-code/kimi-for-coding
+
+nodes:
+  # 1. Resolve exactly which PR we're revising, and its current state.
+  - id: resolve-pr
+    category: planning
+    provider: claude
+    model: haiku
+    context: fresh
+    prompt: |
+      Identify the GitHub pull request to revise from this input:
+
+      $ARGUMENTS
+
+      The input may be a PR number, a PR URL, or a Linear issue identifier whose
+      linked PR should be revised. Use `gh` to resolve it to a single PR in this
+      repository. If the input is a Linear issue, find its associated PR (e.g.
+      `gh pr list --search "<issue-id>"`, or the PR whose branch/title references
+      it).
+
+      Inspect it:
+        gh pr view <pr> --json number,state,mergeable,mergeStateStatus,baseRefName,headRefName,title
+
+      Then emit ONLY this JSON verdict (no prose). If you cannot find a PR, set
+      `pr` to "" and `state` to "CLOSED".
+    output_format:
+      type: object
+      properties:
+        pr: { type: string, description: "PR number, or \"\" if none found" }
+        base: { type: string, description: "base branch (e.g. main)" }
+        title: { type: string }
+        state: { type: string, enum: ["OPEN", "MERGED", "CLOSED"] }
+        mergeable: { type: string, enum: ["MERGEABLE", "CONFLICTING", "UNKNOWN"] }
+      required: [pr, state, mergeable]
+
+  # 2. Nothing to do if there's no open PR to revise.
+  - id: abort-no-pr
+    category: planning
+    depends_on: [resolve-pr]
+    when: "$resolve-pr.output.state != 'OPEN'"
+    cancel: "No open PR to revise for this input (not found, or already merged/closed)."
+
+  # 3. Gather every piece of actionable PR feedback (reviews + inline comments).
+  - id: gather-feedback
+    category: planning
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [resolve-pr]
+    when: "$resolve-pr.output.state == 'OPEN'"
+    prompt: |
+      PR #$resolve-pr.output.pr ("$resolve-pr.output.title") needs revisions.
+      Collect ALL actionable feedback from GitHub for this PR.
+
+      1. Review verdicts and top-level comments:
+         `gh pr view $resolve-pr.output.pr --json reviews,comments`
+      2. Inline code-review comments:
+         `gh api repos/{owner}/{repo}/pulls/$resolve-pr.output.pr/comments`
+         (gh substitutes `{owner}` and `{repo}` from the current repository.)
+
+      Ignore any comments posted by the ai-harness bot / this workflow. For each
+      actionable item include:
+      - reviewer name
+      - review state (COMMENTED, CHANGES_REQUESTED, APPROVED)
+      - body text
+      - for inline comments: `path:line`
+
+      Emit ONLY JSON.
+    output_format:
+      type: object
+      properties:
+        feedback:
+          type: string
+          description: "markdown digest of all PR feedback, or empty string if none"
+        has_feedback:
+          type: boolean
+          description: "true if there is at least one actionable feedback item"
+      required: [feedback, has_feedback]
+
+  # 4. Address all feedback (GitHub + Linear) and push to the existing PR branch.
+  - id: implement
+    category: implementation
+    depends_on: [resolve-pr, gather-feedback]
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      until: REVISION_DONE
+      max_iterations: 3
+      prompt: |
+        Revise PR #$resolve-pr.output.pr ("$resolve-pr.output.title").
+
+        1. Check the PR branch out into this worktree:
+           `gh pr checkout $resolve-pr.output.pr`
+           Confirm which revision pass this is with:
+           `git log --oneline -5`
+           Read the prior revision commits so you don't redo work already done.
+
+        2. Address ALL feedback from BOTH sources:
+           a) GitHub PR reviews / inline comments:
+              $gather-feedback.output.feedback
+           b) Linear tester / reviewer comments (functionality feedback):
+              $ARGUMENTS
+              (look under "## Reviewer comments (Linear)")
+
+        3. Make the code changes. Run the project's **scoped verify chain**
+           (commands live in `CLAUDE.md` / `AGENTS.md`; use the narrowest scope
+           covering the change). Fix until green — never commit a non-building
+           branch.
+
+        4. Commit with conventional-commit message(s) and **push to the existing
+           PR branch** (`git push`). Do NOT open a new PR — this updates the
+           same one.
+
+        Universal prohibitions:
+        - No `--no-verify`, no skipped hooks.
+        - No DB / schema migrations (`prisma migrate`, `sqlx migrate run`, etc.).
+        - No `gh pr review`, no PR-review comments, no label changes.
+        - Honor project-specific rules in `CLAUDE.md` / `AGENTS.md`.
+
+        When every feedback item is addressed, verify is green, and commits are
+        pushed, emit the literal signal:
+        <promise>REVISION_DONE</promise>
+        If something is genuinely blocked or unaddressable, end your turn
+        WITHOUT the signal and explain what is blocked — the run then fails
+        (and the poller routes the card back to source under the retry cap)
+        rather than signaling a false "ready".
+
+  # 5. Post a short summary comment on the PR and finish.
+  - id: summary
+    category: delivery
+    provider: claude
+    model: haiku
+    depends_on: [implement]
+    trigger_rule: none_failed_min_one_success
+    prompt: |
+      PR #$resolve-pr.output.pr has been revised and pushed. Read the commit
+      history since the base branch:
+      `git log --oneline origin/$BASE_BRANCH..HEAD`
+
+      Post one short PR comment:
+        gh pr comment $resolve-pr.output.pr --body "..."
+      The comment should summarize the revisions pushed this pass and note that
+      the PR is ready for re-review. Do NOT change labels or title; the poller
+      will move the Linear card back to the review column on completion.
+
+      End with: <promise>REVISE-SUMMARY-DONE</promise>
+      Emit ONLY the comment + the promise token.
+
+  # 6. Fail the run if no actionable feedback was gathered — there should be
+  #    something to revise. This guards against a misconfigured trigger state.
+  - id: abort-no-feedback
+    category: planning
+    depends_on: [gather-feedback]
+    when: "$gather-feedback.output.has_feedback != 'true'"
+    cancel: "No actionable feedback found for PR #$resolve-pr.output.pr. If this issue was moved to 'Changes requested' by mistake, move it back to the source column."

@@ -60,6 +60,16 @@ pub struct Issue {
     pub body: Option<String>,
     pub labels: Vec<String>,
 }
+/// A comment on a Linear issue (reviewer feedback fed to `revise-pr`).
+#[derive(Debug, Clone, Serialize)]
+pub struct Comment {
+    /// Markdown body of the comment.
+    pub body: String,
+    /// Display name of the author, or "unknown" if absent.
+    pub author: String,
+    /// ISO-8601 creation timestamp (Linear `createdAt`).
+    pub created_at: String,
+}
 
 // ── GraphQL wire types (private) ─────────────────────────────────────────────
 
@@ -120,6 +130,28 @@ struct IssueNode {
 struct IssueLabelNode {
     name: String,
 }
+#[derive(Deserialize)]
+struct CommentsData {
+    // `issue` is null when the id doesn't resolve.
+    #[serde(default)]
+    issue: Option<IssueCommentsNode>,
+}
+#[derive(Deserialize)]
+struct IssueCommentsNode {
+    comments: Conn<CommentNode>,
+}
+#[derive(Deserialize)]
+struct CommentNode {
+    body: String,
+    #[serde(default)]
+    user: Option<CommentUserNode>,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+}
+#[derive(Deserialize)]
+struct CommentUserNode {
+    name: String,
+}
 
 // ── GraphQL documents ────────────────────────────────────────────────────────
 
@@ -144,6 +176,17 @@ const ISSUES_QUERY: &str = r#"
 query Preview($teamId: ID!, $stateId: ID!) {
   issues(first: 50, filter: { team: { id: { eq: $teamId } }, state: { id: { eq: $stateId } } }) {
     nodes { id identifier title url description labels { nodes { name } } }
+  }
+}"#;
+// A single issue's comments connection is flat (no nested connections), so
+// even first: 50 stays well under Linear's 10k complexity cap. Ordered
+// oldest→newest so the reviewer's narrative reads top-to-bottom.
+const COMMENTS_QUERY: &str = r#"
+query Comments($id: String!) {
+  issue(id: $id) {
+    comments(first: 50) {
+      nodes { body createdAt user { name } }
+    }
   }
 }"#;
 
@@ -259,6 +302,23 @@ pub fn parse_issues(json: &[u8], label: Option<&str>) -> Result<Vec<Issue>, Line
         .collect();
     Ok(issues)
 }
+/// Parse an issue's comments response into clean types. Returns an empty vec
+/// if the issue id didn't resolve (`issue: null`).
+pub fn parse_comments(json: &[u8]) -> Result<Vec<Comment>, LinearError> {
+    let data: CommentsData = gql_data(json)?;
+    let comments = data
+        .issue
+        .map(|i| i.comments.nodes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| Comment {
+            body: c.body,
+            author: c.user.map(|u| u.name).unwrap_or_else(|| "unknown".into()),
+            created_at: c.created_at,
+        })
+        .collect();
+    Ok(comments)
+}
 
 // ── HTTP client ──────────────────────────────────────────────────────────────
 
@@ -320,6 +380,15 @@ impl LinearClient {
             "variables": { "teamId": team_id, "stateId": state_id },
         });
         parse_issues(&self.post(body).await?, label)
+    }
+    /// List an issue's comments (read-only). `issue_id` is the Linear internal
+    /// id (the `id` field of a previewed [`Issue`]), not the `COR-12` identifier.
+    pub async fn list_comments(&self, issue_id: &str) -> Result<Vec<Comment>, LinearError> {
+        let body = serde_json::json!({
+            "query": COMMENTS_QUERY,
+            "variables": { "id": issue_id },
+        });
+        parse_comments(&self.post(body).await?)
     }
 
     /// Move an issue to a workflow state (write). `issue_id` is the Linear
@@ -487,5 +556,38 @@ mod tests {
         let issues = parse_issues(json, None).unwrap();
         assert_eq!(issues.len(), 1);
         assert!(issues[0].labels.is_empty());
+    }
+    #[test]
+    fn parse_comments_maps_body_author_and_time() {
+        let json = br#"{"data":{"issue":{"comments":{"nodes":[
+            {"body":"First pass looks good","createdAt":"2026-06-01T10:00:00Z","user":{"name":"Alice"}},
+            {"body":"Please fix the edge case","createdAt":"2026-06-02T14:30:00Z","user":{"name":"Bob"}}
+        ]}}}}"#;
+        let comments = parse_comments(json).unwrap();
+        assert_eq!(comments.len(), 2);
+        assert_eq!(comments[0].author, "Alice");
+        assert_eq!(comments[0].body, "First pass looks good");
+        assert_eq!(comments[0].created_at, "2026-06-01T10:00:00Z");
+    }
+    #[test]
+    fn parse_comments_handles_missing_user() {
+        let json = br#"{"data":{"issue":{"comments":{"nodes":[
+            {"body":"Anonymous note","createdAt":"2026-06-03T09:00:00Z","user":null}
+        ]}}}}"#;
+        let comments = parse_comments(json).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].author, "unknown");
+    }
+    #[test]
+    fn parse_comments_handles_null_issue() {
+        let json = br#"{"data":{"issue":null}}"#;
+        let comments = parse_comments(json).unwrap();
+        assert!(comments.is_empty());
+    }
+    #[test]
+    fn parse_comments_surfaces_graphql_errors() {
+        let json = br#"{"errors":[{"message":"authentication required"}]}"#;
+        let err = parse_comments(json).unwrap_err();
+        assert!(err.0.contains("authentication required"));
     }
 }
