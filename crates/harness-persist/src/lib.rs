@@ -45,6 +45,17 @@ pub struct RunSummary {
     pub node_count: i32,
     pub recorded_at: DateTime<Utc>,
 }
+/// One (project, day, status) tally for the dashboard aggregate.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct RunDailyCount {
+    /// Project the runs belong to; `None` for older/CLI runs.
+    pub project: Option<String>,
+    /// Day bucket (UTC, midnight) the runs were recorded in.
+    pub day: DateTime<Utc>,
+    /// Terminal run status: "completed" | "failed" | "cancelled".
+    pub status: String,
+    pub count: i64,
+}
 
 /// A persisted per-node row (matches `harness_run_nodes`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -120,6 +131,10 @@ const ALTER_RUNS_HEARTBEAT: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz";
 const ALTER_NODES_ARTIFACT: &str =
     "ALTER TABLE harness_run_nodes ADD COLUMN IF NOT EXISTS artifact_content text";
+const INDEX_RUNS_RECORDED_AT: &str =
+    "CREATE INDEX IF NOT EXISTS idx_harness_workflow_runs_recorded_at ON harness_workflow_runs(recorded_at DESC)";
+const INDEX_RUNS_PROJECT_RECORDED_AT: &str =
+    "CREATE INDEX IF NOT EXISTS idx_harness_workflow_runs_project_recorded_at ON harness_workflow_runs(project, recorded_at DESC)";
 
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
@@ -142,7 +157,6 @@ CREATE TABLE IF NOT EXISTS harness_run_nodes (
     artifact_content text,
     PRIMARY KEY (run_id, node_id)
 )";
-
 /// A Postgres-backed store for workflow runs.
 pub struct RunStore {
     pool: PgPool,
@@ -179,6 +193,12 @@ impl RunStore {
             .await?;
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
         sqlx::query(ALTER_NODES_ARTIFACT)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(INDEX_RUNS_RECORDED_AT)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(INDEX_RUNS_PROJECT_RECORDED_AT)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -538,6 +558,63 @@ impl RunStore {
         Ok(rows)
     }
 
+    /// List the most recently recorded runs for a project (newest first).
+    pub async fn list_runs_for_project(
+        &self,
+        project: &str,
+        limit: i64,
+    ) -> Result<Vec<RunSummary>, PersistError> {
+        let rows = sqlx::query_as::<_, RunSummary>(
+            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
+             FROM harness_workflow_runs
+             WHERE project = $1
+             ORDER BY recorded_at DESC
+             LIMIT $2",
+        )
+        .bind(project)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// List the most recently recorded runs without a project (newest first).
+    pub async fn list_unassigned_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
+        let rows = sqlx::query_as::<_, RunSummary>(
+            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
+             FROM harness_workflow_runs
+             WHERE project IS NULL OR btrim(project) = ''
+             ORDER BY recorded_at DESC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Per-project, per-day counts of **finished** runs since `since`, for the
+    /// dashboard. Buckets on `recorded_at` (this table has no `ended_at`; on a
+    /// terminal transition `recorded_at` is set to `now()`), in UTC, and counts
+    /// only terminal statuses so in-flight runs don't inflate "what got done".
+    pub async fn runs_daily_summary(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<RunDailyCount>, PersistError> {
+        let rows = sqlx::query_as::<_, RunDailyCount>(
+            "SELECT project, date_trunc('day', recorded_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day, status, count(*) AS count
+             FROM harness_workflow_runs
+             WHERE recorded_at >= $1
+               AND status IN ('completed', 'failed', 'cancelled')
+             GROUP BY project, day, status
+             ORDER BY day DESC",
+        )
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// Fetch a run plus its node rows (ordered by declaration order).
     pub async fn get_run(&self, run_id: &str) -> Result<Option<RunDetail>, PersistError> {
         let run = sqlx::query_as::<_, RunSummary>(
@@ -746,6 +823,131 @@ mod tests {
             Some("Implement X end to end")
         );
         assert!(store.get_run("does-not-exist").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn runs_daily_summary_groups_by_project_day_and_status() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+
+        let uid = |prefix: &str| {
+            format!(
+                "{prefix}-{}",
+                chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            )
+        };
+
+        // Two completed runs in proj-a.
+        let mut report_a = sample_report();
+        report_a.status = RunStatus::Completed;
+        for i in 0..2 {
+            let run_id = uid(&format!("test-dash-a-{i}"));
+            store
+                .record_run(&run_id, Some("task-a"), None, Some("proj-a"), &report_a)
+                .await
+                .unwrap();
+        }
+
+        // One failed run in proj-b.
+        let mut report_b = sample_report();
+        report_b.status = RunStatus::Failed;
+        let run_id_b = uid("test-dash-b");
+        store
+            .record_run(&run_id_b, Some("task-b"), None, Some("proj-b"), &report_b)
+            .await
+            .unwrap();
+
+        // One running run (should be excluded from the aggregate).
+        let run_id_c = uid("test-dash-c");
+        store
+            .start_run(
+                &run_id_c,
+                &report_a.workflow,
+                Some("task-c"),
+                None,
+                Some("proj-a"),
+                2,
+                &report_a.graph,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let rows = store
+            .runs_daily_summary(chrono::Utc::now() - chrono::Duration::days(1))
+            .await
+            .unwrap();
+
+        let proj_a_completed: i64 = rows
+            .iter()
+            .filter(|r| r.project.as_deref() == Some("proj-a") && r.status == "completed")
+            .map(|r| r.count)
+            .sum();
+        let proj_b_failed: i64 = rows
+            .iter()
+            .filter(|r| r.project.as_deref() == Some("proj-b") && r.status == "failed")
+            .map(|r| r.count)
+            .sum();
+        let any_running = rows.iter().any(|r| r.status == "running");
+
+        assert_eq!(proj_a_completed, 2, "proj-a should have 2 completed runs");
+        assert_eq!(proj_b_failed, 1, "proj-b should have 1 failed run");
+        assert!(!any_running, "running runs must be excluded from aggregate");
+        for r in &rows {
+            assert_eq!(
+                r.day.time(),
+                chrono::NaiveTime::from_hms_opt(0, 0, 0).unwrap(),
+                "day bucket must be at UTC midnight"
+            );
+        }
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn runs_daily_summary_excludes_runs_outside_window() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+
+        let uid = |prefix: &str| {
+            format!(
+                "{prefix}-{}",
+                chrono::Utc::now().timestamp_nanos_opt().unwrap()
+            )
+        };
+
+        let mut report = sample_report();
+        report.status = RunStatus::Completed;
+        let run_id = uid("test-dash-window");
+        store
+            .record_run(&run_id, Some("task"), None, Some("proj"), &report)
+            .await
+            .unwrap();
+
+        // Backdate the run so it falls outside a 1-hour window.
+        sqlx::query(
+            "UPDATE harness_workflow_runs SET recorded_at = now() - interval '2 hours' WHERE id = $1",
+        )
+        .bind(&run_id)
+        .execute(&store.pool)
+        .await
+        .unwrap();
+
+        let rows = store
+            .runs_daily_summary(chrono::Utc::now() - chrono::Duration::hours(1))
+            .await
+            .unwrap();
+
+        assert!(
+            rows.iter().all(|r| r.project.as_deref() != Some("proj")),
+            "runs older than the since window must be excluded"
+        );
     }
 
     #[tokio::test]
