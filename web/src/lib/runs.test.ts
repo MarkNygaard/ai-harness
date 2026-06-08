@@ -113,6 +113,8 @@ describe("nodesFromDetail", () => {
       project: null,
       node_count: 2,
       recorded_at: NOW,
+      started_at: null,
+      ended_at: null,
       graph: [
         { id: "build", depends_on: [] },
         { id: "review", depends_on: ["build"] },
@@ -173,6 +175,8 @@ describe("nodesFromDetail", () => {
       project: "ai-harness",
       node_count: 3,
       recorded_at: NOW,
+      started_at: null,
+      ended_at: null,
       graph: [
         { id: "explore", depends_on: [] },
         { id: "plan", depends_on: ["explore"] },
@@ -219,6 +223,8 @@ describe("nodesFromDetail", () => {
       project: null,
       node_count: 1,
       recorded_at: NOW,
+      started_at: null,
+      ended_at: null,
       graph: [{ id: "explore", depends_on: [], artifact: "exploration.md" }],
       nodes: [
         {
@@ -256,6 +262,8 @@ describe("nodesFromDetail", () => {
       project: null,
       node_count: 1,
       recorded_at: NOW,
+      started_at: null,
+      ended_at: null,
       graph: [{ id: "build", depends_on: [] }],
       nodes: [
         {

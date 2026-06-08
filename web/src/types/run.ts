@@ -49,6 +49,10 @@ export interface RunSummary {
   project: string | null;
   node_count: number;
   recorded_at: string;
+  /** Earliest node start across the run (ISO); null when no node has timing. */
+  started_at: string | null;
+  /** Latest node end across the run (ISO); null when no node has finished. */
+  ended_at: string | null;
 }
 /** One (project, day, status) tally from the runs summary endpoint. */
 export interface RunDailyCount {
