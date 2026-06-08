@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use harness_persist::LinearSource;
-use harness_sources::linear::{Issue, LinearClient};
+use harness_sources::linear::{Comment, Issue, LinearClient};
 use tokio::time::{interval, Instant, MissedTickBehavior};
 
 use super::runs_routes::{start_run, CreateRunRequest, RunsState};
@@ -210,10 +210,23 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
         }
     }
 
+    let comments = match client.list_comments(&issue.id).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                "linear poller: {}/{} — list_comments failed for {}: {} (firing without)",
+                b.project,
+                b.workflow,
+                issue.identifier,
+                e.0
+            );
+            Vec::new()
+        }
+    };
     let req = CreateRunRequest {
         workflow: b.workflow.clone(),
         title: Some(format!("{} {}", issue.identifier, issue.title)),
-        description: task_for_issue(&issue),
+        description: task_for_issue(&issue, &comments),
         args: String::new(),
         real: true,
         base_branch: b.base_branch.clone(),
@@ -277,17 +290,9 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
     }
 }
 
-/// The task spec handed to the fired run: the issue identifier/title/url + body.
-///
-/// The identifier is stated up front *and* as an explicit PR-title directive so
-/// the `verify-pr-title` node carries it into the final title — that's what lets
-/// Linear link the PR back to this issue (and lets `merge-pr` find the PR via
-/// `gh pr list --search`). We deliberately avoid close keywords ("Fixes"/
-/// "Closes") so Linear's GitHub integration links without auto-closing the
-/// issue, which would bypass the poller's own status transitions.
-fn task_for_issue(issue: &Issue) -> String {
+fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     let id = &issue.identifier;
-    format!(
+    let mut task = format!(
         "Linear issue {id} — {title}\n{url}\n\n\
          When you open the PR, make sure its title ends with \" ({id})\" so \
          Linear links the PR to this issue. Do not use close keywords like \
@@ -296,7 +301,34 @@ fn task_for_issue(issue: &Issue) -> String {
         title = issue.title,
         url = issue.url,
         body = issue.body.as_deref().unwrap_or("").trim()
-    )
+    );
+    let reviewer: Vec<&Comment> = comments
+        .iter()
+        .filter(|c| !is_harness_status_comment(&c.body))
+        .collect();
+    if !reviewer.is_empty() {
+        task.push_str("\n\n## Reviewer comments (Linear)\n\n");
+        task.push_str(
+            "Reviewer/clarifying comments left on the Linear issue. Address the \
+             feedback they contain.\n",
+        );
+        for c in reviewer {
+            let who = c.author.as_deref().unwrap_or("Unknown");
+            task.push_str(&format!(
+                "\n**{who}** ({when}):\n{body}\n",
+                when = c.created_at,
+                body = c.body.trim()
+            ));
+        }
+    }
+    task
+}
+
+/// True for comments the poller itself posted (run lifecycle status), which
+/// must not be re-injected as reviewer feedback.
+fn is_harness_status_comment(body: &str) -> bool {
+    let t = body.trim_start();
+    t.starts_with('🤖') || t.starts_with('✅') || t.starts_with('⚠') || t.starts_with('❌')
 }
 
 /// Walk in-flight claims and transition their issues based on run progress.
@@ -432,4 +464,64 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
         .nodes
         .iter()
         .any(|n| n.status == "success" && delivery.contains(n.node_id.as_str()))
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn sample_issue() -> Issue {
+        Issue {
+            id: "issue-1".into(),
+            identifier: "COR-42".into(),
+            title: "Fix the thing".into(),
+            url: "https://linear.app/issue/COR-42".into(),
+            body: Some("The thing is broken.".into()),
+            labels: vec![],
+        }
+    }
+    #[test]
+    fn task_for_issue_without_comments_has_no_section() {
+        let task = task_for_issue(&sample_issue(), &[]);
+        assert!(task.contains("Linear issue COR-42"));
+        assert!(!task.contains("## Reviewer comments (Linear)"));
+    }
+    #[test]
+    fn task_for_issue_appends_reviewer_section() {
+        let comments = vec![Comment {
+            author: Some("Reviewer A".into()),
+            body: "please fix the off-by-one".into(),
+            created_at: "2026-06-01T10:00:00Z".into(),
+        }];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(task.contains("## Reviewer comments (Linear)"));
+        assert!(task.contains("**Reviewer A** (2026-06-01T10:00:00Z):"));
+        assert!(task.contains("please fix the off-by-one"));
+    }
+    #[test]
+    fn task_for_issue_filters_harness_status_comments() {
+        let bot = Comment {
+            author: Some("Harness".into()),
+            body: "🤖 ai-harness started run idea-to-pr-123".into(),
+            created_at: "2026-06-01T09:00:00Z".into(),
+        };
+        let task = task_for_issue(&sample_issue(), std::slice::from_ref(&bot));
+        assert!(!task.contains("## Reviewer comments (Linear)"));
+        let real = Comment {
+            author: Some("Human".into()),
+            body: "Needs tests".into(),
+            created_at: "2026-06-01T11:00:00Z".into(),
+        };
+        let task = task_for_issue(&sample_issue(), &[real.clone(), bot]);
+        assert!(task.contains("## Reviewer comments (Linear)"));
+        assert!(task.contains("Needs tests"));
+        assert!(!task.contains("🤖 ai-harness"));
+    }
+    #[test]
+    fn is_harness_status_comment_matches_emoji_prefixes() {
+        assert!(is_harness_status_comment("🤖 bot"));
+        assert!(is_harness_status_comment("✅ done"));
+        assert!(is_harness_status_comment("⚠️ warning"));
+        assert!(is_harness_status_comment("❌ failed"));
+        assert!(!is_harness_status_comment("Looks good"));
+        assert!(!is_harness_status_comment("  Looks good"));
+    }
 }

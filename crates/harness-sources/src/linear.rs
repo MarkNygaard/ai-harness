@@ -60,6 +60,16 @@ pub struct Issue {
     pub body: Option<String>,
     pub labels: Vec<String>,
 }
+/// A comment on a Linear issue — reviewer/clarifying feedback the poller
+/// injects into the fired task.
+#[derive(Debug, Clone, Serialize)]
+pub struct Comment {
+    /// Comment author's display name; `None` for system/integration comments.
+    pub author: Option<String>,
+    pub body: String,
+    /// ISO-8601 creation timestamp (Linear `createdAt`).
+    pub created_at: String,
+}
 
 // ── GraphQL wire types (private) ─────────────────────────────────────────────
 
@@ -114,10 +124,29 @@ struct IssueNode {
     #[serde(default)]
     labels: Option<Conn<IssueLabelNode>>,
 }
-
-// Issue labels are fetched by name only (the issues query omits label ids).
 #[derive(Deserialize)]
 struct IssueLabelNode {
+    name: String,
+}
+#[derive(Deserialize)]
+struct CommentsData {
+    // `issue` is null when the id doesn't resolve — treat as no comments.
+    issue: Option<IssueComments>,
+}
+#[derive(Deserialize)]
+struct IssueComments {
+    comments: Conn<CommentNode>,
+}
+#[derive(Deserialize)]
+struct CommentNode {
+    body: String,
+    #[serde(rename = "createdAt")]
+    created_at: String,
+    #[serde(default)]
+    user: Option<UserNode>,
+}
+#[derive(Deserialize)]
+struct UserNode {
     name: String,
 }
 
@@ -144,6 +173,14 @@ const ISSUES_QUERY: &str = r#"
 query Preview($teamId: ID!, $stateId: ID!) {
   issues(first: 50, filter: { team: { id: { eq: $teamId } }, state: { id: { eq: $stateId } } }) {
     nodes { id identifier title url description labels { nodes { name } } }
+  }
+}"#;
+const COMMENTS_QUERY: &str = r#"
+query Comments($issueId: String!) {
+  issue(id: $issueId) {
+    comments(first: 50) {
+      nodes { body createdAt user { name } }
+    }
   }
 }"#;
 
@@ -259,6 +296,22 @@ pub fn parse_issues(json: &[u8], label: Option<&str>) -> Result<Vec<Issue>, Line
         .collect();
     Ok(issues)
 }
+/// Parse an issue-comments response into clean types (oldest-first as Linear
+/// returns them). Returns empty when the issue has no comments or didn't resolve.
+pub fn parse_comments(json: &[u8]) -> Result<Vec<Comment>, LinearError> {
+    let data: CommentsData = gql_data(json)?;
+    Ok(data
+        .issue
+        .map(|i| i.comments.nodes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| Comment {
+            author: c.user.map(|u| u.name),
+            body: c.body,
+            created_at: c.created_at,
+        })
+        .collect())
+}
 
 // ── HTTP client ──────────────────────────────────────────────────────────────
 
@@ -320,6 +373,15 @@ impl LinearClient {
             "variables": { "teamId": team_id, "stateId": state_id },
         });
         parse_issues(&self.post(body).await?, label)
+    }
+    /// List an issue's comments (read-only). `issue_id` is the Linear internal
+    /// id (the `id` field of an [`Issue`]), not the `COR-12` identifier.
+    pub async fn list_comments(&self, issue_id: &str) -> Result<Vec<Comment>, LinearError> {
+        let body = serde_json::json!({
+            "query": COMMENTS_QUERY,
+            "variables": { "issueId": issue_id },
+        });
+        parse_comments(&self.post(body).await?)
     }
 
     /// Move an issue to a workflow state (write). `issue_id` is the Linear
@@ -487,5 +549,35 @@ mod tests {
         let issues = parse_issues(json, None).unwrap();
         assert_eq!(issues.len(), 1);
         assert!(issues[0].labels.is_empty());
+    }
+    #[test]
+    fn parse_comments_maps_author_body_time() {
+        let json = br#"{"data":{"issue":{"comments":{"nodes":[{"body":"please fix the off-by-one","createdAt":"2026-06-01T10:00:00Z","user":{"name":"Reviewer A"}}]}}}}"#;
+        let comments = parse_comments(json).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert_eq!(comments[0].author.as_deref(), Some("Reviewer A"));
+        assert_eq!(comments[0].body, "please fix the off-by-one");
+        assert_eq!(comments[0].created_at, "2026-06-01T10:00:00Z");
+    }
+    #[test]
+    fn parse_comments_handles_null_user() {
+        let json = br#"{"data":{"issue":{"comments":{"nodes":[{"body":"system note","createdAt":"2026-06-01T12:00:00Z","user":null}]}}}}"#;
+        let comments = parse_comments(json).unwrap();
+        assert_eq!(comments.len(), 1);
+        assert!(comments[0].author.is_none());
+        assert_eq!(comments[0].body, "system note");
+    }
+    #[test]
+    fn parse_comments_empty_and_missing_issue() {
+        let empty = br#"{"data":{"issue":{"comments":{"nodes":[]}}}}"#;
+        assert!(parse_comments(empty).unwrap().is_empty());
+        let null_issue = br#"{"data":{"issue":null}}"#;
+        assert!(parse_comments(null_issue).unwrap().is_empty());
+    }
+    #[test]
+    fn parse_comments_surfaces_graphql_errors() {
+        let json = br#"{"errors":[{"message":"authentication required"}]}"#;
+        let err = parse_comments(json).unwrap_err();
+        assert!(err.0.contains("authentication required"));
     }
 }

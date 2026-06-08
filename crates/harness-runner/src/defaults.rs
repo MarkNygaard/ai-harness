@@ -22,6 +22,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "merge-pr",
         include_str!("../defaults/workflows/merge-pr.yaml"),
     ),
+    (
+        "revise-pr",
+        include_str!("../defaults/workflows/revise-pr.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.
@@ -193,5 +197,6 @@ mod tests {
         let names = list_default_workflows();
         assert!(names.contains(&DEFAULT_WORKFLOW));
         assert!(names.contains(&"merge-pr"));
+        assert!(names.contains(&"revise-pr"));
     }
 }
