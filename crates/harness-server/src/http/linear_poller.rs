@@ -290,6 +290,16 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
     }
 }
 
+/// The task spec handed to the fired run: the issue identifier/title/url + body,
+/// plus any reviewer comments from the Linear issue (excluding harness bot
+/// status comments to avoid feedback loops).
+///
+/// The identifier is stated up front *and* as an explicit PR-title directive so
+/// the `verify-pr-title` node carries it into the final title — that's what lets
+/// Linear link the PR back to this issue (and lets `merge-pr` find the PR via
+/// `gh pr list --search`). We deliberately avoid close keywords ("Fixes"/
+/// "Closes") so Linear's GitHub integration links without auto-closing the
+/// issue, which would bypass the poller's own status transitions.
 fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     let id = &issue.identifier;
     let mut task = format!(

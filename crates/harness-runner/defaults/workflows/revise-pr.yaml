@@ -128,7 +128,6 @@ nodes:
   - id: summary
     category: delivery
     depends_on: [implement]
-    trigger_rule: all_done
     provider: pi
     model: kimi-code/kimi-for-coding
     context: fresh
