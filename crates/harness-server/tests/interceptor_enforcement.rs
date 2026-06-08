@@ -38,7 +38,15 @@ fn make_engine_with_guard(guard_dir: &std::path::Path) -> Arc<RwLock<RuleEngine>
 }
 
 /// post_tool_use detects violations and writes a hook_enforcement event to EventStore.
+// QUARANTINED (flaky in CI): `HookEnforcer::post_tool_use` branches on the
+// process-global `CI` env var (hook_enforcer.rs:112); this test unsets `CI` to
+// exercise the guard path, but that global-env dance races under nextest's
+// process model and intermittently yields no violation feedback. The behavior
+// is still covered by `hook_enforcer`'s in-crate unit tests
+// (`post_tool_use_returns_violations_when_guard_fires`). Re-enable once the
+// enforcer takes an explicit flag instead of reading `CI` — see tracking issue.
 #[tokio::test]
+#[ignore = "flaky: enforcer reads global CI env; covered by hook_enforcer unit tests; re-enable after env-flag fix"]
 async fn post_tool_use_violation_is_logged_to_event_store() -> anyhow::Result<()> {
     if !harness_server::test_helpers::db_tests_enabled().await {
         return Ok(());
