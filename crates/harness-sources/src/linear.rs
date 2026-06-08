@@ -124,6 +124,7 @@ struct IssueNode {
     #[serde(default)]
     labels: Option<Conn<IssueLabelNode>>,
 }
+// Issue labels are fetched by name only (the issues query omits label ids).
 #[derive(Deserialize)]
 struct IssueLabelNode {
     name: String,
@@ -296,8 +297,8 @@ pub fn parse_issues(json: &[u8], label: Option<&str>) -> Result<Vec<Issue>, Line
         .collect();
     Ok(issues)
 }
-/// Parse an issue-comments response into clean types (oldest-first as Linear
-/// returns them). Returns empty when the issue has no comments or didn't resolve.
+/// Parse an issue-comments response into clean types. Returns empty when the
+/// issue has no comments or didn't resolve.
 pub fn parse_comments(json: &[u8]) -> Result<Vec<Comment>, LinearError> {
     let data: CommentsData = gql_data(json)?;
     Ok(data
