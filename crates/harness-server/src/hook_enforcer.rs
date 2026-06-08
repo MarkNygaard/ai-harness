@@ -248,7 +248,7 @@ mod tests {
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project)?;
 
-        let enforcer = HookEnforcer::new(rules, events, true, true);
+        let enforcer = HookEnforcer::new(rules, events, true, false);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![PathBuf::from("src/main.rs")],
@@ -439,7 +439,7 @@ mod tests {
         let project = dir.path().join("project");
         std::fs::create_dir_all(&project)?;
 
-        let enforcer = HookEnforcer::new(rules, events, true, false);
+        let enforcer = HookEnforcer::new(rules, events, true, true);
         let event = ToolUseEvent {
             tool_name: "write_file".to_string(),
             affected_files: vec![PathBuf::from("src/main.rs")],
