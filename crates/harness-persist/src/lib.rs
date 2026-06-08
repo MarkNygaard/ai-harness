@@ -44,6 +44,12 @@ pub struct RunSummary {
     pub project: Option<String>,
     pub node_count: i32,
     pub recorded_at: DateTime<Utc>,
+    /// Earliest node start across the run's nodes (`MIN(n.started_at)`); `None`
+    /// when no node has timing (e.g. a run with no started nodes).
+    pub started_at: Option<DateTime<Utc>>,
+    /// Latest node end across the run's nodes (`MAX(n.ended_at)`); `None` when
+    /// no node has finished.
+    pub ended_at: Option<DateTime<Utc>>,
 }
 /// One (project, day, status) tally for the dashboard aggregate.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -547,9 +553,13 @@ impl RunStore {
     /// List the most recently recorded runs (newest first).
     pub async fn list_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
-             FROM harness_workflow_runs
-             ORDER BY recorded_at DESC
+            "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
+                    r.node_count, r.recorded_at,
+                    MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at
+             FROM harness_workflow_runs r
+             LEFT JOIN harness_run_nodes n ON n.run_id = r.id
+             GROUP BY r.id
+             ORDER BY r.recorded_at DESC
              LIMIT $1",
         )
         .bind(limit)
@@ -565,10 +575,14 @@ impl RunStore {
         limit: i64,
     ) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
-             FROM harness_workflow_runs
-             WHERE project = $1
-             ORDER BY recorded_at DESC
+            "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
+                    r.node_count, r.recorded_at,
+                    MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at
+             FROM harness_workflow_runs r
+             LEFT JOIN harness_run_nodes n ON n.run_id = r.id
+             WHERE r.project = $1
+             GROUP BY r.id
+             ORDER BY r.recorded_at DESC
              LIMIT $2",
         )
         .bind(project)
@@ -581,10 +595,14 @@ impl RunStore {
     /// List the most recently recorded runs without a project (newest first).
     pub async fn list_unassigned_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
-             FROM harness_workflow_runs
-             WHERE project IS NULL OR btrim(project) = ''
-             ORDER BY recorded_at DESC
+            "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
+                    r.node_count, r.recorded_at,
+                    MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at
+             FROM harness_workflow_runs r
+             LEFT JOIN harness_run_nodes n ON n.run_id = r.id
+             WHERE r.project IS NULL OR btrim(r.project) = ''
+             GROUP BY r.id
+             ORDER BY r.recorded_at DESC
              LIMIT $1",
         )
         .bind(limit)
@@ -618,8 +636,13 @@ impl RunStore {
     /// Fetch a run plus its node rows (ordered by declaration order).
     pub async fn get_run(&self, run_id: &str) -> Result<Option<RunDetail>, PersistError> {
         let run = sqlx::query_as::<_, RunSummary>(
-            "SELECT id, workflow_name, title, description, status, project, node_count, recorded_at
-             FROM harness_workflow_runs WHERE id = $1",
+            "SELECT r.id, r.workflow_name, r.title, r.description, r.status, r.project,
+                    r.node_count, r.recorded_at,
+                    MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at
+             FROM harness_workflow_runs r
+             LEFT JOIN harness_run_nodes n ON n.run_id = r.id
+             WHERE r.id = $1
+             GROUP BY r.id",
         )
         .bind(run_id)
         .fetch_optional(&self.pool)
@@ -801,6 +824,16 @@ mod tests {
         assert!(
             listed_run.description.is_none(),
             "list_runs must redact long task descriptions"
+        );
+        // The "build" node carries start/end timestamps, so the run's derived
+        // timing (MIN start / MAX end across nodes) must be populated.
+        assert!(
+            listed_run.started_at.is_some(),
+            "list_runs must derive started_at from node timings"
+        );
+        assert!(
+            listed_run.ended_at.is_some(),
+            "list_runs must derive ended_at from node timings"
         );
         let detail = store.get_run(&run_id).await.unwrap().expect("detail");
         assert_eq!(detail.run.status, "completed");
