@@ -22,6 +22,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "merge-pr",
         include_str!("../defaults/workflows/merge-pr.yaml"),
     ),
+    (
+        "architect",
+        include_str!("../defaults/workflows/architect.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.
@@ -193,5 +197,30 @@ mod tests {
         let names = list_default_workflows();
         assert!(names.contains(&DEFAULT_WORKFLOW));
         assert!(names.contains(&"merge-pr"));
+    }
+    #[test]
+    fn architect_workflow_parses_with_readonly_hooks() {
+        let yaml = default_workflow("architect").expect("architect is bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("architect must parse");
+        assert_eq!(wf.name, "architect");
+        // Core phases exist.
+        for id in [
+            "measure",
+            "analyze",
+            "plan",
+            "simplify",
+            "validate",
+            "fix-failures",
+            "finalize-pr",
+        ] {
+            assert!(wf.nodes.iter().any(|n| n.id == id), "missing node `{id}`");
+        }
+        // analyze is hook-enforced read-only: a pre_tool_use deny on edit/shell tools.
+        let analyze = wf.nodes.iter().find(|n| n.id == "analyze").unwrap();
+        let hooks = analyze.hooks.as_ref().expect("analyze has hooks");
+        assert!(hooks
+            .pre_tool_use
+            .iter()
+            .any(|r| r.decision == Some(harness_dag::HookDecision::Deny)));
     }
 }
