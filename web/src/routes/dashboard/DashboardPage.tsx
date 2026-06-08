@@ -3,11 +3,7 @@ import { AppShell } from "@/components/AppShell";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useRunsSummary } from "@/lib/runs";
-import {
-  buildProjectSummaries,
-  recentDayKeys,
-  NO_PROJECT,
-} from "@/lib/dashboard";
+import { buildProjectSummaries, recentDayKeys } from "@/lib/dashboard";
 
 export function DashboardPage() {
   const summary = useRunsSummary(14);
@@ -35,50 +31,65 @@ export function DashboardPage() {
           </p>
         )}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-          {projects.map((ps) => (
-            <Card key={ps.project}>
-              <CardHeader className="flex flex-row items-center justify-between pb-2">
-                <CardTitle className="text-sm font-medium">
-                  <Link
-                    to={`/runs?project=${encodeURIComponent(ps.project)}`}
-                    className={ps.project === NO_PROJECT ? "text-muted-foreground hover:underline" : "hover:underline"}
-                  >
-                    {ps.project}
-                  </Link>
-                </CardTitle>
-                <Badge variant="success">{ps.total}</Badge>
-              </CardHeader>
-              <CardContent>
-                <div className="flex flex-col gap-3">
-                  <DayRow label="Today" day={today} byDay={ps.byDay} />
-                  <DayRow label="Yesterday" day={yesterday} byDay={ps.byDay} />
-                  <div className="flex gap-1">
-                    {trailing.map((d) => {
-                      const b = ps.byDay[d];
-                      const failed = b?.failed ?? 0;
-                      const hasFailed = failed > 0;
-                      const completed = b?.completed ?? 0;
-                      return (
-                        <div
-                          key={d}
-                          className={`flex h-6 flex-1 items-center justify-center rounded text-[10px] font-medium ${
-                            completed > 0
-                              ? "bg-status-success/15 text-status-success"
-                              : "bg-muted text-muted-foreground"
-                          } ${hasFailed ? "ring-1 ring-status-failed" : ""}`}
-                          title={`${d}: ${completed} completed${
-                            hasFailed ? `, ${failed} failed` : ""
-                          }`}
-                        >
-                          {completed > 0 ? completed : "·"}
-                        </div>
-                      );
-                    })}
+          {projects.map((ps) => {
+            const runsLink = ps.isUnassigned
+              ? "/runs?unassigned=true"
+              : `/runs?project=${encodeURIComponent(ps.projectQuery ?? "")}`;
+            return (
+              <Card
+                key={`${ps.isUnassigned ? "unassigned" : "project"}:${ps.project}`}
+              >
+                <CardHeader className="flex flex-row items-center justify-between pb-2">
+                  <CardTitle className="text-sm font-medium">
+                    <Link
+                      to={runsLink}
+                      className={
+                        ps.isUnassigned
+                          ? "text-muted-foreground hover:underline"
+                          : "hover:underline"
+                      }
+                    >
+                      {ps.project}
+                    </Link>
+                  </CardTitle>
+                  <Badge variant="success">{ps.total}</Badge>
+                </CardHeader>
+                <CardContent>
+                  <div className="flex flex-col gap-3">
+                    <DayRow label="Today" day={today} byDay={ps.byDay} />
+                    <DayRow
+                      label="Yesterday"
+                      day={yesterday}
+                      byDay={ps.byDay}
+                    />
+                    <div className="flex gap-1">
+                      {trailing.map((d) => {
+                        const b = ps.byDay[d];
+                        const failed = b?.failed ?? 0;
+                        const hasFailed = failed > 0;
+                        const completed = b?.completed ?? 0;
+                        return (
+                          <div
+                            key={d}
+                            className={`flex h-6 flex-1 items-center justify-center rounded text-[10px] font-medium ${
+                              completed > 0
+                                ? "bg-status-success/15 text-status-success"
+                                : "bg-muted text-muted-foreground"
+                            } ${hasFailed ? "ring-1 ring-status-failed" : ""}`}
+                            title={`${d}: ${completed} completed${
+                              hasFailed ? `, ${failed} failed` : ""
+                            }`}
+                          >
+                            {completed > 0 ? completed : "·"}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
+                </CardContent>
+              </Card>
+            );
+          })}
         </div>
       </div>
     </AppShell>

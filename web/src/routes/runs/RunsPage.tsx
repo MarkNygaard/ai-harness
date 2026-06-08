@@ -33,13 +33,15 @@ function relativeTime(iso: string): string {
 }
 
 export function RunsPage() {
-  const runs = useRuns();
   const [params] = useSearchParams();
-  const projectFilter = params.get("project");
-  const filtered = runs.data?.filter((r) => {
-    if (!projectFilter) return true;
-    if (projectFilter === NO_PROJECT) return !r.project || r.project.trim() === "";
-    return r.project === projectFilter;
+  const projectFilter = params.get("project")?.trim() || null;
+  const unassignedParam = params.get("unassigned");
+  const unassignedFilter =
+    unassignedParam === "true" || unassignedParam === "1";
+  const activeFilterLabel = unassignedFilter ? NO_PROJECT : projectFilter;
+  const runs = useRuns({
+    project: projectFilter,
+    unassigned: unassignedFilter,
   });
   return (
     <AppShell title="Runs">
@@ -49,12 +51,10 @@ export function RunsPage() {
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Recent runs
           </h2>
-          {projectFilter && (
+          {activeFilterLabel && (
             <p className="text-sm">
               Filtered by project:{" "}
-              <span className="font-medium">
-                {projectFilter === NO_PROJECT ? NO_PROJECT : projectFilter}
-              </span>{" "}
+              <span className="font-medium">{activeFilterLabel}</span>{" "}
               <Link to="/runs" className="underline text-muted-foreground">
                 clear
               </Link>
@@ -68,15 +68,15 @@ export function RunsPage() {
               Failed to load runs: {runs.error.message}
             </p>
           )}
-          {filtered?.length === 0 && (
+          {runs.data?.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              {projectFilter
+              {activeFilterLabel
                 ? "No runs match this project."
                 : "No runs yet. Submit a workflow above to start one."}
             </p>
           )}
           <div className="flex flex-col gap-1.5">
-            {filtered?.map((run) => (
+            {runs.data?.map((run) => (
               <RunRow key={run.id} run={run} />
             ))}
           </div>

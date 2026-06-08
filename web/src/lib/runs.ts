@@ -46,10 +46,33 @@ const STATUS_RANK: Record<NodeStatus, number> = {
   cancelled: 2,
 };
 
-export function useRuns() {
+interface RunsListOptions {
+  project?: string | null;
+  unassigned?: boolean;
+}
+
+function runsListPath({
+  project,
+  unassigned = false,
+}: RunsListOptions): string {
+  const params = new URLSearchParams();
+  if (unassigned) {
+    params.set("unassigned", "true");
+  } else if (project) {
+    params.set("project", project);
+  }
+  const query = params.toString();
+  return query ? `/api/runs?${query}` : "/api/runs";
+}
+
+export function useRuns({
+  project = null,
+  unassigned = false,
+}: RunsListOptions = {}) {
   return useQuery<RunSummary[], Error>({
-    queryKey: ["runs"],
-    queryFn: ({ signal }) => apiJson<RunSummary[]>("/api/runs", { signal }),
+    queryKey: ["runs", project, unassigned],
+    queryFn: ({ signal }) =>
+      apiJson<RunSummary[]>(runsListPath({ project, unassigned }), { signal }),
     refetchInterval: 5_000,
   });
 }

@@ -10,7 +10,7 @@
 //! State is attached as an axum `Extension` (a self-contained `RunsState`) so it
 //! doesn't entangle the large shared `AppState`.
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read;
@@ -315,10 +315,24 @@ pub struct CreateRunRequest {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct ListRunsQuery {
+    #[serde(default)]
+    pub project: Option<String>,
+    #[serde(default)]
+    pub unassigned: bool,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct SummaryQuery {
     /// Trailing window in days (default 14, clamped 1..=90).
     #[serde(default)]
     pub days: Option<i64>,
+}
+
+fn summary_window_start(now: DateTime<Utc>, days: i64) -> DateTime<Utc> {
+    let days = days.clamp(1, 90);
+    let today_start = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
+    today_start - Duration::days(days - 1)
 }
 
 #[derive(Debug, Serialize)]
@@ -580,13 +594,28 @@ pub(crate) fn sweep_cargo_cache(
     Ok(Some((total, remaining)))
 }
 
-/// `GET /runs` — list recent runs.
-pub async fn list_runs(Extension(state): Extension<Arc<RunsState>>) -> Response {
+/// `GET /runs` — list recent runs, optionally filtered by project.
+pub async fn list_runs(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<ListRunsQuery>,
+) -> Response {
     let store = match state.store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    match store.list_runs(100).await {
+    let project = q
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    let result = if q.unassigned {
+        store.list_unassigned_runs(100).await
+    } else if let Some(project) = project {
+        store.list_runs_for_project(project, 100).await
+    } else {
+        store.list_runs(100).await
+    };
+    match result {
         Ok(runs) => Json(runs).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -598,7 +627,7 @@ pub async fn runs_daily_summary(
     Query(q): Query<SummaryQuery>,
 ) -> Response {
     let days = q.days.unwrap_or(14).clamp(1, 90);
-    let since = Utc::now() - Duration::days(days);
+    let since = summary_window_start(Utc::now(), days);
     let store = match state.store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -1117,6 +1146,33 @@ pub async fn delete_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn summary_window_start_uses_visible_utc_calendar_days() {
+        let now = DateTime::parse_from_rfc3339("2026-06-08T15:30:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+
+        assert_eq!(
+            summary_window_start(now, 14),
+            DateTime::parse_from_rfc3339("2026-05-26T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+        assert_eq!(
+            summary_window_start(now, 1),
+            DateTime::parse_from_rfc3339("2026-06-08T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+        assert_eq!(
+            summary_window_start(now, 0),
+            DateTime::parse_from_rfc3339("2026-06-08T00:00:00Z")
+                .unwrap()
+                .with_timezone(&Utc)
+        );
+    }
+
     #[test]
     fn dir_size_sums_regular_files_skips_symlinks() {
         let dir = tempfile::tempdir().unwrap();

@@ -133,6 +133,8 @@ const ALTER_NODES_ARTIFACT: &str =
     "ALTER TABLE harness_run_nodes ADD COLUMN IF NOT EXISTS artifact_content text";
 const INDEX_RUNS_RECORDED_AT: &str =
     "CREATE INDEX IF NOT EXISTS idx_harness_workflow_runs_recorded_at ON harness_workflow_runs(recorded_at DESC)";
+const INDEX_RUNS_PROJECT_RECORDED_AT: &str =
+    "CREATE INDEX IF NOT EXISTS idx_harness_workflow_runs_project_recorded_at ON harness_workflow_runs(project, recorded_at DESC)";
 
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
@@ -194,6 +196,9 @@ impl RunStore {
             .execute(&self.pool)
             .await?;
         sqlx::query(INDEX_RUNS_RECORDED_AT)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(INDEX_RUNS_PROJECT_RECORDED_AT)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -544,6 +549,41 @@ impl RunStore {
         let rows = sqlx::query_as::<_, RunSummary>(
             "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
              FROM harness_workflow_runs
+             ORDER BY recorded_at DESC
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// List the most recently recorded runs for a project (newest first).
+    pub async fn list_runs_for_project(
+        &self,
+        project: &str,
+        limit: i64,
+    ) -> Result<Vec<RunSummary>, PersistError> {
+        let rows = sqlx::query_as::<_, RunSummary>(
+            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
+             FROM harness_workflow_runs
+             WHERE project = $1
+             ORDER BY recorded_at DESC
+             LIMIT $2",
+        )
+        .bind(project)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// List the most recently recorded runs without a project (newest first).
+    pub async fn list_unassigned_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
+        let rows = sqlx::query_as::<_, RunSummary>(
+            "SELECT id, workflow_name, title, NULL::text AS description, status, project, node_count, recorded_at
+             FROM harness_workflow_runs
+             WHERE project IS NULL OR btrim(project) = ''
              ORDER BY recorded_at DESC
              LIMIT $1",
         )

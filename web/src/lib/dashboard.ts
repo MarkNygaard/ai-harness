@@ -26,6 +26,8 @@ export interface DayBucket {
 
 export interface ProjectSummary {
   project: string; // NO_PROJECT when null/empty
+  projectQuery: string | null;
+  isUnassigned: boolean;
   total: number; // completed across the window
   byDay: Record<string, DayBucket>; // keyed by UTC day key
 }
@@ -34,9 +36,18 @@ export interface ProjectSummary {
 export function buildProjectSummaries(rows: RunDailyCount[]): ProjectSummary[] {
   const map = new Map<string, ProjectSummary>();
   for (const r of rows) {
-    const project = r.project?.trim() || NO_PROJECT;
+    const projectQuery = r.project?.trim() || null;
+    const isUnassigned = projectQuery === null;
+    const project = projectQuery ?? NO_PROJECT;
+    const mapKey = isUnassigned ? "unassigned" : `project:${projectQuery}`;
     const key = utcDayKey(r.day);
-    const ps = map.get(project) ?? { project, total: 0, byDay: {} };
+    const ps = map.get(mapKey) ?? {
+      project,
+      projectQuery,
+      isUnassigned,
+      total: 0,
+      byDay: {},
+    };
     const b = ps.byDay[key] ?? { completed: 0, failed: 0 };
     if (r.status === "completed") {
       b.completed += r.count;
@@ -45,7 +56,7 @@ export function buildProjectSummaries(rows: RunDailyCount[]): ProjectSummary[] {
       b.failed += r.count;
     } // failed + cancelled → red bucket
     ps.byDay[key] = b;
-    map.set(project, ps);
+    map.set(mapKey, ps);
   }
   return [...map.values()].sort(
     (a, b) => b.total - a.total || a.project.localeCompare(b.project),
