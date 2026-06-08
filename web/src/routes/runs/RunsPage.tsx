@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useCreateRun, useDeleteRun, useRuns } from "@/lib/runs";
+import { NO_PROJECT } from "@/lib/dashboard";
 import { useProjects } from "@/lib/projects";
 import type { RunStatus, RunSummary } from "@/types/run";
 
@@ -35,9 +36,11 @@ export function RunsPage() {
   const runs = useRuns();
   const [params] = useSearchParams();
   const projectFilter = params.get("project");
-  const filtered = runs.data?.filter(
-    (r) => !projectFilter || r.project === projectFilter,
-  );
+  const filtered = runs.data?.filter((r) => {
+    if (!projectFilter) return true;
+    if (projectFilter === NO_PROJECT) return !r.project || r.project.trim() === "";
+    return r.project === projectFilter;
+  });
   return (
     <AppShell title="Runs">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
@@ -49,7 +52,9 @@ export function RunsPage() {
           {projectFilter && (
             <p className="text-sm">
               Filtered by project:{" "}
-              <span className="font-medium">{projectFilter}</span>{" "}
+              <span className="font-medium">
+                {projectFilter === NO_PROJECT ? NO_PROJECT : projectFilter}
+              </span>{" "}
               <Link to="/runs" className="underline text-muted-foreground">
                 clear
               </Link>

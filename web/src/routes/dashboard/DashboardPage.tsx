@@ -39,16 +39,12 @@ export function DashboardPage() {
             <Card key={ps.project}>
               <CardHeader className="flex flex-row items-center justify-between pb-2">
                 <CardTitle className="text-sm font-medium">
-                  {ps.project === NO_PROJECT ? (
-                    <span className="text-muted-foreground">{NO_PROJECT}</span>
-                  ) : (
-                    <Link
-                      to={`/runs?project=${encodeURIComponent(ps.project)}`}
-                      className="hover:underline"
-                    >
-                      {ps.project}
-                    </Link>
-                  )}
+                  <Link
+                    to={`/runs?project=${encodeURIComponent(ps.project)}`}
+                    className={ps.project === NO_PROJECT ? "text-muted-foreground hover:underline" : "hover:underline"}
+                  >
+                    {ps.project}
+                  </Link>
                 </CardTitle>
                 <Badge variant="success">{ps.total}</Badge>
               </CardHeader>

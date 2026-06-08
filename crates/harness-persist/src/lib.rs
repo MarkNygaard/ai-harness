@@ -131,6 +131,8 @@ const ALTER_RUNS_HEARTBEAT: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS heartbeat_at timestamptz";
 const ALTER_NODES_ARTIFACT: &str =
     "ALTER TABLE harness_run_nodes ADD COLUMN IF NOT EXISTS artifact_content text";
+const INDEX_RUNS_RECORDED_AT: &str =
+    "CREATE INDEX IF NOT EXISTS idx_harness_workflow_runs_recorded_at ON harness_workflow_runs(recorded_at DESC)";
 
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
@@ -153,7 +155,6 @@ CREATE TABLE IF NOT EXISTS harness_run_nodes (
     artifact_content text,
     PRIMARY KEY (run_id, node_id)
 )";
-
 /// A Postgres-backed store for workflow runs.
 pub struct RunStore {
     pool: PgPool,
@@ -190,6 +191,9 @@ impl RunStore {
             .await?;
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
         sqlx::query(ALTER_NODES_ARTIFACT)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(INDEX_RUNS_RECORDED_AT)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -558,7 +562,7 @@ impl RunStore {
         since: DateTime<Utc>,
     ) -> Result<Vec<RunDailyCount>, PersistError> {
         let rows = sqlx::query_as::<_, RunDailyCount>(
-            "SELECT project, date_trunc('day', recorded_at) AS day, status, count(*) AS count
+            "SELECT project, date_trunc('day', recorded_at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day, status, count(*) AS count
              FROM harness_workflow_runs
              WHERE recorded_at >= $1
                AND status IN ('completed', 'failed', 'cancelled')
