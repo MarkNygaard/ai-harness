@@ -421,11 +421,11 @@ nodes:
     # Runs gpt-5.x via omp on the ChatGPT Plus/Pro subscription (OAuth — no
     # per-token API-key billing; "Codex for OSS"). The ChatGPT account exposes
     # the general gpt-5.x models but NOT the `-codex` variants, so use the
-    # general model. The model id MUST be namespace-qualified (`openai/...`):
+    # general model. The model id MUST be namespace-qualified (`openai-codex/...`):
     # a bare name would be mis-prefixed to `kimi-code/...` by the pi provider.
     # Connect once on the cluster image: `omp /login` → "ChatGPT Plus/Pro
     # (Codex)". To see an account's exact list run `omp` → `/model`.
-    model: openai/gpt-5.5
+    model: openai-codex/gpt-5.5
     context: fresh
     prompt: |
       You are reviewing a PR that an upstream agent already authored

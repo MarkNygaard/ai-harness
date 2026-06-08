@@ -1,6 +1,6 @@
 # ChatGPT Plus/Pro (Codex) via omp
 
-This runbook covers connecting the harness to a **ChatGPT Plus or Pro subscription** so that workflow nodes can run OpenAI models (e.g. `openai/gpt-5.5`) through `omp` without per-token API-key billing.
+This runbook covers connecting the harness to a **ChatGPT Plus or Pro subscription** so that workflow nodes can run OpenAI models (e.g. `openai-codex/gpt-5.5`) through `omp` without per-token API-key billing.
 
 ## One-time setup
 
@@ -18,10 +18,10 @@ When authoring a workflow node that uses this credential, set:
 
 ```yaml
 provider: pi
-model: openai/gpt-5.5
+model: openai-codex/gpt-5.5
 ```
 
-The model id **must** be namespace-qualified (`openai/...`). A bare name like `gpt-5.5` would be mis-prefixed to `kimi-code/gpt-5.5` by the `pi` provider.
+The model id **must** be namespace-qualified (`openai-codex/...`). A bare name like `gpt-5.5` would be mis-prefixed to `kimi-code/gpt-5.5` by the `pi` provider.
 
 **ChatGPT-account scope**: the subscription exposes the general `gpt-5.x` models (`gpt-5.5`, `gpt-5.4`) but **not** the `-codex` variants. Those require API-key / non-ChatGPT auth and should still use the dedicated `codex` provider.
 

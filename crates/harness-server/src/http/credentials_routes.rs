@@ -69,7 +69,7 @@ async fn provider_native_present(provider: &str) -> bool {
         "pi" => {
             crate::http::kimi_routes::agent_db_has_provider(
                 home.join(".omp").join("agent").join("agent.db"),
-                &["kimi-code", "openai", "openai-codex", "codex"],
+                &["kimi-code", "openai-codex"],
             )
             .await
         }

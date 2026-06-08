@@ -335,6 +335,9 @@ pub(crate) async fn agent_db_has_provider(path: PathBuf, providers: &[&str]) -> 
     if !path.exists() {
         return false;
     }
+    if providers.is_empty() {
+        return false;
+    }
     let opts = sqlx::sqlite::SqliteConnectOptions::new()
         .filename(&path)
         .read_only(true);
@@ -343,7 +346,8 @@ pub(crate) async fn agent_db_has_provider(path: PathBuf, providers: &[&str]) -> 
     };
     let placeholders = providers.iter().map(|_| "?").collect::<Vec<_>>().join(",");
     let sql = format!(
-        "SELECT count(*) FROM auth_credentials WHERE provider IN ({})",
+        "SELECT count(*) FROM auth_credentials \
+         WHERE credential_type = 'oauth' AND disabled_cause IS NULL AND provider IN ({})",
         placeholders
     );
     let mut query = sqlx::query_as::<_, (i64,)>(&sql);
@@ -353,4 +357,62 @@ pub(crate) async fn agent_db_has_provider(path: PathBuf, providers: &[&str]) -> 
     let row: Option<(i64,)> = query.fetch_optional(&pool).await.ok().flatten();
     pool.close().await;
     row.map(|r| r.0 > 0).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn insert_auth_row(
+        pool: &sqlx::SqlitePool,
+        provider: &str,
+        credential_type: &str,
+        disabled_cause: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO auth_credentials \
+             (provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at) \
+             VALUES (?, ?, '{}', ?, NULL, 1, 1)",
+        )
+        .bind(provider)
+        .bind(credential_type)
+        .bind(disabled_cause)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn create_agent_db(path: &std::path::Path) -> sqlx::SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE auth_credentials (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, \
+                credential_type TEXT NOT NULL, data TEXT NOT NULL, \
+                disabled_cause TEXT DEFAULT NULL, identity_key TEXT DEFAULT NULL, \
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn agent_db_has_provider_only_counts_active_oauth_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("agent.db");
+        let pool = create_agent_db(&path).await;
+        insert_auth_row(&pool, "openai-codex", "oauth", None).await;
+        insert_auth_row(&pool, "openai", "oauth", Some("deleted by user")).await;
+        insert_auth_row(&pool, "codex", "api_key", None).await;
+        pool.close().await;
+
+        assert!(agent_db_has_provider(path.clone(), &["openai-codex"]).await);
+        assert!(!agent_db_has_provider(path.clone(), &["openai"]).await);
+        assert!(!agent_db_has_provider(path.clone(), &["codex"]).await);
+        assert!(!agent_db_has_provider(path, &[]).await);
+    }
 }
