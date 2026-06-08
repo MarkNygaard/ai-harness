@@ -137,10 +137,10 @@ nodes:
     context: fresh
     hooks:
       pre_tool_use:
-        - matcher: "Write|Edit|MultiEdit"
+        - matcher: "Write|Edit|MultiEdit|NotebookEdit"
           additional_context: "Is this file in cleanup-plan.md's file list? If not, STOP — out of scope. Before editing, check its fan-out (who imports/calls it) so a 'simplification' here doesn't ripple."
       post_tool_use:
-        - matcher: "Write|Edit|MultiEdit"
+        - matcher: "Write|Edit|MultiEdit|NotebookEdit"
           additional_context: "Run `cargo check -p <the crate you just touched>`. Is the result actually simpler AND behavior-preserving? If it doesn't compile or isn't clearly simpler, justify it in your summary or revert it."
     prompt: |
       You are an implementation agent. Read `$ARTIFACTS_DIR/cleanup-plan.md`;

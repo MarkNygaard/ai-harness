@@ -215,12 +215,18 @@ mod tests {
         ] {
             assert!(wf.nodes.iter().any(|n| n.id == id), "missing node `{id}`");
         }
-        // analyze is hook-enforced read-only: a pre_tool_use deny on edit/shell tools.
-        let analyze = wf.nodes.iter().find(|n| n.id == "analyze").unwrap();
-        let hooks = analyze.hooks.as_ref().expect("analyze has hooks");
-        assert!(hooks
-            .pre_tool_use
-            .iter()
-            .any(|r| r.decision == Some(harness_dag::HookDecision::Deny)));
+        // Both analyze and plan are hook-enforced read-only: a pre_tool_use deny
+        // on edit/shell tools.
+        for id in ["analyze", "plan"] {
+            let node = wf.nodes.iter().find(|n| n.id == id).unwrap();
+            let hooks = node.hooks.as_ref().expect("{id} has hooks");
+            assert!(
+                hooks
+                    .pre_tool_use
+                    .iter()
+                    .any(|r| r.decision == Some(harness_dag::HookDecision::Deny)),
+                "{id} missing a pre_tool_use Deny hook"
+            );
+        }
     }
 }
