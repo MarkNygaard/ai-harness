@@ -101,18 +101,25 @@ nodes:
          `gh pr view $resolve-pr.output.pr --json state,mergeable,mergeStateStatus`
          - If it is no longer OPEN, report that and stop (already merged).
          - If it is still CONFLICTING, do NOT merge — report the conflict.
-      2. Squash-merge and delete the branch:
-         `gh pr merge $resolve-pr.output.pr --squash --delete-branch`
-         If the repository REQUIRES passing checks and they are still running,
-         enable auto-merge instead so GitHub merges it once green:
-         `gh pr merge $resolve-pr.output.pr --squash --delete-branch --auto`
-      3. Never bypass branch protection, never admin-override, never `--no-verify`.
+      2. Wait for CI to finish and PASS before merging. Conflict resolution above
+         may have pushed new commits that retriggered CI, so checks can still be
+         running — never merge on in-progress or red checks. Block on them:
+           `gh pr checks $resolve-pr.output.pr --watch --fail-fast`
+         This waits until every check completes and exits non-zero the moment one
+         fails.
+         - If it exits non-zero (a check failed/was cancelled), or it reports that
+           no checks exist at all: do NOT merge. Report the failing check(s) and
+           stop — leave the PR for a human. Never merge a red or unverified PR.
+      3. Only after every check has passed, squash-merge and delete the branch:
+           `gh pr merge $resolve-pr.output.pr --squash --delete-branch`
+      4. Never bypass branch protection, never admin-override, never `--no-verify`,
+         and do not use `--auto` — confirm the checks are green here yourself.
 
       Emit ONLY this JSON verdict:
     output_format:
       type: object
       properties:
-        merged: { type: boolean, description: "true if merged or auto-merge queued" }
+        merged: { type: boolean, description: "true if merged (after all checks passed)" }
         summary: { type: string, description: "one line: merged / queued / why not" }
       required: [merged, summary]
 
@@ -125,6 +132,6 @@ nodes:
     trigger_rule: all_done
     prompt: |
       Summarize the outcome for PR #$resolve-pr.output.pr in 2-3 lines: whether
-      it merged (or auto-merge was queued), whether conflicts had to be resolved,
+      it merged (only after CI passed), whether conflicts had to be resolved,
       and anything a human still needs to do. Merge verdict:
       $merge.output.summary
