@@ -341,6 +341,21 @@ impl LinearClient {
         });
         expect_mutation_success(&self.post(body).await?, "commentCreate")
     }
+
+    /// Attach a linked resource (URL) to an issue (write). Shows up under the
+    /// issue's "Links" like the auto-linked GitHub PR.
+    pub async fn add_attachment(
+        &self,
+        issue_id: &str,
+        url: &str,
+        title: &str,
+    ) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!,$u:String!,$t:String!){ attachmentCreate(input:{issueId:$id, url:$u, title:$t}){ success } }",
+            "variables": { "id": issue_id, "u": url, "t": title },
+        });
+        expect_mutation_success(&self.post(body).await?, "attachmentCreate")
+    }
 }
 
 /// Check a mutation response reported `{ <field>: { success: true } }`.
@@ -370,8 +385,18 @@ mod tests {
         )
         .is_ok());
         assert!(expect_mutation_success(
+            br#"{"data":{"attachmentCreate":{"success":true}}}"#,
+            "attachmentCreate"
+        )
+        .is_ok());
+        assert!(expect_mutation_success(
             br#"{"data":{"issueUpdate":{"success":false}}}"#,
             "issueUpdate"
+        )
+        .is_err());
+        assert!(expect_mutation_success(
+            br#"{"data":{"attachmentCreate":{"success":false}}}"#,
+            "attachmentCreate"
         )
         .is_err());
         // A GraphQL error surfaces through gql_data.

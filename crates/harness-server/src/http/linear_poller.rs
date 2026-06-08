@@ -240,6 +240,21 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
                     &format!("🤖 ai-harness started `{}` (run `{}`).", b.workflow, run_id),
                 )
                 .await;
+            if let Some(base) = &state.public_url {
+                let run_url = format!("{base}/runs/{run_id}");
+                if let Err(e) = client
+                    .add_attachment(&issue.id, &run_url, "ai-harness run")
+                    .await
+                {
+                    tracing::warn!(
+                        "linear poller: {}/{} — failed to attach run link for {}: {}",
+                        b.project,
+                        b.workflow,
+                        issue.identifier,
+                        e.0
+                    );
+                }
+            }
             tracing::info!(
                 "linear poller: {}/{} — claimed {} → fired run {}",
                 b.project,
