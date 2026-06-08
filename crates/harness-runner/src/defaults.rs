@@ -150,6 +150,19 @@ mod tests {
     }
 
     #[test]
+    fn bundled_gpt_review_uses_subscription_codex_namespace() {
+        let yaml = default_workflow(DEFAULT_WORKFLOW).unwrap();
+        let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow must parse");
+        let node = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "gpt-review-fix")
+            .expect("gpt review node exists");
+        assert_eq!(node.provider.as_deref(), Some("pi"));
+        assert_eq!(node.model.as_deref(), Some("openai-codex/gpt-5.5"));
+    }
+
+    #[test]
     fn resolve_falls_back_to_bundled_default() {
         let tmp = std::env::temp_dir();
         let (yaml, label) = resolve_workflow_source(DEFAULT_WORKFLOW, &tmp).unwrap();

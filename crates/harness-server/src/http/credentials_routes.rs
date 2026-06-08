@@ -66,9 +66,12 @@ pub async fn list_credentials(Extension(state): Extension<Arc<RunsState>>) -> Re
 async fn provider_native_present(provider: &str) -> bool {
     let home = home_dir();
     match provider {
-        // Kimi-for-Coding: omp keeps the OAuth credential in its agent.db.
         "pi" => {
-            kimi_agent_db_has_credential(home.join(".omp").join("agent").join("agent.db")).await
+            crate::http::kimi_routes::agent_db_has_provider(
+                home.join(".omp").join("agent").join("agent.db"),
+                &["kimi-code", "openai-codex"],
+            )
+            .await
         }
         // Codex: ChatGPT OAuth tokens / api key live in auth.json.
         "codex" => file_non_empty(home.join(".codex").join("auth.json")),
@@ -82,28 +85,6 @@ fn file_non_empty(path: PathBuf) -> bool {
     std::fs::metadata(&path)
         .map(|m| m.len() > 2)
         .unwrap_or(false)
-}
-
-/// True if omp's `agent.db` has a `kimi-code` OAuth row. Best-effort (any error
-/// or missing file → false).
-async fn kimi_agent_db_has_credential(path: PathBuf) -> bool {
-    if !path.exists() {
-        return false;
-    }
-    let opts = sqlx::sqlite::SqliteConnectOptions::new()
-        .filename(&path)
-        .read_only(true);
-    let Ok(pool) = sqlx::SqlitePool::connect_with(opts).await else {
-        return false;
-    };
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT count(*) FROM auth_credentials WHERE provider = 'kimi-code'")
-            .fetch_optional(&pool)
-            .await
-            .ok()
-            .flatten();
-    pool.close().await;
-    row.map(|r| r.0 > 0).unwrap_or(false)
 }
 
 #[derive(Debug, Deserialize)]

@@ -232,7 +232,7 @@ pub async fn connect_poll(
                 );
             }
             // Write the omp-native agent.db so omp uses it immediately.
-            if let Err(e) = write_agent_db(&data_str).await {
+            if let Err(e) = write_agent_db(PROVIDER, &data_str).await {
                 return err(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     format!("write agent.db: {e}"),
@@ -264,10 +264,10 @@ pub async fn connect_poll(
     }
 }
 
-/// Write the Kimi-for-Coding credential into omp's `~/.omp/agent/agent.db`
-/// (SQLite, schema v4) so `omp` reads it like a native `/login`. Replaces any
-/// existing `kimi-code` row; omp self-refreshes the tokens from there on.
-pub(crate) async fn write_agent_db(data_json: &str) -> Result<(), String> {
+/// Write an OAuth credential into omp's `~/.omp/agent/agent.db` (SQLite, schema v4)
+/// so `omp` reads it like a native `/login`. Replaces any existing row for
+/// `provider`; omp self-refreshes the tokens from there on.
+pub(crate) async fn write_agent_db(provider: &str, data_json: &str) -> Result<(), String> {
     let path = home_dir().join(".omp").join("agent").join("agent.db");
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| format!("create dir: {e}"))?;
@@ -291,18 +291,22 @@ pub(crate) async fn write_agent_db(data_json: &str) -> Result<(), String> {
             updated_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)))",
         "CREATE INDEX IF NOT EXISTS idx_auth_provider ON auth_credentials(provider)",
         "CREATE INDEX IF NOT EXISTS idx_auth_provider_identity ON auth_credentials(provider, identity_key) WHERE identity_key IS NOT NULL",
-        "DELETE FROM auth_credentials WHERE provider = 'kimi-code'",
     ] {
         sqlx::query(stmt)
             .execute(&pool)
             .await
             .map_err(|e| format!("agent.db schema: {e}"))?;
     }
+    sqlx::query("DELETE FROM auth_credentials WHERE provider = ?")
+        .bind(provider)
+        .execute(&pool)
+        .await
+        .map_err(|e| format!("agent.db delete: {e}"))?;
     sqlx::query(
         "INSERT INTO auth_credentials (provider, credential_type, data, identity_key, created_at, updated_at) \
          VALUES (?, 'oauth', ?, NULL, CAST(strftime('%s','now') AS INTEGER), CAST(strftime('%s','now') AS INTEGER))",
     )
-    .bind(PROVIDER)
+    .bind(provider)
     .bind(data_json)
     .execute(&pool)
     .await
@@ -319,8 +323,96 @@ pub(crate) async fn reseed_agent_db_if_missing(fields: &BTreeMap<String, String>
         return;
     }
     if let Some(data) = fields.get("kimi_oauth").filter(|v| !v.is_empty()) {
-        if let Err(e) = write_agent_db(data).await {
+        if let Err(e) = write_agent_db(PROVIDER, data).await {
             tracing::warn!("failed to reseed kimi agent.db: {e}");
         }
+    }
+}
+
+/// True if omp's `agent.db` has an OAuth row for any of `providers`.
+/// Best-effort (missing file or error → false).
+pub(crate) async fn agent_db_has_provider(path: PathBuf, providers: &[&str]) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    if providers.is_empty() {
+        return false;
+    }
+    let opts = sqlx::sqlite::SqliteConnectOptions::new()
+        .filename(&path)
+        .read_only(true);
+    let Ok(pool) = sqlx::SqlitePool::connect_with(opts).await else {
+        return false;
+    };
+    let placeholders = providers.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT count(*) FROM auth_credentials \
+         WHERE credential_type = 'oauth' AND disabled_cause IS NULL AND provider IN ({})",
+        placeholders
+    );
+    let mut query = sqlx::query_as::<_, (i64,)>(&sql);
+    for p in providers {
+        query = query.bind(*p);
+    }
+    let row: Option<(i64,)> = query.fetch_optional(&pool).await.ok().flatten();
+    pool.close().await;
+    row.map(|r| r.0 > 0).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn insert_auth_row(
+        pool: &sqlx::SqlitePool,
+        provider: &str,
+        credential_type: &str,
+        disabled_cause: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO auth_credentials \
+             (provider, credential_type, data, disabled_cause, identity_key, created_at, updated_at) \
+             VALUES (?, ?, '{}', ?, NULL, 1, 1)",
+        )
+        .bind(provider)
+        .bind(credential_type)
+        .bind(disabled_cause)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn create_agent_db(path: &std::path::Path) -> sqlx::SqlitePool {
+        let opts = sqlx::sqlite::SqliteConnectOptions::new()
+            .filename(path)
+            .create_if_missing(true);
+        let pool = sqlx::SqlitePool::connect_with(opts).await.unwrap();
+        sqlx::query(
+            "CREATE TABLE auth_credentials (\
+                id INTEGER PRIMARY KEY AUTOINCREMENT, provider TEXT NOT NULL, \
+                credential_type TEXT NOT NULL, data TEXT NOT NULL, \
+                disabled_cause TEXT DEFAULT NULL, identity_key TEXT DEFAULT NULL, \
+                created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        pool
+    }
+
+    #[tokio::test]
+    async fn agent_db_has_provider_only_counts_active_oauth_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("agent.db");
+        let pool = create_agent_db(&path).await;
+        insert_auth_row(&pool, "openai-codex", "oauth", None).await;
+        insert_auth_row(&pool, "openai", "oauth", Some("deleted by user")).await;
+        insert_auth_row(&pool, "codex", "api_key", None).await;
+        pool.close().await;
+
+        assert!(agent_db_has_provider(path.clone(), &["openai-codex"]).await);
+        assert!(!agent_db_has_provider(path.clone(), &["openai"]).await);
+        assert!(!agent_db_has_provider(path.clone(), &["codex"]).await);
+        assert!(!agent_db_has_provider(path, &[]).await);
     }
 }

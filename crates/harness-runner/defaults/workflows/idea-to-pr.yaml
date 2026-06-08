@@ -5,7 +5,7 @@ description: |
 
   Flow: Claude plans (a read-only Sonnet `explore` feeding a lean Opus
   `create-plan`), Kimi (via Pi, on the Kimi-for-Coding subscription)
-  implements and self-reviews up to 5x, Codex does a second-pass review
+  implements and self-reviews up to 5x, gpt-5.x via omp does a second-pass review
   with fixes, and Claude Sonnet signs off — then a final build gate.
 
   Output: a PR against the project's base branch (auto-detected from
@@ -411,19 +411,21 @@ nodes:
           <promise>PI_REVIEW_CLEAN</promise>
 
         Be honest: emitting PI_REVIEW_CLEAN prematurely shifts cost onto
-        the Codex and Sonnet phases that follow. Emitting it on a clean
+        the gpt-review-fix and Sonnet phases that follow. Emitting it on a clean
         PR is the goal.
 
-  - id: codex-review-fix
+  - id: gpt-review-fix
     category: validation
     depends_on: [pi-review-fix-loop]
-    provider: codex
-    # ChatGPT-account auth doesn't expose the `-codex` variants (gpt-5.3-codex →
-    # 400 "not supported when using Codex with a ChatGPT account", confirmed via
-    # both the codex CLI and omp). gpt-5.5 is the frontier general model the
-    # account does expose. If a given account lacks it, run `codex` → `/model`
-    # to see that account's list and set the model accordingly.
-    model: gpt-5.5
+    provider: pi
+    # Runs gpt-5.x via omp on the ChatGPT Plus/Pro subscription (OAuth — no
+    # per-token API-key billing; "Codex for OSS"). The ChatGPT account exposes
+    # the general gpt-5.x models but NOT the `-codex` variants, so use the
+    # general model. The model id MUST be namespace-qualified (`openai-codex/...`):
+    # a bare name would be mis-prefixed to `kimi-code/...` by the pi provider.
+    # Connect once on the cluster image: `omp /login` → "ChatGPT Plus/Pro
+    # (Codex)". To see an account's exact list run `omp` → `/model`.
+    model: openai-codex/gpt-5.5
     context: fresh
     prompt: |
       You are reviewing a PR that an upstream agent already authored
@@ -458,11 +460,12 @@ nodes:
 
       If you genuinely find nothing, push nothing.
 
-      When done, output: <promise>CODEX-REVIEW-DONE</promise>
+      When done, output: <promise>GPT-REVIEW-DONE</promise>
+
 
   - id: sonnet-final-review
     category: validation
-    depends_on: [codex-review-fix]
+    depends_on: [gpt-review-fix]
     provider: claude
     model: sonnet
     context: fresh
@@ -602,7 +605,7 @@ nodes:
       prompt: |
         Final build gate — the last node that can touch code before the
         run completes. Every fix-capable node upstream (implement, the
-        kimi self-review loop, codex, sonnet) has already pushed its
+        kimi self-review loop, gpt-review-fix, sonnet) has already pushed its
         changes. CRITICAL: the `validate` node ran much EARLIER in the
         pipeline, before those review fixes — so the branch HEAD may not
         compile even though `validate` reported green. Re-verify the
@@ -675,7 +678,7 @@ nodes:
     prompt: |
       Post a short "workflow complete" PR comment that reflects what
       ACTUALLY happened in this run. Don't suggest running review
-      agents — three review passes (kimi self-review loop, codex, sonnet)
+      agents — three review passes (kimi self-review loop, gpt-review-fix, sonnet)
       already ran in this same workflow. Sonnet's verdict comment and
       the PR label are the authoritative signal for the human; your
       summary is a thin status line, not a second review.
@@ -683,9 +686,9 @@ nodes:
       ## Read first
 
       1. `gh pr view --json number,title,headRefName,labels,additions,deletions`
-         — get the PR number and the archon-* label sonnet set.
+         — see every commit that landed, including any from gpt-review-fix
       2. `git log --oneline origin/$BASE_BRANCH..HEAD`
-         — see every commit that landed, including any from codex-review-fix
+         — see every commit that landed, including any from gpt-review-fix
          and sonnet-final-review.
       3. Count commits by phase using the conventional-commit prefixes
          (feat / fix / chore / etc.) and any phase markers in the bodies.
@@ -704,7 +707,7 @@ nodes:
 
       **Commit breakdown**:
       - Implementation + kimi self-review: <N> commits
-      - Codex fix-pass: <N> commits (or "none — nothing to fix")
+      - gpt-review-fix pass: <N> commits (or "none — nothing to fix")
       - Sonnet fix-pass: <N> commits (or "none — nothing to fix")
       ```
 
