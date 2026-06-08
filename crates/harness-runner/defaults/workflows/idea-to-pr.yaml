@@ -458,6 +458,8 @@ nodes:
       Do NOT post PR comments. Do NOT use `gh pr review`. Do NOT use --no-verify.
       Push commits — that is the entire output.
 
+      If you genuinely find nothing, push nothing.
+
       When done, output: <promise>GPT-REVIEW-DONE</promise>
 
 
