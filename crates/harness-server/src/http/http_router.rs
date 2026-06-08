@@ -42,6 +42,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             agent_registry,
             state.core.project_root.clone(),
             secret_key,
+            config.server.public_url.clone(),
         ))
     };
     // Periodically reap runs whose lease has gone stale (crashed/orphaned), so a

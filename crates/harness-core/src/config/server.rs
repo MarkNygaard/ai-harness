@@ -82,6 +82,12 @@ pub struct ServerConfig {
     /// when not configured.
     #[serde(default)]
     pub github_token: Option<String>,
+    /// External base URL of this harness instance (e.g.
+    /// `https://harness.mnygaard.io`), used to build user-facing run links
+    /// (e.g. the Linear run-link attachment). Overridable via
+    /// `HARNESS_PUBLIC_URL`. When unset, run-link features no-op.
+    #[serde(default)]
+    pub public_url: Option<String>,
     /// Staged HTTP shutdown configuration (drain, force, hard-exit deadlines).
     #[serde(default)]
     pub shutdown: ShutdownConfig,
@@ -102,6 +108,7 @@ impl ServerConfig {
     /// - `HARNESS_DATABASE_POOL_MAX_CONNECTIONS` — `database_pool_max_connections`
     /// - `HARNESS_DATABASE_POOL_ACQUIRE_TIMEOUT_SECS` — `database_pool_acquire_timeout_secs`
     /// - `HARNESS_API_TOKEN`       — `api_token`
+    /// - `HARNESS_PUBLIC_URL`      — `public_url`
     /// - `GITHUB_TOKEN` / `GH_TOKEN` — `github_token`
     /// - `GITHUB_WEBHOOK_SECRET`   — `github_webhook_secret`
     pub fn apply_env_overrides(&mut self) -> anyhow::Result<()> {
@@ -141,6 +148,11 @@ impl ServerConfig {
         if let Ok(v) = std::env::var("HARNESS_API_TOKEN") {
             if !v.is_empty() {
                 self.api_token = Some(v);
+            }
+        }
+        if let Ok(v) = std::env::var("HARNESS_PUBLIC_URL") {
+            if !v.is_empty() {
+                self.public_url = Some(v);
             }
         }
         if self
@@ -211,6 +223,7 @@ impl fmt::Debug for ServerConfig {
             password_reset_rate_limit_per_hour,
             constitution_enabled,
             github_token,
+            public_url,
             shutdown,
         } = self;
         f.debug_struct("ServerConfig")
@@ -248,6 +261,7 @@ impl fmt::Debug for ServerConfig {
             )
             .field("constitution_enabled", constitution_enabled)
             .field("github_token", &github_token.as_ref().map(|_| "[REDACTED]"))
+            .field("public_url", public_url)
             .field("shutdown", shutdown)
             .finish()
     }
@@ -275,6 +289,7 @@ impl Default for ServerConfig {
             password_reset_rate_limit_per_hour: default_password_reset_rate_limit_per_hour(),
             constitution_enabled: true,
             github_token: None,
+            public_url: None,
             shutdown: ShutdownConfig::default(),
         }
     }
@@ -456,6 +471,27 @@ mod tests {
             let mut cfg = ServerConfig::default();
             cfg.apply_env_overrides().unwrap();
             assert_eq!(cfg.api_token, Some("tok-test".to_string()));
+        });
+    }
+
+    #[test]
+    fn env_override_public_url() {
+        temp_env::with_vars(
+            [("HARNESS_PUBLIC_URL", Some("https://example.test"))],
+            || {
+                let mut cfg = ServerConfig::default();
+                cfg.apply_env_overrides().unwrap();
+                assert_eq!(cfg.public_url, Some("https://example.test".to_string()));
+            },
+        );
+    }
+
+    #[test]
+    fn env_override_empty_public_url_does_not_override() {
+        temp_env::with_vars([("HARNESS_PUBLIC_URL", Some(""))], || {
+            let mut cfg = ServerConfig::default();
+            cfg.apply_env_overrides().unwrap();
+            assert_eq!(cfg.public_url, None);
         });
     }
 

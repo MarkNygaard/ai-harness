@@ -98,6 +98,10 @@ pub struct RunsState {
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
+    /// External base URL of this instance (`HARNESS_PUBLIC_URL` /
+    /// `server.public_url`), trailing slash trimmed. `None` => run-link
+    /// features no-op.
+    pub(crate) public_url: Option<String>,
     /// This server instance's identity, stamped as the `owner` of every run it
     /// starts (lease attribution). Unique per process so a restart/replica is
     /// distinguishable.
@@ -121,6 +125,7 @@ impl RunsState {
         agent_registry: Arc<AgentRegistry>,
         project_root: PathBuf,
         secret_key: Option<[u8; 32]>,
+        public_url: Option<String>,
     ) -> Self {
         // Project checkouts live next to the default project root (sibling
         // `projects/` dir), overridable via HARNESS_PROJECTS_DIR.
@@ -132,6 +137,9 @@ impl RunsState {
                     .map(|p| p.join("projects"))
                     .unwrap_or_else(|| project_root.join("projects"))
             });
+        let public_url = public_url
+            .map(|u| u.trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty());
         // Identity for run-lease attribution: the pod name (k8s sets HOSTNAME)
         // plus a start stamp, so two pods — and a restart of the same pod — get
         // distinct owners.
@@ -149,6 +157,7 @@ impl RunsState {
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             projects_dir,
+            public_url,
             instance_id,
             live: Mutex::new(HashMap::new()),
         }
