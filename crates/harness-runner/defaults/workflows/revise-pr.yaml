@@ -138,4 +138,7 @@ nodes:
 
         gh pr comment $resolve-pr.output.pr --body "Revision pass complete. Both Linear tester comments and GitHub review feedback have been addressed; the PR is ready for re-review."
 
-      Emit: <promise>REVISE-SUMMARY-DONE</promise>
+      Only emit <promise>REVISE-SUMMARY-DONE</promise> after the `gh pr comment`
+      command exits successfully. If the comment cannot be posted, do NOT emit the
+      promise and explain what failed — the run will then fail rather than
+      falsely claiming the summary was posted.
