@@ -329,10 +329,13 @@ fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     }
     task
 }
-/// True for the poller's own status comments (🤖 / ✅ / ⚠️ / ❌ prefixes).
+/// True for the poller's own status comments. The heuristic requires both an
+/// emoji prefix (🤖 / ✅ / ⚠️ / ❌) AND the string "ai-harness" in the body,
+/// so a human comment beginning with ✅ (e.g. "✅ LGTM") is not filtered out.
 fn is_bot_status(body: &str) -> bool {
     let t = body.trim_start();
-    ["🤖", "✅", "⚠️", "❌"].iter().any(|p| t.starts_with(p))
+    let has_prefix = ["🤖", "✅", "⚠️", "❌"].iter().any(|p| t.starts_with(p));
+    has_prefix && body.contains("ai-harness")
 }
 
 /// Walk in-flight claims and transition their issues based on run progress.
@@ -524,5 +527,13 @@ mod tests {
         )];
         let task = task_for_issue(&sample_issue(), &comments);
         assert!(!task.contains("Reviewer comments (Linear)"));
+    }
+    #[test]
+    fn task_for_issue_does_not_filter_human_emoji_comments() {
+        // A human reviewer starting with ✅ should NOT be filtered (no "ai-harness").
+        let comments = vec![sample_comment("✅ LGTM, just one nit.", "Alice")];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(task.contains("## Reviewer comments (Linear)"));
+        assert!(task.contains("✅ LGTM, just one nit."));
     }
 }

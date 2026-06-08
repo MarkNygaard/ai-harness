@@ -72,13 +72,17 @@ nodes:
     when: "$resolve-pr.output.state == 'OPEN'"
     prompt: |
       PR #$resolve-pr.output.pr ("$resolve-pr.output.title") needs revisions.
-      Collect ALL actionable feedback from GitHub for this PR.
+      Collect ALL actionable feedback from BOTH sources for this PR.
 
-      1. Review verdicts and top-level comments:
+      1. Review verdicts and top-level comments on GitHub:
          `gh pr view $resolve-pr.output.pr --json reviews,comments`
-      2. Inline code-review comments:
+      2. Inline code-review comments on GitHub:
          `gh api repos/{owner}/{repo}/pulls/$resolve-pr.output.pr/comments`
          (gh substitutes `{owner}` and `{repo}` from the current repository.)
+      3. Linear tester / reviewer comments (functionality feedback):
+         These are already in the task description below. Look for the section
+         "## Reviewer comments (Linear)" in $ARGUMENTS. If present, include
+         those comments in the digest.
 
       Ignore any comments posted by the ai-harness bot / this workflow. For each
       actionable item include:
@@ -93,10 +97,10 @@ nodes:
       properties:
         feedback:
           type: string
-          description: "markdown digest of all PR feedback, or empty string if none"
+          description: "markdown digest of all PR feedback (GitHub + Linear), or empty string if none"
         has_feedback:
           type: boolean
-          description: "true if there is at least one actionable feedback item"
+          description: "true if there is at least one actionable feedback item from GitHub OR Linear"
       required: [feedback, has_feedback]
 
   # 4. Address all feedback (GitHub + Linear) and push to the existing PR branch.
