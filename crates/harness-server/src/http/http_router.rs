@@ -50,6 +50,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     runs_routes::spawn_reaper(runs_state.clone());
     // Bound the shared cargo build cache (size-gated) so it can't fill the disk.
     runs_routes::spawn_cache_sweeper(runs_state.clone());
+    // Self-host a loopback omp auth-broker so the dashboard's subscription-usage
+    // cards work off the local omp creds (skipped if OMP_AUTH_BROKER_URL is set).
+    super::usage_routes::spawn_local_broker();
     // Linear poller (Slice 3a, dry-run): logs which eligible issues each enabled
     // binding WOULD fire — no claim, no transition, no run triggered.
     super::linear_poller::spawn_poller(runs_state.clone());

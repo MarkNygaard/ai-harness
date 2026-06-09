@@ -146,6 +146,16 @@ async fn fetch_claude_usage(state: &RunsState) -> SubscriptionUsage {
         .await;
     let resp = match resp {
         Ok(r) if r.status().is_success() => r,
+        // Claude Code subscription tokens are scoped `user:inference`; the usage
+        // endpoint requires `user:profile`, which they never carry — a permanent
+        // limitation, not a transient error, so say so plainly.
+        Ok(r) if r.status().as_u16() == 403 => {
+            return unavailable(
+                CLI,
+                LABEL,
+                "not available — Claude Code subscription tokens lack the user:profile scope the usage API needs",
+            );
+        }
         Ok(r) => return unavailable(CLI, LABEL, format!("Claude usage HTTP {}", r.status())),
         Err(e) => return unavailable(CLI, LABEL, format!("Claude usage request failed: {e}")),
     };
@@ -215,14 +225,77 @@ fn parse_claude_access(json: &str) -> Option<String> {
 
 // ── omp auth-broker (Codex + Kimi) ───────────────────────────────────────────
 
+/// Loopback address the server self-hosts `omp auth-broker serve` on, so the
+/// Codex/Kimi usage cards work off the container's local omp creds with no
+/// external broker or env config.
+const LOCAL_BROKER_BIND: &str = "127.0.0.1:8765";
+const LOCAL_BROKER_URL: &str = "http://127.0.0.1:8765";
+
+/// Self-host `omp auth-broker serve` on loopback so the usage cards can read the
+/// local omp credentials (the ones the "Connect" flow writes to `agent.db`) — no
+/// external broker or env wiring needed. Skipped when an external
+/// `OMP_AUTH_BROKER_URL` is set, or when disabled via
+/// `HARNESS_SELF_HOST_OMP_BROKER=0`. Supervised: respawns with backoff if it
+/// exits. **Usage-only** — runs still authenticate from the local `agent.db`
+/// directly (we never set the global broker env), so this doesn't change how
+/// agents run.
+pub fn spawn_local_broker() {
+    if std::env::var("OMP_AUTH_BROKER_URL")
+        .map(|s| !s.is_empty())
+        .unwrap_or(false)
+    {
+        tracing::info!("OMP_AUTH_BROKER_URL set — using the external auth-broker for usage cards");
+        return;
+    }
+    if std::env::var("HARNESS_SELF_HOST_OMP_BROKER")
+        .map(|v| v == "0" || v.eq_ignore_ascii_case("false"))
+        .unwrap_or(false)
+    {
+        return;
+    }
+    tokio::spawn(async move {
+        let omp = std::env::var_os("OMP_CLI")
+            .or_else(|| std::env::var_os("OMP_PATH"))
+            .unwrap_or_else(|| std::ffi::OsString::from("omp"));
+        let mut backoff = Duration::from_secs(2);
+        loop {
+            let mut cmd = tokio::process::Command::new(&omp);
+            cmd.arg("auth-broker")
+                .arg("serve")
+                .arg("--bind")
+                .arg(LOCAL_BROKER_BIND);
+            // Agent-session vars make spawned CLIs SIGTRAP — never propagate them.
+            cmd.env_remove("CLAUDECODE");
+            cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+            match cmd.spawn() {
+                Ok(mut child) => {
+                    backoff = Duration::from_secs(2);
+                    tracing::info!(
+                        "self-hosting omp auth-broker on {LOCAL_BROKER_BIND} for usage cards"
+                    );
+                    let _ = child.wait().await;
+                    tracing::warn!("local omp auth-broker exited; restarting shortly");
+                }
+                Err(e) => {
+                    tracing::warn!("could not start omp auth-broker (usage cards unavailable): {e}")
+                }
+            }
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(Duration::from_secs(60));
+        }
+    });
+}
+
 /// Fetch `GET {broker}/v1/usage` and return its `reports` array. `Err` carries a
-/// reason (broker not configured / unreachable) used as the card's error.
+/// reason (broker unreachable / not ready) used as the card's error.
 async fn fetch_broker_reports() -> Result<Vec<serde_json::Value>, String> {
+    // Prefer an external broker; otherwise the loopback one we self-host.
     let base = std::env::var("OMP_AUTH_BROKER_URL")
         .ok()
         .filter(|s| !s.is_empty())
-        .ok_or("omp auth-broker not configured (OMP_AUTH_BROKER_URL unset)")?;
-    let token = broker_token().ok_or("no omp auth-broker token")?;
+        .unwrap_or_else(|| LOCAL_BROKER_URL.to_string());
+    let token = broker_token()
+        .ok_or("auth-broker not ready yet — reconnect the subscription, then refresh")?;
 
     let client = reqwest::Client::new();
     let resp = client
