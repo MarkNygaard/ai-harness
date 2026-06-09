@@ -564,7 +564,7 @@ nodes:
       ready for re-review.
 
       Read the commit history since the base branch to ground the summary:
-      `git log --oneline origin/$BASE_BRANCH..HEAD`
+      `git log --oneline origin/$resolve-pr.output.base..HEAD`
 
       The three-review chain (kimi self-review loop, gpt-review-fix, sonnet)
       already ran in this same workflow, so do NOT suggest running additional
