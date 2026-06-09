@@ -1,0 +1,401 @@
+name: architect
+description: |
+  A behavior-preserving codebase-health sweep.
+
+  Flow: measure Rust metrics, read-only architectural assessment (Claude
+  Sonnet), a tightly-scoped plan (Claude Opus, ≤5–7 files, KISS/YAGNI/
+  Rule-of-Three), hook-enforced simplification with per-edit verification
+  (Pi/Kimi), full validate, fix loop, then PR.
+
+  Output: a PR against the project's base branch with independently
+  revertable conventional-commits and a short summary comment.
+
+  Project-specific rules — verify chain, conventional-commit scope
+  vocabulary, agent prohibitions — live in the project's `CLAUDE.md` /
+  `AGENTS.md` and are auto-loaded into every agent's context.
+
+  NOT for: feature work, bug fixes, or behavior-changing refactors.
+  Each change must be independently revertable.
+
+provider: pi
+model: kimi-code/kimi-for-coding
+
+nodes:
+  - id: measure
+    category: planning
+    bash: |
+      set -uo pipefail
+
+      REPORT="$ARTIFACTS_DIR/metrics.md"
+      echo "# Codebase Metrics" > "$REPORT"
+      echo "" >> "$REPORT"
+
+      echo "## Largest .rs files" >> "$REPORT"
+      find crates -name '*.rs' -not -path '*/target/*' | xargs wc -l | sort -rn | head -26 >> "$REPORT"
+      echo "" >> "$REPORT"
+
+      echo "## #[allow(...)] count + top offending files" >> "$REPORT"
+      grep -rEn '#\[allow\(' crates --include='*.rs' >> "$REPORT" || true
+      echo "" >> "$REPORT"
+
+      echo "## unsafe blocks (count)" >> "$REPORT"
+      grep -rEn '\bunsafe\b' crates --include='*.rs' | wc -l >> "$REPORT"
+      echo "" >> "$REPORT"
+
+      echo "## TODO/FIXME/XXX/HACK (count)" >> "$REPORT"
+      grep -rEn 'TODO|FIXME|XXX|HACK' crates --include='*.rs' | wc -l >> "$REPORT"
+      echo "" >> "$REPORT"
+
+      echo "## Functions over 80 lines (heuristic)" >> "$REPORT"
+      find crates -name '*.rs' -not -path '*/target/*' -exec awk '
+        /^\s*fn / { file=FILENAME; line=NR; start=NR }
+        /^{/ { if (start) depth++ }
+        /^}/ { if (start) depth--; if (depth==0) { len=NR-start+1; if (len>80) print file":"start": "len" lines"; start=0 } }
+      ' {} + >> "$REPORT" 2>/dev/null || true
+      echo "" >> "$REPORT"
+
+      echo "## Clippy warning count" >> "$REPORT"
+      cargo clippy --workspace --all-targets 2>&1 | grep -cE '^warning' || true >> "$REPORT"
+      echo "" >> "$REPORT"
+
+      echo "## Dead code (best-effort)" >> "$REPORT"
+      if command -v cargo-udeps >/dev/null 2>&1; then
+        cargo +nightly udeps --workspace 2>/dev/null >> "$REPORT" || echo "udeps scan failed — skipping" >> "$REPORT"
+      else
+        echo "udeps unavailable — skipping" >> "$REPORT"
+      fi
+
+      cat "$REPORT"
+    timeout: 600000
+
+  - id: analyze
+    category: planning
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [measure]
+    artifact: architecture-assessment.md
+    hooks:
+      pre_tool_use:
+        - matcher: "Edit|MultiEdit|NotebookEdit|Bash|mcp__harness__run"
+          decision: deny
+          reason: "Read-only node: no code edits, no shell, no run-spawning. Read/Grep/Glob to analyze; Write ONLY your artifact file."
+      post_tool_use:
+        - matcher: "Read"
+          additional_context: "Assess against: single-responsibility, cognitive load, value of each abstraction, and dependency direction (do deps point inward toward stable cores?). Note KISS/YAGNI/Rule-of-Three violations."
+        - matcher: "Write"
+          additional_context: "Write ONLY architecture-assessment.md under $ARTIFACTS_DIR. Do not write or overwrite any source file."
+    prompt: |
+      You are a senior software architect performing a read-only assessment.
+
+      ## Task
+      $ARGUMENTS
+
+      ## Instructions
+
+      1. Read `$ARTIFACTS_DIR/metrics.md`.
+      2. Use Read, Grep, Glob to inspect the hot-spot files it flags. Do NOT
+         edit any source file and do NOT run shell commands.
+      3. Assess:
+         - Single-responsibility: does each module/file have one reason to change?
+         - Cognitive load: are public APIs obvious? Are internals well-named?
+         - Value of each abstraction: does every trait/struct earn its keep?
+         - Dependency direction: do unstable modules depend on stable cores, or vice versa?
+         - KISS / YAGNI / Rule-of-Three violations.
+      4. Write the assessment to `$ARTIFACTS_DIR/architecture-assessment.md`
+         using the `Write` tool. This is the ONLY file you may write.
+         Do NOT propose code edits.
+
+      Output a one-line confirmation and: <promise>ANALYZE-DONE</promise>
+
+  - id: plan
+    category: planning
+    provider: claude
+    model: opus
+    context: fresh
+    depends_on: [analyze]
+    artifact: cleanup-plan.md
+    hooks:
+      pre_tool_use:
+        - matcher: "Edit|MultiEdit|NotebookEdit|Bash|mcp__harness__run"
+          decision: deny
+          reason: "Read-only node: no code edits, no shell, no run-spawning. Read/Grep/Glob to analyze; Write ONLY your artifact file."
+      post_tool_use:
+        - matcher: "Read"
+          additional_context: "Assess against: single-responsibility, cognitive load, value of each abstraction, and dependency direction (do deps point inward toward stable cores?). Note KISS/YAGNI/Rule-of-Three violations."
+        - matcher: "Write"
+          additional_context: "Write ONLY cleanup-plan.md under $ARTIFACTS_DIR. Do not write or overwrite any source file."
+    prompt: |
+      You are a planner. Turn the architectural assessment into a concrete,
+      tightly-scoped cleanup plan. PLAN ONLY — write no code.
+
+      ## Task
+      $ARGUMENTS
+
+      ## Inputs
+      Read these artifacts (do NOT re-explore the codebase):
+      - `$ARTIFACTS_DIR/architecture-assessment.md`
+      - `$ARTIFACTS_DIR/metrics.md`
+
+      ## Plan constraints
+      - Select the **top 3–5 highest-impact, lowest-risk, mutually-independent,
+        behavior-preserving** cleanups.
+      - Touch **≤5–7 files total**.
+      - Apply KISS / YAGNI / Rule-of-Three.
+      - For each proposed change: the file(s), the concrete simplification,
+        why it's safe and independent, and how to revert it alone.
+
+      ## Output
+      Write the plan to `$ARTIFACTS_DIR/cleanup-plan.md` using the `Write`
+      tool. This is the ONLY file you may write. Do NOT edit source files.
+
+      After writing the plan, output a one-line summary and:
+      <promise>PLAN-DONE</promise>
+
+  - id: simplify
+    category: implementation
+    depends_on: [plan]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    hooks:
+      pre_tool_use:
+        - matcher: "Edit|MultiEdit|Write"
+          additional_context: "Before editing: is this file named in $ARTIFACTS_DIR/cleanup-plan.md? If not, do not touch it. Check the file's fan-out (who imports/calls it) before changing a signature."
+      post_tool_use:
+        - matcher: "Edit|MultiEdit|Write"
+          additional_context: "Run the scoped `cargo check`/`clippy` for the crate you just edited. Is this genuinely simpler AND behavior-preserving? If not, justify in your summary or revert the edit."
+    prompt: |
+      Simplify the codebase according to the cleanup plan.
+
+      ## Scope (critical — do not exceed it)
+
+      Read `$ARTIFACTS_DIR/cleanup-plan.md`. Act ONLY on the files it names.
+      Do NOT open, read-for-simplification, or edit any file outside that list.
+
+      ## Process
+
+      Go file by file through the in-scope list. For each, look only for:
+      - Unnecessary complexity / deep nesting that can flatten.
+      - Redundant or duplicated logic, unused variables/imports.
+      - Unclear names; dense one-liners that hurt readability.
+      - Obvious comments that just restate the code.
+      Match the surrounding module's conventions. Clarity over brevity —
+      never introduce clever-but-obscure code or nested ternaries, and
+      never drop a feature, output, or behaviour.
+
+      ## Verify BEFORE you commit (non-negotiable)
+
+      After making edits, run the project's scoped verify chain for the
+      crates/packages you touched — the commands live in `CLAUDE.md` /
+      `AGENTS.md` (auto-loaded into your context). Use the narrowest
+      scope that covers your edits. If verification fails, FIX or REVERT
+      your simplification until it passes — never commit code that does
+      not build and pass its tests. A simplification that breaks the
+      build is worse than no simplification.
+
+      ## Commit
+
+      - If, after a green verify, `git status --porcelain` shows modified
+        files, stage them and commit ONE conventional-commit per file or
+        per logical change:
+          `refactor(<crate>): <simplification>`
+        Do NOT push — `finalize-pr` pushes the branch. Do NOT use
+        `--no-verify` or skip commit hooks. Do NOT run DB migrations.
+      - If you made no changes (or reverted them all), do nothing — a
+        no-op is a perfectly good outcome.
+
+      Honor any project-specific agent rules in `CLAUDE.md` / `AGENTS.md`.
+
+      Output a one-line summary (what you simplified + that verify passed,
+      or "no changes") and: <promise>SIMPLIFY-DONE</promise>
+
+  - id: validate
+    category: validation
+    command: validate
+    depends_on: [simplify]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        summary: { type: string }
+      required: [passed]
+
+  - id: fix-failures
+    category: validation
+    depends_on: [validate]
+    when: "$validate.output.passed != 'true'"
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      max_iterations: 3
+      until: VALIDATE_CLEAN
+      prompt: |
+        The validation that just ran reported failures:
+        $validate.output.summary
+
+        ## Scope the verify chain to the diff
+
+        Compute the changed set:
+        `git diff --name-only origin/$BASE_BRANCH...HEAD`
+
+        - **Web-only** (every path starts with `web/`): run only
+          `cd web && bunx tsc --noEmit && bunx vitest run && bunx vite build`.
+          Run no cargo.
+        - **Rust-touching** (any path under `crates/`, `Cargo.toml`, or `Cargo.lock`):
+          run the Rust full gate —
+          `RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets` then
+          `cargo nextest run --workspace`.
+        - **Mixed**: run both chains.
+        - **Empty diff or root-only files**: treat as Rust+web full gate fallback.
+
+        ## Fix or revert
+
+        Fix the root cause OR, since this is a behavior-preserving sweep,
+        REVERT the offending simplification. Commit fixes with a
+        conventional-commit message; do NOT push.
+
+        Emit `<promise>VALIDATE_CLEAN</promise>` only after a full clean
+        pass with nothing left to fix. If still red on the final iteration,
+        end WITHOUT the signal — the run fails, which is correct.
+
+  - id: finalize-pr
+    category: delivery
+    command: finalize-pr
+    depends_on: [validate, fix-failures]
+    trigger_rule: none_failed_min_one_success
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+
+  - id: verify-pr-base
+    category: delivery
+    bash: |
+      set -euo pipefail
+      EXPECTED="$BASE_BRANCH"
+      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
+      if [ "$ACTUAL" != "$EXPECTED" ]; then
+        PR_NUMBER=$(gh pr view --json number -q '.number')
+        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
+        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      else
+        echo "PR base verified: $EXPECTED"
+      fi
+    depends_on: [finalize-pr]
+
+  - id: verify-pr-title
+    category: delivery
+    depends_on: [verify-pr-base]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    prompt: |
+      Verify the PR title follows the conventional-commits format.
+      If it doesn't, rewrite it via `gh pr edit`.
+
+      ## Task
+      $ARGUMENTS
+
+      ## Linear-sourced tasks
+      If the task above references a Linear issue identifier (it will say
+      "Linear issue ABC-123 — …"), the final PR title MUST end with that
+      identifier in parentheses — e.g. `feat(api): add webhook (ABC-123)`
+      — so Linear links the PR to the issue. Keep the conventional-commits
+      prefix; the suffix is part of the description. Do NOT use close
+      keywords ("Fixes"/"Closes") — a plain id links without auto-closing
+      the issue (the poller owns its status). If the task is not from
+      Linear, add no suffix.
+
+      ## Format (universal — same for every project)
+
+          ^(feat|fix|chore|ci|docs|refactor|perf|test)(\([^)]\+\))?!?: <description>
+
+      - `<description>` is a short, lower-case imperative summary
+        ("wire X to Y", not "Wire X To Y").
+      - Breaking change: add `!` after the type (e.g.
+        `feat!: remove legacy API`).
+      - Scope is optional but encouraged. Use the project's package /
+        crate / app name. The vocabulary is project-specific — pick it
+        up from:
+          1. The project's `CLAUDE.md` / `AGENTS.md` if a scope
+             vocabulary is documented there, OR
+          2. `git log --oneline origin/$BASE_BRANCH..HEAD~50` — copy
+             the convention already in use, OR
+          3. The directory structure (top-level `crates/`,
+             `packages/`, `apps/` etc. — use the affected one's name).
+
+      ## Type selection rubric (universal)
+
+      | Type | Use when |
+      |---|---|
+      | `feat` | Adds user-visible functionality. Triggers a minor bump. |
+      | `fix` | Fixes a bug. Triggers a patch bump. |
+      | `perf` | Performance change without new behavior. Triggers a patch bump. |
+      | `refactor` | Internal restructure, no behavior change. No release. |
+      | `chore` | Tooling, deps, internal config, agent workflows. No release. |
+      | `ci` | CI / release config changes. No release. |
+      | `docs` | Docs-only changes. No release. |
+      | `test` | Tests-only changes. No release. |
+
+      ## Steps
+
+      1. `gh pr view --json number,title`
+      2. If the title already matches the pattern AND the type fits the
+         change set (don't accept `chore:` on a PR that adds a new
+         feature) AND (for Linear tasks) already carries the
+         ` (ABC-123)` suffix, output `TITLE OK: <title>` and emit
+         <promise>PR-TITLE-OK</promise>.
+      3. Otherwise infer the right type+scope from
+         `git diff origin/$BASE_BRANCH...HEAD --stat` and
+         `git log --oneline origin/$BASE_BRANCH..HEAD`. Pick the
+         dominant scope when multiple packages are touched.
+      4. Rewrite the title (appending the ` (ABC-123)` suffix for Linear
+         tasks) and apply with
+         `gh pr edit <number> --title "<new title>"`.
+      5. Output `Renamed PR title to: <new title>` and emit
+         <promise>PR-TITLE-OK</promise>.
+
+      Do NOT touch the PR body, labels, base branch, or any other
+      property. Title only.
+
+  - id: summary
+    category: delivery
+    provider: claude
+    model: haiku
+    context: fresh
+    depends_on: [verify-pr-title]
+    trigger_rule: all_done
+    prompt: |
+      Post one short PR comment summarizing the architect sweep.
+
+      ## Read first
+
+      1. `gh pr view --json number,title,headRefName,additions,deletions`
+      2. `git log --oneline origin/$BASE_BRANCH..HEAD`
+      3. Read `$ARTIFACTS_DIR/cleanup-plan.md` and
+         `$ARTIFACTS_DIR/architecture-assessment.md` if you need specifics.
+
+      ## Output: one short PR comment
+
+      Use `gh pr comment <number> --body "..."` with this shape:
+
+      ```
+      ## Architect sweep complete
+
+      **What was simplified**: <one-line summary from the cleanup plan>
+
+      **Diff**: +<additions> / -<deletions>
+
+      **Changes are behavior-preserving and independently revertable.**
+      (Assessment and plan are in run artifacts.)
+      ```
+
+      Rules:
+      - One short comment. No "review agents have not yet run" wording.
+      - No deviations table, no validation table, no follow-up issue
+        suggestions.
+
+      Output: <promise>ARCHITECT-SUMMARY-DONE</promise>

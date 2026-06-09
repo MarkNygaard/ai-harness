@@ -22,6 +22,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "merge-pr",
         include_str!("../defaults/workflows/merge-pr.yaml"),
     ),
+    (
+        "architect",
+        include_str!("../defaults/workflows/architect.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.
@@ -193,5 +197,35 @@ mod tests {
         let names = list_default_workflows();
         assert!(names.contains(&DEFAULT_WORKFLOW));
         assert!(names.contains(&"merge-pr"));
+        assert!(names.contains(&"architect"));
+    }
+    #[test]
+    fn architect_workflow_parses_and_enforces_readonly() {
+        let yaml = default_workflow("architect").expect("architect bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("architect must parse");
+        assert_eq!(wf.name, "architect");
+        let node = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("missing node `{id}`"))
+        };
+        // analyze + plan are read-only: a pre_tool_use deny rule must be present.
+        for id in ["analyze", "plan"] {
+            let hooks = node(id).hooks.as_ref().expect("read-only node has hooks");
+            let denies = hooks
+                .pre_tool_use
+                .iter()
+                .any(|r| r.decision == Some(harness_dag::HookDecision::Deny));
+            assert!(denies, "{id} must deny code-mutating tools");
+        }
+        // simplify steers per-edit verification via a post_tool_use rule.
+        let hooks = node("simplify").hooks.as_ref().expect("simplify has hooks");
+        assert!(hooks
+            .post_tool_use
+            .iter()
+            .any(|r| r.additional_context.is_some()));
+        // validate exposes the {passed} verdict downstream nodes gate on.
+        assert!(node("validate").output_format.is_some());
     }
 }
