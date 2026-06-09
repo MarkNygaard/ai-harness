@@ -119,6 +119,7 @@ nodes:
     model: sonnet
     context: fresh
     depends_on: [gather-feedback]
+    when: "$gather-feedback.output.has_feedback == 'true'"
     prompt: |
       You are a codebase explorer for a PR REVISION. The PR already exists;
       reviewers asked for changes. Map the parts of the codebase the feedback
@@ -538,17 +539,41 @@ nodes:
 
       3. Output: <promise>SONNET-SIGNOFF-DONE</promise>
 
-  # 13. Post a short summary comment on the PR and finish.
+  # 13. Final scoped verify gate — review/fix nodes above may push commits
+  #     after the earlier validate node, so verify the branch HEAD again.
+  - id: final-validate
+    category: validation
+    command: validate
+    depends_on: [sonnet-final-review]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        summary: { type: string }
+      required: [passed]
+
+  # 14. Abort if the final branch state is red after review fixes.
+  - id: abort-final-invalid
+    category: validation
+    depends_on: [final-validate]
+    when: "$final-validate.output.passed != 'true'"
+    cancel: "Final validation failed after review fixes for PR #$resolve-pr.output.pr — refusing to mark the PR ready. $final-validate.output.summary"
+
+  # 15. Post a short summary on the PR and finish after final validation.
   - id: summary
     category: delivery
     provider: claude
     model: haiku
-    depends_on: [sonnet-final-review]
-    trigger_rule: all_done
+    depends_on: [final-validate]
+    when: "$final-validate.output.passed == 'true'"
     prompt: |
-      PR #$resolve-pr.output.pr may have been revised and pushed. Before
-      posting a summary comment, check whether the implement node actually
-      converged:
+      PR #$resolve-pr.output.pr may have been revised and pushed. Final
+      validation has passed at branch HEAD after the implementation and all
+      review/fix nodes. Before posting a summary comment, check whether the
+      implement node actually converged:
 
       $implement.output
 
