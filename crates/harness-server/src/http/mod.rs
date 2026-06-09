@@ -40,6 +40,7 @@ pub(crate) mod task_mutation_routes;
 pub(crate) mod task_query_routes;
 pub(crate) mod task_routes;
 pub(crate) mod task_submission_routes;
+pub(crate) mod usage_routes;
 pub(crate) mod workflows_routes;
 
 #[cfg(test)]
