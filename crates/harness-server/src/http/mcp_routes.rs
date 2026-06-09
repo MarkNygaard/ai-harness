@@ -186,7 +186,10 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
 
         // ── Authoring (project-scoped) ──────────────────────────────────────
         "workflow_catalog" => match project_dir(state, &s("project")).await {
-            Ok(dir) => to_result("catalog".to_string(), &authoring::catalog(&dir)),
+            Ok(dir) => {
+                let creds = crate::http::credentials_routes::connected_clis().await;
+                to_result("catalog".to_string(), &authoring::catalog(&dir, creds))
+            }
             Err(e) => tool_error(e),
         },
         "workflow_list" => match project_dir(state, &s("project")).await {

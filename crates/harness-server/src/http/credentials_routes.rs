@@ -87,6 +87,27 @@ fn file_non_empty(path: PathBuf) -> bool {
         .unwrap_or(false)
 }
 
+/// Which agent CLIs have a usable credential **on disk** right now — the same
+/// source of truth as [`provider_native_present`], shaped as the
+/// [`ConnectedCreds`](harness_runner::authoring::ConnectedCreds) the authoring
+/// catalog needs to gate its per-CLI model lists.
+pub async fn connected_clis() -> harness_runner::authoring::ConnectedCreds {
+    let home = home_dir();
+    let agent_db = home.join(".omp").join("agent").join("agent.db");
+    // "Codex (ChatGPT)" powers both the Codex CLI (auth.json) and omp's
+    // `openai-codex`; treat either as connected.
+    let codex = file_non_empty(home.join(".codex").join("auth.json"))
+        || crate::http::kimi_routes::agent_db_has_provider(agent_db.clone(), &["openai-codex"])
+            .await;
+    let kimi = crate::http::kimi_routes::agent_db_has_provider(agent_db, &["kimi-code"]).await;
+    let claude = file_non_empty(home.join(".claude").join(".credentials.json"));
+    harness_runner::authoring::ConnectedCreds {
+        codex,
+        kimi,
+        claude,
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct SetCredentialRequest {
     /// `field → value` map (e.g. `oauth_token`, `auth_json`, `moonshot_api_key`).

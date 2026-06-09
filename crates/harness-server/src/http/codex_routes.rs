@@ -203,6 +203,12 @@ pub async fn connect_complete(
         );
     };
 
+    // Copies for omp provisioning below — `auth_json` consumes the originals.
+    let omp_access = access.clone();
+    let omp_refresh = refresh.clone();
+    let omp_id_token = id_token.clone();
+    let omp_account_id = account_id.clone();
+
     // Exactly the shape `codex login` writes: no `auth_mode` (the CLI parses it
     // as an enum and infers ChatGPT mode from the presence of `tokens`).
     let auth_json = serde_json::json!({
@@ -231,7 +237,98 @@ pub async fn connect_complete(
             format!("write auth.json: {e}"),
         );
     }
+    // One "Connect Codex" also provisions omp's `openai-codex` from the same
+    // ChatGPT tokens, so the `pi` provider can run `openai-codex/*` models
+    // without a separate login. Fail loud if it doesn't take.
+    if let Err(e) =
+        provision_omp_codex(&omp_access, &omp_refresh, &omp_id_token, &omp_account_id).await
+    {
+        return err(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("connected the Codex CLI, but provisioning omp's openai-codex failed: {e}"),
+        );
+    }
     Json(serde_json::json!({ "status": "connected" })).into_response()
+}
+
+/// Provision omp's `openai-codex` credential from the ChatGPT OAuth tokens, so a
+/// single "Connect Codex" powers both the Codex CLI (`~/.codex/auth.json`) and
+/// omp (the `pi` provider running `openai-codex/*` models). We hand the tokens to
+/// omp via `omp auth-broker import` rather than writing its SQLite vault
+/// directly: omp owns that schema, and `import` transparently targets the local
+/// store or a configured auth-broker (`OMP_AUTH_BROKER_URL`).
+async fn provision_omp_codex(
+    access: &str,
+    refresh: &str,
+    id_token: &str,
+    account_id: &str,
+) -> Result<(), String> {
+    // CLIProxyAPI-style entry: omp maps `type: "codex"` → provider `openai-codex`.
+    let expired = jwt_exp_rfc3339(access).unwrap_or_else(|| {
+        (chrono::Utc::now() + chrono::Duration::hours(1))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    });
+    let mut entry = serde_json::json!({
+        "type": "codex",
+        "access_token": access,
+        "refresh_token": refresh,
+        "expired": expired,
+        "account_id": account_id,
+    });
+    if let Some(email) = jwt_claim_str(id_token, "email") {
+        entry["email"] = serde_json::Value::String(email);
+    }
+
+    let dir = tempfile::tempdir().map_err(|e| format!("tempdir: {e}"))?;
+    let path = dir.path().join("codex-connect.json");
+    std::fs::write(&path, entry.to_string()).map_err(|e| format!("write import file: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+
+    let omp = std::env::var_os("OMP_CLI")
+        .or_else(|| std::env::var_os("OMP_PATH"))
+        .unwrap_or_else(|| std::ffi::OsString::from("omp"));
+    let out = tokio::process::Command::new(&omp)
+        .arg("auth-broker")
+        .arg("import")
+        .arg(&path)
+        .output()
+        .await
+        .map_err(|e| format!("spawn `omp auth-broker import`: {e}"))?;
+    if !out.status.success() {
+        return Err(format!(
+            "`omp auth-broker import` exited {}: {}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    Ok(())
+}
+
+/// Read a string claim from a JWT payload (best-effort).
+fn jwt_claim_str(jwt: &str, claim: &str) -> Option<String> {
+    let payload_b64 = jwt.split('.').nth(1)?;
+    let decoded = B64.decode(payload_b64).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    value
+        .get(claim)?
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// Read the `exp` (epoch seconds) claim from a JWT and format it RFC3339 — the
+/// `expired` field omp's import expects.
+fn jwt_exp_rfc3339(jwt: &str) -> Option<String> {
+    let payload_b64 = jwt.split('.').nth(1)?;
+    let decoded = B64.decode(payload_b64).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+    let exp = value.get("exp")?.as_i64()?;
+    chrono::DateTime::from_timestamp(exp, 0)
+        .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
 }
 
 /// Extract a query parameter from a redirect URL (or `key=value&…` string),

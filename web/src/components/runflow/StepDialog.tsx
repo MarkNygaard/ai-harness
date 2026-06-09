@@ -54,7 +54,7 @@ export function StepDialog({
             </DialogHeader>
 
             <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 border-y py-3 text-xs sm:grid-cols-3">
-              <Meta label="Provider" value={view.provider ?? "—"} />
+              <Meta label="CLI" value={view.provider ?? "—"} />
               <Meta label="Model" value={view.model ?? "—"} />
               <Meta
                 label="Duration"

@@ -67,7 +67,10 @@ pub async fn get_catalog(
     AxumPath(project): AxumPath<String>,
 ) -> Response {
     match project_dir(&state, &project).await {
-        Ok(dir) => Json(authoring::catalog(&dir)).into_response(),
+        Ok(dir) => {
+            let creds = crate::http::credentials_routes::connected_clis().await;
+            Json(authoring::catalog(&dir, creds)).into_response()
+        }
         Err(resp) => resp,
     }
 }
