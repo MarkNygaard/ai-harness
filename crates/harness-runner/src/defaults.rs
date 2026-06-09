@@ -23,6 +23,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         include_str!("../defaults/workflows/merge-pr.yaml"),
     ),
     (
+        "revise-pr",
+        include_str!("../defaults/workflows/revise-pr.yaml"),
+    ),
+    (
         "architect",
         include_str!("../defaults/workflows/architect.yaml"),
     ),
@@ -193,11 +197,12 @@ mod tests {
                 .unwrap_or_else(|e| panic!("bundled workflow `{name}` failed to parse: {e}"));
             assert!(!wf.nodes.is_empty(), "`{name}` has no nodes");
         }
-        // Both the default and merge-pr are present.
+        // The default, merge-pr, and revise-pr workflows are all present.
         let names = list_default_workflows();
         assert!(names.contains(&DEFAULT_WORKFLOW));
         assert!(names.contains(&"merge-pr"));
         assert!(names.contains(&"architect"));
+        assert!(names.contains(&"revise-pr"));
     }
     #[test]
     fn architect_workflow_parses_and_enforces_readonly() {

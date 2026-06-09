@@ -53,6 +53,8 @@ pub(crate) async fn build_services(
 
     // ── Interceptor stack ─────────────────────────────────────────────────────
     let hook_enforcement = server.config.rules.hook_enforcement;
+    // Resolve the CI flag once at startup; the enforcer no longer polls the env.
+    let in_ci = std::env::var("CI").is_ok();
     let interceptors: Vec<Arc<dyn harness_core::interceptor::TurnInterceptor>> = vec![
         Arc::new(crate::contract_validator::ContractValidator::new()),
         // RuleEnforcer disabled: false-positives on test fixtures in other repo
@@ -65,6 +67,7 @@ pub(crate) async fn build_services(
             engines.rules.clone(),
             events.clone(),
             hook_enforcement,
+            in_ci,
         )),
         Arc::new(
             crate::post_validator::PostExecutionValidator::new_with_github_token(
