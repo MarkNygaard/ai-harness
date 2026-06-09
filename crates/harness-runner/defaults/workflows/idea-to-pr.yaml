@@ -58,6 +58,7 @@ nodes:
 
   - id: create-plan
     category: planning
+    artifact: plan.md
     provider: claude
     model: opus
     context: fresh

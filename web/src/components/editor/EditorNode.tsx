@@ -3,6 +3,7 @@ import {
   Bot,
   CircleSlash,
   FileCode2,
+  FileText,
   Hand,
   Repeat,
   Settings2,
@@ -97,6 +98,15 @@ export function EditorNode({ id, data }: NodeProps) {
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
+      {node.artifact && (
+        <div
+          className="flex items-center gap-1.5 border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground"
+          title={`Produces ${node.artifact}`}
+        >
+          <FileText className="h-3 w-3 shrink-0" />
+          <span className="truncate font-mono">{node.artifact}</span>
+        </div>
+      )}
       <Handle
         type="source"
         position={Position.Bottom}
