@@ -246,7 +246,7 @@ export function PropertiesDrawer({
           AI options
         </div>
 
-        <Field label="Provider">
+        <Field label="CLI">
           <select
             className={inputCls}
             value={provider}

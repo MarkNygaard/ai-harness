@@ -51,18 +51,6 @@ const PROVIDERS: {
     ],
   },
   {
-    id: "pi",
-    label: "Moonshot API (per-token, optional)",
-    help: "Only for the per-token Moonshot API (moonshotai/* models). The Kimi-for-Coding subscription (kimi-code/* models) is connected via the device login above, not an API key.",
-    fields: [
-      {
-        key: "moonshot_api_key",
-        label: "MOONSHOT_API_KEY",
-        help: "Sets MOONSHOT_API_KEY for moonshotai/* per-token models.",
-      },
-    ],
-  },
-  {
     id: "github",
     label: "GitHub",
     help: "Global token used to clone private project repos and to open PRs with `gh`. A fine-grained or classic PAT with repo + pull-request access to the repos you register as projects.",
@@ -294,7 +282,7 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
     <Card>
       <CardHeader className="flex-row items-center justify-between gap-2">
         <CardTitle className="flex items-center gap-2">
-          Codex (ChatGPT)
+          ChatGPT subscription
           {configured ? (
             <Badge variant="success">
               <Check className="h-3 w-3" /> connected
@@ -307,17 +295,19 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
           {phase === "exchanging" && (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           )}
-          {configured ? "Reconnect" : "Connect Codex"}
+          {configured ? "Reconnect" : "Connect ChatGPT"}
         </Button>
       </CardHeader>
       <CardContent>
         <p className="mb-3 text-xs text-muted-foreground">
-          The Codex review step (<code>gpt-5.3-codex</code>) uses your ChatGPT
-          subscription. Click Connect, sign in in the tab that opens. Your
-          browser then redirects to a <code>localhost:1455</code> URL that{" "}
-          <em>won’t load</em> — copy that URL from the address bar and paste it
-          below. The credential is stored encrypted and written to{" "}
-          <code>~/.codex/auth.json</code> (and self-refreshes).
+          Uses your ChatGPT subscription for both the <strong>Codex</strong> CLI
+          and <strong>omp</strong> (the <code>openai-codex/*</code> models on
+          the Pi&nbsp;/&nbsp;omp CLI). Click Connect, sign in in the tab that
+          opens. Your browser then redirects to a <code>localhost:1455</code>{" "}
+          URL that <em>won’t load</em> — copy that URL from the address bar and
+          paste it below. The credential is stored encrypted, written to{" "}
+          <code>~/.codex/auth.json</code>, and imported into omp (and
+          self-refreshes).
         </p>
         {(phase === "await_paste" || phase === "exchanging") && start && (
           <div className="flex flex-col gap-2 text-sm">

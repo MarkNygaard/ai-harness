@@ -346,7 +346,7 @@ impl McpServer {
             // Workflow authoring (Phase 4.6) — build/edit workflows with an AI.
             // Backed by the same `harness_runner::authoring` core the visual
             // editor uses, so both front-ends behave identically.
-            "workflow_catalog" => workflow_catalog_tool(arguments),
+            "workflow_catalog" => workflow_catalog_tool(arguments).await,
             "workflow_list" => workflow_list_tool(arguments),
             "workflow_get" => workflow_get_tool(arguments),
             "workflow_validate" => workflow_validate_tool(arguments),
@@ -482,7 +482,7 @@ fn to_value_result(v: impl serde::Serialize, text: String) -> Value {
 
 /// `workflow_catalog` — the building blocks (node kinds, provider/model hints,
 /// commands, context modes, trigger rules) an AI may use.
-fn workflow_catalog_tool(arguments: Value) -> Value {
+async fn workflow_catalog_tool(arguments: Value) -> Value {
     let args: ProjectRootArgs = match serde_json::from_value(arguments) {
         Ok(v) => v,
         Err(e) => return tool_error_result(format!("invalid `workflow_catalog` args: {e}")),
@@ -491,7 +491,8 @@ fn workflow_catalog_tool(arguments: Value) -> Value {
         Ok(p) => p,
         Err(e) => return tool_error_result(e.to_string()),
     };
-    let catalog = harness_runner::authoring::catalog(&root);
+    let creds = harness_server::connected_clis().await;
+    let catalog = harness_runner::authoring::catalog(&root, creds);
     let kinds = catalog
         .node_kinds
         .iter()

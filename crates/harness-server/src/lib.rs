@@ -23,6 +23,8 @@ pub(crate) mod github_auth;
 pub mod handlers;
 pub mod hook_enforcer;
 pub mod http;
+/// Credential detection for the authoring catalog (shared with `harness-cli`).
+pub use http::credentials_routes::connected_clis;
 pub mod intake;
 pub mod memory_monitor;
 pub mod notify;

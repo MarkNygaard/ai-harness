@@ -24,7 +24,8 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 
 /// `GET /api/authoring/catalog`
 pub async fn get_catalog(State(state): State<Arc<AppState>>) -> Response {
-    Json(authoring::catalog(&state.core.project_root)).into_response()
+    let creds = crate::http::credentials_routes::connected_clis().await;
+    Json(authoring::catalog(&state.core.project_root, creds)).into_response()
 }
 
 /// `GET /api/authoring/workflows`

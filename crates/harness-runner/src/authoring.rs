@@ -97,6 +97,77 @@ pub struct ProviderInfo {
     pub models: Vec<&'static str>,
 }
 
+/// Which agent CLIs have a credential connected right now. Drives the catalog's
+/// credential-gated model lists: a CLI's models are only offered once its
+/// credential is present, and the omp (`pi`) list reflects which omp backends
+/// (Codex / Kimi) are authenticated.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ConnectedCreds {
+    /// "Codex (ChatGPT)" — the Codex CLI auth and/or omp's `openai-codex`.
+    pub codex: bool,
+    /// "Kimi-for-Coding" — omp's `kimi-code`.
+    pub kimi: bool,
+    /// Claude Code.
+    pub claude: bool,
+}
+
+/// The selectable CLIs and their models, gated on which credentials are
+/// connected. A subscription CLI is shown only once its credential is present
+/// (no point offering a CLI that can't run); Anthropic API stays listed as the
+/// always-available direct-key fallback.
+fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
+    let mut providers = Vec::new();
+    if creds.claude {
+        providers.push(ProviderInfo {
+            id: "claude",
+            label: "Claude Code",
+            models: vec!["sonnet", "opus", "haiku"],
+        });
+    }
+    if creds.codex {
+        // Codex CLI on a ChatGPT account: general gpt-5.x models (not the
+        // `-codex` variants, which need API-key auth).
+        providers.push(ProviderInfo {
+            id: "codex",
+            label: "Codex",
+            models: vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+        });
+    }
+    // omp (`pi`) is shown when at least one omp backend is authenticated; its
+    // models reflect which ones (Codex via ChatGPT and/or Kimi-for-Coding).
+    if creds.codex || creds.kimi {
+        let mut pi_models: Vec<&'static str> = Vec::new();
+        if creds.codex {
+            pi_models.extend([
+                "openai-codex/gpt-5.4-nano",
+                "openai-codex/gpt-5.2-codex",
+                "openai-codex/gpt-5.1-codex-max",
+                "openai-codex/gpt-5.1-codex",
+            ]);
+        }
+        if creds.kimi {
+            pi_models.extend([
+                "kimi-code/kimi-for-coding",
+                "kimi-code/kimi-k2",
+                "kimi-code/kimi-k2-turbo-preview",
+                "kimi-code/kimi-k2.5",
+            ]);
+        }
+        providers.push(ProviderInfo {
+            id: "pi",
+            label: "Pi / omp",
+            models: pi_models,
+        });
+    }
+    // Direct Anthropic API (API key, not a subscription CLI) — always offered.
+    providers.push(ProviderInfo {
+        id: "anthropic-api",
+        label: "Anthropic API",
+        models: vec!["sonnet", "opus"],
+    });
+    providers
+}
+
 /// A command available to `command:` nodes.
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandInfo {
@@ -553,7 +624,8 @@ fn prebuilt_steps() -> Vec<PrebuiltStep> {
 }
 
 /// The building-blocks catalog: the editor palette + the drawer's option lists.
-pub fn catalog(project_root: &Path) -> Catalog {
+/// `creds` gates the per-CLI model lists to what's actually connected.
+pub fn catalog(project_root: &Path, creds: ConnectedCreds) -> Catalog {
     Catalog {
         node_kinds: vec![
             NodeKindInfo {
@@ -599,36 +671,7 @@ pub fn catalog(project_root: &Path) -> Catalog {
                 ai: false,
             },
         ],
-        providers: vec![
-            ProviderInfo {
-                id: "claude",
-                label: "Claude (subscription)",
-                models: vec!["sonnet", "opus", "sonnet[1m]", "opus[1m]", "haiku"],
-            },
-            ProviderInfo {
-                id: "codex",
-                label: "Codex",
-                // ChatGPT-account auth exposes general models (gpt-5.5/5.4) but
-                // not the `-codex` variants; an account's actual list is shown by
-                // `codex` → `/model`. gpt-5.3-codex needs API-key / non-ChatGPT auth.
-                models: vec!["gpt-5.5", "gpt-5-codex", "gpt-5.3-codex"],
-            },
-            ProviderInfo {
-                id: "pi",
-                label: "Pi / Kimi",
-                models: vec![
-                    "kimi-code/kimi-for-coding",
-                    "kimi-code/kimi-k2.6",
-                    "openai-codex/gpt-5.5",
-                    "openai-codex/gpt-5.4",
-                ],
-            },
-            ProviderInfo {
-                id: "anthropic-api",
-                label: "Anthropic API",
-                models: vec!["sonnet", "opus"],
-            },
-        ],
+        providers: build_providers(creds),
         commands: list_commands(project_root),
         context_modes: vec!["fresh", "shared"],
         trigger_rules: vec![
@@ -758,7 +801,14 @@ nodes:
     #[test]
     fn catalog_exposes_kinds_providers_and_bundled_commands() {
         let tmp = tempfile::tempdir().unwrap();
-        let cat = catalog(tmp.path());
+        let cat = catalog(
+            tmp.path(),
+            ConnectedCreds {
+                codex: true,
+                kimi: true,
+                claude: true,
+            },
+        );
         assert_eq!(cat.node_kinds.len(), 7);
         assert!(cat.node_kinds.iter().any(|k| k.kind == "loop" && k.ai));
         assert!(cat.node_kinds.iter().any(|k| k.kind == "cancel"));
@@ -767,10 +817,70 @@ nodes:
         // Bundled commands surface in the catalog.
         assert!(cat.commands.iter().any(|c| c.name == "implement-tasks"));
     }
+
+    #[test]
+    fn catalog_model_lists_are_credential_gated() {
+        let tmp = tempfile::tempdir().unwrap();
+        let models = |cat: &Catalog, id: &str| {
+            cat.providers
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| p.models.clone())
+                .unwrap_or_default()
+        };
+
+        let has = |cat: &Catalog, id: &str| cat.providers.iter().any(|p| p.id == id);
+
+        // Nothing connected: subscription CLIs are hidden entirely; the direct
+        // Anthropic API fallback remains.
+        let none = catalog(tmp.path(), ConnectedCreds::default());
+        assert!(!has(&none, "claude"));
+        assert!(!has(&none, "codex"));
+        assert!(!has(&none, "pi"));
+        assert!(has(&none, "anthropic-api"));
+
+        // Codex only: Codex-CLI gpt-5.x + omp's openai-codex/* models; no kimi.
+        let codex = catalog(
+            tmp.path(),
+            ConnectedCreds {
+                codex: true,
+                ..Default::default()
+            },
+        );
+        assert!(models(&codex, "codex").contains(&"gpt-5.5"));
+        assert!(models(&codex, "pi").contains(&"openai-codex/gpt-5.1-codex"));
+        assert!(!models(&codex, "pi")
+            .iter()
+            .any(|m| m.starts_with("kimi-code/")));
+
+        // Kimi only: omp offers kimi-code/* and no openai-codex/*.
+        let kimi = catalog(
+            tmp.path(),
+            ConnectedCreds {
+                kimi: true,
+                ..Default::default()
+            },
+        );
+        assert!(models(&kimi, "pi").contains(&"kimi-code/kimi-for-coding"));
+        assert!(!models(&kimi, "pi")
+            .iter()
+            .any(|m| m.starts_with("openai-codex/")));
+
+        // Claude only: the three Claude Code models.
+        let claude = catalog(
+            tmp.path(),
+            ConnectedCreds {
+                claude: true,
+                ..Default::default()
+            },
+        );
+        assert!(models(&claude, "claude").contains(&"sonnet"));
+        assert!(models(&claude, "claude").contains(&"haiku"));
+    }
     #[test]
     fn catalog_exposes_valid_prebuilt_steps() {
         let tmp = tempfile::tempdir().unwrap();
-        let cat = catalog(tmp.path());
+        let cat = catalog(tmp.path(), ConnectedCreds::default());
 
         // Every curated step must be present (if one is renamed in the bundled
         // YAML and the list isn't updated, this fails loud and clear).
