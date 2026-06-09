@@ -171,6 +171,45 @@ mod tests {
     }
 
     #[test]
+    fn revise_pr_revalidates_after_review_fixes() {
+        let yaml = default_workflow("revise-pr").expect("revise-pr bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("revise-pr must parse");
+        let node = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("missing node `{id}`"))
+        };
+        let deps = |id: &str| {
+            node(id)
+                .depends_on
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            node("explore").when.as_deref(),
+            Some("$gather-feedback.output.has_feedback == 'true'")
+        );
+        assert_eq!(deps("final-validate"), vec!["sonnet-final-review"]);
+        assert!(
+            matches!(&node("final-validate").kind, harness_dag::NodeKind::Command(name) if name == "validate")
+        );
+        assert!(node("final-validate").output_format.is_some());
+        assert_eq!(deps("abort-final-invalid"), vec!["final-validate"]);
+        assert_eq!(
+            node("abort-final-invalid").when.as_deref(),
+            Some("$final-validate.output.passed != 'true'")
+        );
+        assert_eq!(deps("summary"), vec!["final-validate"]);
+        assert_eq!(
+            node("summary").when.as_deref(),
+            Some("$final-validate.output.passed == 'true'")
+        );
+    }
+
+    #[test]
     fn resolve_falls_back_to_bundled_default() {
         let tmp = std::env::temp_dir();
         let (yaml, label) = resolve_workflow_source(DEFAULT_WORKFLOW, &tmp).unwrap();

@@ -103,33 +103,127 @@ nodes:
           description: "true if there is at least one actionable feedback item from GitHub OR Linear"
       required: [feedback, has_feedback]
 
-  # 4. Address all feedback (GitHub + Linear) and push to the existing PR branch.
+  # 4. Fail the run if no actionable feedback was gathered — there should be
+  #    something to revise. This guards against a misconfigured trigger state.
+  - id: abort-no-feedback
+    category: planning
+    depends_on: [gather-feedback]
+    when: "$gather-feedback.output.has_feedback != 'true'"
+    cancel: "No actionable feedback found for PR #$resolve-pr.output.pr. If this issue was moved to 'Changes requested' by mistake, move it back to the source column."
+
+  # 5. Explore the code the feedback touches before planning the fix.
+  - id: explore
+    category: planning
+    artifact: exploration.md
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [gather-feedback]
+    when: "$gather-feedback.output.has_feedback == 'true'"
+    prompt: |
+      You are a codebase explorer for a PR REVISION. The PR already exists;
+      reviewers asked for changes. Map the parts of the codebase the feedback
+      touches. Do NOT propose the fix and do NOT edit anything — gather facts.
+
+      ## Get the PR branch into this worktree first
+      `gh pr checkout $resolve-pr.output.pr`
+      Then read the change set under review:
+      `git diff origin/$resolve-pr.output.base...HEAD`
+      `git log --oneline origin/$resolve-pr.output.base..HEAD`
+
+      ## The feedback to address
+      a) GitHub PR reviews / inline comments:
+         $gather-feedback.output.feedback
+      b) Linear tester / reviewer comments (functionality feedback) — look under
+         "## Reviewer comments (Linear)":
+         $ARGUMENTS
+
+      ## Capture (facts only)
+      For each feedback item, find the relevant code:
+      - **Files & symbols** the feedback points at (path + one-line purpose;
+        quote short snippets with `file:line`).
+      - **Patterns to mirror**: surrounding conventions any fix must follow
+        (error handling, test style, naming).
+      - **Constraints**: rules from CLAUDE.md / AGENTS.md that apply.
+      - **Risks / edge cases**: prior art, gotchas, anything a fix could break.
+
+      Write your findings to `$ARTIFACTS_DIR/exploration.md` (300–800 words).
+      Do NOT design the fix — that's the next node's job.
+
+      Output a one-line confirmation and: <promise>EXPLORE-DONE</promise>
+
+  # 6. Plan the revision — every feedback point mapped to a concrete edit.
+  - id: create-plan
+    category: planning
+    artifact: plan.md
+    provider: claude
+    model: opus
+    context: fresh
+    depends_on: [explore]
+    prompt: |
+      You are a planner for a PR REVISION. Turn the reviewer feedback +
+      exploration into a concrete, one-pass plan that addresses EVERY review
+      point. PLAN ONLY — write no code. Scope TIGHTLY to the feedback; do not
+      expand scope beyond what reviewers asked for.
+
+      ## Feedback to address
+      a) GitHub PR reviews / inline comments:
+         $gather-feedback.output.feedback
+      b) Linear tester / reviewer comments — look under
+         "## Reviewer comments (Linear)":
+         $ARGUMENTS
+
+      ## Exploration
+      Read `$ARTIFACTS_DIR/exploration.md` — the codebase facts are already
+      gathered there. Do NOT re-explore; if one critical fact is genuinely
+      missing, do a single targeted read.
+
+      ## Write the plan to `$ARTIFACTS_DIR/plan.md`
+      Use these sections:
+      - **Feedback checklist**: one line per review point (GitHub + Linear),
+        each mapped to the file(s) that will change. This is the contract —
+        every item must be covered.
+      - **Files to change**: path + reason per file.
+      - **Step-by-step tasks**: ordered; each names the file(s) and the concrete
+        edit, granular enough to follow without re-deciding the approach.
+      - **Testing strategy**: tests to add/update + edge cases.
+      - **Validation commands**: the project's verify chain (CLAUDE.md / AGENTS.md).
+      - **Out of scope**: anything NOT in the feedback — explicitly excluded.
+
+      Prefer minimal, surgical changes that fit existing patterns. Honor
+      CLAUDE.md / AGENTS.md.
+
+      After writing plan.md, output a one-line summary and:
+      <promise>PLAN-DONE</promise>
+
+  # 7. Execute the plan and push fixes to the existing PR branch.
   - id: implement
     category: implementation
-    depends_on: [resolve-pr, gather-feedback]
+    depends_on: [create-plan]
     loop:
       provider: pi
       model: kimi-code/kimi-for-coding
       until: REVISION_DONE
       max_iterations: 3
       prompt: |
-        Revise PR #$resolve-pr.output.pr ("$resolve-pr.output.title").
+        Revise PR #$resolve-pr.output.pr ("$resolve-pr.output.title") by
+        executing the plan. This may be one of up to 3 passes — read the commit
+        history so you don't redo work already done.
 
-        1. Check the PR branch out into this worktree:
+        1. Get the PR branch into this worktree:
            `gh pr checkout $resolve-pr.output.pr`
-           Confirm which revision pass this is with:
-           `git log --oneline -5`
-           Read the prior revision commits so you don't redo work already done.
+           `git log --oneline -5`  (see prior revision commits)
 
-        2. Address ALL feedback from BOTH sources:
-           a) GitHub PR reviews / inline comments:
-              $gather-feedback.output.feedback
-           b) Linear tester / reviewer comments (functionality feedback):
-              $ARGUMENTS
-              (look under "## Reviewer comments (Linear)")
+        2. Read the plan — it is the contract for this revision:
+           `cat $ARTIFACTS_DIR/plan.md`
+           Implement EVERY item in the plan's feedback checklist. The feedback
+           sources behind the plan are:
+           a) GitHub PR reviews / inline comments: $gather-feedback.output.feedback
+           b) Linear tester / reviewer comments (look under
+              "## Reviewer comments (Linear)"): $ARGUMENTS
 
         3. Make the code changes. Run the project's **scoped verify chain**
-           (commands live in `CLAUDE.md` / `AGENTS.md`; use the narrowest scope
+           (commands live in CLAUDE.md / AGENTS.md; use the narrowest scope
            covering the change). Fix until green — never commit a non-building
            branch.
 
@@ -141,9 +235,9 @@ nodes:
         - No `--no-verify`, no skipped hooks.
         - No DB / schema migrations (`prisma migrate`, `sqlx migrate run`, etc.).
         - No `gh pr review`, no PR-review comments, no label changes.
-        - Honor project-specific rules in `CLAUDE.md` / `AGENTS.md`.
+        - Honor project-specific rules in CLAUDE.md / AGENTS.md.
 
-        When every feedback item is addressed, verify is green, and commits are
+        When every plan item is addressed, verify is green, and commits are
         pushed, emit the literal signal:
         <promise>REVISION_DONE</promise>
         If something is genuinely blocked or unaddressable, end your turn
@@ -151,17 +245,335 @@ nodes:
         (and the poller routes the card back to source under the retry cap)
         rather than signaling a false "ready".
 
-  # 5. Post a short summary comment on the PR and finish.
+  # 8. Scoped verify gate — fail loudly if the revision doesn't build/test clean.
+  - id: validate
+    category: validation
+    command: validate
+    depends_on: [implement]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        summary: { type: string }
+      required: [passed]
+
+  # 9. Abort if validation failed — never leave the PR red.
+  - id: abort-on-invalid
+    category: validation
+    depends_on: [validate]
+    when: "$validate.output.passed != 'true'"
+    cancel: "Validation failed after revising PR #$resolve-pr.output.pr — refusing to leave the PR red. $validate.output.summary"
+
+  # 10. Kimi self-review loop on the updated revision diff.
+  - id: pi-review-fix-loop
+    category: validation
+    depends_on: [validate]
+    when: "$validate.output.passed == 'true'"
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      max_iterations: 5
+      until: PI_REVIEW_CLEAN
+      prompt: |
+        You are performing a self-review-and-fix pass on a PR revision that you
+        (or an earlier iteration of you) just implemented. This may be one of up
+        to 5 such passes — look at the commit history to see whether earlier
+        passes have already run. Stop early when you have no more substantive
+        issues to fix.
+
+        ## Read the change set first
+
+        Use `gh pr view --json title,body,baseRefName,headRefName,additions,deletions`
+        and `git log --oneline origin/$resolve-pr.output.base..HEAD` to understand
+        what's been done. Read the diff with `git diff origin/$resolve-pr.output.base...HEAD`.
+
+        Look at any prior iteration's commits — your previous self has
+        already addressed those issues. Don't re-flag the same thing.
+
+        ## Review categories
+
+        Run a self-review against these dimensions:
+        - **Correctness**: off-by-one, null/undefined handling, boundary
+          conditions, logic errors, edge cases the implementation missed.
+        - **Error handling**: silently swallowed errors, unhelpful error
+          messages, missing try/catch around external calls, retry/idempotency
+          gaps in async code.
+        - **Test coverage**: critical paths or new functions without tests,
+          mocks that hide real failures, missing edge-case tests for branches
+          you added.
+        - **Performance**: N+1 queries, unbounded loops, accidental re-renders,
+          eager loading where lazy would do, large in-memory payloads.
+        - **Security**: SQL injection, XSS, missing auth/scope checks, PII
+          leaks into logs, secrets in code, broken access control, unsafe
+          type casts (`as any` in TS, `unsafe` blocks in Rust, etc.).
+        - **Inconsistencies with sibling code**: comments that contradict
+          the code, naming that doesn't match the surrounding module's
+          conventions.
+        - **Docs**: behaviour changes that aren't reflected in inline doc
+          comments, the project's `CLAUDE.md` / `AGENTS.md`, or its docs site.
+
+        ## Disposition
+
+        For each issue you find:
+        1. Fix it directly. Edit the file(s).
+        2. Run the project's scoped verify chain — the commands live in
+           `CLAUDE.md` / `AGENTS.md`. Use the narrowest scope that
+           covers the change (single package / crate, not repo-wide)
+           unless the project explicitly requires the wider run.
+        3. Commit with a conventional-commit message. Push to the PR branch.
+
+        Universal AI-agent rules (do not violate, even if asked):
+        - Do NOT post PR comments or use `gh pr review` from this node.
+        - Do NOT use `--no-verify` or otherwise skip commit hooks.
+        - Do NOT execute database / schema migrations (`prisma migrate`,
+          `sqlx migrate run`, etc.) — edit the schema + write the SQL,
+          flag the migration for the human in your summary.
+        - Follow any additional project-specific prohibitions in
+          `CLAUDE.md` / `AGENTS.md`.
+
+        After fixing this iteration's issues, produce a short summary:
+
+        ```
+        ## Self-review iteration N
+
+        Addressed this iteration:
+        - <one-line description> — commit <sha>
+        ...
+        ```
+
+        Then decide:
+        - If you found and fixed issues this iteration, end your turn
+          (do NOT emit the convergence signal). The orchestrator will run
+          another iteration so you can take another pass.
+        - If you genuinely have nothing more to improve — code is clean,
+          tests cover the change, docs are aligned, no smells — output
+          the literal convergence signal:
+
+          <promise>PI_REVIEW_CLEAN</promise>
+
+        Be honest: emitting PI_REVIEW_CLEAN prematurely shifts cost onto
+        the gpt-review-fix and Sonnet phases that follow. Emitting it on a clean
+        PR is the goal.
+
+  # 11. Second-pass review via gpt-5.x — catch what Kimi rationalized.
+  - id: gpt-review-fix
+    category: validation
+    depends_on: [pi-review-fix-loop]
+    provider: pi
+    # Runs gpt-5.x via omp on the ChatGPT Plus/Pro subscription (OAuth — no
+    # per-token API-key billing; "Codex for OSS"). The ChatGPT account exposes
+    # the general gpt-5.x models but NOT the `-codex` variants, so use the
+    # general model. The model id MUST be namespace-qualified (`openai-codex/...`):
+    # a bare name would be mis-prefixed to `kimi-code/...` by the pi provider.
+    # Connect once on the cluster image: `omp /login` -> "ChatGPT Plus/Pro
+    # (Codex)". To see an account's exact list run `omp` -> `/model`.
+    model: openai-codex/gpt-5.5
+    context: fresh
+    prompt: |
+      You are reviewing a PR that an upstream agent already authored
+      and self-reviewed up to 3 times. Your job is to find what the
+      upstream agent missed.
+
+      The PR branch is checked out at HEAD with all of the upstream
+      agent's fixes applied. Use `gh pr view` and
+      `git log --oneline origin/$resolve-pr.output.base..HEAD` to understand the
+      change set. Pay attention to the prior self-review summaries in
+      the commit history — they tell you what's already been addressed
+      so you can focus on what's still open.
+
+      Look for issues a single-model review tends to rationalize or miss:
+      - Subtle logic bugs (off-by-one, boundary conditions, null/undefined)
+      - Race conditions, idempotency gaps in async code or DB writes
+      - Performance issues: N+1 queries, unbounded loops, eager loading,
+        accidental re-renders, large in-memory payloads
+      - Security: SQL injection, XSS, missing auth checks, PII leaks in logs,
+        secrets in code, broken access control
+      - API design: inconsistent error shapes, leaky abstractions, breaking
+        changes that aren't called out
+
+      For each issue you find, FIX IT directly:
+      1. Edit the relevant file(s).
+      2. Commit with a conventional-commit message
+         (e.g. `fix(scope): handle race in token refresh`).
+      3. Push to the same branch.
+
+      Do NOT post PR comments. Do NOT use `gh pr review`. Do NOT use --no-verify.
+      Push commits — that is the entire output.
+
+      If you genuinely find nothing, push nothing.
+
+      When done, output: <promise>GPT-REVIEW-DONE</promise>
+
+  # 12. Third model-diverse review pass — final sign-off with verdict label.
+  - id: sonnet-final-review
+    category: validation
+    depends_on: [gpt-review-fix]
+    provider: claude
+    model: sonnet
+    context: fresh
+    prompt: |
+      You are the third model-diverse review pass on a PR revision that has been:
+      1. Planned (strategic planning agent)
+      2. Implemented (implementation agent)
+      3. Self-reviewed up to 3 iterations, fix-and-push each round
+      4. Reviewed with a second-pass agent that also pushed fixes
+
+      You bring a different training-data / bias profile than the two
+      earlier reviewers — your job is to catch what they rationalized
+      or missed, fix what's concretely fixable, and surface judgment-
+      call questions for the human.
+
+      ## Read the change set first
+
+      1. `gh pr view --json title,body,baseRefName,number` — note the PR number.
+      2. `git diff origin/$resolve-pr.output.base...HEAD` — full diff at HEAD with all
+         prior fixes applied.
+      3. `git log --oneline origin/$resolve-pr.output.base..HEAD` — paper trail of
+         self-review summaries and second-pass fix commits.
+
+      ## What to fix vs flag
+
+      Classify every finding as one of:
+
+      - **Concrete fixable bug** (off-by-one, null/undefined, missing
+        try/catch, broken test, dead branch, etc.): FIX IT.
+        - Edit the file(s)
+        - Run the project's scoped verify chain — see `CLAUDE.md` /
+          `AGENTS.md` for the commands. Use the narrowest scope that
+          covers the change.
+        - Commit with a conventional-commit message and push.
+        - Universal AI-agent rules: do NOT skip commit hooks, do NOT
+          use `--no-verify`, do NOT execute database / schema migrations
+          (`prisma migrate`, `sqlx migrate run`, etc.) — edit the
+          schema + SQL only, flag the migration for the human. Follow
+          additional project-specific prohibitions in `CLAUDE.md` /
+          `AGENTS.md`.
+
+      - **Judgment-call concern** (scope ambiguity, architectural risk,
+        "is X the right approach"): do NOT touch the code. Surface it
+        in the summary comment for the human.
+
+      If a finding is fixable but you're not confident your fix is
+      correct, prefer flagging over fixing.
+
+      ## Verdict rubric (used in the comment + label)
+
+      - **APPROVE** — code is mergeable as-is, optionally after the fixes
+        you just pushed. No judgment-call concerns remain.
+      - **REQUEST_CHANGES** — concrete, fixable issue you chose NOT to
+        fix (e.g. ambiguous, broader scope) — surfaced for human.
+      - **NEEDS_DISCUSSION** — architectural concern, scope ambiguity,
+        or risk that needs human judgment, not a fix.
+
+      ## What to look at (checklist)
+
+      - **Scope discipline**: does the PR match the original ask, or did
+        earlier agents drift?
+      - **Architectural risk**: coupling, leaky abstractions, contracts
+        that are hard to evolve.
+      - **Operational risk**: migrations, destructive operations, env-var
+        surface, anything that needs a human deploy step.
+      - **Test honesty**: tests pin real invariants, not happy paths only.
+      - **Upstream guardrail compliance**: `CLAUDE.md` / `AGENTS.md`
+        is auto-loaded into your context. Verify the upstream agents
+        respected its rules — no `--no-verify`, no migrations
+        executed, no scope-violating commands, no lockfile churn
+        unrelated to the change. Any violation -> REQUEST_CHANGES.
+
+      ## Output: sized PR comment + PR label
+
+      Pick a comment shape based on the verdict:
+
+      ### If APPROVE — terse comment (one paragraph)
+
+      ```
+      ## Sonnet 4.6 sign-off — APPROVE ✅
+
+      <one short paragraph: what the PR does + your read on quality>
+
+      <if you pushed fixes this phase, list commit short-shas + one line each>
+      <if you pushed nothing this phase, say "No additional fixes needed.">
+
+      🤖 Final sign-off by Claude Sonnet 4.6
+      ```
+
+      ### If REQUEST_CHANGES or NEEDS_DISCUSSION — full structured comment
+
+      ```
+      ## Sonnet 4.6 sign-off — <REQUEST_CHANGES | NEEDS_DISCUSSION>
+
+      ### What I fixed this phase
+      <list of commit short-shas + one line each, or "Nothing pushed.">
+
+      ### Open items the human should look at
+      <bulleted list. For REQUEST_CHANGES: concrete file:line items.
+       For NEEDS_DISCUSSION: questions to decide.>
+
+      ### Risk
+      <migrations / destructive ops / env-var changes / etc. State
+       what the human needs to do before/after merge. Skip if none.>
+
+      🤖 Final sign-off by Claude Sonnet 4.6
+      ```
+
+      ## Posting steps
+
+      1. Post the comment:
+         `gh pr comment <number> --body "<comment body>"`
+
+      2. Set a PR label matching the verdict:
+         - APPROVE -> `archon-approved`
+         - REQUEST_CHANGES -> `archon-request-changes`
+         - NEEDS_DISCUSSION -> `archon-needs-discussion`
+
+         Apply with:
+         `gh pr edit <number> --add-label "archon-approved"`
+
+         If the label doesn't exist yet, create it first:
+         `gh label create archon-approved --color "0E8A16" --description "Sonnet sign-off approved" 2>/dev/null || true`
+         Use color `0E8A16` (green) for approved, `D73A4A` (red) for
+         request-changes, `FBCA04` (yellow) for needs-discussion.
+
+      3. Output: <promise>SONNET-SIGNOFF-DONE</promise>
+
+  # 13. Final scoped verify gate — review/fix nodes above may push commits
+  #     after the earlier validate node, so verify the branch HEAD again.
+  - id: final-validate
+    category: validation
+    command: validate
+    depends_on: [sonnet-final-review]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        summary: { type: string }
+      required: [passed]
+
+  # 14. Abort if the final branch state is red after review fixes.
+  - id: abort-final-invalid
+    category: validation
+    depends_on: [final-validate]
+    when: "$final-validate.output.passed != 'true'"
+    cancel: "Final validation failed after review fixes for PR #$resolve-pr.output.pr — refusing to mark the PR ready. $final-validate.output.summary"
+
+  # 15. Post a short summary on the PR and finish after final validation.
   - id: summary
     category: delivery
     provider: claude
     model: haiku
-    depends_on: [implement]
-    trigger_rule: none_failed_min_one_success
+    depends_on: [final-validate]
+    when: "$final-validate.output.passed == 'true'"
     prompt: |
-      PR #$resolve-pr.output.pr may have been revised and pushed. Before
-      posting a summary comment, check whether the implement node actually
-      converged:
+      PR #$resolve-pr.output.pr may have been revised and pushed. Final
+      validation has passed at branch HEAD after the implementation and all
+      review/fix nodes. Before posting a summary comment, check whether the
+      implement node actually converged:
 
       $implement.output
 
@@ -177,18 +589,14 @@ nodes:
       ready for re-review.
 
       Read the commit history since the base branch to ground the summary:
-      `git log --oneline origin/$BASE_BRANCH..HEAD`
+      `git log --oneline origin/$resolve-pr.output.base..HEAD`
+
+      The three-review chain (kimi self-review loop, gpt-review-fix, sonnet)
+      already ran in this same workflow, so do NOT suggest running additional
+      review agents.
 
       Do NOT change labels or title; the poller will move the Linear card back
       to the review column on completion.
 
       End with: <promise>REVISE-SUMMARY-DONE</promise>
       Emit ONLY the comment + the promise token.
-
-  # 6. Fail the run if no actionable feedback was gathered — there should be
-  #    something to revise. This guards against a misconfigured trigger state.
-  - id: abort-no-feedback
-    category: planning
-    depends_on: [gather-feedback]
-    when: "$gather-feedback.output.has_feedback != 'true'"
-    cancel: "No actionable feedback found for PR #$resolve-pr.output.pr. If this issue was moved to 'Changes requested' by mistake, move it back to the source column."
