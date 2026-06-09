@@ -57,6 +57,12 @@ export function PropertiesDrawer({
   const provider = node.provider ?? "";
   const providerModels =
     catalog?.providers.find((p) => p.id === provider)?.models ?? [];
+  // Always include the node's current model, so a value not in the catalog
+  // (a bundled workflow's model, or one whose CLI isn't connected) still shows.
+  const modelOptions =
+    node.model && !providerModels.includes(node.model)
+      ? [node.model, ...providerModels]
+      : providerModels;
 
   return (
     <div className="flex w-80 flex-none flex-col border-l border-border bg-card">
@@ -257,19 +263,20 @@ export function PropertiesDrawer({
             </SelectItem>
           ))}
         </SelectField>
-        <Field label="Model">
-          <Input
-            list="harness-models"
-            value={node.model ?? ""}
-            onChange={(e) => set({ model: e.target.value || undefined })}
-            placeholder="(default)"
-          />
-          <datalist id="harness-models">
-            {providerModels.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
-        </Field>
+        <SelectField
+          label="Model"
+          value={node.model ?? DEFAULT_SENTINEL}
+          onValueChange={(v) =>
+            set({ model: v === DEFAULT_SENTINEL ? undefined : v })
+          }
+        >
+          <SelectItem value={DEFAULT_SENTINEL}>(workflow default)</SelectItem>
+          {modelOptions.map((m) => (
+            <SelectItem key={m} value={m}>
+              {m}
+            </SelectItem>
+          ))}
+        </SelectField>
         <div className="grid grid-cols-2 gap-2">
           <SelectField
             label="Context"

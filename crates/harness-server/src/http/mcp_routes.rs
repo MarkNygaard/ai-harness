@@ -13,7 +13,7 @@
 //! Auth is the global bearer-token middleware (`Authorization: Bearer …`); this
 //! route is not exempt, so the cluster token gates every call.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use axum::extract::Extension;
@@ -99,19 +99,6 @@ async fn handle_one(state: &Arc<RunsState>, req: &Value) -> Option<Value> {
     }
 }
 
-/// Resolve a registered project to its on-disk checkout dir (or an error string).
-async fn project_dir(state: &Arc<RunsState>, project: &str) -> Result<PathBuf, String> {
-    if project.is_empty() {
-        return Err("`project` is required".to_string());
-    }
-    let store = state.project_store().await?;
-    match store.get(project).await {
-        Ok(Some(_)) => Ok(state.projects_dir.join(project)),
-        Ok(None) => Err(format!("unknown project `{project}`")),
-        Err(e) => Err(e.to_string()),
-    }
-}
-
 /// After a successful authoring mutation, report the resulting DAG's node
 /// summaries (the build→validate→fix loop sees the new state).
 fn state_after(dir: &Path, name: &str, msg: String) -> Value {
@@ -184,101 +171,109 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
             }
         }
 
-        // ── Authoring (project-scoped) ──────────────────────────────────────
-        "workflow_catalog" => match project_dir(state, &s("project")).await {
-            Ok(dir) => {
-                let creds = crate::http::credentials_routes::connected_clis().await;
-                to_result("catalog".to_string(), &authoring::catalog(&dir, creds))
-            }
+        // ── Authoring ───────────────────────────────────────────────────────
+        // Custom workflows are GLOBAL (like bundled): they live in the server's
+        // `project_root` and apply to every project, so these ignore `project`
+        // and resolve against the global root the editor authors into.
+        "workflow_catalog" => {
+            let creds = crate::http::credentials_routes::connected_clis().await;
+            to_result(
+                "catalog".to_string(),
+                &authoring::catalog(&state.project_root, creds),
+            )
+        }
+        "workflow_list" => {
+            let list = authoring::list_workflows(&state.project_root);
+            to_result(
+                format!("{} workflow(s)", list.len()),
+                &json!({ "workflows": list }),
+            )
+        }
+        "workflow_get" => match authoring::get_workflow(&state.project_root, &s("name")) {
+            Ok(src) => to_result(src.yaml.clone(), &src),
             Err(e) => tool_error(e),
         },
-        "workflow_list" => match project_dir(state, &s("project")).await {
-            Ok(dir) => {
-                let list = authoring::list_workflows(&dir);
-                to_result(
-                    format!("{} workflow(s)", list.len()),
-                    &json!({ "workflows": list }),
-                )
-            }
-            Err(e) => tool_error(e),
-        },
-        "workflow_get" => match project_dir(state, &s("project")).await {
-            Ok(dir) => match authoring::get_workflow(&dir, &s("name")) {
-                Ok(src) => to_result(src.yaml.clone(), &src),
-                Err(e) => tool_error(e),
-            },
-            Err(e) => tool_error(e),
-        },
-        "workflow_validate" => match project_dir(state, &s("project")).await {
-            Ok(_) => {
-                let v = authoring::validate_workflow(&s("yaml"));
-                let text = if v.valid {
-                    format!("valid: {} step(s)", v.nodes.len())
-                } else {
-                    format!("invalid: {}", v.error.clone().unwrap_or_default())
-                };
-                to_result(text, &v)
-            }
-            Err(e) => tool_error(e),
-        },
-        "workflow_save" => match project_dir(state, &s("project")).await {
-            Ok(dir) => match authoring::save_workflow(&dir, &s("name"), &s("yaml")) {
+        "workflow_validate" => {
+            let v = authoring::validate_workflow(&s("yaml"));
+            let text = if v.valid {
+                format!("valid: {} step(s)", v.nodes.len())
+            } else {
+                format!("invalid: {}", v.error.clone().unwrap_or_default())
+            };
+            to_result(text, &v)
+        }
+        "workflow_save" => {
+            match authoring::save_workflow(&state.project_root, &s("name"), &s("yaml")) {
                 Ok(()) => to_result(
                     format!("saved `{}`", s("name")),
                     &json!({ "saved": true, "name": s("name") }),
                 ),
                 Err(e) => tool_error(e),
-            },
-            Err(e) => tool_error(e),
-        },
-        "workflow_create" => match project_dir(state, &s("project")).await {
-            Ok(dir) => {
-                let r = authoring::create_workflow(
-                    &dir,
-                    &s("name"),
-                    args.get("description").and_then(Value::as_str),
-                    args.get("provider").and_then(Value::as_str),
-                    args.get("model").and_then(Value::as_str),
-                );
-                match r {
-                    Ok(()) => state_after(&dir, &s("name"), format!("created `{}`", s("name"))),
-                    Err(e) => tool_error(e),
-                }
             }
-            Err(e) => tool_error(e),
-        },
-        "workflow_set_node" => match project_dir(state, &s("project")).await {
-            Ok(dir) => {
-                let node = args.get("node").cloned().unwrap_or(Value::Null);
-                match authoring::set_node(&dir, &s("name"), node) {
-                    Ok(()) => state_after(&dir, &s("name"), format!("set node in `{}`", s("name"))),
-                    Err(e) => tool_error(e),
-                }
+        }
+        // Delete a CUSTOM workflow (bundled defaults have no file → can't be
+        // deleted; the call reports that rather than silently no-op'ing).
+        "workflow_delete" => {
+            match authoring::delete_project_workflow(&state.project_root, &s("name")) {
+                Ok(true) => to_result(
+                    format!("deleted custom workflow `{}`", s("name")),
+                    &json!({ "deleted": true, "name": s("name") }),
+                ),
+                Ok(false) => tool_error(format!(
+                    "`{}` is not a custom workflow — bundled defaults can't be deleted",
+                    s("name")
+                )),
+                Err(e) => tool_error(e),
             }
-            Err(e) => tool_error(e),
-        },
-        "workflow_remove_node" => match project_dir(state, &s("project")).await {
-            Ok(dir) => match authoring::remove_node(&dir, &s("name"), &s("id")) {
+        }
+        "workflow_create" => {
+            let r = authoring::create_workflow(
+                &state.project_root,
+                &s("name"),
+                args.get("description").and_then(Value::as_str),
+                args.get("provider").and_then(Value::as_str),
+                args.get("model").and_then(Value::as_str),
+            );
+            match r {
                 Ok(()) => state_after(
-                    &dir,
+                    &state.project_root,
+                    &s("name"),
+                    format!("created `{}`", s("name")),
+                ),
+                Err(e) => tool_error(e),
+            }
+        }
+        "workflow_set_node" => {
+            let node = args.get("node").cloned().unwrap_or(Value::Null);
+            match authoring::set_node(&state.project_root, &s("name"), node) {
+                Ok(()) => state_after(
+                    &state.project_root,
+                    &s("name"),
+                    format!("set node in `{}`", s("name")),
+                ),
+                Err(e) => tool_error(e),
+            }
+        }
+        "workflow_remove_node" => {
+            match authoring::remove_node(&state.project_root, &s("name"), &s("id")) {
+                Ok(()) => state_after(
+                    &state.project_root,
                     &s("name"),
                     format!("removed `{}` from `{}`", s("id"), s("name")),
                 ),
                 Err(e) => tool_error(e),
-            },
-            Err(e) => tool_error(e),
-        },
-        "workflow_connect" => match project_dir(state, &s("project")).await {
-            Ok(dir) => match authoring::connect_nodes(&dir, &s("name"), &s("from"), &s("to")) {
+            }
+        }
+        "workflow_connect" => {
+            match authoring::connect_nodes(&state.project_root, &s("name"), &s("from"), &s("to")) {
                 Ok(()) => state_after(
-                    &dir,
+                    &state.project_root,
                     &s("name"),
                     format!("connected `{}` -> `{}`", s("from"), s("to")),
                 ),
                 Err(e) => tool_error(e),
-            },
-            Err(e) => tool_error(e),
-        },
+            }
+        }
         other => tool_error(format!("unknown tool `{other}`")),
     }
 }
@@ -368,12 +363,22 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_save",
-            "description": "Validate then save a workflow to the project's .harness/workflows/<name>.yaml.",
+            "description": "Validate then save a workflow to .harness/workflows/<name>.yaml. Custom workflows are global (apply to every project).",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": { "project": project, "name": { "type": "string" }, "yaml": { "type": "string" } },
                 "required": ["project", "name", "yaml"],
+            }
+        }),
+        json!({
+            "name": "workflow_delete",
+            "description": "Delete a CUSTOM workflow by name. Bundled defaults have no file and can't be deleted.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"],
             }
         }),
         json!({

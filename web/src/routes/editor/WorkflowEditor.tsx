@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import {
   addEdge,
   Background,
@@ -16,7 +16,14 @@ import {
   type NodeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Check, Loader2, RotateCcw, Save, TriangleAlert } from "lucide-react";
+import {
+  Check,
+  Loader2,
+  RotateCcw,
+  Save,
+  Trash2,
+  TriangleAlert,
+} from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -58,6 +65,7 @@ function Editor() {
   const validate = useValidateWorkflow();
   const save = useSaveWorkflow();
   const reset = useResetWorkflow();
+  const navigate = useNavigate();
   const { screenToFlowPosition } = useReactFlow();
 
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<EditorNodeData>>(
@@ -245,6 +253,19 @@ function Editor() {
     });
   }, [reset, routeName]);
 
+  // Delete a custom workflow (no bundled default to fall back to). Same DELETE
+  // endpoint as reset; afterward there's nothing to load, so leave the editor.
+  const doDelete = useCallback(() => {
+    if (!routeName) return;
+    if (
+      !window.confirm(
+        `Delete the custom workflow "${routeName}"? This can't be undone.`,
+      )
+    )
+      return;
+    reset.mutate(routeName, { onSuccess: () => navigate("/editor") });
+  }, [reset, routeName, navigate]);
+
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId)?.data.node ?? null,
     [nodes, selectedId],
@@ -301,6 +322,19 @@ function Editor() {
           {reset.isPending ? "Resetting…" : "Reset to default"}
         </Button>
       )}
+      {source.data?.source === "project" &&
+        !source.data.has_bundled_default && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={doDelete}
+            disabled={reset.isPending}
+            title="Delete this custom workflow"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {reset.isPending ? "Deleting…" : "Delete"}
+          </Button>
+        )}
       <Button
         variant="outline"
         size="sm"
