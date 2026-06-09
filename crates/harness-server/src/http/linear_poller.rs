@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use harness_persist::LinearSource;
-use harness_sources::linear::{Issue, LinearClient};
+use harness_sources::linear::{Comment, Issue, LinearClient};
 use tokio::time::{interval, Instant, MissedTickBehavior};
 
 use super::runs_routes::{start_run, CreateRunRequest, RunsState};
@@ -210,10 +210,20 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
         }
     }
 
+    let comments = client.list_comments(&issue.id).await.unwrap_or_else(|e| {
+        tracing::warn!(
+            "linear poller: {}/{} — list_comments failed for {}: {} (proceeding without)",
+            b.project,
+            b.workflow,
+            issue.identifier,
+            e.0
+        );
+        Vec::new()
+    });
     let req = CreateRunRequest {
         workflow: b.workflow.clone(),
         title: Some(format!("{} {}", issue.identifier, issue.title)),
-        description: task_for_issue(&issue),
+        description: task_for_issue(&issue, &comments),
         args: String::new(),
         real: true,
         base_branch: b.base_branch.clone(),
@@ -285,9 +295,13 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
 /// `gh pr list --search`). We deliberately avoid close keywords ("Fixes"/
 /// "Closes") so Linear's GitHub integration links without auto-closing the
 /// issue, which would bypass the poller's own status transitions.
-fn task_for_issue(issue: &Issue) -> String {
+///
+/// Injected Linear comments give reviewers a feedback channel for `revise-pr`
+/// and a place to drop clarifications for `idea-to-pr`; the poller's own
+/// status comments are filtered out so they don't drown human feedback.
+fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     let id = &issue.identifier;
-    format!(
+    let mut task = format!(
         "Linear issue {id} — {title}\n{url}\n\n\
          When you open the PR, make sure its title ends with \" ({id})\" so \
          Linear links the PR to this issue. Do not use close keywords like \
@@ -296,7 +310,32 @@ fn task_for_issue(issue: &Issue) -> String {
         title = issue.title,
         url = issue.url,
         body = issue.body.as_deref().unwrap_or("").trim()
-    )
+    );
+    let human: Vec<&Comment> = comments
+        .iter()
+        .filter(|c| !is_bot_status(&c.body))
+        .collect();
+    if !human.is_empty() {
+        task.push_str("\n\n## Reviewer comments (Linear)\n\n");
+        for (idx, c) in human.iter().enumerate() {
+            task.push_str(&format!(
+                "**{}** ({}):\n{}\n",
+                c.author, c.created_at, c.body
+            ));
+            if idx + 1 < human.len() {
+                task.push_str("\n---\n\n");
+            }
+        }
+    }
+    task
+}
+/// True for the poller's own status comments. The heuristic requires both an
+/// emoji prefix (🤖 / ✅ / ⚠️ / ❌) AND the string "ai-harness" in the body,
+/// so a human comment beginning with ✅ (e.g. "✅ LGTM") is not filtered out.
+fn is_bot_status(body: &str) -> bool {
+    let t = body.trim_start();
+    let has_prefix = ["🤖", "✅", "⚠️", "❌"].iter().any(|p| t.starts_with(p));
+    has_prefix && body.contains("ai-harness")
 }
 
 /// Walk in-flight claims and transition their issues based on run progress.
@@ -432,4 +471,69 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
         .nodes
         .iter()
         .any(|n| n.status == "success" && delivery.contains(n.node_id.as_str()))
+}
+#[cfg(test)]
+mod tests {
+    use super::task_for_issue;
+    use harness_sources::linear::{Comment, Issue};
+    fn sample_issue() -> Issue {
+        Issue {
+            id: "issue-123".into(),
+            identifier: "COR-12".into(),
+            title: "Add dark mode".into(),
+            url: "https://linear.app/issue/COR-12".into(),
+            body: Some("Support a system-level dark theme.".into()),
+            labels: vec![],
+        }
+    }
+    fn sample_comment(body: &str, author: &str) -> Comment {
+        Comment {
+            body: body.into(),
+            author: author.into(),
+            created_at: "2026-06-01T10:00:00Z".into(),
+        }
+    }
+    #[test]
+    fn task_for_issue_without_comments_omits_section() {
+        let task = task_for_issue(&sample_issue(), &[]);
+        assert!(!task.contains("Reviewer comments (Linear)"));
+        assert!(task.contains("COR-12"));
+        assert!(task.contains("title ends with \" (COR-12)\""));
+    }
+    #[test]
+    fn task_for_issue_appends_reviewer_comments() {
+        let comments = vec![sample_comment("Please add a toggle.", "Alice")];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(task.contains("## Reviewer comments (Linear)"));
+        assert!(task.contains("**Alice** (2026-06-01T10:00:00Z):"));
+        assert!(task.contains("Please add a toggle."));
+    }
+    #[test]
+    fn task_for_issue_filters_bot_status_comments() {
+        let comments = vec![
+            sample_comment("🤖 ai-harness started `revise-pr` (run `r1`).", "bot"),
+            sample_comment("Please add a toggle.", "Alice"),
+        ];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(task.contains("## Reviewer comments (Linear)"));
+        assert!(!task.contains("🤖 ai-harness started"));
+        assert!(task.contains("Please add a toggle."));
+    }
+    #[test]
+    fn task_for_issue_omits_section_when_all_comments_are_bot_status() {
+        let comments = vec![sample_comment(
+            "✅ ai-harness completed `idea-to-pr` (run `r2`).",
+            "bot",
+        )];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(!task.contains("Reviewer comments (Linear)"));
+    }
+    #[test]
+    fn task_for_issue_does_not_filter_human_emoji_comments() {
+        // A human reviewer starting with ✅ should NOT be filtered (no "ai-harness").
+        let comments = vec![sample_comment("✅ LGTM, just one nit.", "Alice")];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(task.contains("## Reviewer comments (Linear)"));
+        assert!(task.contains("✅ LGTM, just one nit."));
+    }
 }
