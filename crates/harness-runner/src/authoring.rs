@@ -139,6 +139,7 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
         let mut pi_models: Vec<&'static str> = Vec::new();
         if creds.codex {
             pi_models.extend([
+                "openai-codex/gpt-5.5",
                 "openai-codex/gpt-5.4-nano",
                 "openai-codex/gpt-5.2-codex",
                 "openai-codex/gpt-5.1-codex-max",
