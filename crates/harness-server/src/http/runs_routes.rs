@@ -99,6 +99,10 @@ pub struct RunsState {
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
+    /// The server's global project root. Custom workflows are global (like
+    /// bundled): the editor authors them here, and runs/MCP resolve them here so
+    /// they apply to every project.
+    pub(crate) project_root: PathBuf,
     /// External base URL of this instance (`HARNESS_PUBLIC_URL` /
     /// `server.public_url`), trailing slash trimmed. `None` => run-link
     /// features no-op.
@@ -138,6 +142,7 @@ impl RunsState {
                     .map(|p| p.join("projects"))
                     .unwrap_or_else(|| project_root.join("projects"))
             });
+        let project_root_global = project_root.clone();
         let public_url = public_url
             .map(|u| u.trim().trim_end_matches('/').to_string())
             .filter(|u| !u.is_empty());
@@ -158,6 +163,7 @@ impl RunsState {
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             projects_dir,
+            project_root: project_root_global,
             public_url,
             instance_id,
             live: Mutex::new(HashMap::new()),
@@ -724,9 +730,22 @@ pub(crate) async fn start_run(
         .map(str::to_string)
         .unwrap_or(project_row.base_branch);
 
-    // Resolve `workflow` against the project's checkout (its `.harness/workflows`)
-    // then bundled defaults.
-    let workflow_root = state.projects_dir.join(&project);
+    // Resolve `workflow`: a workflow shipped in the project's own checkout wins,
+    // else the global custom workflows (where the editor authors them), else a
+    // bundled default. Custom workflows are global — they apply to every project.
+    let per_project_root = state.projects_dir.join(&project);
+    let name = workflow_name.trim();
+    let ships_per_project = !name.is_empty()
+        && per_project_root
+            .join(".harness")
+            .join("workflows")
+            .join(format!("{name}.yaml"))
+            .is_file();
+    let workflow_root = if ships_per_project {
+        per_project_root
+    } else {
+        state.project_root.clone()
+    };
     let (yaml, _label) = harness_runner::resolve_workflow_source(&workflow_name, &workflow_root)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let workflow = parse_workflow(&yaml)
