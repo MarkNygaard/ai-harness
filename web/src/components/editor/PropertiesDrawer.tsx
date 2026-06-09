@@ -2,6 +2,15 @@ import { X } from "lucide-react";
 import type { Catalog, EditorNode, NodeKindId } from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
 import { useCategories } from "@/lib/categories";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 /** Body fields that define a node's kind — cleared/swapped when the kind changes. */
 const BODY_KEYS = [
@@ -64,32 +73,28 @@ export function PropertiesDrawer({
 
       <div className="flex flex-col gap-3 overflow-auto p-4 text-[13px]">
         <Field label="Step id">
-          <input
-            className={inputCls}
+          <Input
             value={node.id}
             onChange={(e) => set({ id: e.target.value })}
           />
         </Field>
 
-        <Field label="Type">
-          <select
-            className={inputCls}
-            value={kind}
-            onChange={(e) => changeKind(e.target.value as NodeKindId)}
-          >
-            {(catalog?.node_kinds ?? []).map((k) => (
-              <option key={k.kind} value={k.kind}>
-                {k.label}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <SelectField
+          label="Type"
+          value={kind}
+          onValueChange={(v) => changeKind(v as NodeKindId)}
+        >
+          {(catalog?.node_kinds ?? []).map((k) => (
+            <SelectItem key={k.kind} value={k.kind}>
+              {k.label}
+            </SelectItem>
+          ))}
+        </SelectField>
 
         {/* Body by kind */}
         {kind === "prompt" && (
           <Field label="Prompt">
-            <textarea
-              className={textareaCls}
+            <Textarea
               rows={6}
               value={node.prompt ?? ""}
               onChange={(e) => set({ prompt: e.target.value })}
@@ -98,8 +103,8 @@ export function PropertiesDrawer({
         )}
         {kind === "bash" && (
           <Field label="Bash">
-            <textarea
-              className={`${textareaCls} font-mono`}
+            <Textarea
+              className="font-mono"
               rows={6}
               value={node.bash ?? ""}
               onChange={(e) => set({ bash: e.target.value })}
@@ -108,8 +113,7 @@ export function PropertiesDrawer({
         )}
         {kind === "command" && (
           <Field label="Command">
-            <input
-              className={inputCls}
+            <Input
               list="harness-commands"
               value={node.command ?? ""}
               onChange={(e) => set({ command: e.target.value })}
@@ -124,21 +128,19 @@ export function PropertiesDrawer({
         )}
         {kind === "script" && (
           <>
-            <Field label="Runtime">
-              <select
-                className={inputCls}
-                value={node.runtime ?? "bun"}
-                onChange={(e) =>
-                  set({ runtime: e.target.value as EditorNode["runtime"] })
-                }
-              >
-                <option value="bun">bun (TS/JS)</option>
-                <option value="uv">uv (Python)</option>
-              </select>
-            </Field>
+            <SelectField
+              label="Runtime"
+              value={node.runtime ?? "bun"}
+              onValueChange={(v) =>
+                set({ runtime: v as EditorNode["runtime"] })
+              }
+            >
+              <SelectItem value="bun">bun (TS/JS)</SelectItem>
+              <SelectItem value="uv">uv (Python)</SelectItem>
+            </SelectField>
             <Field label="Script">
-              <textarea
-                className={`${textareaCls} font-mono`}
+              <Textarea
+                className="font-mono"
                 rows={6}
                 value={node.script ?? ""}
                 onChange={(e) => set({ script: e.target.value })}
@@ -149,8 +151,7 @@ export function PropertiesDrawer({
         {kind === "loop" && (
           <>
             <Field label="Loop prompt">
-              <textarea
-                className={textareaCls}
+              <Textarea
                 rows={5}
                 value={node.loop?.prompt ?? ""}
                 onChange={(e) =>
@@ -160,8 +161,7 @@ export function PropertiesDrawer({
             </Field>
             <div className="grid grid-cols-2 gap-2">
               <Field label="Until signal">
-                <input
-                  className={inputCls}
+                <Input
                   value={node.loop?.until ?? ""}
                   onChange={(e) =>
                     set({ loop: { ...loopOf(node), until: e.target.value } })
@@ -169,10 +169,9 @@ export function PropertiesDrawer({
                 />
               </Field>
               <Field label="Max iterations">
-                <input
+                <Input
                   type="number"
                   min={1}
-                  className={inputCls}
                   value={node.loop?.max_iterations ?? 3}
                   onChange={(e) =>
                     set({
@@ -190,8 +189,7 @@ export function PropertiesDrawer({
         {kind === "approval" && (
           <>
             <Field label="Approval message">
-              <textarea
-                className={textareaCls}
+              <Textarea
                 rows={4}
                 value={node.approval?.message ?? ""}
                 onChange={(e) =>
@@ -223,8 +221,7 @@ export function PropertiesDrawer({
         )}
         {kind === "cancel" && (
           <Field label="Cancel reason">
-            <textarea
-              className={textareaCls}
+            <Textarea
               rows={3}
               value={node.cancel ?? ""}
               onChange={(e) => set({ cancel: e.target.value })}
@@ -234,8 +231,8 @@ export function PropertiesDrawer({
         )}
 
         <Field label="When (condition)">
-          <input
-            className={`${inputCls} font-mono`}
+          <Input
+            className="font-mono"
             value={node.when ?? ""}
             onChange={(e) => set({ when: e.target.value || undefined })}
             placeholder="$classify.output.type == 'BUG'"
@@ -246,23 +243,22 @@ export function PropertiesDrawer({
           AI options
         </div>
 
-        <Field label="CLI">
-          <select
-            className={inputCls}
-            value={provider}
-            onChange={(e) => set({ provider: e.target.value || undefined })}
-          >
-            <option value="">(workflow default)</option>
-            {(catalog?.providers ?? []).map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.label}
-              </option>
-            ))}
-          </select>
-        </Field>
+        <SelectField
+          label="CLI"
+          value={provider || DEFAULT_SENTINEL}
+          onValueChange={(v) =>
+            set({ provider: v === DEFAULT_SENTINEL ? undefined : v })
+          }
+        >
+          <SelectItem value={DEFAULT_SENTINEL}>(workflow default)</SelectItem>
+          {(catalog?.providers ?? []).map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.label}
+            </SelectItem>
+          ))}
+        </SelectField>
         <Field label="Model">
-          <input
-            className={inputCls}
+          <Input
             list="harness-models"
             value={node.model ?? ""}
             onChange={(e) => set({ model: e.target.value || undefined })}
@@ -275,57 +271,48 @@ export function PropertiesDrawer({
           </datalist>
         </Field>
         <div className="grid grid-cols-2 gap-2">
-          <Field label="Context">
-            <select
-              className={inputCls}
-              value={node.context ?? "shared"}
-              onChange={(e) =>
-                set({ context: e.target.value as EditorNode["context"] })
-              }
-            >
-              {(catalog?.context_modes ?? ["fresh", "shared"]).map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Trigger rule">
-            <select
-              className={inputCls}
-              value={node.trigger_rule ?? "all_success"}
-              onChange={(e) =>
-                set({
-                  trigger_rule: e.target.value as EditorNode["trigger_rule"],
-                })
-              }
-            >
-              {(catalog?.trigger_rules ?? ["all_success"]).map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <Field label="Category">
-          <select
-            className={inputCls}
-            value={node.category ?? ""}
-            onChange={(e) => set({ category: e.target.value || undefined })}
+          <SelectField
+            label="Context"
+            value={node.context ?? "shared"}
+            onValueChange={(v) => set({ context: v as EditorNode["context"] })}
           >
-            <option value="">(none — status colour)</option>
-            {(categories.data ?? []).map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.label}
-              </option>
+            {(catalog?.context_modes ?? ["fresh", "shared"]).map((c) => (
+              <SelectItem key={c} value={c}>
+                {c}
+              </SelectItem>
             ))}
-          </select>
-        </Field>
+          </SelectField>
+          <SelectField
+            label="Trigger rule"
+            value={node.trigger_rule ?? "all_success"}
+            onValueChange={(v) =>
+              set({ trigger_rule: v as EditorNode["trigger_rule"] })
+            }
+          >
+            {(catalog?.trigger_rules ?? ["all_success"]).map((t) => (
+              <SelectItem key={t} value={t}>
+                {t}
+              </SelectItem>
+            ))}
+          </SelectField>
+        </div>
+        <SelectField
+          label="Category"
+          value={node.category ?? NONE_SENTINEL}
+          onValueChange={(v) =>
+            set({ category: v === NONE_SENTINEL ? undefined : v })
+          }
+        >
+          <SelectItem value={NONE_SENTINEL}>(none — status colour)</SelectItem>
+          {(categories.data ?? []).map((c) => (
+            <SelectItem key={c.id} value={c.id}>
+              {c.label}
+            </SelectItem>
+          ))}
+        </SelectField>
         <Field label="Artifact">
-          <input
+          <Input
             type="text"
-            className={inputCls}
             placeholder="e.g. exploration.md"
             value={node.artifact ?? ""}
             onChange={(e) => set({ artifact: e.target.value || undefined })}
@@ -333,10 +320,9 @@ export function PropertiesDrawer({
         </Field>
         {(kind === "bash" || kind === "script") && (
           <Field label="Timeout (ms)">
-            <input
+            <Input
               type="number"
               min={0}
-              className={inputCls}
               value={node.timeout ?? ""}
               onChange={(e) =>
                 set({
@@ -372,7 +358,37 @@ function Field({
   );
 }
 
-const inputCls =
-  "h-8 rounded-md border border-input bg-transparent px-2 text-[13px] outline-none focus:ring-2 focus:ring-ring";
-const textareaCls =
-  "rounded-md border border-input bg-transparent p-2 text-[12px] outline-none focus:ring-2 focus:ring-ring resize-y";
+/** Sentinels for nullable selects — Base UI Select needs a concrete item value. */
+const DEFAULT_SENTINEL = "__default__";
+const NONE_SENTINEL = "__none__";
+
+/** A labelled shadcn Select (replaces the native `<select>` for a styled popup).
+ *  Not wrapped in a `<label>` — the trigger is a button. */
+function SelectField({
+  label,
+  value,
+  onValueChange,
+  children,
+}: {
+  label: string;
+  value: string;
+  onValueChange: (v: string) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-muted-foreground">
+        {label}
+      </span>
+      <Select
+        value={value}
+        onValueChange={(v) => v != null && onValueChange(v)}
+      >
+        <SelectTrigger className="h-8 w-full text-[13px]">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>{children}</SelectContent>
+      </Select>
+    </div>
+  );
+}
