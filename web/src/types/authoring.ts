@@ -16,6 +16,9 @@ export interface WorkflowSource {
   name: string;
   source: AuthoringSource;
   yaml: string;
+  /** A bundled default of this name exists → this workflow can be reset to it
+   *  (true for bundled workflows + their project overrides; false for custom). */
+  has_bundled_default: boolean;
 }
 
 export interface NodeSummary {

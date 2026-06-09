@@ -14,7 +14,8 @@ import type {
 export function useCatalog() {
   return useQuery<Catalog, Error>({
     queryKey: ["authoring", "catalog"],
-    queryFn: ({ signal }) => apiJson<Catalog>("/api/authoring/catalog", { signal }),
+    queryFn: ({ signal }) =>
+      apiJson<Catalog>("/api/authoring/catalog", { signal }),
     staleTime: 60_000,
   });
 }
@@ -22,7 +23,8 @@ export function useCatalog() {
 export function useWorkflowList() {
   return useQuery<WorkflowSummary[], Error>({
     queryKey: ["authoring", "workflows"],
-    queryFn: ({ signal }) => apiJson<WorkflowSummary[]>("/api/authoring/workflows", { signal }),
+    queryFn: ({ signal }) =>
+      apiJson<WorkflowSummary[]>("/api/authoring/workflows", { signal }),
   });
 }
 
@@ -42,7 +44,10 @@ export function useWorkflowSource(name: string | null) {
   return useQuery<WorkflowSource, Error>({
     queryKey: ["authoring", "workflow", name],
     queryFn: ({ signal }) =>
-      apiJson<WorkflowSource>(`/api/authoring/workflows/${encodeURIComponent(name!)}`, { signal }),
+      apiJson<WorkflowSource>(
+        `/api/authoring/workflows/${encodeURIComponent(name!)}`,
+        { signal },
+      ),
     enabled: !!name,
   });
 }
@@ -62,7 +67,11 @@ export function useValidateWorkflow() {
 /** Validate-then-save a workflow to the project's `.harness/workflows/`. */
 export function useSaveWorkflow() {
   const qc = useQueryClient();
-  return useMutation<{ saved: boolean; name: string }, Error, { name: string; yaml: string }>({
+  return useMutation<
+    { saved: boolean; name: string },
+    Error,
+    { name: string; yaml: string }
+  >({
     mutationFn: (body) =>
       apiJson<{ saved: boolean; name: string }>("/api/authoring/workflows", {
         method: "POST",
@@ -72,6 +81,22 @@ export function useSaveWorkflow() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["authoring", "workflows"] });
       qc.invalidateQueries({ queryKey: ["runs"] });
+    },
+  });
+}
+
+/** Reset a workflow to its bundled default by deleting the project override. */
+export function useResetWorkflow() {
+  const qc = useQueryClient();
+  return useMutation<{ reset: boolean; name: string }, Error, string>({
+    mutationFn: (name) =>
+      apiJson<{ reset: boolean; name: string }>(
+        `/api/authoring/workflows/${encodeURIComponent(name)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: (_data, name) => {
+      qc.invalidateQueries({ queryKey: ["authoring", "workflow", name] });
+      qc.invalidateQueries({ queryKey: ["authoring", "workflows"] });
     },
   });
 }

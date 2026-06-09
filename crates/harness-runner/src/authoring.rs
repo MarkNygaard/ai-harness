@@ -44,6 +44,10 @@ pub struct WorkflowSource {
     pub name: String,
     pub source: Source,
     pub yaml: String,
+    /// Whether a bundled default of this name exists — i.e. this workflow can be
+    /// "reset to default" (true for bundled workflows and their project
+    /// overrides; false for purely custom workflows).
+    pub has_bundled_default: bool,
 }
 
 /// A node, distilled for quick feedback in the editor (id + kind + edges).
@@ -316,6 +320,7 @@ pub fn get_workflow(project_root: &Path, name: &str) -> Result<WorkflowSource, S
             name: name.to_string(),
             source: Source::Project,
             yaml,
+            has_bundled_default: defaults::default_workflow(name).is_some(),
         });
     }
     if let Some(yaml) = defaults::default_workflow(name) {
@@ -323,9 +328,28 @@ pub fn get_workflow(project_root: &Path, name: &str) -> Result<WorkflowSource, S
             name: name.to_string(),
             source: Source::Bundled,
             yaml: yaml.to_string(),
+            has_bundled_default: true,
         });
     }
     Err(format!("workflow `{name}` not found"))
+}
+
+/// Delete a project's workflow override (`.harness/workflows/<name>.yaml`) so a
+/// bundled workflow reverts to its built-in default. Never touches bundled
+/// defaults; returns whether a project file was actually removed.
+pub fn delete_project_workflow(project_root: &Path, name: &str) -> Result<bool, String> {
+    if !is_safe_name(name) {
+        return Err(format!("invalid workflow name `{name}`"));
+    }
+    let path = project_root
+        .join(".harness")
+        .join("workflows")
+        .join(format!("{name}.yaml"));
+    if !path.is_file() {
+        return Ok(false);
+    }
+    std::fs::remove_file(&path).map_err(|e| format!("failed to remove {}: {e}", path.display()))?;
+    Ok(true)
 }
 
 /// A workflow/command name safe to use as a file stem (no traversal).
@@ -764,6 +788,34 @@ nodes:
         // Unsafe names are refused.
         assert!(save_workflow(root, "../escape", good).is_err());
         assert!(save_workflow(root, "a/b", good).is_err());
+    }
+
+    #[test]
+    fn reset_reverts_a_bundled_override_and_flags_resettability() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let good = "name: t\nnodes:\n  - id: a\n    bash: \"echo hi\"\n";
+
+        // A purely custom workflow has no bundled default → the UI hides reset.
+        save_workflow(root, "my-custom", good).unwrap();
+        assert!(!get_workflow(root, "my-custom").unwrap().has_bundled_default);
+
+        // Override a bundled workflow: resettable, and shadows the bundled one.
+        save_workflow(root, "idea-to-pr", good).unwrap();
+        let overridden = get_workflow(root, "idea-to-pr").unwrap();
+        assert!(overridden.has_bundled_default);
+        assert!(matches!(overridden.source, Source::Project));
+
+        // Reset removes the override and reverts to the bundled default.
+        assert!(delete_project_workflow(root, "idea-to-pr").unwrap());
+        assert!(matches!(
+            get_workflow(root, "idea-to-pr").unwrap().source,
+            Source::Bundled
+        ));
+        // A second reset is a harmless no-op (nothing left to remove).
+        assert!(!delete_project_workflow(root, "idea-to-pr").unwrap());
+        // Unsafe names are refused.
+        assert!(delete_project_workflow(root, "../escape").is_err());
     }
 
     #[test]

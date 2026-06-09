@@ -16,12 +16,13 @@ import {
   type NodeTypes,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { Check, Loader2, Save, TriangleAlert } from "lucide-react";
+import { Check, Loader2, RotateCcw, Save, TriangleAlert } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   useCatalog,
+  useResetWorkflow,
   useSaveWorkflow,
   useValidateWorkflow,
   useWorkflowSource,
@@ -56,11 +57,16 @@ function Editor() {
   const source = useWorkflowSource(routeName);
   const validate = useValidateWorkflow();
   const save = useSaveWorkflow();
+  const reset = useResetWorkflow();
   const { screenToFlowPosition } = useReactFlow();
 
-  const [nodes, setNodes, onNodesChange] = useNodesState<Node<EditorNodeData>>([]);
+  const [nodes, setNodes, onNodesChange] = useNodesState<Node<EditorNodeData>>(
+    [],
+  );
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
-  const [meta, setMeta] = useState<Meta>({ name: routeName ?? "untitled-workflow" });
+  const [meta, setMeta] = useState<Meta>({
+    name: routeName ?? "untitled-workflow",
+  });
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const loadedFor = useRef<string | null>(null);
 
@@ -104,7 +110,11 @@ function Editor() {
           {
             ...c,
             id: `${c.source}->${c.target}`,
-            style: { stroke: "var(--muted-foreground)", strokeWidth: 1.5, opacity: 0.5 },
+            style: {
+              stroke: "var(--muted-foreground)",
+              strokeWidth: 1.5,
+              opacity: 0.5,
+            },
           },
           eds,
         ),
@@ -128,7 +138,10 @@ function Editor() {
     (kind: NodeKindId, pos?: { x: number; y: number }) => {
       const id = uniqueId(kind);
       const node = emptyNode(kind, id);
-      const position = pos ?? { x: 80 + nodes.length * 36, y: 100 + nodes.length * 36 };
+      const position = pos ?? {
+        x: 80 + nodes.length * 36,
+        y: 100 + nodes.length * 36,
+      };
       setNodes((nds) => [...nds, makeNode(node, position.x, position.y)]);
       setSelectedId(id);
     },
@@ -138,7 +151,10 @@ function Editor() {
     (step: PrebuiltStep, pos?: { x: number; y: number }) => {
       const id = uniqueId(step.node.id);
       const node = prebuiltNode(step, id);
-      const position = pos ?? { x: 80 + nodes.length * 36, y: 100 + nodes.length * 36 };
+      const position = pos ?? {
+        x: 80 + nodes.length * 36,
+        y: 100 + nodes.length * 36,
+      };
       setNodes((nds) => [...nds, makeNode(node, position.x, position.y)]);
       setSelectedId(id);
     },
@@ -148,13 +164,19 @@ function Editor() {
     (e: React.DragEvent) => {
       e.preventDefault();
       const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-      const prebuiltId = e.dataTransfer.getData("application/harness-prebuilt-step");
+      const prebuiltId = e.dataTransfer.getData(
+        "application/harness-prebuilt-step",
+      );
       if (prebuiltId) {
-        const step = catalog.data?.prebuilt_steps?.find((s) => s.id === prebuiltId);
+        const step = catalog.data?.prebuilt_steps?.find(
+          (s) => s.id === prebuiltId,
+        );
         if (step) addPrebuiltNode(step, pos);
         return;
       }
-      const kind = e.dataTransfer.getData("application/harness-node-kind") as NodeKindId;
+      const kind = e.dataTransfer.getData(
+        "application/harness-node-kind",
+      ) as NodeKindId;
       if (kind) addNode(kind, pos);
     },
     [addNode, addPrebuiltNode, catalog.data, screenToFlowPosition],
@@ -176,7 +198,9 @@ function Editor() {
       if (!oldId) return;
       if (next.id !== oldId) {
         setNodes((nds) =>
-          nds.map((n) => (n.id === oldId ? { ...n, id: next.id, data: { node: next } } : n)),
+          nds.map((n) =>
+            n.id === oldId ? { ...n, id: next.id, data: { node: next } } : n,
+          ),
         );
         setEdges((eds) =>
           eds.map((e) => ({
@@ -204,6 +228,23 @@ function Editor() {
     save.mutate({ name: meta.name, yaml: toYaml(currentWorkflow()) });
   }, [save, meta.name, currentWorkflow]);
 
+  // Discard the project override and reload the bundled default. Clearing
+  // `loadedFor` lets the load effect re-run once the refetched source arrives.
+  const doReset = useCallback(() => {
+    if (!routeName) return;
+    if (
+      !window.confirm(
+        `Reset "${routeName}" to its bundled default? This discards the project copy of this workflow.`,
+      )
+    )
+      return;
+    reset.mutate(routeName, {
+      onSuccess: () => {
+        loadedFor.current = null;
+      },
+    });
+  }, [reset, routeName]);
+
   const selectedNode = useMemo(
     () => nodes.find((n) => n.id === selectedId)?.data.node ?? null,
     [nodes, selectedId],
@@ -216,7 +257,10 @@ function Editor() {
 
   const editorTitle = (
     <div className="flex min-w-0 items-center gap-2">
-      <Link to="/editor" className="shrink-0 font-semibold text-muted-foreground hover:text-foreground">
+      <Link
+        to="/editor"
+        className="shrink-0 font-semibold text-muted-foreground hover:text-foreground"
+      >
         Workflows
       </Link>
       <span className="shrink-0 text-muted-foreground">/</span>
@@ -227,7 +271,10 @@ function Editor() {
         placeholder="workflow-name"
       />
       {source.data?.source === "bundled" && (
-        <Badge variant="outline" title="Saving creates a project copy that shadows the bundled default">
+        <Badge
+          variant="outline"
+          title="Saving creates a project copy that shadows the bundled default"
+        >
           bundled
         </Badge>
       )}
@@ -242,13 +289,32 @@ function Editor() {
         error={validate.data?.error ?? null}
         count={validate.data?.nodes.length}
       />
-      <Button variant="outline" size="sm" onClick={tidy} disabled={nodes.length === 0}>
+      {source.data?.has_bundled_default && source.data.source === "project" && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={doReset}
+          disabled={reset.isPending}
+          title="Discard the project copy and revert to the bundled default"
+        >
+          <RotateCcw className="h-3.5 w-3.5" />
+          {reset.isPending ? "Resetting…" : "Reset to default"}
+        </Button>
+      )}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={tidy}
+        disabled={nodes.length === 0}
+      >
         Tidy
       </Button>
       <Button
         size="sm"
         onClick={doSave}
-        disabled={save.isPending || validate.data?.valid === false || nodes.length === 0}
+        disabled={
+          save.isPending || validate.data?.valid === false || nodes.length === 0
+        }
       >
         <Save className="h-3.5 w-3.5" />
         {save.isPending ? "Saving…" : save.isSuccess ? "Saved" : "Save"}
@@ -271,7 +337,11 @@ function Editor() {
             onAdd={(k) => addNode(k)}
             onAddPrebuilt={(s) => addPrebuiltNode(s)}
           />
-          <div className="min-w-0 flex-1" onDrop={onDrop} onDragOver={(e) => e.preventDefault()}>
+          <div
+            className="min-w-0 flex-1"
+            onDrop={onDrop}
+            onDragOver={(e) => e.preventDefault()}
+          >
             <EditorActionsContext.Provider value={actions}>
               <ReactFlow
                 nodes={nodes}
@@ -287,8 +357,16 @@ function Editor() {
                 proOptions={{ hideAttribution: true }}
                 className="bg-transparent"
               >
-                <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
-                <Controls showInteractive={false} className="border-border! bg-card!" />
+                <Background
+                  variant={BackgroundVariant.Dots}
+                  gap={20}
+                  size={1}
+                  color="var(--border)"
+                />
+                <Controls
+                  showInteractive={false}
+                  className="border-border! bg-card!"
+                />
               </ReactFlow>
             </EditorActionsContext.Provider>
           </div>
@@ -327,13 +405,17 @@ function ValidationStatus({
   if (valid === true) {
     return (
       <span className="flex items-center gap-1 text-xs text-status-success">
-        <Check className="h-3.5 w-3.5" /> valid · {count} step{count === 1 ? "" : "s"}
+        <Check className="h-3.5 w-3.5" /> valid · {count} step
+        {count === 1 ? "" : "s"}
       </span>
     );
   }
   if (valid === false) {
     return (
-      <span className="flex items-center gap-1 truncate text-xs text-destructive" title={error ?? ""}>
+      <span
+        className="flex items-center gap-1 truncate text-xs text-destructive"
+        title={error ?? ""}
+      >
         <TriangleAlert className="h-3.5 w-3.5 shrink-0" /> {error ?? "invalid"}
       </span>
     );
