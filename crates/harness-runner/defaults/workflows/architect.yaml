@@ -48,14 +48,16 @@ nodes:
 
       echo "## Functions over 80 lines (heuristic)" >> "$REPORT"
       find crates -name '*.rs' -not -path '*/target/*' -exec awk '
-        /^\s*fn / { file=FILENAME; line=NR; start=NR }
+        BEGIN { depth=0; start=0 }
+        FNR == 1 { depth=0; start=0 }
+        /^\s*((pub|pub\([^)]+\))\s+)?(async\s+)?(unsafe\s+)?fn\s/ { file=FILENAME; start=NR }
         /^{/ { if (start) depth++ }
         /^}/ { if (start) depth--; if (depth==0) { len=NR-start+1; if (len>80) print file":"start": "len" lines"; start=0 } }
       ' {} + >> "$REPORT" 2>/dev/null || true
       echo "" >> "$REPORT"
 
       echo "## Clippy warning count" >> "$REPORT"
-      cargo clippy --workspace --all-targets 2>&1 | grep -cE '^warning' || true >> "$REPORT"
+      (cargo clippy --workspace --all-targets 2>&1 | grep -cE '^warning' || echo "0") >> "$REPORT"
       echo "" >> "$REPORT"
 
       echo "## Dead code (best-effort)" >> "$REPORT"
