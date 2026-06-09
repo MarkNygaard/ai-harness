@@ -1,12 +1,10 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { ArrowRight } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
-import { Card, CardContent } from "@/components/ui/card";
+import { SubscriptionsRow } from "@/components/dashboard/SubscriptionsRow";
 import { Badge } from "@/components/ui/badge";
 import { useRuns } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
-import { elapsedMs, formatDuration } from "@/components/runflow/format";
 import type { RunStatus, RunSummary } from "@/types/run";
 
 const STATUS_VARIANT: Record<
@@ -19,19 +17,16 @@ const STATUS_VARIANT: Record<
   cancelled: "failed",
 };
 
-/** Sentinel filter value meaning "every project (and unassigned) runs". */
+/** Sentinel filter value meaning "all projects". */
 const ALL = "__all__";
 
-/**
- * Local-time day bucket label for an ISO timestamp, relative to `now`:
- * "Today" / "Yesterday" / a locale date for anything older.
- */
+const startOfDay = (x: Date) =>
+  new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+
+/** "Today" / "Yesterday" / a locale date, relative to `now` (local time). */
 function dayLabel(iso: string, now: Date): string {
   const d = new Date(iso);
-  const startOf = (x: Date) =>
-    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
-  const dayMs = 86_400_000;
-  const diffDays = Math.round((startOf(now) - startOf(d)) / dayMs);
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86_400_000);
   if (diffDays <= 0) return "Today";
   if (diffDays === 1) return "Yesterday";
   return d.toLocaleDateString(undefined, {
@@ -42,22 +37,59 @@ function dayLabel(iso: string, now: Date): string {
   });
 }
 
-interface DayGroup {
-  label: string;
+/**
+ * A task = all runs sharing a title — i.e. the same Linear issue moving through
+ * its workflows (`idea-to-pr` builds it, then `merge-pr` merges it, etc.). We
+ * collapse them to one row so a task's whole journey is a single line.
+ */
+interface Task {
+  key: string;
+  title: string;
+  project: string | null;
+  /** Chronological: oldest (build) → newest (merge). */
   runs: RunSummary[];
+  /** Latest run's `recorded_at` — when the task last finished. */
+  finishedAt: string;
 }
 
-/** Group runs (already newest-first) into ordered local-day sections. */
-function groupByDay(runs: RunSummary[], now: Date): DayGroup[] {
+function groupIntoTasks(runs: RunSummary[]): Task[] {
+  // `runs` arrive newest-first. Group by title, preserving order.
+  const byKey = new Map<string, RunSummary[]>();
+  for (const r of runs) {
+    const key = r.title || r.id;
+    let arr = byKey.get(key);
+    if (!arr) {
+      arr = [];
+      byKey.set(key, arr);
+    }
+    arr.push(r);
+  }
+  const tasks = Array.from(byKey.entries()).map(([key, group]) => ({
+    key,
+    title: group[0].title || group[0].workflow_name,
+    project: group[0].project,
+    runs: [...group].reverse(), // chronological
+    finishedAt: group[0].recorded_at, // newest
+  }));
+  tasks.sort((a, b) => Date.parse(b.finishedAt) - Date.parse(a.finishedAt));
+  return tasks;
+}
+
+interface DayGroup {
+  label: string;
+  tasks: Task[];
+}
+
+function groupByDay(tasks: Task[], now: Date): DayGroup[] {
   const groups: DayGroup[] = [];
   let current: DayGroup | null = null;
-  for (const run of runs) {
-    const label = dayLabel(run.recorded_at, now);
+  for (const t of tasks) {
+    const label = dayLabel(t.finishedAt, now);
     if (!current || current.label !== label) {
-      current = { label, runs: [] };
+      current = { label, tasks: [] };
       groups.push(current);
     }
-    current.runs.push(run);
+    current.tasks.push(t);
   }
   return groups;
 }
@@ -68,20 +100,18 @@ export function DashboardPage() {
   const [filter, setFilter] = useState<string>(ALL);
   const now = new Date();
 
-  const filtered = useMemo(() => {
+  const days = useMemo(() => {
     const all = runs.data ?? [];
-    const sorted = [...all].sort(
-      (a, b) => Date.parse(b.recorded_at) - Date.parse(a.recorded_at),
-    );
-    if (filter === ALL) return sorted;
-    return sorted.filter((r) => (r.project ?? "") === filter);
+    const scoped =
+      filter === ALL ? all : all.filter((r) => (r.project ?? "") === filter);
+    return groupByDay(groupIntoTasks(scoped), now);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runs.data, filter]);
-
-  const groups = useMemo(() => groupByDay(filtered, now), [filtered, now]);
 
   return (
     <AppShell title="Dashboard">
-      <div className="flex w-full flex-col gap-6 p-6">
+      <div className="flex w-full flex-col gap-4 p-6">
+        <SubscriptionsRow />
         <div className="flex flex-wrap items-center gap-2">
           <FilterButton active={filter === ALL} onClick={() => setFilter(ALL)}>
             All
@@ -105,11 +135,9 @@ export function DashboardPage() {
             Failed to load runs: {runs.error.message}
           </p>
         )}
-        {!runs.isLoading && !runs.isError && filtered.length === 0 && (
+        {!runs.isLoading && !runs.isError && days.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            {filter === ALL
-              ? "No runs yet. "
-              : "No runs for this project. "}
+            {filter === ALL ? "No runs yet. " : "No runs for this project. "}
             <Link to="/runs" className="underline">
               Start one
             </Link>
@@ -117,14 +145,14 @@ export function DashboardPage() {
           </p>
         )}
 
-        {groups.map((group) => (
-          <section key={group.label} className="flex flex-col gap-2">
-            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {group.label}
+        {days.map((day) => (
+          <section key={day.label} className="flex flex-col gap-1">
+            <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              {day.label}
             </h2>
-            <div className="flex flex-col gap-1.5">
-              {group.runs.map((run) => (
-                <RunRow key={run.id} run={run} now={now} />
+            <div className="overflow-hidden rounded-md border border-border">
+              {day.tasks.map((t, i) => (
+                <TaskRow key={t.key} task={t} divider={i > 0} />
               ))}
             </div>
           </section>
@@ -158,40 +186,52 @@ function FilterButton({
   );
 }
 
-function RunRow({ run, now }: { run: RunSummary; now: Date }) {
-  const duration = formatDuration(
-    elapsedMs(run.started_at, run.ended_at, now.getTime()),
-  );
+/** One dense line per task: title · project · workflow journey · finish time. */
+function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
+  // Title links to the build run (full pipeline graph) when present.
+  const primary =
+    task.runs.find((r) => r.workflow_name.includes("idea-to-pr")) ??
+    task.runs[task.runs.length - 1];
+  const finishedTime = new Date(task.finishedAt).toLocaleTimeString(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
   return (
-    <Link to={`/runs/${run.id}`} className="group block">
-      <Card className="transition-colors group-hover:border-accent-orange/50">
-        <CardContent className="flex items-center gap-3 py-2.5">
-          <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>
-            {run.status}
-          </Badge>
-          <div className="min-w-0 flex-1">
-            <div className="flex items-center gap-2">
-              <span className="truncate text-sm font-medium">
-                {run.title || run.workflow_name}
-              </span>
-              {run.project && (
-                <Badge variant="outline" className="shrink-0">
-                  {run.project}
-                </Badge>
-              )}
-            </div>
-            <div className="truncate font-mono text-[11px] text-muted-foreground">
-              {run.title ? `${run.workflow_name} · ` : ""}
-              {run.id}
-            </div>
-          </div>
-          <div className="text-right text-[11px] text-muted-foreground">
-            <div>{duration}</div>
-            <div>{run.node_count} steps</div>
-          </div>
-          <ArrowRight className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
-        </CardContent>
-      </Card>
-    </Link>
+    <div
+      className={`flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/40 ${
+        divider ? "border-t border-border" : ""
+      }`}
+    >
+      <Link
+        to={`/runs/${primary.id}`}
+        className="min-w-0 flex-1 truncate font-medium hover:underline"
+      >
+        {task.title}
+      </Link>
+      {task.project && (
+        <Badge variant="outline" className="shrink-0 text-[10px]">
+          {task.project}
+        </Badge>
+      )}
+      <div className="flex shrink-0 items-center gap-1">
+        {task.runs.map((r) => (
+          <Link
+            key={r.id}
+            to={`/runs/${r.id}`}
+            title={`${r.workflow_name} — ${r.status}`}
+          >
+            <Badge
+              variant={STATUS_VARIANT[r.status] ?? "default"}
+              className="font-mono text-[10px] hover:opacity-80"
+            >
+              {r.workflow_name}
+            </Badge>
+          </Link>
+        ))}
+      </div>
+      <span className="w-12 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
+        {finishedTime}
+      </span>
+    </div>
   );
 }

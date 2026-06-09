@@ -272,6 +272,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/credentials",
             get(credentials_routes::list_credentials),
         )
+        // Subscription usage (weekly + rolling windows) for the dashboard.
+        .route("/api/usage", get(super::usage_routes::get_usage))
         .route(
             "/api/credentials/{provider}",
             axum::routing::put(credentials_routes::set_credential)
