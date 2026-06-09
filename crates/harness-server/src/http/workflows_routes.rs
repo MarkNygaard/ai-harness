@@ -59,3 +59,16 @@ pub async fn save_workflow(
         Err(e) => err(StatusCode::BAD_REQUEST, e),
     }
 }
+
+/// `DELETE /api/authoring/workflows/{name}` — remove a project override so a
+/// bundled workflow reverts to its built-in default. A no-op (`reset: false`)
+/// when there's no project copy; never deletes a bundled default.
+pub async fn delete_workflow(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Response {
+    match authoring::delete_project_workflow(&state.core.project_root, &name) {
+        Ok(reset) => Json(serde_json::json!({ "reset": reset, "name": name })).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}

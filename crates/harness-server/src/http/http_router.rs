@@ -216,7 +216,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/authoring/workflows/{name}",
-            get(workflows_routes::get_workflow),
+            get(workflows_routes::get_workflow).delete(workflows_routes::delete_workflow),
         )
         .route(
             "/api/authoring/validate",
