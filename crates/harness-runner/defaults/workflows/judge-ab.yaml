@@ -1,13 +1,14 @@
 name: judge-ab
 description: |
-  Pairwise A/B quality judge. Given the shared task and the two arms' results
-  (model, status, per-node outcomes, final output), decide which arm did the
-  better job and score each 0–100.
+  Pairwise A/B quality judge. Given the shared task and the two arms' results,
+  decide which arm did the better job and score each 0–100.
 
-  Read-only: it inspects the evidence packet passed as the task input and emits
-  ONLY a structured verdict — it does not touch the repo. The judge model is the
-  workflow default (Claude Opus) unless the trigger overrides it, so the judge
-  itself is held constant across a comparison.
+  When an arm produced a pull request, the judge reads the actual diff
+  (`gh pr diff`) and bases its verdict primarily on the code change — falling
+  back to the textual evidence (status, per-step outcomes, final output) when no
+  PR is available. The judge model is the workflow default (Claude Opus) unless
+  the trigger overrides it, so the judge itself is held constant across a
+  comparison.
 
   Output: a JSON verdict `{ winner, score_a, score_b, reasoning }`.
 provider: claude
@@ -18,21 +19,29 @@ nodes:
     context: fresh
     prompt: |
       Two AI coding agents ("arm A" and "arm B") performed the SAME task using
-      different models. Judge which did the better job, impartially.
+      different models. Judge which did the better job, impartially. Do NOT favor
+      an arm because of its model name.
 
       Below is the task, then each arm's result — its model, final status, the
-      per-step outcomes, and its final output. Base your judgment on the
-      evidence; do NOT favor an arm because of its model name.
+      per-step outcomes, its final output, and (when it opened one) a `PR:` link.
 
       $ARGUMENTS
 
-      Evaluate on: correctness, completeness against the task, code quality, and
-      whether the run's own validation/review steps passed. Score each arm 0–100
-      (higher is better). Pick the winner, or "tie" if they are genuinely
-      equivalent. Keep the reasoning to 2–4 sentences citing concrete
-      differences.
+      Read the real change before judging:
+      - For each arm that has a `PR:` link, inspect the actual diff with
+        `gh pr diff <pr-url>` (and `gh pr view <pr-url>` for the description/CI).
+        Base your verdict primarily on the code: correctness, whether it fully
+        and minimally satisfies the task, edge cases, tests, and code quality.
+      - If an arm has no PR (it failed or produced no change), judge it on the
+        textual evidence and score it accordingly — a missing/incomplete change
+        should not win over a correct one.
+      - Read both diffs before deciding; compare them head-to-head.
 
-      Emit ONLY the JSON verdict — no prose, no preamble.
+      Score each arm 0–100 (higher is better). Pick the winner, or "tie" if they
+      are genuinely equivalent. Keep the reasoning to 2–4 sentences citing
+      concrete differences you saw in the diffs.
+
+      When done, emit ONLY the JSON verdict — no prose, no preamble.
     output_format:
       type: object
       properties:

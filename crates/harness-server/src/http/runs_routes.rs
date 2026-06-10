@@ -817,8 +817,33 @@ pub async fn get_run_pair(
     Json(serde_json::json!({ "pair_id": pair_id, "runs": runs, "judge": judge })).into_response()
 }
 
+/// Find a GitHub pull-request URL in a run's node outputs, preferring later
+/// nodes (the finalize/summary step that opens the PR). Pure text scan — the
+/// harness never shells out to `gh`/`git` itself (that lives in agent prompts);
+/// the judge agent fetches the diff from this URL.
+fn extract_pr_url(detail: &harness_persist::RunDetail) -> Option<String> {
+    detail
+        .nodes
+        .iter()
+        .rev()
+        .find_map(|n| find_pr_url_in(&n.output))
+}
+
+/// First GitHub PR URL in a blob of text, with surrounding punctuation trimmed.
+fn find_pr_url_in(text: &str) -> Option<String> {
+    text.split(|c: char| {
+        c.is_whitespace() || matches!(c, '(' | ')' | '"' | '\'' | '<' | '>' | ',' | '`')
+    })
+    .find(|raw| raw.contains("github.com") && raw.contains("/pull/"))
+    .map(|raw| {
+        raw.trim_end_matches(|c: char| matches!(c, '.' | ';' | ':' | ']'))
+            .to_string()
+    })
+}
+
 /// Build the evidence packet a judge run reasons over: the shared task, then for
-/// each arm its model, final status, per-step outcomes, and final output.
+/// each arm its model, final status, per-step outcomes, PR link, and final
+/// output. The judge uses the PR link to read the actual diff.
 fn assemble_ab_evidence(runs: &[harness_persist::RunDetail]) -> String {
     let mut s = String::new();
     if let Some(desc) = runs.first().and_then(|r| r.run.description.as_deref()) {
@@ -830,7 +855,12 @@ fn assemble_ab_evidence(runs: &[harness_persist::RunDetail]) -> String {
         let arm = r.run.ab_arm.as_deref().unwrap_or("?").to_uppercase();
         let label = r.run.ab_label.as_deref().unwrap_or("(unknown model)");
         s.push_str(&format!("# Arm {arm} — model: {label}\n"));
-        s.push_str(&format!("Final status: {}\n\nSteps:\n", r.run.status));
+        s.push_str(&format!("Final status: {}\n", r.run.status));
+        match extract_pr_url(r) {
+            Some(pr) => s.push_str(&format!("PR: {pr}\n")),
+            None => s.push_str("PR: (none — arm produced no pull request)\n"),
+        }
+        s.push_str("\nSteps:\n");
         for n in &r.nodes {
             s.push_str(&format!("- {} [{}]\n", n.node_id, n.status));
         }
@@ -1593,6 +1623,27 @@ pub async fn delete_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_pr_url_extracts_and_trims() {
+        // Plain URL in a sentence — trailing punctuation stripped.
+        assert_eq!(
+            find_pr_url_in("Opened https://github.com/o/r/pull/42 for review."),
+            Some("https://github.com/o/r/pull/42".to_string())
+        );
+        // Markdown-wrapped link.
+        assert_eq!(
+            find_pr_url_in("PR: (https://github.com/acme/app/pull/7)"),
+            Some("https://github.com/acme/app/pull/7".to_string())
+        );
+        // No PR link → None.
+        assert_eq!(find_pr_url_in("validation passed; no PR yet"), None);
+        // A plain repo/commit URL is not a PR.
+        assert_eq!(
+            find_pr_url_in("see https://github.com/o/r/commit/abc"),
+            None
+        );
+    }
 
     #[test]
     fn ab_swap_replaces_every_kimi_occurrence_and_leaves_others() {
