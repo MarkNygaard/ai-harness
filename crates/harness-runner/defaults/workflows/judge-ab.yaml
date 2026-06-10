@@ -1,0 +1,52 @@
+name: judge-ab
+description: |
+  Pairwise A/B quality judge. Given the shared task and the two arms' results
+  (model, status, per-node outcomes, final output), decide which arm did the
+  better job and score each 0–100.
+
+  Read-only: it inspects the evidence packet passed as the task input and emits
+  ONLY a structured verdict — it does not touch the repo. The judge model is the
+  workflow default (Claude Opus) unless the trigger overrides it, so the judge
+  itself is held constant across a comparison.
+
+  Output: a JSON verdict `{ winner, score_a, score_b, reasoning }`.
+provider: claude
+model: opus
+nodes:
+  - id: judge
+    category: review
+    context: fresh
+    prompt: |
+      Two AI coding agents ("arm A" and "arm B") performed the SAME task using
+      different models. Judge which did the better job, impartially.
+
+      Below is the task, then each arm's result — its model, final status, the
+      per-step outcomes, and its final output. Base your judgment on the
+      evidence; do NOT favor an arm because of its model name.
+
+      $ARGUMENTS
+
+      Evaluate on: correctness, completeness against the task, code quality, and
+      whether the run's own validation/review steps passed. Score each arm 0–100
+      (higher is better). Pick the winner, or "tie" if they are genuinely
+      equivalent. Keep the reasoning to 2–4 sentences citing concrete
+      differences.
+
+      Emit ONLY the JSON verdict — no prose, no preamble.
+    output_format:
+      type: object
+      properties:
+        winner:
+          type: string
+          enum: ["a", "b", "tie"]
+          description: "Which arm did the better job overall."
+        score_a:
+          type: integer
+          description: "Quality score for arm A, 0–100."
+        score_b:
+          type: integer
+          description: "Quality score for arm B, 0–100."
+        reasoning:
+          type: string
+          description: "2–4 sentences justifying the verdict, citing concrete differences."
+      required: [winner, score_a, score_b, reasoning]

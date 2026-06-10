@@ -792,7 +792,142 @@ pub async fn get_run_pair(
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         }
     }
-    Json(serde_json::json!({ "pair_id": pair_id, "runs": runs })).into_response()
+    // If this pair has been judged, surface the judge run's status + parsed
+    // verdict so the comparison can show it inline (null verdict while running).
+    let judge = match store.get_pair_judge(&pair_id).await {
+        Ok(Some(judge_run_id)) => {
+            let (status, verdict) = match store.get_run(&judge_run_id).await {
+                Ok(Some(jd)) => (
+                    jd.run.status.clone(),
+                    jd.nodes
+                        .iter()
+                        .find(|n| n.node_id == "judge")
+                        .and_then(|n| serde_json::from_str::<serde_json::Value>(&n.output).ok()),
+                ),
+                _ => ("unknown".to_string(), None),
+            };
+            Some(serde_json::json!({
+                "run_id": judge_run_id,
+                "status": status,
+                "verdict": verdict,
+            }))
+        }
+        _ => None,
+    };
+    Json(serde_json::json!({ "pair_id": pair_id, "runs": runs, "judge": judge })).into_response()
+}
+
+/// Build the evidence packet a judge run reasons over: the shared task, then for
+/// each arm its model, final status, per-step outcomes, and final output.
+fn assemble_ab_evidence(runs: &[harness_persist::RunDetail]) -> String {
+    let mut s = String::new();
+    if let Some(desc) = runs.first().and_then(|r| r.run.description.as_deref()) {
+        s.push_str("# Task (identical for both arms)\n");
+        s.push_str(desc.trim());
+        s.push_str("\n\n");
+    }
+    for r in runs {
+        let arm = r.run.ab_arm.as_deref().unwrap_or("?").to_uppercase();
+        let label = r.run.ab_label.as_deref().unwrap_or("(unknown model)");
+        s.push_str(&format!("# Arm {arm} — model: {label}\n"));
+        s.push_str(&format!("Final status: {}\n\nSteps:\n", r.run.status));
+        for n in &r.nodes {
+            s.push_str(&format!("- {} [{}]\n", n.node_id, n.status));
+        }
+        // The final node is usually the summary describing the result. Truncate
+        // so a long output can't blow the judge's context.
+        if let Some(last) = r.nodes.last() {
+            let out = last.output.trim();
+            if !out.is_empty() {
+                let truncated: String = out.chars().take(4000).collect();
+                s.push_str(&format!(
+                    "\nFinal output ({}):\n{}\n",
+                    last.node_id, truncated
+                ));
+            }
+        }
+        s.push('\n');
+    }
+    s
+}
+
+/// `POST /runs/pair/{pair_id}/judge` — score both arms with the `judge-ab`
+/// workflow. Optional `judge_model` overrides the workflow's default judge.
+#[derive(Debug, Deserialize)]
+pub struct JudgePairRequest {
+    #[serde(default)]
+    pub judge_model: Option<ModelRef>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct JudgePairResponse {
+    pub judge_run_id: String,
+}
+
+pub async fn judge_run_pair(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(pair_id): AxumPath<String>,
+    Json(req): Json<JudgePairRequest>,
+) -> Response {
+    let store = match state.store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let summaries = match store.list_runs_for_pair(&pair_id).await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if summaries.len() < 2 {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("pair `{pair_id}` needs two arms to judge"),
+        );
+    }
+    let mut runs = Vec::with_capacity(summaries.len());
+    for s in &summaries {
+        if let Ok(Some(detail)) = store.get_run(&s.id).await {
+            runs.push(detail);
+        }
+    }
+    let project = summaries[0].project.clone();
+    let evidence = assemble_ab_evidence(&runs);
+    // The judge is the workflow's default model unless overridden. We retarget it
+    // by swapping the default pair → the chosen model (a no-op when equal).
+    let default_pair = resolve_workflow_models(&state, "judge-ab", project.as_deref())
+        .ok()
+        .and_then(|v| v.into_iter().next());
+    let swap_to = req.judge_model.or_else(|| default_pair.clone());
+    let title = format!(
+        "Judge: {}",
+        summaries[0].title.as_deref().unwrap_or(pair_id.as_str())
+    );
+    let run_req = CreateRunRequest {
+        workflow: "judge-ab".to_string(),
+        title: Some(title),
+        description: evidence,
+        args: String::new(),
+        real: true,
+        base_branch: None,
+        project,
+        swap_from: default_pair,
+        swap_to,
+        ab_pair_id: None,
+        ab_arm: None,
+        ab_label: None,
+    };
+    match start_run(&state, run_req).await {
+        Ok(judge_run_id) => {
+            if let Err(e) = store.set_pair_judge(&pair_id, &judge_run_id).await {
+                return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+            }
+            (
+                StatusCode::ACCEPTED,
+                Json(JudgePairResponse { judge_run_id }),
+            )
+                .into_response()
+        }
+        Err((status, msg)) => err(status, msg),
+    }
 }
 
 /// `POST /runs` — submit a workflow; execute it in a background task.

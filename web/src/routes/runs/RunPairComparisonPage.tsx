@@ -1,6 +1,8 @@
+import { useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
 import {
   elapsedMs,
@@ -10,8 +12,19 @@ import {
   totalTokens,
 } from "@/components/runflow/format";
 import { formatCost, usageCost } from "@/lib/cost";
-import { nodesFromDetail, useRunPair } from "@/lib/runs";
-import type { NodeView, RunDetail, RunStatus } from "@/types/run";
+import {
+  nodesFromDetail,
+  useJudgePair,
+  useRunPair,
+  useWorkflowModels,
+} from "@/lib/runs";
+import type {
+  AbJudge,
+  ModelRef,
+  NodeView,
+  RunDetail,
+  RunStatus,
+} from "@/types/run";
 
 const STATUS_VARIANT: Record<
   RunStatus,
@@ -197,6 +210,16 @@ export function RunPairComparisonPage() {
           </div>
         )}
 
+        {a && b && pairId && (
+          <JudgePanel
+            pairId={pairId}
+            project={a.detail.project}
+            judge={pair.data?.judge ?? null}
+            labelA={a.label}
+            labelB={b.label}
+          />
+        )}
+
         {arms.map((arm) => (
           <section key={arm.detail.id} className="flex flex-col gap-2">
             <div className="flex items-center gap-2">
@@ -249,5 +272,127 @@ function Row({
       <Td className="font-medium text-muted-foreground">{label}</Td>
       {children}
     </tr>
+  );
+}
+
+/**
+ * Quality judgement: a pairwise LLM verdict over both arms. Shows the verdict
+ * once judged, a progress note while the judge run is in flight, or a judge-model
+ * picker + trigger button otherwise. The picker prefills from the `judge-ab`
+ * workflow's own default model (so there's no hardcoded id) and is overridable.
+ */
+function JudgePanel({
+  pairId,
+  project,
+  judge,
+  labelA,
+  labelB,
+}: {
+  pairId: string;
+  project: string | null;
+  judge: AbJudge | null;
+  labelA: string;
+  labelB: string;
+}) {
+  const judgeModels = useWorkflowModels("judge-ab", project);
+  const defaultModel = judgeModels.data?.[0] ?? null;
+  const [override, setOverride] = useState<ModelRef | null>(null);
+  const chosen = override ?? defaultModel;
+  const run = useJudgePair(pairId);
+
+  const verdict = judge?.verdict ?? null;
+  const judging = !!judge && !verdict && judge.status !== "failed";
+
+  return (
+    <section className="border border-border">
+      <header className="flex items-center justify-between border-b border-border bg-secondary/40 px-3 py-2">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Quality judgement
+        </span>
+        {judge?.run_id && (
+          <Link
+            to={`/runs/${judge.run_id}`}
+            className="font-mono text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            {judge.run_id}
+          </Link>
+        )}
+      </header>
+
+      <div className="p-3">
+        {verdict ? (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-sm">
+              <span className="font-semibold">
+                {verdict.winner === "tie"
+                  ? "Tie"
+                  : `Arm ${verdict.winner.toUpperCase()} wins`}
+              </span>
+              <span className="text-muted-foreground">
+                — {labelA}{" "}
+                <span className="tabular-nums">{verdict.score_a}</span> vs{" "}
+                {labelB} <span className="tabular-nums">{verdict.score_b}</span>
+              </span>
+            </div>
+            <p className="text-[13px] text-muted-foreground">
+              {verdict.reasoning}
+            </p>
+            <button
+              type="button"
+              onClick={() => run.mutate({ judge_model: chosen ?? undefined })}
+              disabled={run.isPending}
+              className="self-start text-[11px] text-muted-foreground underline hover:text-foreground"
+            >
+              {run.isPending ? "Re-judging…" : "Re-judge"}
+            </button>
+          </div>
+        ) : judging ? (
+          <p className="text-sm text-muted-foreground">
+            Judging in progress… the verdict appears here when the judge run
+            finishes.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-2">
+            <span className="text-[12px] text-muted-foreground">
+              Score which arm did the better job. Judge model:
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={chosen?.provider ?? ""}
+                onChange={(e) =>
+                  setOverride({
+                    provider: e.target.value,
+                    model: chosen?.model ?? "",
+                  })
+                }
+                placeholder="provider"
+                className="h-8 w-28 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              />
+              <input
+                value={chosen?.model ?? ""}
+                onChange={(e) =>
+                  setOverride({
+                    provider: chosen?.provider ?? "",
+                    model: e.target.value,
+                  })
+                }
+                placeholder="model"
+                className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              />
+              <Button
+                type="button"
+                onClick={() => run.mutate({ judge_model: chosen ?? undefined })}
+                disabled={run.isPending || !chosen}
+              >
+                {run.isPending ? "Starting…" : "Judge quality"}
+              </Button>
+            </div>
+            {run.isError && (
+              <p className="text-xs text-destructive">{run.error.message}</p>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
   );
 }

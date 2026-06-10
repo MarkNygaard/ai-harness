@@ -30,6 +30,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "architect",
         include_str!("../defaults/workflows/architect.yaml"),
     ),
+    (
+        "judge-ab",
+        include_str!("../defaults/workflows/judge-ab.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.
@@ -271,5 +275,26 @@ mod tests {
             .any(|r| r.additional_context.is_some()));
         // validate exposes the {passed} verdict downstream nodes gate on.
         assert!(node("validate").output_format.is_some());
+    }
+
+    #[test]
+    fn judge_ab_workflow_emits_verdict_on_claude_default() {
+        let yaml = default_workflow("judge-ab").expect("judge-ab bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("judge-ab must parse");
+        assert_eq!(wf.name, "judge-ab");
+        // The judge model is the workflow default, held constant across a
+        // comparison unless the trigger overrides it.
+        assert_eq!(wf.provider.as_deref(), Some("claude"));
+        assert_eq!(wf.model.as_deref(), Some("opus"));
+        // Single judge node that emits the structured verdict.
+        let judge = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "judge")
+            .expect("judge node exists");
+        assert!(
+            judge.output_format.is_some(),
+            "judge must emit a structured verdict"
+        );
     }
 }

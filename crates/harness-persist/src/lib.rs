@@ -171,6 +171,15 @@ const INDEX_RUNS_RECORDED_AT: &str =
 const INDEX_RUNS_PROJECT_RECORDED_AT: &str =
     "CREATE INDEX IF NOT EXISTS idx_harness_workflow_runs_project_recorded_at ON harness_workflow_runs(project, recorded_at DESC)";
 
+/// Links an A/B pair to the run that judged it (`judge-ab`). One judgement per
+/// pair; re-judging upserts the row to point at the new judge run.
+const CREATE_PAIR_JUDGE: &str = "
+CREATE TABLE IF NOT EXISTS harness_ab_pair_judge (
+    pair_id      text PRIMARY KEY,
+    judge_run_id text NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now()
+)";
+
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
     run_id        text NOT NULL REFERENCES harness_workflow_runs(id) ON DELETE CASCADE,
@@ -236,6 +245,7 @@ impl RunStore {
             .execute(&self.pool)
             .await?;
         sqlx::query(INDEX_RUNS_AB_PAIR).execute(&self.pool).await?;
+        sqlx::query(CREATE_PAIR_JUDGE).execute(&self.pool).await?;
         sqlx::query(INDEX_RUNS_RECORDED_AT)
             .execute(&self.pool)
             .await?;
@@ -654,6 +664,36 @@ impl RunStore {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    /// Record (upsert) which run judged an A/B pair. Re-judging replaces it.
+    pub async fn set_pair_judge(
+        &self,
+        pair_id: &str,
+        judge_run_id: &str,
+    ) -> Result<(), PersistError> {
+        sqlx::query(
+            "INSERT INTO harness_ab_pair_judge (pair_id, judge_run_id, created_at)
+             VALUES ($1, $2, now())
+             ON CONFLICT (pair_id) DO UPDATE SET
+                judge_run_id = excluded.judge_run_id,
+                created_at   = now()",
+        )
+        .bind(pair_id)
+        .bind(judge_run_id)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// The run id that judged a pair, if any.
+    pub async fn get_pair_judge(&self, pair_id: &str) -> Result<Option<String>, PersistError> {
+        let row: Option<(String,)> =
+            sqlx::query_as("SELECT judge_run_id FROM harness_ab_pair_judge WHERE pair_id = $1")
+                .bind(pair_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|(id,)| id))
     }
 
     /// List the most recently recorded runs without a project (newest first).

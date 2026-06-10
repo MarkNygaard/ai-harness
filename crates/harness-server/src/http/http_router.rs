@@ -190,6 +190,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/runs/pair", post(runs_routes::create_run_pair))
         .route("/api/runs/pair/{pair_id}", get(runs_routes::get_run_pair))
         .route(
+            "/api/runs/pair/{pair_id}/judge",
+            post(runs_routes::judge_run_pair),
+        )
+        .route(
             "/api/runs/workflow-models",
             get(runs_routes::list_workflow_models),
         )

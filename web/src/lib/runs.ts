@@ -17,6 +17,8 @@ import type {
   CreateRunPairResponse,
   CreateRunRequest,
   CreateRunResponse,
+  JudgePairRequest,
+  JudgePairResponse,
   ModelRef,
   NodeMeta,
   NodeStatus,
@@ -157,6 +159,20 @@ export function useRunPair(pairId: string | null, live: boolean) {
     enabled: !!pairId,
     retry: false,
     refetchInterval: live ? 4_000 : false,
+  });
+}
+
+/** `POST /api/runs/pair/{id}/judge` — score both arms (optional judge model). */
+export function useJudgePair(pairId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<JudgePairResponse, Error, JudgePairRequest>({
+    mutationFn: (body) =>
+      apiJson<JudgePairResponse>(`/api/runs/pair/${pairId}/judge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["run-pair", pairId] }),
   });
 }
 

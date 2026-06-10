@@ -172,10 +172,36 @@ export interface CreateRunPairResponse {
   run_id_b: string;
 }
 
+/** A pairwise quality verdict from the `judge-ab` workflow. */
+export interface AbVerdict {
+  winner: "a" | "b" | "tie";
+  score_a: number;
+  score_b: number;
+  reasoning: string;
+}
+
+/** The judge run for a pair: its run id, status, and parsed verdict (if done). */
+export interface AbJudge {
+  run_id: string;
+  status: RunStatus | string;
+  verdict: AbVerdict | null;
+}
+
 /** Both arms of an A/B pair (`GET /api/runs/pair/{id}`), ordered a → b. */
 export interface RunPairResponse {
   pair_id: string;
   runs: RunDetail[];
+  /** The quality judgement, once one has been requested; null otherwise. */
+  judge: AbJudge | null;
+}
+
+/** `POST /api/runs/pair/{id}/judge` body — optional judge-model override. */
+export interface JudgePairRequest {
+  judge_model?: ModelRef;
+}
+
+export interface JudgePairResponse {
+  judge_run_id: string;
 }
 
 /**
