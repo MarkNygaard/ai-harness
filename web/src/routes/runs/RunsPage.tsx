@@ -115,6 +115,12 @@ function RunRow({ run }: { run: RunSummary }) {
                   {run.project}
                 </Badge>
               )}
+              {run.ab_arm && (
+                <Badge variant="secondary" className="shrink-0">
+                  A/B · {run.ab_arm.toUpperCase()}
+                  {run.ab_label ? ` · ${run.ab_label}` : ""}
+                </Badge>
+              )}
             </div>
             <div className="truncate font-mono text-[11px] text-muted-foreground">
               {run.title ? `${run.workflow_name} · ` : ""}

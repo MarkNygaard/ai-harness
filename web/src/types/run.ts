@@ -53,6 +53,12 @@ export interface RunSummary {
   started_at: string | null;
   /** Latest node end across the run (ISO); null when no node has finished. */
   ended_at: string | null;
+  /** A/B pairing: shared id linking the two arms; null for a normal run. */
+  ab_pair_id: string | null;
+  /** Which arm of the pair this run is — "a" or "b"; null if not paired. */
+  ab_arm: string | null;
+  /** Display label for the arm's substituted model (e.g. "cursor/composer-2.5"). */
+  ab_label: string | null;
 }
 /** One (project, day, status) tally from the runs summary endpoint. */
 export interface RunDailyCount {

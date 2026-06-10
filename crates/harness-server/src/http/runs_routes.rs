@@ -305,6 +305,21 @@ impl RunsState {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ModelRef {
+    /// Agent provider (e.g. `pi`, `claude`, `cursor`).
+    pub provider: String,
+    /// Model id, as written in the workflow (e.g. `kimi-code/kimi-for-coding`).
+    pub model: String,
+}
+
+impl ModelRef {
+    /// `"provider/model"` — the display label used for an A/B arm.
+    fn label(&self) -> String {
+        format!("{}/{}", self.provider, self.model)
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateRunRequest {
     /// Workflow path or bundled/project name.
@@ -327,6 +342,29 @@ pub struct CreateRunRequest {
     /// a per-run worktree is cut off its `base_branch`. Missing → 400.
     #[serde(default)]
     pub project: Option<String>,
+    /// A/B model substitution: replace every node — plus the workflow default and
+    /// loop bodies — whose `(provider, model)` equals `swap_from` with `swap_to`,
+    /// leaving every other step untouched. Both must be set to take effect.
+    #[serde(default)]
+    pub swap_from: Option<ModelRef>,
+    #[serde(default)]
+    pub swap_to: Option<ModelRef>,
+    /// A/B pairing stamp, set by the paired-trigger endpoint; absent for a normal
+    /// run. `ab_arm` is `"a"`/`"b"`, `ab_label` names the arm's substituted model.
+    #[serde(default)]
+    pub ab_pair_id: Option<String>,
+    #[serde(default)]
+    pub ab_arm: Option<String>,
+    #[serde(default)]
+    pub ab_label: Option<String>,
+}
+
+/// Owned A/B pairing info carried from trigger → `execute_run_task` → persistence.
+#[derive(Debug, Clone)]
+struct AbInfo {
+    pair_id: String,
+    arm: String,
+    label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -348,6 +386,61 @@ fn summary_window_start(now: DateTime<Utc>, days: i64) -> DateTime<Utc> {
     let days = days.clamp(1, 90);
     let today_start = now.date_naive().and_time(chrono::NaiveTime::MIN).and_utc();
     today_start - Duration::days(days - 1)
+}
+
+/// Replace every place a workflow pins `from`'s `(provider, model)` with `to`:
+/// the workflow-level default, each node's pin, and each loop body's pin. This is
+/// the A/B substitution primitive — it swaps one integration model for another
+/// wherever it appears while leaving every other step (e.g. specialist review
+/// nodes pinned to a different model) untouched.
+fn apply_model_swap(workflow: &mut harness_dag::Workflow, from: &ModelRef, to: &ModelRef) {
+    let hits = |provider: &Option<String>, model: &Option<String>| {
+        provider.as_deref() == Some(from.provider.as_str())
+            && model.as_deref() == Some(from.model.as_str())
+    };
+    if hits(&workflow.provider, &workflow.model) {
+        workflow.provider = Some(to.provider.clone());
+        workflow.model = Some(to.model.clone());
+    }
+    for node in &mut workflow.nodes {
+        if hits(&node.provider, &node.model) {
+            node.provider = Some(to.provider.clone());
+            node.model = Some(to.model.clone());
+        }
+        if let harness_dag::NodeKind::Loop(cfg) = &mut node.kind {
+            if hits(&cfg.provider, &cfg.model) {
+                cfg.provider = Some(to.provider.clone());
+                cfg.model = Some(to.model.clone());
+            }
+        }
+    }
+}
+
+/// The distinct `(provider, model)` pairs a workflow uses — across the
+/// workflow-level default, node pins, and loop-body pins. Drives the A/B UI:
+/// "which step do you want to swap out?" A pair is only included when both
+/// provider and model are concretely set (an unresolved half can't be swapped).
+fn workflow_model_pairs(workflow: &harness_dag::Workflow) -> Vec<ModelRef> {
+    let mut pairs: Vec<ModelRef> = Vec::new();
+    let mut push = |provider: &Option<String>, model: &Option<String>| {
+        if let (Some(p), Some(m)) = (provider.as_deref(), model.as_deref()) {
+            let r = ModelRef {
+                provider: p.to_string(),
+                model: m.to_string(),
+            };
+            if !pairs.contains(&r) {
+                pairs.push(r);
+            }
+        }
+    };
+    push(&workflow.provider, &workflow.model);
+    for node in &workflow.nodes {
+        push(&node.provider, &node.model);
+        if let harness_dag::NodeKind::Loop(cfg) = &node.kind {
+            push(&cfg.provider, &cfg.model);
+        }
+    }
+    pairs
 }
 
 #[derive(Debug, Serialize)]
@@ -680,6 +773,132 @@ pub async fn create_run(
     }
 }
 
+/// Trigger an A/B pair: two runs of the same task that differ only by which model
+/// the `swap_from` steps use. Arm A applies `swap_from → variant_a`, arm B applies
+/// `swap_from → variant_b`; both share an `ab_pair_id` so the comparison view can
+/// pull them together. Picking `variant_a == swap_from` makes arm A the unchanged
+/// baseline.
+#[derive(Debug, Deserialize)]
+pub struct CreateRunPairRequest {
+    pub workflow: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub args: String,
+    #[serde(default)]
+    pub real: bool,
+    #[serde(default)]
+    pub base_branch: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+    /// The step(s) under test, named by the `(provider, model)` they currently use.
+    pub swap_from: ModelRef,
+    /// Arm A's model for those steps (often equal to `swap_from` — the baseline).
+    pub variant_a: ModelRef,
+    /// Arm B's model for those steps — the challenger.
+    pub variant_b: ModelRef,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CreateRunPairResponse {
+    pub pair_id: String,
+    pub run_id_a: String,
+    pub run_id_b: String,
+}
+
+/// `POST /runs/pair` — start both arms of an A/B comparison.
+pub async fn create_run_pair(
+    Extension(state): Extension<Arc<RunsState>>,
+    Json(req): Json<CreateRunPairRequest>,
+) -> Response {
+    match start_run_pair(&state, req).await {
+        Ok(resp) => (StatusCode::ACCEPTED, Json(resp)).into_response(),
+        Err((status, msg)) => err(status, msg),
+    }
+}
+
+/// Start both arms of an A/B pair — the shared core behind `POST /api/runs/pair`
+/// and the MCP `run_trigger_pair` tool. Both arms share a generated `pair_id`.
+pub(crate) async fn start_run_pair(
+    state: &Arc<RunsState>,
+    req: CreateRunPairRequest,
+) -> Result<CreateRunPairResponse, (StatusCode, String)> {
+    let pair_id = format!("ab-{}", now_millis());
+    // One arm = the base request with the swap and pairing stamp filled in.
+    let arm = |arm: &str, variant: &ModelRef| CreateRunRequest {
+        workflow: req.workflow.clone(),
+        title: req.title.clone(),
+        description: req.description.clone(),
+        args: req.args.clone(),
+        real: req.real,
+        base_branch: req.base_branch.clone(),
+        project: req.project.clone(),
+        swap_from: Some(req.swap_from.clone()),
+        swap_to: Some(variant.clone()),
+        ab_pair_id: Some(pair_id.clone()),
+        ab_arm: Some(arm.to_string()),
+        ab_label: Some(variant.label()),
+    };
+    let run_id_a = start_run(state, arm("a", &req.variant_a)).await?;
+    let run_id_b = start_run(state, arm("b", &req.variant_b)).await?;
+    Ok(CreateRunPairResponse {
+        pair_id,
+        run_id_a,
+        run_id_b,
+    })
+}
+
+/// `GET /runs/workflow-models?workflow=NAME&project=P` — the distinct
+/// `(provider, model)` pairs a workflow uses, so the A/B UI can offer them as
+/// swap targets. Resolves the workflow project-first, exactly like a run trigger.
+#[derive(Debug, Deserialize)]
+pub struct WorkflowModelsQuery {
+    pub workflow: String,
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+pub async fn list_workflow_models(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<WorkflowModelsQuery>,
+) -> Response {
+    match resolve_workflow_models(&state, &q.workflow, q.project.as_deref()) {
+        Ok(pairs) => Json(pairs).into_response(),
+        Err((status, msg)) => err(status, msg),
+    }
+}
+
+/// Resolve a workflow (project-first, same precedence as `start_run`) and return
+/// the distinct `(provider, model)` pairs it uses. Shared by `GET
+/// /api/runs/workflow-models` and the MCP `workflow_models` tool.
+pub(crate) fn resolve_workflow_models(
+    state: &Arc<RunsState>,
+    workflow: &str,
+    project: Option<&str>,
+) -> Result<Vec<ModelRef>, (StatusCode, String)> {
+    let project = project.map(str::trim).filter(|p| !p.is_empty());
+    let ships_per_project = project.is_some_and(|p| {
+        state
+            .projects_dir
+            .join(p)
+            .join(".harness")
+            .join("workflows")
+            .join(format!("{}.yaml", workflow.trim()))
+            .is_file()
+    });
+    let workflow_root = match (ships_per_project, project) {
+        (true, Some(p)) => state.projects_dir.join(p),
+        _ => state.project_root.clone(),
+    };
+    let (yaml, _label) = harness_runner::resolve_workflow_source(workflow, &workflow_root)
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    let workflow = parse_workflow(&yaml)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid workflow: {e}")))?;
+    Ok(workflow_model_pairs(&workflow))
+}
+
 /// Validate, resolve, and spawn a run in the background — the shared core behind
 /// both `POST /api/runs` and the MCP `run_trigger` tool. Returns the `run_id` or
 /// a `(status, message)` pair the caller renders however it likes.
@@ -748,8 +967,24 @@ pub(crate) async fn start_run(
     };
     let (yaml, _label) = harness_runner::resolve_workflow_source(&workflow_name, &workflow_root)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
-    let workflow = parse_workflow(&yaml)
+    let mut workflow = parse_workflow(&yaml)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid workflow: {e}")))?;
+
+    // A/B substitution: swap one integration model for another wherever the
+    // workflow pins it, leaving every other step constant. Both halves required.
+    if let (Some(from), Some(to)) = (req.swap_from.as_ref(), req.swap_to.as_ref()) {
+        apply_model_swap(&mut workflow, from, to);
+    }
+
+    // A/B pairing stamp (set by the paired-trigger endpoint; None for normal runs).
+    let ab = match (req.ab_pair_id, req.ab_arm) {
+        (Some(pair_id), Some(arm)) => Some(AbInfo {
+            pair_id,
+            arm,
+            label: req.ab_label,
+        }),
+        _ => None,
+    };
 
     let run_id = format!(
         "{}-{}",
@@ -764,6 +999,7 @@ pub(crate) async fn start_run(
     let task_state = state.clone();
     let task_run_id = run_id.clone();
     let toolchains = project_row.toolchains.clone();
+    let real = req.real;
     // `description` is the task spec; fall back to the deprecated `args` alias.
     let description = if req.description.is_empty() {
         req.args
@@ -777,12 +1013,13 @@ pub(crate) async fn start_run(
             task_state,
             task_run_id,
             workflow,
-            req.real,
+            real,
             title,
             description,
             base_branch,
             project,
             toolchains,
+            ab,
             btx,
         )
         .await;
@@ -810,6 +1047,7 @@ async fn execute_run_task(
     base_branch: String,
     project: String,
     toolchains: Vec<String>,
+    ab: Option<AbInfo>,
     btx: broadcast::Sender<RunEvent>,
 ) {
     // The workspace is an isolated per-run worktree off the project checkout's
@@ -823,6 +1061,11 @@ async fn execute_run_task(
         Err(e) => {
             tracing::error!(run_id = %run_id, project = %project, "workspace setup failed: {e}");
             if let Ok(store) = state.store().await {
+                let ab_ref = ab.as_ref().map(|a| harness_persist::AbPairing {
+                    pair_id: &a.pair_id,
+                    arm: &a.arm,
+                    label: a.label.as_deref(),
+                });
                 let _ = store
                     .start_run(
                         &run_id,
@@ -833,6 +1076,7 @@ async fn execute_run_task(
                         0,
                         &[],
                         Some(&state.instance_id),
+                        ab_ref.as_ref(),
                     )
                     .await;
                 let _ = store
@@ -939,6 +1183,7 @@ async fn execute_run_task(
     let persist_description = description.clone();
     let persist_project = Some(project.clone());
     let persist_owner = state.instance_id.clone();
+    let persist_ab = ab;
     let forwarder = tokio::spawn(async move {
         let mut ordinals: HashMap<String, i32> = HashMap::new();
         while let Some(ev) = rx.next().await {
@@ -952,6 +1197,11 @@ async fn execute_run_task(
                         for (i, n) in nodes.iter().enumerate() {
                             ordinals.insert(n.id.clone(), i as i32);
                         }
+                        let ab_ref = persist_ab.as_ref().map(|a| harness_persist::AbPairing {
+                            pair_id: &a.pair_id,
+                            arm: &a.arm,
+                            label: a.label.as_deref(),
+                        });
                         let _ = store
                             .start_run(
                                 &persist_run_id,
@@ -962,6 +1212,7 @@ async fn execute_run_task(
                                 *total_nodes,
                                 nodes,
                                 Some(&persist_owner),
+                                ab_ref.as_ref(),
                             )
                             .await;
                     }
@@ -1174,6 +1425,56 @@ pub async fn delete_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ab_swap_replaces_every_kimi_occurrence_and_leaves_others() {
+        // Real bundled workflow: kimi as the default + many node pins + a loop
+        // body, with gpt-5.5 and sonnet pinned on specialist review steps.
+        let yaml = harness_runner::default_workflow("idea-to-pr").expect("bundled idea-to-pr");
+        let mut wf = parse_workflow(yaml).expect("idea-to-pr parses");
+
+        let before = workflow_model_pairs(&wf);
+        let has =
+            |ps: &[ModelRef], p: &str, m: &str| ps.iter().any(|r| r.provider == p && r.model == m);
+        assert!(
+            has(&before, "pi", "kimi-code/kimi-for-coding"),
+            "kimi present"
+        );
+        assert!(
+            has(&before, "pi", "openai-codex/gpt-5.5"),
+            "gpt-5.5 present"
+        );
+        assert!(has(&before, "claude", "sonnet"), "sonnet present");
+
+        apply_model_swap(
+            &mut wf,
+            &ModelRef {
+                provider: "pi".into(),
+                model: "kimi-code/kimi-for-coding".into(),
+            },
+            &ModelRef {
+                provider: "cursor".into(),
+                model: "composer-2.5".into(),
+            },
+        );
+
+        let after = workflow_model_pairs(&wf);
+        // Every kimi occurrence — default, node pins, AND the loop body — is gone.
+        assert!(
+            !has(&after, "pi", "kimi-code/kimi-for-coding"),
+            "all kimi (incl. loop body) swapped out"
+        );
+        assert!(
+            has(&after, "cursor", "composer-2.5"),
+            "challenger swapped in"
+        );
+        // Specialist review steps pinned to other models are untouched.
+        assert!(
+            has(&after, "pi", "openai-codex/gpt-5.5"),
+            "gpt-5.5 unchanged"
+        );
+        assert!(has(&after, "claude", "sonnet"), "sonnet unchanged");
+    }
 
     #[test]
     fn summary_window_start_uses_visible_utc_calendar_days() {

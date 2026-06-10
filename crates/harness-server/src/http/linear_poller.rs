@@ -228,6 +228,11 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
         real: true,
         base_branch: b.base_branch.clone(),
         project: Some(b.project.clone()),
+        swap_from: None,
+        swap_to: None,
+        ab_pair_id: None,
+        ab_arm: None,
+        ab_label: None,
     };
     match start_run(state, req).await {
         Ok(run_id) => {

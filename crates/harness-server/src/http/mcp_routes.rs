@@ -23,7 +23,10 @@ use axum::Json;
 use harness_runner::authoring;
 use serde_json::{json, Value};
 
-use super::runs_routes::{start_run, CreateRunRequest, RunsState};
+use super::runs_routes::{
+    resolve_workflow_models, start_run, start_run_pair, CreateRunPairRequest, CreateRunRequest,
+    ModelRef, RunsState,
+};
 
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
@@ -134,6 +137,11 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
                     .and_then(Value::as_str)
                     .map(str::to_string),
                 project: Some(s("project")),
+                swap_from: None,
+                swap_to: None,
+                ab_pair_id: None,
+                ab_arm: None,
+                ab_label: None,
             };
             match start_run(state, req).await {
                 Ok(run_id) => to_result(
@@ -168,6 +176,59 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
                 Ok(Some(detail)) => to_result(format!("run {id}"), &detail),
                 Ok(None) => tool_error(format!("run `{id}` not found")),
                 Err(e) => tool_error(e.to_string()),
+            }
+        }
+        "workflow_models" => {
+            match resolve_workflow_models(state, &s("workflow"), Some(&s("project"))) {
+                Ok(pairs) => to_result(
+                    format!("{} model pair(s) in `{}`", pairs.len(), s("workflow")),
+                    &json!({ "pairs": pairs }),
+                ),
+                Err((_status, msg)) => tool_error(msg),
+            }
+        }
+        "run_trigger_pair" => {
+            // swap_from / variant_a / variant_b are {provider, model} objects.
+            let model_ref = |k: &str| -> Option<ModelRef> {
+                args.get(k)
+                    .and_then(|v| serde_json::from_value::<ModelRef>(v.clone()).ok())
+            };
+            let (Some(swap_from), Some(variant_a), Some(variant_b)) = (
+                model_ref("swap_from"),
+                model_ref("variant_a"),
+                model_ref("variant_b"),
+            ) else {
+                return tool_error(
+                    "`swap_from`, `variant_a`, and `variant_b` are required {provider, model} objects",
+                );
+            };
+            let req = CreateRunPairRequest {
+                workflow: s("workflow"),
+                title: args
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                description: s("description"),
+                args: String::new(),
+                real: args.get("real").and_then(Value::as_bool).unwrap_or(true),
+                base_branch: args
+                    .get("base_branch")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+                project: Some(s("project")),
+                swap_from,
+                variant_a,
+                variant_b,
+            };
+            match start_run_pair(state, req).await {
+                Ok(resp) => to_result(
+                    format!(
+                        "A/B pair started: {} (a={}, b={})",
+                        resp.pair_id, resp.run_id_a, resp.run_id_b
+                    ),
+                    &resp,
+                ),
+                Err((_status, msg)) => tool_error(msg),
             }
         }
 
@@ -319,6 +380,38 @@ fn mcp_tools() -> Vec<Value> {
                 "additionalProperties": false,
                 "properties": { "run_id": { "type": "string" } },
                 "required": ["run_id"],
+            }
+        }),
+        json!({
+            "name": "workflow_models",
+            "description": "List the distinct provider+model pairs a workflow uses (default, nodes, loop bodies) — the candidate swap targets for an A/B test.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "project": project,
+                    "workflow": { "type": "string", "description": "Workflow name." }
+                },
+                "required": ["project", "workflow"],
+            }
+        }),
+        json!({
+            "name": "run_trigger_pair",
+            "description": "Start an A/B pair: two runs of the same task that differ only by which model the swap_from steps use. Arm A swaps swap_from→variant_a, arm B swaps swap_from→variant_b; pick variant_a == swap_from to make A the baseline. Returns pair_id + both run_ids.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "project": project,
+                    "workflow": { "type": "string", "description": "Workflow name; empty = the project's default." },
+                    "description": { "type": "string", "description": "The task spec (fed to nodes as $ARGUMENTS)." },
+                    "title": { "type": "string", "description": "Human title for the pair." },
+                    "base_branch": { "type": "string", "description": "Git base branch; empty = project default." },
+                    "swap_from": { "type": "object", "description": "The steps under test, by current provider+model.", "properties": { "provider": { "type": "string" }, "model": { "type": "string" } }, "required": ["provider", "model"] },
+                    "variant_a": { "type": "object", "description": "Arm A model (often == swap_from).", "properties": { "provider": { "type": "string" }, "model": { "type": "string" } }, "required": ["provider", "model"] },
+                    "variant_b": { "type": "object", "description": "Arm B model (the challenger).", "properties": { "provider": { "type": "string" }, "model": { "type": "string" } }, "required": ["provider", "model"] }
+                },
+                "required": ["project", "description", "swap_from", "variant_a", "variant_b"],
             }
         }),
         json!({
@@ -487,6 +580,8 @@ mod tests {
 
         for expected in [
             "run_trigger",
+            "run_trigger_pair",
+            "workflow_models",
             "run_list",
             "run_status",
             "workflow_catalog",
@@ -502,6 +597,22 @@ mod tests {
         let req = trigger["inputSchema"]["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "project"));
         assert!(req.iter().any(|v| v == "description"));
+
+        // The A/B pair tool requires the swap target and both variants.
+        let pair = by_name("run_trigger_pair").unwrap();
+        let req = pair["inputSchema"]["required"].as_array().unwrap();
+        for field in [
+            "project",
+            "description",
+            "swap_from",
+            "variant_a",
+            "variant_b",
+        ] {
+            assert!(
+                req.iter().any(|v| v == field),
+                "pair tool missing required `{field}`"
+            );
+        }
 
         let catalog = by_name("workflow_catalog").unwrap();
         let req = catalog["inputSchema"]["required"].as_array().unwrap();
