@@ -113,6 +113,14 @@ tests are the source of truth.*
 - **Pi/Kimi (`omp`)** — `PiAgent` in `crates/harness-runner/src/pi.rs`
   (`build_args` builds the `omp` invocation; `OMP_PLUGIN_DIRS` → `--plugin-dir`).
   Verify with `cargo test -p harness-runner`.
+- **Cursor (`cursor-agent`)** — `CursorAgent` in `crates/harness-runner/src/cursor.rs`
+  (`provider: cursor`). Headless: `cursor-agent -p "<prompt>" --output-format json
+  --model <id> --force --trust`; the completion is a single `type:"result"` JSON
+  object (`result`, `session_id`, `usage.*Tokens`). Auth is `CURSOR_API_KEY`
+  (materialized from the `cursor` credential). **Deploy prereq:** the
+  `cursor-agent` binary must be on `PATH` in the container image — without it,
+  `cursor` nodes fail to spawn. Verify with `cargo test -p harness-runner`.
+  Routing for all three lives in `dispatch.rs` (`DispatchAgent`).
 
 ## Server operation
 

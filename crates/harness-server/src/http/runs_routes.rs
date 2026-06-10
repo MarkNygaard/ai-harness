@@ -28,8 +28,8 @@ use harness_agents::registry::AgentRegistry;
 use harness_dag::{parse_workflow, run_workflow_streaming, RunEvent, VarContext};
 use harness_persist::{ProjectStore, RunStore};
 use harness_runner::{
-    sanitize_branch_component, CodeAgentRunner, DispatchAgent, EchoAgent, LocalRunner, PiAgent,
-    PromptAgent,
+    sanitize_branch_component, CodeAgentRunner, CursorAgent, DispatchAgent, EchoAgent, LocalRunner,
+    PiAgent, PromptAgent,
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex, OnceCell};
@@ -1351,9 +1351,13 @@ async fn execute_run_task(
             Ok(store) => crate::http::credentials_routes::materialize(store).await,
             Err(e) => tracing::info!("credentials not materialized: {e}"),
         }
-        // `provider: pi` → omp-backed session-aware agent; others → CodeAgent registry.
+        // `provider: pi` → omp; `cursor` → cursor-agent; others → CodeAgent registry.
         let code = Arc::new(CodeAgentRunner::new(state.agent_registry.clone()));
-        Arc::new(DispatchAgent::new(Arc::new(PiAgent::from_env()), code))
+        Arc::new(DispatchAgent::new(
+            Arc::new(PiAgent::from_env()),
+            Arc::new(CursorAgent::from_env()),
+            code,
+        ))
     } else {
         Arc::new(EchoAgent)
     };

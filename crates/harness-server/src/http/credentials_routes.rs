@@ -24,7 +24,7 @@ use serde::Deserialize;
 use super::runs_routes::RunsState;
 
 /// Providers the UI can configure (the agent backends + GitHub for repo access).
-const PROVIDERS: &[&str] = &["claude", "codex", "pi", "github"];
+const PROVIDERS: &[&str] = &["claude", "codex", "pi", "github", "cursor"];
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
@@ -101,10 +101,16 @@ pub async fn connected_clis() -> harness_runner::authoring::ConnectedCreds {
             .await;
     let kimi = crate::http::kimi_routes::agent_db_has_provider(agent_db, &["kimi-code"]).await;
     let claude = file_non_empty(home.join(".claude").join(".credentials.json"));
+    // Cursor CLI is usable when an API key is in the environment (materialized
+    // from the stored credential / set by the operator) or an interactive
+    // `cursor-agent login` left its config on disk.
+    let cursor = std::env::var_os("CURSOR_API_KEY").is_some_and(|v| !v.is_empty())
+        || file_non_empty(home.join(".cursor").join("cli-config.json"));
     harness_runner::authoring::ConnectedCreds {
         codex,
         kimi,
         claude,
+        cursor,
     }
 }
 
@@ -314,6 +320,13 @@ pub async fn materialize(store: &CredentialStore) {
         if let Some(token) = gh.get("token").filter(|v| !v.is_empty()) {
             std::env::set_var("GH_TOKEN", token);
             std::env::set_var("GITHUB_TOKEN", token);
+        }
+    }
+    if let Ok(Some(cursor)) = store.get("cursor").await {
+        // Cursor CLI (`cursor-agent`) reads CURSOR_API_KEY for headless auth — a
+        // user API key from the Cursor dashboard.
+        if let Some(key) = cursor.get("api_key").filter(|v| !v.is_empty()) {
+            std::env::set_var("CURSOR_API_KEY", key);
         }
     }
 }
