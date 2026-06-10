@@ -62,6 +62,18 @@ const PROVIDERS: {
       },
     ],
   },
+  {
+    id: "cursor",
+    label: "Cursor",
+    help: "Runs the Cursor CLI (cursor-agent) for `provider: cursor` nodes. Generate a user API key from the Cursor dashboard → API Keys.",
+    fields: [
+      {
+        key: "api_key",
+        label: "Cursor API key",
+        help: "Sets CURSOR_API_KEY for the cursor-agent CLI.",
+      },
+    ],
+  },
 ];
 
 export function CredentialsPage() {

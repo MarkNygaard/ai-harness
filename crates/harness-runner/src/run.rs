@@ -120,10 +120,14 @@ pub async fn execute_run(opts: RunOptions) -> Result<RunReport, String> {
             None => HarnessConfig::default(),
         };
         let registry = Arc::new(build_agent_registry(&config, opts.sandbox));
-        // Route `provider: pi` to the omp-backed session-aware agent; everything
-        // else goes through the CodeAgent registry (claude/codex/anthropic-api).
+        // Route `provider: pi` → omp, `cursor` → cursor-agent; everything else
+        // goes through the CodeAgent registry (claude/codex/anthropic-api).
         let code = Arc::new(CodeAgentRunner::new(registry));
-        Arc::new(DispatchAgent::new(Arc::new(PiAgent::from_env()), code))
+        Arc::new(DispatchAgent::new(
+            Arc::new(PiAgent::from_env()),
+            Arc::new(crate::CursorAgent::from_env()),
+            code,
+        ))
     } else {
         Arc::new(EchoAgent)
     };

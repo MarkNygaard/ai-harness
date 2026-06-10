@@ -113,6 +113,8 @@ pub struct ConnectedCreds {
     pub kimi: bool,
     /// Claude Code.
     pub claude: bool,
+    /// Cursor CLI (`cursor-agent`) — `CURSOR_API_KEY` connected.
+    pub cursor: bool,
 }
 
 /// The selectable CLIs and their models, gated on which credentials are
@@ -162,6 +164,21 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
             id: "pi",
             label: "Pi / omp",
             models: pi_models,
+        });
+    }
+    // Cursor CLI — shown once a CURSOR_API_KEY credential is connected. Bare
+    // Cursor model ids (any model string is still accepted).
+    if creds.cursor {
+        providers.push(ProviderInfo {
+            id: "cursor",
+            label: "Cursor",
+            models: vec![
+                "composer",
+                "composer-2.5",
+                "sonnet-4",
+                "sonnet-4-thinking",
+                "gpt-5",
+            ],
         });
     }
     // Direct Anthropic API (API key, not a subscription CLI) — always offered.
@@ -860,6 +877,7 @@ nodes:
                 codex: true,
                 kimi: true,
                 claude: true,
+                cursor: false,
             },
         );
         assert_eq!(cat.node_kinds.len(), 7);
@@ -929,6 +947,18 @@ nodes:
         );
         assert!(models(&claude, "claude").contains(&"sonnet"));
         assert!(models(&claude, "claude").contains(&"haiku"));
+
+        // Cursor only: shown with its bare Cursor model ids.
+        let cursor = catalog(
+            tmp.path(),
+            ConnectedCreds {
+                cursor: true,
+                ..Default::default()
+            },
+        );
+        assert!(has(&cursor, "cursor"));
+        assert!(models(&cursor, "cursor").contains(&"composer"));
+        assert!(!has(&none, "cursor"));
     }
     #[test]
     fn catalog_exposes_valid_prebuilt_steps() {
