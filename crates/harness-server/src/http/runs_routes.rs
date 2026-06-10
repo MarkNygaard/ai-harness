@@ -762,6 +762,39 @@ pub async fn get_run(
     }
 }
 
+/// `GET /runs/pair/{pair_id}` — both arms of an A/B pair, with full per-node
+/// detail, for the side-by-side comparison view. Arms come back ordered a → b.
+pub async fn get_run_pair(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(pair_id): AxumPath<String>,
+) -> Response {
+    let store = match state.store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let summaries = match store.list_runs_for_pair(&pair_id).await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if summaries.is_empty() {
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("no runs for pair `{pair_id}`"),
+        );
+    }
+    // Hydrate each arm with its node rows + graph (the comparison needs per-node
+    // tokens/time/cost). Two short reads — a pair is two runs.
+    let mut runs = Vec::with_capacity(summaries.len());
+    for s in &summaries {
+        match store.get_run(&s.id).await {
+            Ok(Some(detail)) => runs.push(detail),
+            Ok(None) => {}
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        }
+    }
+    Json(serde_json::json!({ "pair_id": pair_id, "runs": runs })).into_response()
+}
+
 /// `POST /runs` — submit a workflow; execute it in a background task.
 pub async fn create_run(
     Extension(state): Extension<Arc<RunsState>>,

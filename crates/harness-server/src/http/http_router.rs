@@ -188,6 +188,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // A/B pairing: start both arms, and list a workflow's model pairs for the
         // swap picker. Static segments — matchit prefers these over `{id}` below.
         .route("/api/runs/pair", post(runs_routes::create_run_pair))
+        .route("/api/runs/pair/{pair_id}", get(runs_routes::get_run_pair))
         .route(
             "/api/runs/workflow-models",
             get(runs_routes::list_workflow_models),

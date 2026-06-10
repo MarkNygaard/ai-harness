@@ -143,6 +143,41 @@ export interface CreateRunResponse {
   run_id: string;
 }
 
+/** A provider+model reference (matches the server `ModelRef`). */
+export interface ModelRef {
+  provider: string;
+  model: string;
+}
+
+/**
+ * Trigger an A/B pair: two runs of one task where the `swap_from` steps use
+ * `variant_a` (arm A) vs `variant_b` (arm B). Matches the server
+ * `CreateRunPairRequest`.
+ */
+export interface CreateRunPairRequest {
+  workflow: string;
+  title?: string;
+  description?: string;
+  real?: boolean;
+  base_branch?: string | null;
+  project?: string | null;
+  swap_from: ModelRef;
+  variant_a: ModelRef;
+  variant_b: ModelRef;
+}
+
+export interface CreateRunPairResponse {
+  pair_id: string;
+  run_id_a: string;
+  run_id_b: string;
+}
+
+/** Both arms of an A/B pair (`GET /api/runs/pair/{id}`), ordered a → b. */
+export interface RunPairResponse {
+  pair_id: string;
+  runs: RunDetail[];
+}
+
 /**
  * A unified, render-ready view of a single node: topology (depends_on) merged
  * with the latest known status, timing, provider/model and token usage. Built
