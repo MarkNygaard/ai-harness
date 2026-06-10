@@ -7,10 +7,11 @@
 # so the builder needs both cargo AND bun, and the runtime is a single static-ish
 # binary that already serves the UI.
 #
-# The runtime also carries the agent CLIs (claude / codex / omp) + git + mise, so
-# `provider: claude|codex|pi` nodes and toolchain bootstrap work in-pod. Provider
-# credentials are NOT baked in — they're entered in the UI, stored encrypted in
-# Postgres, and materialized into $HOME (~/.claude, ~/.codex) at run time.
+# The runtime also carries the agent CLIs (claude / codex / cursor / omp) + git + mise,
+# so `provider: claude|codex|cursor|pi` nodes and toolchain bootstrap work in-pod.
+# Provider credentials are NOT baked in — they're entered in the UI, stored encrypted
+# in Postgres, and materialized into $HOME (~/.claude, ~/.codex) or env (CURSOR_API_KEY)
+# at run time.
 
 # ── Builder: cargo + bun → the `harness` binary with the UI embedded ──────────
 FROM rust:1-bookworm AS builder
@@ -83,6 +84,18 @@ RUN mkdir -p /opt/omp-plugins \
     && cd /opt/omp-plugins \
     && BUN_INSTALL=/opt/bun /opt/bun/bin/bun add pi-web-access \
     && chmod -R a+rX /opt/omp-plugins
+# Cursor CLI (cursor-agent) — invoked as a subprocess by `provider: cursor` workflow
+# nodes. Same constraint as mise/bun: the installer drops the binary at
+# ~/.local/bin/cursor-agent, so as root that lands in /root/.local (mode 700,
+# unreadable by uid 1000). Move the binary to /usr/local/bin so the harness user
+# can resolve it on PATH. Auth is materialized at run time via CURSOR_API_KEY from
+# the harness credential store — no login during build.
+RUN curl https://cursor.com/install -fsS | bash \
+    && mv /root/.local/bin/cursor-agent /usr/local/bin/cursor-agent \
+    && chmod a+rx /usr/local/bin/cursor-agent \
+    && rm -rf /root/.local /root/.cursor \
+    && cursor-agent --version
+
 RUN curl -fsSL https://mise.run | sh \
     && mv /root/.local/bin/mise /usr/local/bin/mise \
     && chmod a+rx /usr/local/bin/mise \
