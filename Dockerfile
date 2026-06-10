@@ -85,14 +85,18 @@ RUN mkdir -p /opt/omp-plugins \
     && BUN_INSTALL=/opt/bun /opt/bun/bin/bun add pi-web-access \
     && chmod -R a+rX /opt/omp-plugins
 # Cursor CLI (cursor-agent) — invoked as a subprocess by `provider: cursor` workflow
-# nodes. Same constraint as mise/bun: the installer drops the binary at
-# ~/.local/bin/cursor-agent, so as root that lands in /root/.local (mode 700,
-# unreadable by uid 1000). Move the binary to /usr/local/bin so the harness user
-# can resolve it on PATH. Auth is materialized at run time via CURSOR_API_KEY from
-# the harness credential store — no login during build.
+# nodes. The installer unpacks a multi-file payload to
+# ~/.local/share/cursor-agent/versions/<ver>/ and symlinks ~/.local/bin/cursor-agent
+# into it; the versioned executable resolves its bundled node/JS relative to its own
+# real path. So we must relocate the WHOLE payload (not just the symlink) out of
+# /root/.local (mode 700, unreadable by uid 1000): move the tree to /opt/cursor-agent,
+# make it world-readable, and symlink the versioned executable onto PATH. The version
+# dir is date-named, so pick the latest by sort rather than hard-coding it. Auth is
+# materialized at run time via CURSOR_API_KEY — no login during build.
 RUN curl https://cursor.com/install -fsS | bash \
-    && mv /root/.local/bin/cursor-agent /usr/local/bin/cursor-agent \
-    && chmod a+rx /usr/local/bin/cursor-agent \
+    && mv /root/.local/share/cursor-agent /opt/cursor-agent \
+    && chmod -R a+rX /opt/cursor-agent \
+    && ln -sf "$(ls -d /opt/cursor-agent/versions/*/cursor-agent | sort | tail -1)" /usr/local/bin/cursor-agent \
     && rm -rf /root/.local /root/.cursor \
     && cursor-agent --version
 
