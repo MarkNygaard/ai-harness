@@ -115,6 +115,9 @@ describe("nodesFromDetail", () => {
       recorded_at: NOW,
       started_at: null,
       ended_at: null,
+      ab_pair_id: null,
+      ab_arm: null,
+      ab_label: null,
       graph: [
         { id: "build", depends_on: [] },
         { id: "review", depends_on: ["build"] },
@@ -177,6 +180,9 @@ describe("nodesFromDetail", () => {
       recorded_at: NOW,
       started_at: null,
       ended_at: null,
+      ab_pair_id: null,
+      ab_arm: null,
+      ab_label: null,
       graph: [
         { id: "explore", depends_on: [] },
         { id: "plan", depends_on: ["explore"] },
@@ -225,6 +231,9 @@ describe("nodesFromDetail", () => {
       recorded_at: NOW,
       started_at: null,
       ended_at: null,
+      ab_pair_id: null,
+      ab_arm: null,
+      ab_label: null,
       graph: [{ id: "explore", depends_on: [], artifact: "exploration.md" }],
       nodes: [
         {
@@ -264,6 +273,9 @@ describe("nodesFromDetail", () => {
       recorded_at: NOW,
       started_at: null,
       ended_at: null,
+      ab_pair_id: null,
+      ab_arm: null,
+      ab_label: null,
       graph: [{ id: "build", depends_on: [] }],
       nodes: [
         {
