@@ -637,6 +637,25 @@ impl RunStore {
         Ok(rows)
     }
 
+    /// The runs of one A/B pair, ordered by arm (`a` then `b`). Usually two.
+    pub async fn list_runs_for_pair(&self, pair_id: &str) -> Result<Vec<RunSummary>, PersistError> {
+        let rows = sqlx::query_as::<_, RunSummary>(
+            "SELECT r.id, r.workflow_name, r.title, r.description, r.status, r.project,
+                    r.node_count, r.recorded_at,
+                    MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
+                    r.ab_pair_id, r.ab_arm, r.ab_label
+             FROM harness_workflow_runs r
+             LEFT JOIN harness_run_nodes n ON n.run_id = r.id
+             WHERE r.ab_pair_id = $1
+             GROUP BY r.id
+             ORDER BY r.ab_arm ASC, r.recorded_at ASC",
+        )
+        .bind(pair_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// List the most recently recorded runs without a project (newest first).
     pub async fn list_unassigned_runs(&self, limit: i64) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(

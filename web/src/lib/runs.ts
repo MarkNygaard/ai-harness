@@ -13,14 +13,18 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, apiJson } from "./api";
 import type {
+  CreateRunPairRequest,
+  CreateRunPairResponse,
   CreateRunRequest,
   CreateRunResponse,
+  ModelRef,
   NodeMeta,
   NodeStatus,
   NodeView,
   RunDailyCount,
   RunDetail,
   RunEvent,
+  RunPairResponse,
   RunStatus,
   RunSummary,
 } from "@/types/run";
@@ -108,6 +112,51 @@ export function useCreateRun() {
         body: JSON.stringify(body),
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  });
+}
+
+/** The distinct provider+model pairs a workflow uses — the A/B swap candidates. */
+export function useWorkflowModels(
+  workflow: string | null,
+  project: string | null,
+) {
+  return useQuery<ModelRef[], Error>({
+    queryKey: ["workflow-models", workflow, project],
+    queryFn: ({ signal }) => {
+      const params = new URLSearchParams({ workflow: workflow ?? "" });
+      if (project) params.set("project", project);
+      return apiJson<ModelRef[]>(`/api/runs/workflow-models?${params}`, {
+        signal,
+      });
+    },
+    enabled: !!workflow,
+    retry: false,
+  });
+}
+
+/** `POST /api/runs/pair` — start both arms of an A/B comparison. */
+export function useCreateRunPair() {
+  const qc = useQueryClient();
+  return useMutation<CreateRunPairResponse, Error, CreateRunPairRequest>({
+    mutationFn: (body) =>
+      apiJson<CreateRunPairResponse>("/api/runs/pair", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  });
+}
+
+/** `GET /api/runs/pair/{id}` — both arms with full detail, for the comparison. */
+export function useRunPair(pairId: string | null, live: boolean) {
+  return useQuery<RunPairResponse, Error>({
+    queryKey: ["run-pair", pairId],
+    queryFn: ({ signal }) =>
+      apiJson<RunPairResponse>(`/api/runs/pair/${pairId}`, { signal }),
+    enabled: !!pairId,
+    retry: false,
+    refetchInterval: live ? 4_000 : false,
   });
 }
 

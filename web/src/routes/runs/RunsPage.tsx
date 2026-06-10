@@ -1,14 +1,20 @@
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ArrowRight, Play, Trash2 } from "lucide-react";
+import { ArrowRight, GitCompare, Play, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useCreateRun, useDeleteRun, useRuns } from "@/lib/runs";
+import {
+  useCreateRun,
+  useCreateRunPair,
+  useDeleteRun,
+  useRuns,
+  useWorkflowModels,
+} from "@/lib/runs";
 import { NO_PROJECT } from "@/lib/dashboard";
 import { useProjects } from "@/lib/projects";
-import type { RunStatus, RunSummary } from "@/types/run";
+import type { ModelRef, RunStatus, RunSummary } from "@/types/run";
 
 const STATUS_VARIANT: Record<
   RunStatus,
@@ -47,6 +53,7 @@ export function RunsPage() {
     <AppShell title="Runs">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
         <NewRunForm />
+        <AbTestForm />
         <section className="flex flex-col gap-2">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Recent runs
@@ -88,6 +95,13 @@ export function RunsPage() {
 
 function RunRow({ run }: { run: RunSummary }) {
   const del = useDeleteRun();
+  const navigate = useNavigate();
+  function onOpenPair(e: React.MouseEvent) {
+    // The row is a Link — divert to the pair comparison instead of the run.
+    e.preventDefault();
+    e.stopPropagation();
+    if (run.ab_pair_id) navigate(`/runs/pair/${run.ab_pair_id}`);
+  }
   function onDelete(e: React.MouseEvent) {
     // The row is a Link — don't navigate when deleting.
     e.preventDefault();
@@ -116,10 +130,16 @@ function RunRow({ run }: { run: RunSummary }) {
                 </Badge>
               )}
               {run.ab_arm && (
-                <Badge variant="secondary" className="shrink-0">
-                  A/B · {run.ab_arm.toUpperCase()}
-                  {run.ab_label ? ` · ${run.ab_label}` : ""}
-                </Badge>
+                <button type="button" onClick={onOpenPair} className="shrink-0">
+                  <Badge
+                    variant="secondary"
+                    className="cursor-pointer hover:bg-secondary/80"
+                    title="Open A/B comparison"
+                  >
+                    A/B · {run.ab_arm.toUpperCase()}
+                    {run.ab_label ? ` · ${run.ab_label}` : ""}
+                  </Badge>
+                </button>
               )}
             </div>
             <div className="truncate font-mono text-[11px] text-muted-foreground">
@@ -270,6 +290,231 @@ function NewRunForm() {
           </div>
           {create.isError && (
             <p className="text-xs text-destructive">{create.error.message}</p>
+          )}
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+const modelLabel = (m: ModelRef) => `${m.provider} / ${m.model}`;
+
+/**
+ * A/B test trigger: run the same task twice, swapping the chosen step's model
+ * for a challenger. Arm A keeps the current model (baseline); arm B uses the
+ * challenger. The "step under test" list is the workflow's own model pairs.
+ */
+function AbTestForm() {
+  const navigate = useNavigate();
+  const pair = useCreateRunPair();
+  const projects = useProjects();
+  const [open, setOpen] = useState(false);
+  const [project, setProject] = useState("");
+  const [workflow, setWorkflow] = useState("idea-to-pr");
+  const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
+  const [real, setReal] = useState(false);
+  const [swapIdx, setSwapIdx] = useState(0);
+  const [challenger, setChallenger] = useState<ModelRef>({
+    provider: "",
+    model: "",
+  });
+
+  // The workflow's distinct provider+model pairs — the swap candidates.
+  const models = useWorkflowModels(open && workflow ? workflow : null, project);
+  const pairs = models.data ?? [];
+  const swapFrom = pairs[swapIdx];
+
+  function onProjectChange(name: string) {
+    setProject(name);
+    const def = projects.data?.find((p) => p.name === name)?.default_workflow;
+    if (def) setWorkflow(def);
+  }
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!swapFrom) return;
+    pair.mutate(
+      {
+        workflow,
+        project: project || undefined,
+        title: title.trim() || undefined,
+        description: description.trim() || undefined,
+        real,
+        swap_from: swapFrom,
+        variant_a: swapFrom, // arm A = baseline (current model)
+        variant_b: challenger,
+      },
+      { onSuccess: (res) => navigate(`/runs/pair/${res.pair_id}`) },
+    );
+  }
+
+  const canSubmit =
+    !pair.isPending &&
+    !!project &&
+    !!workflow.trim() &&
+    !!swapFrom &&
+    !!challenger.provider.trim() &&
+    !!challenger.model.trim();
+
+  if (!open) {
+    return (
+      <Button
+        variant="outline"
+        onClick={() => setOpen(true)}
+        className="self-start"
+      >
+        <GitCompare className="h-3.5 w-3.5" />
+        New A/B test
+      </Button>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="py-4">
+        <form onSubmit={submit} className="flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              New A/B test
+            </h2>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-[11px] text-muted-foreground hover:text-foreground"
+            >
+              cancel
+            </button>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">
+              Project
+            </label>
+            <select
+              value={project}
+              onChange={(e) => onProjectChange(e.target.value)}
+              className="h-8 rounded-md border border-input bg-transparent px-2 text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            >
+              <option value="" disabled>
+                Select a project…
+              </option>
+              {projects.data?.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">
+              Workflow
+            </label>
+            <input
+              value={workflow}
+              onChange={(e) => setWorkflow(e.target.value)}
+              placeholder="idea-to-pr"
+              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">
+              Step under test (swap from) — arm A keeps this
+            </label>
+            {models.isLoading ? (
+              <span className="text-[11px] text-muted-foreground">
+                Loading workflow models…
+              </span>
+            ) : models.isError ? (
+              <span className="text-[11px] text-destructive">
+                {models.error.message}
+              </span>
+            ) : pairs.length === 0 ? (
+              <span className="text-[11px] text-muted-foreground">
+                No model pairs found for this workflow.
+              </span>
+            ) : (
+              <select
+                value={swapIdx}
+                onChange={(e) => setSwapIdx(Number(e.target.value))}
+                className="h-8 rounded-md border border-input bg-transparent px-2 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              >
+                {pairs.map((m, i) => (
+                  <option key={modelLabel(m)} value={i}>
+                    {modelLabel(m)}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">
+              Test against (arm B challenger)
+            </label>
+            <div className="flex gap-2">
+              <input
+                value={challenger.provider}
+                onChange={(e) =>
+                  setChallenger((c) => ({ ...c, provider: e.target.value }))
+                }
+                placeholder="provider (e.g. cursor)"
+                className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              />
+              <input
+                value={challenger.model}
+                onChange={(e) =>
+                  setChallenger((c) => ({ ...c, model: e.target.value }))
+                }
+                placeholder="model (e.g. composer-2.5)"
+                list="ab-known-models"
+                className="h-8 flex-2 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              />
+              <datalist id="ab-known-models">
+                {pairs.map((m) => (
+                  <option key={m.model} value={m.model} />
+                ))}
+              </datalist>
+            </div>
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">
+              Title
+            </label>
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="short task name"
+              className="h-8 rounded-md border border-input bg-transparent px-2.5 text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label className="text-xs font-medium text-muted-foreground">
+              Description (the task spec — identical for both arms)
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={4}
+              placeholder="Describe the work fully. Both arms run this same task."
+              className="rounded-md border border-input bg-transparent p-2 text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={real}
+                onChange={(e) => setReal(e.target.checked)}
+                className="accent-[var(--accent-orange)]"
+              />
+              Use real agents (otherwise echo)
+            </label>
+            <Button type="submit" disabled={!canSubmit}>
+              <GitCompare className="h-3.5 w-3.5" />
+              {pair.isPending ? "Starting…" : "Start A/B pair"}
+            </Button>
+          </div>
+          {pair.isError && (
+            <p className="text-xs text-destructive">{pair.error.message}</p>
           )}
         </form>
       </CardContent>
