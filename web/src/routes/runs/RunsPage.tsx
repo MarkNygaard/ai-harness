@@ -14,6 +14,7 @@ import {
 } from "@/lib/runs";
 import { NO_PROJECT } from "@/lib/dashboard";
 import { useProjects } from "@/lib/projects";
+import { useCatalog } from "@/lib/authoring";
 import type { ModelRef, RunStatus, RunSummary } from "@/types/run";
 
 const STATUS_VARIANT: Record<
@@ -315,20 +316,35 @@ function AbTestForm() {
   const [description, setDescription] = useState("");
   const [real, setReal] = useState(false);
   const [swapIdx, setSwapIdx] = useState(0);
-  const [challenger, setChallenger] = useState<ModelRef>({
-    provider: "",
-    model: "",
-  });
+  const [challengerProvider, setChallengerProvider] = useState("");
+  const [challengerModel, setChallengerModel] = useState("");
 
   // The workflow's distinct provider+model pairs — the swap candidates.
   const models = useWorkflowModels(open && workflow ? workflow : null, project);
   const pairs = models.data ?? [];
   const swapFrom = pairs[swapIdx];
 
+  // Credential-gated provider/model catalog — the challenger picks from what's
+  // actually runnable (same source as the editor).
+  const catalog = useCatalog();
+  const providers = catalog.data?.providers ?? [];
+  const challengerModels =
+    providers.find((p) => p.id === challengerProvider)?.models ?? [];
+  const challenger: ModelRef = {
+    provider: challengerProvider,
+    model: challengerModel,
+  };
+
   function onProjectChange(name: string) {
     setProject(name);
     const def = projects.data?.find((p) => p.name === name)?.default_workflow;
     if (def) setWorkflow(def);
+  }
+
+  // Picking a provider defaults the model to its first listed model.
+  function onChallengerProviderChange(id: string) {
+    setChallengerProvider(id);
+    setChallengerModel(providers.find((p) => p.id === id)?.models[0] ?? "");
   }
 
   function submit(e: React.FormEvent) {
@@ -354,8 +370,8 @@ function AbTestForm() {
     !!project &&
     !!workflow.trim() &&
     !!swapFrom &&
-    !!challenger.provider.trim() &&
-    !!challenger.model.trim();
+    !!challengerProvider &&
+    !!challengerModel;
 
   if (!open) {
     return (
@@ -450,30 +466,54 @@ function AbTestForm() {
             <label className="text-xs font-medium text-muted-foreground">
               Test against (arm B challenger)
             </label>
-            <div className="flex gap-2">
-              <input
-                value={challenger.provider}
-                onChange={(e) =>
-                  setChallenger((c) => ({ ...c, provider: e.target.value }))
-                }
-                placeholder="provider (e.g. cursor)"
-                className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-              />
-              <input
-                value={challenger.model}
-                onChange={(e) =>
-                  setChallenger((c) => ({ ...c, model: e.target.value }))
-                }
-                placeholder="model (e.g. composer-2.5)"
-                list="ab-known-models"
-                className="h-8 flex-2 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-              />
-              <datalist id="ab-known-models">
-                {pairs.map((m) => (
-                  <option key={m.model} value={m.model} />
-                ))}
-              </datalist>
-            </div>
+            {catalog.isLoading ? (
+              <span className="text-[11px] text-muted-foreground">
+                Loading providers…
+              </span>
+            ) : providers.length === 0 ? (
+              <span className="text-[11px] text-muted-foreground">
+                No connected providers —{" "}
+                <Link
+                  to="/credentials"
+                  className="text-accent-orange hover:underline"
+                >
+                  connect one
+                </Link>{" "}
+                to test against.
+              </span>
+            ) : (
+              <div className="flex gap-2">
+                <select
+                  value={challengerProvider}
+                  onChange={(e) => onChallengerProviderChange(e.target.value)}
+                  className="h-8 flex-1 rounded-md border border-input bg-transparent px-2 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+                >
+                  <option value="" disabled>
+                    Provider…
+                  </option>
+                  {providers.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={challengerModel}
+                  onChange={(e) => setChallengerModel(e.target.value)}
+                  disabled={!challengerProvider}
+                  className="h-8 flex-2 rounded-md border border-input bg-transparent px-2 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring disabled:opacity-50"
+                >
+                  <option value="" disabled>
+                    Model…
+                  </option>
+                  {challengerModels.map((m) => (
+                    <option key={m} value={m}>
+                      {m}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">
