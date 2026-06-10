@@ -18,6 +18,10 @@ struct UsageBucket {
     cache_create_tokens: u64,
     request_count: u64,
     session_count: u64,
+    /// Notional USD cost, priced per-record at each record's model rate (see
+    /// [`record_cost`]) and summed in. Model-aware — unlike a flat post-aggregate
+    /// estimate, a bucket spanning several models reflects each model's price.
+    cost_usd: f64,
 }
 
 /// Per-hour, per-model token totals for the trend chart.
@@ -210,6 +214,15 @@ pub async fn token_usage(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
             }
 
             let total_ctx = parsed.input + parsed.cache_read + parsed.cache_create;
+            // Price each record at its own model's rate, then sum into the buckets.
+            // Computed before `parsed.model` is moved into `by_model` below.
+            let cost = record_cost(
+                &parsed.model,
+                parsed.input,
+                parsed.output,
+                parsed.cache_read,
+                parsed.cache_create,
+            );
 
             let hb = by_hour.entry(parsed.hour.clone()).or_default();
             hb.request_count += 1;
@@ -217,6 +230,7 @@ pub async fn token_usage(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
             hb.output_tokens += parsed.output;
             hb.cache_read_tokens += parsed.cache_read;
             hb.cache_create_tokens += parsed.cache_create;
+            hb.cost_usd += cost;
 
             let mb = model_trend
                 .entry(parsed.hour.clone())
@@ -232,6 +246,7 @@ pub async fn token_usage(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
             db.output_tokens += parsed.output;
             db.cache_read_tokens += parsed.cache_read;
             db.cache_create_tokens += parsed.cache_create;
+            db.cost_usd += cost;
 
             let by_model_bucket = by_model.entry(parsed.model).or_default();
             by_model_bucket.request_count += 1;
@@ -239,12 +254,14 @@ pub async fn token_usage(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
             by_model_bucket.output_tokens += parsed.output;
             by_model_bucket.cache_read_tokens += parsed.cache_read;
             by_model_bucket.cache_create_tokens += parsed.cache_create;
+            by_model_bucket.cost_usd += cost;
 
             sess.input_tokens += parsed.input;
             sess.output_tokens += parsed.output;
             sess.cache_read_tokens += parsed.cache_read;
             sess.cache_create_tokens += parsed.cache_create;
             sess.request_count += 1;
+            sess.cost_usd += cost;
         }
 
         if sess.request_count == 0 {
@@ -261,7 +278,7 @@ pub async fn token_usage(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
         accumulate(&mut totals, &sess);
     }
 
-    let cost = estimate_cost(&totals);
+    let cost = totals.cost_usd;
 
     let task_usage_vec: Vec<Value> = {
         let mut items: Vec<_> = task_usage.into_iter().collect();
@@ -283,7 +300,7 @@ pub async fn token_usage(State(state): State<Arc<AppState>>) -> (StatusCode, Jso
                     "context_tokens": ctx,
                     "output_tokens": usage.output_tokens,
                     "requests": usage.request_count,
-                    "cost_usd": estimate_cost(&usage),
+                    "cost_usd": usage.cost_usd,
                 })
             })
             .collect()
@@ -433,21 +450,108 @@ fn accumulate(dst: &mut UsageBucket, src: &UsageBucket) {
     dst.cache_create_tokens += src.cache_create_tokens;
     dst.request_count += src.request_count;
     dst.session_count += src.session_count;
+    dst.cost_usd += src.cost_usd;
 }
 
-/// Estimate API-equivalent cost at Sonnet 4.6 pricing.
-fn estimate_cost(usage: &UsageBucket) -> f64 {
-    let has_cache = usage.cache_read_tokens > 0 || usage.cache_create_tokens > 0;
-    let (eff_input, eff_cache_read) = if has_cache {
-        (usage.input_tokens as f64, usage.cache_read_tokens as f64)
+/// Per-MTok USD rates for a model family.
+struct ModelRates {
+    input: f64,
+    output: f64,
+    cache_read: f64,
+    cache_write: f64,
+}
+
+/// Notional per-MTok price table, matched by substring on the (lowercased) model
+/// id so id variants resolve to a family (`claude-opus-4-8`, `openai-codex/gpt-5.5`,
+/// `kimi-for-coding`, …).
+///
+/// This is a **notional** cost basis — it lets runs on subscription models be
+/// compared against API-billed ones on a common dollar scale, NOT an invoice.
+/// Claude rates are list price (input/output from the model catalog; cache-read =
+/// 0.1× input, 5-minute cache-write = 1.25× input). The GPT-5.5 and Kimi K2.6
+/// rows are the providers' published direct API prices (Jun 2026) — verified, but
+/// the entries most likely to drift, so re-check them here when prices change.
+/// Unknown models fall back to Sonnet-tier, which preserves the prior flat-rate
+/// behavior.
+fn rates_for_model(model: &str) -> ModelRates {
+    let m = model.to_ascii_lowercase();
+    if m.contains("opus") {
+        ModelRates {
+            input: 5.0,
+            output: 25.0,
+            cache_read: 0.5,
+            cache_write: 6.25,
+        }
+    } else if m.contains("haiku") {
+        ModelRates {
+            input: 1.0,
+            output: 5.0,
+            cache_read: 0.1,
+            cache_write: 1.25,
+        }
+    } else if m.contains("fable") {
+        ModelRates {
+            input: 10.0,
+            output: 50.0,
+            cache_read: 1.0,
+            cache_write: 12.5,
+        }
+    } else if m.contains("sonnet") {
+        ModelRates {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+        }
+    } else if m.contains("gpt-5") || m.contains("codex") || m.contains("openai") {
+        // OpenAI GPT-5.5 (openai.com/api/pricing, Jun 2026): $5 in / $30 out,
+        // cached input $0.50 (90% off). OpenAI does not surcharge cache writes,
+        // so cache_write = input. (>272K-token prompts carry a 2x/1.5x
+        // long-context surcharge not modeled here.)
+        ModelRates {
+            input: 5.0,
+            output: 30.0,
+            cache_read: 0.50,
+            cache_write: 5.0,
+        }
+    } else if m.contains("kimi") || m.contains("moonshot") {
+        // Moonshot Kimi K2.6 (platform.moonshot direct, Jun 2026): $0.95
+        // cache-miss in / $4.00 out, cache-hit input $0.16. No cache-write
+        // surcharge, so cache_write = input.
+        ModelRates {
+            input: 0.95,
+            output: 4.0,
+            cache_read: 0.16,
+            cache_write: 0.95,
+        }
     } else {
-        let total = usage.input_tokens as f64;
+        // Unknown model — Sonnet-tier fallback (matches the prior estimate).
+        ModelRates {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+        }
+    }
+}
+
+/// Notional USD cost for a single usage record, priced at its model's rate.
+fn record_cost(model: &str, input: u64, output: u64, cache_read: u64, cache_create: u64) -> f64 {
+    let r = rates_for_model(model);
+    let has_cache = cache_read > 0 || cache_create > 0;
+    let (eff_input, eff_cache_read) = if has_cache {
+        (input as f64, cache_read as f64)
+    } else {
+        // No cache breakdown (Codex agent / older Claude CLI builds report all
+        // context as input_tokens): assume a 90% cache-read hit rate. Same
+        // heuristic as the prior aggregate estimate, applied per record.
+        let total = input as f64;
         (total * 0.10, total * 0.90)
     };
-    eff_input / 1e6 * 3.0
-        + usage.output_tokens as f64 / 1e6 * 15.0
-        + eff_cache_read / 1e6 * 0.30
-        + usage.cache_create_tokens as f64 / 1e6 * 3.75
+    eff_input / 1e6 * r.input
+        + output as f64 / 1e6 * r.output
+        + eff_cache_read / 1e6 * r.cache_read
+        + cache_create as f64 / 1e6 * r.cache_write
 }
 
 /// Parse an ISO-8601 timestamp into (YYYY-MM-DD, YYYY-MM-DD HH:00).
@@ -696,5 +800,39 @@ mod tests {
 
         assert!(window.contains(recent.occurred_at));
         assert!(!window.contains(old.occurred_at));
+    }
+
+    #[test]
+    fn record_cost_is_model_aware() {
+        // 1M output tokens priced at each family's output rate.
+        let out_only = |model: &str| record_cost(model, 0, 1_000_000, 0, 0);
+        assert!((out_only("claude-opus-4-8") - 25.0).abs() < 1e-9);
+        assert!((out_only("claude-sonnet-4-6") - 15.0).abs() < 1e-9);
+        assert!((out_only("claude-haiku-4-5") - 5.0).abs() < 1e-9);
+        assert!((out_only("claude-fable-5") - 50.0).abs() < 1e-9);
+        assert!((out_only("openai-codex/gpt-5.5") - 30.0).abs() < 1e-9);
+        assert!((out_only("kimi-for-coding") - 4.0).abs() < 1e-9);
+        // Unknown model falls back to Sonnet-tier (prior flat-rate behavior).
+        assert!((out_only("some-future-model") - 15.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn record_cost_splits_input_when_no_cache_breakdown() {
+        // No cache fields: 90% of input is priced as cache-read, 10% as input.
+        // Sonnet: 1M input → 0.1M*$3 + 0.9M*$0.30 = $0.30 + $0.27 = $0.57.
+        let cost = record_cost("claude-sonnet-4-6", 1_000_000, 0, 0, 0);
+        assert!((cost - 0.57).abs() < 1e-9, "got {cost}");
+    }
+
+    #[test]
+    fn accumulate_sums_cost() {
+        let mut dst = UsageBucket::default();
+        let src = UsageBucket {
+            cost_usd: 1.5,
+            ..Default::default()
+        };
+        accumulate(&mut dst, &src);
+        accumulate(&mut dst, &src);
+        assert!((dst.cost_usd - 3.0).abs() < 1e-9);
     }
 }
