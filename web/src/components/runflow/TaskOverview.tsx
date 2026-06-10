@@ -22,6 +22,7 @@ import {
   type WaterfallRow,
 } from "./overview";
 import { categoryColorMap, useCategories } from "@/lib/categories";
+import { formatCost, usageCost } from "@/lib/cost";
 
 export { usageByModel };
 
@@ -46,6 +47,16 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
   const byModel = useMemo(() => usageByModel(nodes), [nodes]);
   const totals = useMemo(() => sumUsage(nodes.map((n) => n.usage)), [nodes]);
   const segments = useMemo(() => usageByType(totals), [totals]);
+  // Notional cost is summed PER NODE (each priced at its own model's rate) — not
+  // priced off the aggregate, which would mis-price a multi-model run.
+  const totalCost = useMemo(
+    () =>
+      nodes.reduce(
+        (acc, n) => acc + usageCost(n.model ?? n.provider, n.usage),
+        0,
+      ),
+    [nodes],
+  );
   const tokenSteps = useMemo(() => tokensByStep(nodes), [nodes]);
   const heaviest = tokenSteps[0]?.total ?? 0;
   const bars = useMemo(() => waterfall(nodes, now), [nodes, now]);
@@ -74,9 +85,14 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
   return (
     <div className="flex w-full flex-col gap-6">
       {/* Headline metrics */}
-      <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-4">
+      <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-5">
         <Metric label="Total time" value={formatDuration(wallMs)} />
         <Metric label="Total tokens" value={formatTokens(totalTok)} />
+        <Metric
+          label="Notional cost"
+          value={formatCost(totalCost)}
+          hint="at API list prices"
+        />
         <Metric
           label="Steps"
           value={`${done}/${nodes.length}`}
@@ -292,6 +308,7 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
                       <Th className="text-right">Out</Th>
                       <Th className="text-right">Cache</Th>
                       <Th className="text-right">Total</Th>
+                      <Th className="text-right">Cost</Th>
                     </tr>
                   </thead>
                   <tbody>
@@ -312,6 +329,9 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
                         </Td>
                         <Td className="text-right font-medium tabular-nums">
                           {formatTokens(g.total)}
+                        </Td>
+                        <Td className="text-right font-medium tabular-nums">
+                          {formatCost(usageCost(g.key, g.usage))}
                         </Td>
                       </tr>
                     ))}
@@ -336,6 +356,7 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
                 <Th className="text-right">In</Th>
                 <Th className="text-right">Out</Th>
                 <Th className="text-right">Total</Th>
+                <Th className="text-right">Cost</Th>
               </tr>
             </thead>
             <tbody>
@@ -362,6 +383,9 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
                   <Td className="text-right font-medium tabular-nums">
                     {formatTokens(totalTokens(n.usage))}
                   </Td>
+                  <Td className="text-right font-medium tabular-nums">
+                    {formatCost(usageCost(n.model ?? n.provider, n.usage))}
+                  </Td>
                 </tr>
               ))}
             </tbody>
@@ -378,6 +402,9 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
                 </Td>
                 <Td className="text-right font-semibold tabular-nums">
                   {formatTokens(totalTokens(totals))}
+                </Td>
+                <Td className="text-right font-semibold tabular-nums">
+                  {formatCost(totalCost)}
                 </Td>
               </tr>
             </tfoot>
