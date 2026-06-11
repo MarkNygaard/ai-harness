@@ -444,7 +444,7 @@ mod tests {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
-            .map_or(false, |s| s.success());
+            .is_ok_and(|s| s.success());
         if !has_node {
             return None;
         }
