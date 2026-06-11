@@ -32,6 +32,10 @@ function ratesFor(model: string): Rates {
     return { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 5 };
   if (m.includes("kimi") || m.includes("moonshot"))
     return { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
+  if (m.includes("composer"))
+    // Cursor Composer 2.5 standard tier ($0.50 in / $2.50 out); cache rates
+    // unpublished, so assume 0.1x read / no write surcharge.
+    return { input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite: 0.5 };
   // Unknown model → Sonnet-tier fallback (matches the server).
   return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
 }

@@ -524,6 +524,17 @@ fn rates_for_model(model: &str) -> ModelRates {
             cache_read: 0.16,
             cache_write: 0.95,
         }
+    } else if m.contains("composer") {
+        // Cursor Composer 2.5 (cursor.com/docs/models-and-pricing, Jun 2026):
+        // standard tier $0.50 in / $2.50 out. Cursor doesn't publish cache rates,
+        // so assume the common 0.1x cache-read and no cache-write surcharge.
+        // (A "fast" tier at $3/$15 exists; standard is the default.)
+        ModelRates {
+            input: 0.50,
+            output: 2.50,
+            cache_read: 0.05,
+            cache_write: 0.50,
+        }
     } else {
         // Unknown model — Sonnet-tier fallback (matches the prior estimate).
         ModelRates {
@@ -812,6 +823,7 @@ mod tests {
         assert!((out_only("claude-fable-5") - 50.0).abs() < 1e-9);
         assert!((out_only("openai-codex/gpt-5.5") - 30.0).abs() < 1e-9);
         assert!((out_only("kimi-for-coding") - 4.0).abs() < 1e-9);
+        assert!((out_only("composer-2.5") - 2.50).abs() < 1e-9);
         // Unknown model falls back to Sonnet-tier (prior flat-rate behavior).
         assert!((out_only("some-future-model") - 15.0).abs() < 1e-9);
     }
