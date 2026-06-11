@@ -208,7 +208,6 @@ impl PromptAgent for CursorAgent {
             let hooks_json = cursor_dir.join("hooks.json");
             ensure_cursor_hooks_path(&cursor_dir, &hooks_json)?;
             std::fs::create_dir_all(&cursor_dir).map_err(|e| AgentError(e.to_string()))?;
-            ensure_cursor_hooks_path(&cursor_dir, &hooks_json)?;
             let original = std::fs::read(&hooks_json).ok();
             let value = crate::hooks::cursor_hooks_json(hooks, &script_path);
             let value = crate::hooks::merge_cursor_hooks_json(original.as_deref(), value);
