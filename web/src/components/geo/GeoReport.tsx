@@ -7,6 +7,7 @@ import {
   SEVERITY_RANK,
   geoTaskDescription,
   ratingColor,
+  useGeoHistory,
   type GeoFinding,
   type GeoSeverity,
   type GeoVerdict,
@@ -80,6 +81,8 @@ export function GeoReport({
         </div>
       </div>
 
+      <GeoHistory project={project} />
+
       <section className="flex flex-col gap-2">
         <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           Scores by dimension
@@ -115,6 +118,52 @@ export function GeoReport({
           ))}
         </div>
       </section>
+    </div>
+  );
+}
+
+/**
+ * GEO score over time for the project: a sparkline of past audits + the delta
+ * since the previous one — the audit → fix → re-audit loop made visible. Hidden
+ * until there are at least two audits to compare.
+ */
+function GeoHistory({ project }: { project: string | null }) {
+  const { points, loading } = useGeoHistory(project);
+  if (loading || points.length < 2) return null;
+  const last = points[points.length - 1];
+  const prev = points[points.length - 2];
+  const delta = last.score - prev.score;
+  return (
+    <div className="flex items-center gap-3 border border-border p-3">
+      <span className="shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+        Score history
+      </span>
+      <div className="flex h-8 items-end gap-0.5">
+        {points.map((p) => (
+          <Link
+            key={p.runId}
+            to={`/runs/${p.runId}`}
+            title={`${new Date(p.at).toLocaleDateString()}: ${p.score}`}
+          >
+            <div
+              className="w-2"
+              style={{
+                height: `${Math.max(4, (p.score / 100) * 32)}px`,
+                backgroundColor: ratingColor(p.score),
+              }}
+            />
+          </Link>
+        ))}
+      </div>
+      <span
+        className="shrink-0 text-xs tabular-nums"
+        style={{
+          color:
+            delta >= 0 ? "var(--status-success)" : "var(--status-failed)",
+        }}
+      >
+        {delta > 0 ? `▲ +${delta}` : delta < 0 ? `▼ ${delta}` : "±0"} vs previous
+      </span>
     </div>
   );
 }

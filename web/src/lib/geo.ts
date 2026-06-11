@@ -4,7 +4,10 @@
  * Parsed from the run's node output so the report view can render a dashboard
  * and turn each finding into an `idea-to-pr` task.
  */
-import type { NodeView } from "@/types/run";
+import { useQueries } from "@tanstack/react-query";
+import { apiJson } from "./api";
+import { nodesFromDetail, useRuns } from "./runs";
+import type { NodeView, RunDetail } from "@/types/run";
 
 export type GeoSeverity = "critical" | "high" | "medium" | "low";
 export type GeoEffort = "quick" | "medium" | "strategic";
@@ -122,4 +125,46 @@ export function geoTaskDescription(f: GeoFinding, url: string): string {
   ]
     .join("\n")
     .trim();
+}
+
+/** One audit's score at a point in time, for the trajectory view. */
+export interface GeoScorePoint {
+  runId: string;
+  at: string;
+  score: number;
+}
+
+const MAX_HISTORY = 12;
+
+/**
+ * The project's GEO score over time — derived from its `geo-audit` runs (no new
+ * storage). Fetches each run's detail and reads its verdict score. Returns
+ * points oldest → newest so the audit → fix → re-audit loop is visible.
+ */
+export function useGeoHistory(project: string | null): {
+  points: GeoScorePoint[];
+  loading: boolean;
+} {
+  const runs = useRuns({ project: project ?? undefined });
+  const auditRuns = (runs.data ?? [])
+    .filter((r) => r.workflow_name === "geo-audit")
+    .slice(0, MAX_HISTORY); // runs arrive newest-first
+  const details = useQueries({
+    queries: auditRuns.map((r) => ({
+      queryKey: ["run", r.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        apiJson<RunDetail>(`/api/runs/${r.id}`, { signal }),
+      staleTime: 60_000,
+    })),
+  });
+  const points: GeoScorePoint[] = [];
+  details.forEach((d, i) => {
+    if (!d.data) return;
+    const v = parseGeoVerdict(nodesFromDetail(d.data));
+    if (v) {
+      points.push({ runId: auditRuns[i].id, at: auditRuns[i].recorded_at, score: v.score });
+    }
+  });
+  points.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return { points, loading: runs.isLoading || details.some((d) => d.isLoading) };
 }
