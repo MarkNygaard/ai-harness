@@ -34,6 +34,9 @@ const DEFAULT_MODEL: &str = "composer";
 /// (a silently dropped connection), never one that is actively working.
 /// Overridable via `CURSOR_IDLE_TIMEOUT_SECS`.
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
+/// Embedded Cursor hook script, materialized to a temp dir at runtime and
+/// registered via `<cwd>/.cursor/hooks.json`.
+const CURSOR_HOOK_SCRIPT: &str = include_str!("../extensions/harness-cursor-hooks/hook.js");
 
 /// Outcome of one `cursor-agent` invocation that didn't error outright.
 enum Attempt {
@@ -111,7 +114,21 @@ impl CursorAgent {
             args.push("--resume".to_string());
             args.push(id.to_string());
         }
+
         args
+    }
+}
+
+/// Removes the materialized `<cwd>/.cursor/hooks.json` on drop. The script
+/// itself lives in `_dir`, a `TempDir` that cleans itself up. We remove only
+/// the file (not `.cursor/`, which may have pre-existed in the worktree).
+struct CursorHooksGuard {
+    hooks_json: std::path::PathBuf,
+    _dir: tempfile::TempDir,
+}
+impl Drop for CursorHooksGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.hooks_json);
     }
 }
 
@@ -121,11 +138,37 @@ impl PromptAgent for CursorAgent {
         let model = self.resolve_model(req.model.as_deref());
         let args = self.build_args(&req.prompt, &model, req.session.as_deref());
 
+        let mut env_vars = req.env_vars.clone();
+        let _hooks_guard = if let Some(hooks) = req.hooks.as_ref() {
+            let dir = tempfile::Builder::new()
+                .prefix("harness-cursor-hooks-")
+                .tempdir()
+                .map_err(|e| AgentError(e.to_string()))?;
+            let script_path = dir.path().join("hook.js");
+            std::fs::write(&script_path, CURSOR_HOOK_SCRIPT)
+                .map_err(|e| AgentError(e.to_string()))?;
+
+            let cursor_dir = req.cwd.join(".cursor");
+            std::fs::create_dir_all(&cursor_dir).map_err(|e| AgentError(e.to_string()))?;
+            let hooks_json = cursor_dir.join("hooks.json");
+            let value = crate::hooks::cursor_hooks_json(hooks, &script_path);
+            std::fs::write(&hooks_json, serde_json::to_string_pretty(&value).unwrap())
+                .map_err(|e| AgentError(e.to_string()))?;
+
+            env_vars.insert("HARNESS_HOOKS".into(), crate::hooks::omp_hooks_env(hooks));
+            Some(CursorHooksGuard {
+                hooks_json,
+                _dir: dir,
+            })
+        } else {
+            None
+        };
+
         // One automatic retry, but ONLY on a stall (a transient dropped
         // connection). A clean non-zero exit is deterministic — never retried.
         let mut attempt = 0u32;
         let (stdout, stderr, status) = loop {
-            match self.run_attempt(&args, &req.cwd, &req.env_vars).await? {
+            match self.run_attempt(&args, &req.cwd, &env_vars).await? {
                 Attempt::Done {
                     stdout,
                     stderr,

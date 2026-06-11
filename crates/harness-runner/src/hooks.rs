@@ -99,6 +99,26 @@ pub fn omp_hooks_env(hooks: &NodeHooks) -> String {
     serde_json::to_string(hooks).unwrap_or_default()
 }
 
+/// Build the project-level Cursor `.cursor/hooks.json` value that registers the
+/// bundled harness hook script on `preToolUse` and `postToolUse`. The script is
+/// invoked as `node <script> <event>`; it reads the rules from `HARNESS_HOOKS`
+/// (see [`omp_hooks_env`]) and the event payload from stdin. Cursor reads this
+/// file relative to the workspace root, so the caller writes it into the run's
+/// worktree (`req.cwd/.cursor/hooks.json`).
+pub fn cursor_hooks_json(_hooks: &NodeHooks, script_path: &std::path::Path) -> Value {
+    let quoted = shlex::try_quote(&script_path.to_string_lossy())
+        .expect("tempdir path must not contain NUL bytes")
+        .into_owned();
+    let cmd = |event: &str| json!({ "command": format!("node {quoted} {event}") });
+    json!({
+        "version": 1,
+        "hooks": {
+            "preToolUse": [cmd("preToolUse")],
+            "postToolUse": [cmd("postToolUse")],
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +383,214 @@ mod tests {
         // shlex quoting should produce a safe shell command
         assert!(cmd.starts_with("cat "));
         assert!(cmd.contains("pre-0.json"));
+    }
+
+    #[test]
+    fn cursor_hooks_json_registers_both_events() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("read-only".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![HookRule {
+                matcher: Some("Edit".into()),
+                decision: None,
+                reason: None,
+                additional_context: Some("Run cargo check".into()),
+                system_message: None,
+            }],
+        };
+        let v = cursor_hooks_json(
+            &hooks,
+            std::path::Path::new("/tmp/harness-cursor-hooks-xyz/hook.js"),
+        );
+        assert_eq!(v["version"], 1);
+        let pre = v["hooks"]["preToolUse"][0]["command"].as_str().unwrap();
+        assert!(pre.starts_with("node "));
+        assert!(pre.contains("hook.js"));
+        assert!(pre.contains("preToolUse"));
+        let post = v["hooks"]["postToolUse"][0]["command"].as_str().unwrap();
+        assert!(post.starts_with("node "));
+        assert!(post.contains("hook.js"));
+        assert!(post.contains("postToolUse"));
+    }
+
+    #[test]
+    fn cursor_hooks_json_quotes_script_path() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![],
+            post_tool_use: vec![],
+        };
+        let v = cursor_hooks_json(&hooks, std::path::Path::new("/tmp/my dir/hook.js"));
+        let cmd = v["hooks"]["preToolUse"][0]["command"].as_str().unwrap();
+        assert!(cmd.starts_with("node "));
+        assert!(cmd.contains("hook.js"));
+        assert!(cmd.contains("preToolUse"));
+    }
+
+    // -------------------------------------------------------------------------
+    // Script-decision tests (gated on node availability)
+    // -------------------------------------------------------------------------
+    const CURSOR_HOOK_SCRIPT: &str = include_str!("../extensions/harness-cursor-hooks/hook.js");
+
+    fn run_cursor_hook(event: &str, hooks_env: &str, stdin: &str) -> Option<Value> {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let has_node = Command::new("node")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_or(false, |s| s.success());
+        if !has_node {
+            return None;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("hook.js");
+        std::fs::write(&script, CURSOR_HOOK_SCRIPT).unwrap();
+        let mut child = Command::new("node")
+            .arg(&script)
+            .arg(event)
+            .env("HARNESS_HOOKS", hooks_env)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        Some(serde_json::from_slice(&out.stdout).unwrap())
+    }
+
+    #[test]
+    fn cursor_hook_pre_deny_match() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("read-only".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("preToolUse", &env, r#"{"tool_name":"Write"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "deny");
+        assert_eq!(out["agent_message"], "read-only");
+    }
+
+    #[test]
+    fn cursor_hook_pre_deny_falls_back_to_additional_context() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(HookDecision::Deny),
+                reason: None,
+                additional_context: Some("no writes".into()),
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("preToolUse", &env, r#"{"tool_name":"Write"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "deny");
+        assert_eq!(out["agent_message"], "no writes");
+    }
+
+    #[test]
+    fn cursor_hook_pre_non_match_allows() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("read-only".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("preToolUse", &env, r#"{"tool_name":"Read"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "allow");
+        assert!(out.get("agent_message").is_none() || out["agent_message"].as_str() == Some(""));
+    }
+
+    #[test]
+    fn cursor_hook_post_context() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![],
+            post_tool_use: vec![HookRule {
+                matcher: Some("Edit".into()),
+                decision: None,
+                reason: None,
+                additional_context: Some("Run cargo check".into()),
+                system_message: None,
+            }],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("postToolUse", &env, r#"{"tool_name":"Edit"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "allow");
+        assert_eq!(out["agent_message"], "Run cargo check");
+    }
+
+    #[test]
+    fn cursor_hook_empty_stdin_no_rules() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("preToolUse", &env, "");
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "allow");
+    }
+
+    #[test]
+    fn cursor_hook_invalid_regex_allows() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("[".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("broken".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("preToolUse", &env, r#"{"tool_name":"Write"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "allow");
     }
 }
