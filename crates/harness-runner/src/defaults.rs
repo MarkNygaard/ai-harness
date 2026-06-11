@@ -34,6 +34,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "judge-ab",
         include_str!("../defaults/workflows/judge-ab.yaml"),
     ),
+    (
+        "geo-audit",
+        include_str!("../defaults/workflows/geo-audit.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.
@@ -295,6 +299,31 @@ mod tests {
         assert!(
             judge.output_format.is_some(),
             "judge must emit a structured verdict"
+        );
+    }
+
+    #[test]
+    fn geo_audit_workflow_discovers_then_scores() {
+        let yaml = default_workflow("geo-audit").expect("geo-audit bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("geo-audit must parse");
+        assert_eq!(wf.name, "geo-audit");
+        // A deterministic fetch step the analysis depends on.
+        let discover = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "discover")
+            .expect("discover node exists");
+        assert!(matches!(discover.kind, harness_dag::NodeKind::Bash(_)));
+        // The analysis emits the structured score/findings verdict.
+        let analyze = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "analyze")
+            .expect("analyze node exists");
+        assert_eq!(analyze.depends_on, vec!["discover".to_string()]);
+        assert!(
+            analyze.output_format.is_some(),
+            "analyze must emit a structured GEO verdict"
         );
     }
 }
