@@ -46,14 +46,23 @@ function WindowRow({ w }: { w: UsageWindow }) {
   );
 }
 
+/** Longer-period windows first (7-day/weekly above the 5-hour). */
+function windowRank(label: string): number {
+  const l = label.toLowerCase();
+  return l.includes("week") || l.includes("day") || l.includes("7") ? 0 : 1;
+}
+
 function SubscriptionCard({ sub }: { sub: SubscriptionUsage }) {
+  const windows = [...sub.windows].sort(
+    (a, b) => windowRank(a.label) - windowRank(b.label),
+  );
   return (
     <Card>
       <CardContent className="flex flex-col gap-3 p-4">
         <div className="text-sm font-medium">{sub.label}</div>
-        {sub.available && sub.windows.length > 0 ? (
+        {sub.available && windows.length > 0 ? (
           <div className="flex flex-col gap-3">
-            {sub.windows.map((w) => (
+            {windows.map((w) => (
               <WindowRow key={w.label} w={w} />
             ))}
           </div>
