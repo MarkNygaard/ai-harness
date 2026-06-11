@@ -94,10 +94,7 @@ export function StepDialog({
               <div className="mb-1 text-xs font-medium text-muted-foreground">
                 Output
               </div>
-              <TextOrEmpty
-                text={view.output}
-                empty="No textual output for this step."
-              />
+              <OutputView text={view.output} />
               {view.artifact && (
                 <ArtifactView
                   name={view.artifact}
@@ -155,14 +152,42 @@ function ArtifactView({
   );
 }
 
-function TextOrEmpty({ text, empty }: { text: string | null; empty: string }) {
-  return text ? (
-    <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
-      {text}
-    </pre>
-  ) : (
-    <p className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-      {empty}
-    </p>
+/**
+ * A step's textual output: rendered as markdown (agents usually emit prose /
+ * markdown), except JSON outputs (e.g. `output_format` verdicts) which stay a
+ * formatted code block since markdown would mangle them. Read-only info, so no
+ * raw/source toggle.
+ */
+function OutputView({ text }: { text: string | null }) {
+  if (!text) {
+    return (
+      <p className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+        No textual output for this step.
+      </p>
+    );
+  }
+  const json = asPrettyJson(text);
+  if (json !== null) {
+    return (
+      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
+        {json}
+      </pre>
+    );
+  }
+  return (
+    <div className="max-h-[50vh] overflow-auto rounded-md bg-muted p-3">
+      <Markdown>{text}</Markdown>
+    </div>
   );
+}
+
+/** Pretty-printed JSON when `text` is a JSON object/array, else null. */
+function asPrettyJson(text: string): string | null {
+  const t = text.trim();
+  if (!t.startsWith("{") && !t.startsWith("[")) return null;
+  try {
+    return JSON.stringify(JSON.parse(t), null, 2);
+  } catch {
+    return null;
+  }
 }
