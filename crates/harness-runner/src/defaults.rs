@@ -314,16 +314,33 @@ mod tests {
             .find(|n| n.id == "discover")
             .expect("discover node exists");
         assert!(matches!(discover.kind, harness_dag::NodeKind::Bash(_)));
-        // The analysis emits the structured score/findings verdict.
-        let analyze = wf
+        // Four dimension analyses fan out from discover (parallel), each scoring
+        // one dimension; they share an output schema (a YAML anchor).
+        for dim in ["technical", "crawlers", "schema", "content"] {
+            let n = wf
+                .nodes
+                .iter()
+                .find(|n| n.id == dim)
+                .unwrap_or_else(|| panic!("dimension node `{dim}` exists"));
+            assert_eq!(n.depends_on, vec!["discover".to_string()]);
+            assert!(
+                n.output_format.is_some(),
+                "{dim} must emit a structured score"
+            );
+        }
+        // Synthesis joins all four and emits the composite verdict.
+        let synth = wf
             .nodes
             .iter()
-            .find(|n| n.id == "analyze")
-            .expect("analyze node exists");
-        assert_eq!(analyze.depends_on, vec!["discover".to_string()]);
+            .find(|n| n.id == "synthesize")
+            .expect("synthesize node exists");
+        assert_eq!(
+            synth.depends_on,
+            vec!["technical", "crawlers", "schema", "content"]
+        );
         assert!(
-            analyze.output_format.is_some(),
-            "analyze must emit a structured GEO verdict"
+            synth.output_format.is_some(),
+            "synthesize must emit the structured GEO verdict"
         );
     }
 }

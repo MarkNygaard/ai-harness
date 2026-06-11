@@ -65,10 +65,9 @@ function extractJson(raw: string): unknown {
 }
 
 /** The GEO verdict from a run's `analyze` node, or null if not a parseable audit. */
-export function parseGeoVerdict(nodes: NodeView[]): GeoVerdict | null {
-  const analyze = nodes.find((n) => n.id === "analyze");
-  if (!analyze?.output) return null;
-  const v = extractJson(analyze.output) as Partial<GeoVerdict> | null;
+function asVerdict(output: string | undefined): GeoVerdict | null {
+  if (!output) return null;
+  const v = extractJson(output) as Partial<GeoVerdict> | null;
   if (
     v &&
     typeof v.score === "number" &&
@@ -76,6 +75,24 @@ export function parseGeoVerdict(nodes: NodeView[]): GeoVerdict | null {
     Array.isArray(v.categories)
   ) {
     return v as GeoVerdict;
+  }
+  return null;
+}
+
+/**
+ * The composite GEO verdict from a run. Prefers the `synthesize` node (the
+ * fan-out workflow) then `analyze` (the MVP single-node workflow), and falls
+ * back to scanning any node whose output parses to a full verdict — so the view
+ * is decoupled from the workflow's node naming.
+ */
+export function parseGeoVerdict(nodes: NodeView[]): GeoVerdict | null {
+  for (const id of ["synthesize", "analyze"]) {
+    const v = asVerdict(nodes.find((n) => n.id === id)?.output);
+    if (v) return v;
+  }
+  for (const n of nodes) {
+    const v = asVerdict(n.output);
+    if (v) return v;
   }
   return null;
 }

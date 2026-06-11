@@ -6,12 +6,12 @@ description: |
   supporting foundation.
 
   Runs against the project's `external_url` (set it on the Projects page; it's
-  exposed to the run as `$EXTERNAL_URL`). A `discover` step fetches the page +
-  robots.txt + headers (deliberately WITHOUT JavaScript — that's what an AI
-  crawler sees), then an analysis step scores it 0–100 across technical /
-  crawler-access / structured-data / content dimensions, writes a human-readable
-  report (`geo-report.md`), and emits a structured verdict (score + severity-
-  tagged findings + a prioritized action plan you can hand to `idea-to-pr`).
+  exposed as `$EXTERNAL_URL`). A `discover` step fetches the page + robots.txt +
+  headers (deliberately WITHOUT JavaScript — that's what an AI crawler sees);
+  four analysis steps then score dimensions in parallel — **technical**,
+  **crawlers**, **schema**, **content** — and a `synthesize` step combines them
+  into a 0–100 composite, writes `geo-report.md`, and emits the structured
+  verdict (severity-tagged findings whose `fix` is phrased for `idea-to-pr`).
 
   NOT for: code changes (it only reads), or sites without an `external_url`.
 
@@ -30,110 +30,51 @@ nodes:
       mkdir -p "$ARTIFACTS_DIR"
       root="$(printf '%s' "$url" | sed -E 's#(https?://[^/]+).*#\1#')"
       echo "Auditing $url (root $root)"
-
-      # Raw homepage HTML with a browser UA — preserves <head> (which AI crawlers
-      # read) and is NOT JS-rendered, matching what a crawler actually sees.
+      # Raw homepage HTML with a browser UA — preserves <head> and is NOT
+      # JS-rendered, matching what an AI crawler actually sees.
       curl -fsSL --max-time 30 -A "Mozilla/5.0 (compatible; harness-geo-audit)" \
         "$url" -o "$ARTIFACTS_DIR/page.html" || echo "(homepage fetch failed)"
-
       # robots.txt — AI-crawler access rules.
       curl -fsSL --max-time 15 "$root/robots.txt" \
         -o "$ARTIFACTS_DIR/robots.txt" || echo "(no robots.txt)"
-
-      # Status as an AI bot vs a browser. A 403 for the bot UA but 200 for the
-      # browser = AI crawlers silently blocked (the classic "invisible to AI").
+      # Status as an AI bot vs a browser — a 403 for the bot but 200 for the
+      # browser = AI crawlers silently blocked.
       curl -sS -o /dev/null -D "$ARTIFACTS_DIR/headers-gptbot.txt" \
         -w "gptbot_status=%{http_code}\n" --max-time 20 \
         -A "Mozilla/5.0 (compatible; GPTBot/1.0; +https://openai.com/gptbot)" "$url" || true
       curl -sS -o /dev/null -D "$ARTIFACTS_DIR/headers-browser.txt" \
         -w "browser_status=%{http_code}\n" --max-time 20 -A "Mozilla/5.0" "$url" || true
-
       echo "page.html: $(wc -c < "$ARTIFACTS_DIR/page.html" 2>/dev/null || echo 0) bytes"
       echo "DISCOVER-DONE"
     timeout: 120000
 
-  - id: analyze
+  - id: technical
     category: validation
     provider: claude
-    model: opus
-    # The audit is the product — reason hard about it.
-    effort: high
+    model: sonnet
     context: fresh
-    artifact: geo-report.md
     depends_on: [discover]
     prompt: |
-      You are a GEO (Generative Engine Optimization) auditor. Assess how ready
-      the site at $EXTERNAL_URL is to be CITED by AI search engines (ChatGPT,
-      Claude, Perplexity, Gemini, Google AI Overviews), with traditional SEO as
-      the supporting foundation. Be concrete and evidence-based — quote what you
-      saw.
-
-      The `discover` step already fetched the site. Read these files in
-      `$ARTIFACTS_DIR`:
-      - `page.html` — the raw homepage HTML. AI crawlers do NOT execute
-        JavaScript, so if the `<body>` is essentially empty / client-rendered,
-        that is a CRITICAL finding — the page is invisible to them.
-      - `robots.txt` — does it allow the AI crawlers (GPTBot, ClaudeBot,
-        PerplexityBot, OAI-SearchBot, Google-Extended, …) or block them?
-      - `headers-gptbot.txt` / `headers-browser.txt` — compare the status codes;
-        a 403/blocked for the bot UA but 200 for the browser = AI crawlers
-        blocked at the edge.
-      You MAY also read the project's source in the working directory to make a
-      finding precise (e.g. point at the component that renders `<head>`), since
-      the fix will land as a PR against this repo.
-
-      Score each dimension 0–100, then a weighted composite:
-      - **technical** (weight 0.30): server-rendered vs client-only, `<title>` /
-        meta description / canonical, Open Graph, HTTPS, security headers.
-      - **crawlers** (0.25): AI-crawler access (robots.txt + the bot-UA status).
-      - **schema** (0.20): JSON-LD structured data in `page.html` (Organization,
-        Article, Person/author, `sameAs` links) — present, valid, useful?
-      - **content** (0.25): citability — clear question-answering passages,
-        self-contained fact-dense paragraphs, author / E-E-A-T trust signals,
-        freshness.
-      Composite = Σ(category_score × weight), 0–100. Rating bands: 90–100
-      excellent · 75–89 good · 60–74 fair · 40–59 poor · 0–39 critical.
-
-      Write a human-readable report to `$ARTIFACTS_DIR/geo-report.md`:
-      an executive summary + the overall score, the per-category scores, the
-      findings grouped by severity (each with a concrete fix), and a prioritized
-      action plan (quick wins first). Phrase each action item so it can be handed
-      to an implementer as a standalone task.
-
-      When done, emit ONLY the JSON verdict matching the schema — no prose, no
-      preamble.
-    output_format:
+      Score the **technical** GEO foundation of $EXTERNAL_URL (0–100), set
+      `key` to "technical". Read `$ARTIFACTS_DIR/page.html` and the
+      `headers-*.txt` files. Assess: server-rendered vs client-only (AI crawlers
+      run NO JavaScript — a near-empty/CSR `<body>` is CRITICAL, it's invisible
+      to them), `<title>` / meta description / canonical, Open Graph, HTTPS,
+      security headers. You MAY read the project's source to point a finding at
+      the file that needs changing. Emit ONLY the JSON.
+    output_format: &dim_schema
       type: object
       properties:
+        key:
+          type: string
+          description: "Dimension key (technical | crawlers | schema | content)."
         score:
           type: integer
-          description: "Composite GEO score, 0–100."
-        rating:
-          type: string
-          enum: [critical, poor, fair, good, excellent]
+          description: "0–100 for this dimension."
         summary:
           type: string
-          description: "2–4 sentence executive summary."
-        categories:
-          type: array
-          description: "Per-dimension scores."
-          items:
-            type: object
-            properties:
-              key:
-                type: string
-                description: "technical | crawlers | schema | content"
-              weight:
-                type: number
-              score:
-                type: integer
-                description: "0–100"
-              summary:
-                type: string
-            required: [key, score, summary]
         findings:
           type: array
-          description: "Severity-tagged issues; each fix is an implementable task."
           items:
             type: object
             properties:
@@ -148,7 +89,130 @@ nodes:
                 type: string
               fix:
                 type: string
-                description: "The concrete change to make, phrased as a task for idea-to-pr."
+                description: "Concrete change, phrased as a task for idea-to-pr."
+              effort:
+                type: string
+                enum: [quick, medium, strategic]
+            required: [severity, category, title, fix]
+      required: [key, score, findings]
+
+  - id: crawlers
+    category: validation
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [discover]
+    prompt: |
+      Score **AI-crawler access** for $EXTERNAL_URL (0–100), set `key` to
+      "crawlers". Read `$ARTIFACTS_DIR/robots.txt` and `headers-gptbot.txt` /
+      `headers-browser.txt`. Are the AI crawlers (GPTBot, ClaudeBot,
+      PerplexityBot, OAI-SearchBot, Google-Extended, …) allowed in robots.txt?
+      Does the bot user-agent get a 403/blocked while the browser gets 200
+      (= silently blocked at the edge — CRITICAL)? Emit ONLY the JSON.
+    output_format: *dim_schema
+
+  - id: schema
+    category: validation
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [discover]
+    prompt: |
+      Score **structured data** for $EXTERNAL_URL (0–100), set `key` to "schema".
+      Read `$ARTIFACTS_DIR/page.html` and find the JSON-LD blocks
+      (`<script type="application/ld+json">`). Assess presence + validity +
+      usefulness of Organization, Article, Person/author, and `sameAs` links
+      (Wikipedia/LinkedIn/etc.). Note deprecated types. You MAY read the source
+      to point at where `<head>` / schema is rendered. Emit ONLY the JSON.
+    output_format: *dim_schema
+
+  - id: content
+    category: validation
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [discover]
+    prompt: |
+      Score **content citability** for $EXTERNAL_URL (0–100), set `key` to
+      "content". Read `$ARTIFACTS_DIR/page.html` (the visible text). Assess:
+      clear question-answering passages, self-contained fact-dense paragraphs an
+      AI can quote, author / E-E-A-T trust signals (named author, credentials,
+      about/contact, dates), and freshness. Emit ONLY the JSON.
+    output_format: *dim_schema
+
+  - id: synthesize
+    category: delivery
+    provider: claude
+    model: opus
+    effort: high
+    context: fresh
+    artifact: geo-report.md
+    depends_on: [technical, crawlers, schema, content]
+    prompt: |
+      Combine the four dimension analyses of $EXTERNAL_URL into one GEO verdict.
+
+      Dimension results (each `{ key, score, summary, findings }`):
+      - technical: $technical.output
+      - crawlers:  $crawlers.output
+      - schema:    $schema.output
+      - content:   $content.output
+
+      Composite score (0–100) = technical×0.30 + crawlers×0.25 + schema×0.20 +
+      content×0.25. Rating: 90–100 excellent · 75–89 good · 60–74 fair ·
+      40–59 poor · 0–39 critical.
+
+      Build the `categories` array from the four dimensions (key, weight, score,
+      summary). Merge all findings, dedupe near-duplicates, and keep each
+      finding's `fix` phrased as a standalone task for an implementer.
+
+      Write a human-readable report to `$ARTIFACTS_DIR/geo-report.md`: executive
+      summary + composite score, the per-dimension scores, findings grouped by
+      severity, and a prioritized action plan (quick wins first).
+
+      Then emit ONLY the JSON verdict matching the schema — no prose.
+    output_format:
+      type: object
+      properties:
+        score:
+          type: integer
+          description: "Composite GEO score, 0–100."
+        rating:
+          type: string
+          enum: [critical, poor, fair, good, excellent]
+        summary:
+          type: string
+          description: "2–4 sentence executive summary."
+        categories:
+          type: array
+          items:
+            type: object
+            properties:
+              key:
+                type: string
+              weight:
+                type: number
+              score:
+                type: integer
+              summary:
+                type: string
+            required: [key, score, summary]
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              severity:
+                type: string
+                enum: [critical, high, medium, low]
+              category:
+                type: string
+              title:
+                type: string
+              detail:
+                type: string
+              fix:
+                type: string
+                description: "The concrete change, phrased as a task for idea-to-pr."
               effort:
                 type: string
                 enum: [quick, medium, strategic]
