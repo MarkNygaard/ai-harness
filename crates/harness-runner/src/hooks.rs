@@ -1,5 +1,6 @@
 //! Pure translation helpers: turn provider-agnostic [`NodeHooks`] into
-//! provider-specific artifacts (Claude Code settings.json, omp extension config).
+//! provider-specific artifacts (Claude Code settings.json, omp extension config,
+//! Cursor project hooks).
 
 use harness_dag::model::{HookDecision, NodeHooks};
 use serde_json::{json, Value};
@@ -593,7 +594,7 @@ mod tests {
             &hook_path,
             "afterFileEdit",
             Some(&env),
-            r#"{"tool_name":"Write"}"#,
+            r#"{"hook_event_name":"afterFileEdit","file_path":"/proj/src/foo.rs","edits":[]}"#,
         );
         assert!(out.status.success());
         let v: Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -601,5 +602,39 @@ mod tests {
         let message = v["agent_message"].as_str().unwrap();
         assert!(message.contains("Run cargo check"));
         assert!(message.contains("Update tests"));
+        assert_eq!(v["additional_context"].as_str().unwrap(), message);
+    }
+
+    #[test]
+    fn cursor_hook_after_file_edit_matches_edit_write_matcher() {
+        if !node_available() {
+            return;
+        }
+        let (_dir, hook_path) = cursor_hook_fixture();
+
+        let hooks = NodeHooks {
+            pre_tool_use: vec![],
+            post_tool_use: vec![HookRule {
+                matcher: Some("Edit|MultiEdit|Write".into()),
+                decision: None,
+                reason: None,
+                additional_context: Some("Run cargo check".into()),
+                system_message: None,
+            }],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook(
+            &hook_path,
+            "afterFileEdit",
+            Some(&env),
+            r#"{"hook_event_name":"afterFileEdit","file_path":"/proj/src/foo.rs","edits":[]}"#,
+        );
+        assert!(out.status.success());
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["permission"], "allow");
+        assert!(v["agent_message"]
+            .as_str()
+            .unwrap()
+            .contains("Run cargo check"));
     }
 }

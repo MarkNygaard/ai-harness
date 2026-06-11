@@ -60,6 +60,28 @@ function extractToolName(payload) {
   return "";
 }
 
+/** Names to test matchers against — one tool event or file-edit aliases. */
+function matchTargets(payload, argvPhase) {
+  const tool = extractToolName(payload);
+  if (tool) return [tool];
+
+  const event =
+    payload.hook_event_name ||
+    payload.hookEventName ||
+    payload.event ||
+    "";
+  if (event === "afterFileEdit" || argvPhase === "afterFileEdit") {
+    // afterFileEdit payloads carry file_path, not tool_name; workflows authored
+    // for Claude often match Edit|MultiEdit|Write.
+    return ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+  }
+  return [""];
+}
+
+function ruleMatches(rule, targets) {
+  return targets.some((target) => testMatcher(rule.matcher, target));
+}
+
 function detectPhase(argvPhase, payload) {
   if (argvPhase === "preToolUse") {
     return "preToolUse";
@@ -88,10 +110,10 @@ function joinMessage(rule) {
   return parts.join("\n");
 }
 
-function handlePre(hooks, toolName) {
+function handlePre(hooks, targets) {
   const rules = hooks.pre_tool_use || [];
   for (const rule of rules) {
-    if (!testMatcher(rule.matcher, toolName)) continue;
+    if (!ruleMatches(rule, targets)) continue;
     if (rule.decision === "deny" || rule.decision === "ask") {
       respond({
         permission: rule.decision,
@@ -102,16 +124,23 @@ function handlePre(hooks, toolName) {
   allow();
 }
 
-function handlePost(hooks, toolName) {
+function handlePost(hooks, targets) {
   const rules = hooks.post_tool_use || [];
   const messages = [];
   for (const rule of rules) {
-    if (!testMatcher(rule.matcher, toolName)) continue;
+    if (!ruleMatches(rule, targets)) continue;
     const message = joinMessage(rule);
     if (message) messages.push(message);
   }
   if (messages.length > 0) {
-    respond({ permission: "allow", agent_message: messages.join("\n") });
+    const text = messages.join("\n");
+    // Headless cursor-agent honors permission/agent_message; IDE postToolUse
+    // hooks also accept additional_context.
+    respond({
+      permission: "allow",
+      agent_message: text,
+      additional_context: text,
+    });
   }
   allow();
 }
@@ -123,11 +152,11 @@ try {
   if (!hooks) {
     allow();
   }
-  const toolName = extractToolName(payload);
+  const targets = matchTargets(payload, process.argv[2]);
   if (phase === "preToolUse") {
-    handlePre(hooks, toolName);
+    handlePre(hooks, targets);
   } else {
-    handlePost(hooks, toolName);
+    handlePost(hooks, targets);
   }
 } catch {
   allow();
