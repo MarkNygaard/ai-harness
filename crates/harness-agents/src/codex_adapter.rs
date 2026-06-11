@@ -835,6 +835,8 @@ mod tests {
                     input_tokens: 10,
                     output_tokens: 3,
                     total_tokens: 15,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                     cost_usd: 0.0,
                 }
             })

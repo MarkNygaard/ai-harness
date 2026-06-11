@@ -98,8 +98,14 @@ impl PromptAgent for CodeAgentRunner {
             usage: Usage {
                 input: Some(resp.token_usage.input_tokens),
                 output: Some(resp.token_usage.output_tokens),
-                cache_read: None,
-                cache_write: None,
+                // Surface the cache breakdown (Claude reports most of its prompt
+                // as cache_read) so usage/cost match the omp path instead of
+                // showing only the tiny uncached input. `None` when there's no
+                // cache data, preserving the "unknown" vs "zero" distinction.
+                cache_read: (resp.token_usage.cache_read_tokens > 0)
+                    .then_some(resp.token_usage.cache_read_tokens),
+                cache_write: (resp.token_usage.cache_creation_tokens > 0)
+                    .then_some(resp.token_usage.cache_creation_tokens),
             },
             // Treat a missing exit code (API adapter) as success; a non-zero
             // CLI exit is a failure.
@@ -139,6 +145,8 @@ mod tests {
                     input_tokens: 12,
                     output_tokens: 3,
                     total_tokens: 15,
+                    cache_read_tokens: 0,
+                    cache_creation_tokens: 0,
                     cost_usd: 0.0,
                 },
                 model: req.model.unwrap_or_else(|| self.name.to_string()),
@@ -240,6 +248,8 @@ mod tests {
                         input_tokens: 1,
                         output_tokens: 1,
                         total_tokens: 2,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                         cost_usd: 0.0,
                     },
                     model: "claude".into(),

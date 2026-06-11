@@ -88,6 +88,9 @@ pub(crate) fn parse_codex_token_usage(usage: &Value) -> Option<TokenUsage> {
         input_tokens,
         output_tokens,
         total_tokens,
+        // Codex-exec doesn't surface a cache breakdown here; leave at 0.
+        cache_read_tokens: 0,
+        cache_creation_tokens: 0,
         cost_usd: 0.0,
     })
 }
