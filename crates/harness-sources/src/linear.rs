@@ -48,6 +48,14 @@ pub struct Label {
     pub name: String,
 }
 
+/// A newly created issue — the fields surfaced back to the caller.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreatedIssue {
+    pub id: String,
+    pub identifier: String,
+    pub url: String,
+}
+
 /// An issue matched by a preview filter.
 #[derive(Debug, Clone, Serialize)]
 pub struct Issue {
@@ -426,6 +434,61 @@ impl LinearClient {
         });
         expect_mutation_success(&self.post(body).await?, "attachmentCreate")
     }
+
+    /// Create an issue in `team_id` (write), with an optional initial workflow
+    /// state and labels. `state_id` / `label_ids` are Linear internal ids
+    /// (resolve label names via [`Self::discover`]). Returns the new issue.
+    pub async fn create_issue(
+        &self,
+        team_id: &str,
+        title: &str,
+        description: &str,
+        state_id: Option<&str>,
+        label_ids: &[String],
+    ) -> Result<CreatedIssue, LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($t:String!,$ti:String!,$d:String!,$s:String,$l:[String!]){ \
+                issueCreate(input:{teamId:$t, title:$ti, description:$d, stateId:$s, labelIds:$l}){ \
+                success issue { id identifier url } } }",
+            "variables": {
+                "t": team_id, "ti": title, "d": description,
+                "s": state_id, "l": label_ids,
+            },
+        });
+        parse_created_issue(&self.post(body).await?)
+    }
+}
+
+/// Parse an `issueCreate` mutation response into a [`CreatedIssue`].
+fn parse_created_issue(json: &[u8]) -> Result<CreatedIssue, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(rename = "issueCreate")]
+        issue_create: Payload,
+    }
+    #[derive(Deserialize)]
+    struct Payload {
+        success: bool,
+        issue: Option<Node>,
+    }
+    #[derive(Deserialize)]
+    struct Node {
+        id: String,
+        identifier: String,
+        url: String,
+    }
+    let data: Data = gql_data(json)?;
+    if !data.issue_create.success {
+        return Err(LinearError("issueCreate did not report success".into()));
+    }
+    data.issue_create
+        .issue
+        .map(|n| CreatedIssue {
+            id: n.id,
+            identifier: n.identifier,
+            url: n.url,
+        })
+        .ok_or_else(|| LinearError("issueCreate returned no issue".into()))
 }
 
 /// Check a mutation response reported `{ <field>: { success: true } }`.
@@ -475,6 +538,33 @@ mod tests {
             "issueUpdate"
         )
         .is_err());
+    }
+
+    #[test]
+    fn create_issue_parses_payload() {
+        let json = br#"{"data":{"issueCreate":{"success":true,"issue":{
+            "id":"i1","identifier":"COR-42",
+            "url":"https://linear.app/acme/issue/COR-42"}}}}"#;
+        let c = parse_created_issue(json).unwrap();
+        assert_eq!(c.id, "i1");
+        assert_eq!(c.identifier, "COR-42");
+        assert_eq!(c.url, "https://linear.app/acme/issue/COR-42");
+    }
+
+    #[test]
+    fn create_issue_rejects_unsuccessful_or_errored() {
+        // success:false → error.
+        assert!(
+            parse_created_issue(br#"{"data":{"issueCreate":{"success":false,"issue":null}}}"#)
+                .is_err()
+        );
+        // success but no issue → error.
+        assert!(
+            parse_created_issue(br#"{"data":{"issueCreate":{"success":true,"issue":null}}}"#)
+                .is_err()
+        );
+        // GraphQL error surfaces through gql_data.
+        assert!(parse_created_issue(br#"{"errors":[{"message":"team not found"}]}"#).is_err());
     }
 
     #[test]

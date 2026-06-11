@@ -296,6 +296,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/projects/{project}/linear-sources",
             get(linear_source_routes::list_sources),
         )
+        .route(
+            "/api/projects/{project}/linear-issues",
+            post(linear_source_routes::create_issue),
+        )
         // ── Provider credentials (UI-managed, encrypted at rest) ────────────
         .route(
             "/api/credentials",

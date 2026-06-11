@@ -1,8 +1,13 @@
+import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { useCreateRun } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
+import { useProjectCredentials } from "@/lib/credentials";
+import { useCreateLinearIssue, useLinearSources } from "@/lib/linear";
+import type { CreatedLinearIssue } from "@/types/linear";
 import {
   SEVERITY_RANK,
   geoTaskDescription,
@@ -13,6 +18,9 @@ import {
   type GeoVerdict,
 } from "@/lib/geo";
 
+/** The workflow GEO findings are filed/built against. */
+const IDEA_WORKFLOW = "idea-to-pr";
+
 const SEV_VARIANT: Record<GeoSeverity, "failed" | "running" | "secondary"> = {
   critical: "failed",
   high: "failed",
@@ -22,8 +30,10 @@ const SEV_VARIANT: Record<GeoSeverity, "failed" | "running" | "secondary"> = {
 
 /**
  * Renders a geo-audit verdict: score dashboard, per-dimension scores, and the
- * findings — each with a one-click "Build this" that fires `idea-to-pr` against
- * the same project to land the fix as a PR.
+ * findings. Each finding can be acted on two ways: "Build this" fires
+ * `idea-to-pr` immediately, and (when the project has Linear configured)
+ * "Create issue" files it into Linear with the eligibility label so the poller
+ * picks it up. A bulk action files every finding at once.
  */
 export function GeoReport({
   verdict,
@@ -44,6 +54,78 @@ export function GeoReport({
   const findings = [...verdict.findings].sort(
     (a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity],
   );
+
+  // "Create issue" is available only when the project has a Linear API key AND
+  // an idea-to-pr binding (team + source status + eligibility label) to file
+  // into. Without the binding the server can't resolve where the issue lands.
+  const projectCreds = useProjectCredentials(project);
+  const linearSources = useLinearSources(project);
+  const hasLinearKey = !!projectCreds.data?.some(
+    (c) => c.provider === "linear" && c.configured,
+  );
+  const hasBinding = !!linearSources.data?.some(
+    (s) => s.workflow === IDEA_WORKFLOW,
+  );
+  const linearEnabled = hasLinearKey && hasBinding;
+
+  // Created issues keyed by the finding's index in `findings` — shared between
+  // the per-finding buttons and the bulk action so neither double-files.
+  const [issues, setIssues] = useState<Record<number, CreatedLinearIssue>>({});
+  const [filing, setFiling] = useState<number | "bulk" | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const createIssue = useCreateLinearIssue(project);
+
+  // Findings the user has dismissed (by index). Ignored ones are skipped by the
+  // bulk action and can't be built/filed until un-ignored. Session-scoped.
+  const [ignored, setIgnored] = useState<Set<number>>(() => new Set());
+  function toggleIgnore(idx: number) {
+    setIgnored((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  }
+
+  async function fileFinding(idx: number, f: GeoFinding) {
+    if (issues[idx]) return;
+    const created = await createIssue.mutateAsync({
+      title: f.title,
+      description: geoTaskDescription(f, url),
+    });
+    setIssues((prev) => ({ ...prev, [idx]: created }));
+  }
+
+  async function fileOne(idx: number, f: GeoFinding) {
+    setFileError(null);
+    setFiling(idx);
+    try {
+      await fileFinding(idx, f);
+    } catch (e) {
+      setFileError((e as Error).message);
+    } finally {
+      setFiling(null);
+    }
+  }
+
+  async function fileAll() {
+    setFileError(null);
+    setFiling("bulk");
+    try {
+      for (let i = 0; i < findings.length; i++) {
+        if (ignored.has(i)) continue;
+        await fileFinding(i, findings[i]);
+      }
+    } catch (e) {
+      setFileError((e as Error).message);
+    } finally {
+      setFiling(null);
+    }
+  }
+
+  const unfiled = findings.filter(
+    (_, i) => !issues[i] && !ignored.has(i),
+  ).length;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
@@ -109,12 +191,41 @@ export function GeoReport({
       </section>
 
       <section className="flex flex-col gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Findings ({findings.length}) — click “Build this” to fix via idea-to-pr
-        </h3>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Findings ({findings.length}) — “Build this” fixes it via idea-to-pr
+          </h3>
+          {linearEnabled && unfiled > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={filing !== null}
+              onClick={fileAll}
+            >
+              {filing === "bulk"
+                ? "Filing…"
+                : `Create Linear issues for all (${unfiled})`}
+            </Button>
+          )}
+        </div>
+        {fileError && (
+          <p className="text-[11px] text-destructive">{fileError}</p>
+        )}
         <div className="flex flex-col gap-2">
           {findings.map((f, i) => (
-            <FindingRow key={i} finding={f} project={project} url={url} />
+            <FindingRow
+              key={i}
+              finding={f}
+              project={project}
+              url={url}
+              linearEnabled={linearEnabled}
+              issue={issues[i]}
+              filing={filing === i}
+              ignored={ignored.has(i)}
+              onCreateIssue={() => fileOne(i, f)}
+              onToggleIgnore={() => toggleIgnore(i)}
+            />
           ))}
         </div>
       </section>
@@ -158,11 +269,11 @@ function GeoHistory({ project }: { project: string | null }) {
       <span
         className="shrink-0 text-xs tabular-nums"
         style={{
-          color:
-            delta >= 0 ? "var(--status-success)" : "var(--status-failed)",
+          color: delta >= 0 ? "var(--status-success)" : "var(--status-failed)",
         }}
       >
-        {delta > 0 ? `▲ +${delta}` : delta < 0 ? `▼ ${delta}` : "±0"} vs previous
+        {delta > 0 ? `▲ +${delta}` : delta < 0 ? `▼ ${delta}` : "±0"} vs
+        previous
       </span>
     </div>
   );
@@ -172,14 +283,31 @@ function FindingRow({
   finding,
   project,
   url,
+  linearEnabled,
+  issue,
+  filing,
+  ignored,
+  onCreateIssue,
+  onToggleIgnore,
 }: {
   finding: GeoFinding;
   project: string | null;
   url: string;
+  linearEnabled: boolean;
+  issue: CreatedLinearIssue | undefined;
+  filing: boolean;
+  ignored: boolean;
+  onCreateIssue: () => void;
+  onToggleIgnore: () => void;
 }) {
   const create = useCreateRun();
   return (
-    <div className="border-l-2 border-border bg-card p-3 pl-3">
+    <div
+      className={cn(
+        "border-l-2 border-border bg-card p-3 pl-3",
+        ignored && "opacity-50",
+      )}
+    >
       <div className="flex items-center gap-2">
         <Badge variant={SEV_VARIANT[finding.severity] ?? "secondary"}>
           {finding.severity}
@@ -188,8 +316,38 @@ function FindingRow({
           {finding.category}
           {finding.effort ? ` · ${finding.effort}` : ""}
         </span>
-        <span className="truncate text-sm font-medium">{finding.title}</span>
-        <div className="ml-auto shrink-0">
+        <span
+          className={cn(
+            "truncate text-sm font-medium",
+            ignored && "line-through",
+          )}
+        >
+          {finding.title}
+        </span>
+        <div className="ml-auto flex shrink-0 items-center gap-2">
+          {linearEnabled &&
+            (issue ? (
+              <a
+                href={issue.url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-accent-orange hover:underline"
+                title="Open the Linear issue"
+              >
+                {issue.identifier} →
+              </a>
+            ) : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={filing || !project || ignored}
+                title="Create a Linear issue (AI Eligible) for this finding"
+                onClick={onCreateIssue}
+              >
+                {filing ? "Filing…" : "Create issue"}
+              </Button>
+            ))}
           {create.data ? (
             <Link
               to={`/runs/${create.data.run_id}`}
@@ -202,11 +360,11 @@ function FindingRow({
               type="button"
               size="sm"
               variant="outline"
-              disabled={create.isPending || !project}
+              disabled={create.isPending || !project || ignored}
               title={!project ? "Run has no project to open a PR against" : ""}
               onClick={() =>
                 create.mutate({
-                  workflow: "idea-to-pr",
+                  workflow: IDEA_WORKFLOW,
                   project: project ?? undefined,
                   real: true,
                   title: finding.title,
@@ -217,6 +375,19 @@ function FindingRow({
               {create.isPending ? "Starting…" : "Build this"}
             </Button>
           )}
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={onToggleIgnore}
+            title={
+              ignored
+                ? "Restore this finding"
+                : "Ignore this finding (won't be built or filed)"
+            }
+          >
+            {ignored ? "Unignore" : "Ignore"}
+          </Button>
         </div>
       </div>
       {finding.detail && (
