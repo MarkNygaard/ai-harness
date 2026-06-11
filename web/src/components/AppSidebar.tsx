@@ -2,6 +2,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   IconBinaryTree2,
   IconFolderCog,
+  IconGitCompare,
   IconHexagonalPrism,
   IconKey,
   IconLayoutDashboard,
@@ -31,6 +32,7 @@ interface NavItem {
 const OPERATIONS: NavItem[] = [
   { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
   { href: "/runs", label: "Runs", icon: IconRocket, match: "/runs" },
+  { href: "/ab", label: "A/B Tests", icon: IconGitCompare, match: "/ab" },
   {
     href: "/projects",
     label: "Projects",
