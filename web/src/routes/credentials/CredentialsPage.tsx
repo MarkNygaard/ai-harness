@@ -16,6 +16,8 @@ import {
   type KimiConnectStart,
   type CodexConnectStart,
 } from "@/lib/credentials";
+import { LANE_FOR_CREDENTIAL } from "@/lib/billing";
+import { BillingFields } from "./BillingFields";
 
 /** A field the user pastes for a provider. */
 interface ProviderField {
@@ -233,6 +235,7 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
           </p>
         )}
         {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
+        <BillingFields lane="kimi" />
       </CardContent>
     </Card>
   );
@@ -357,6 +360,7 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
           </p>
         )}
         {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
+        <BillingFields lane="gpt" />
       </CardContent>
     </Card>
   );
@@ -456,6 +460,9 @@ function ProviderCard({
             )}
           </div>
         </form>
+        {LANE_FOR_CREDENTIAL[provider.id] && (
+          <BillingFields lane={LANE_FOR_CREDENTIAL[provider.id]} />
+        )}
       </CardContent>
     </Card>
   );
