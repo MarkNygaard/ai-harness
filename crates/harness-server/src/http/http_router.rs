@@ -7,7 +7,7 @@ use axum::{
 use std::sync::Arc;
 
 use super::{
-    auth, categories_routes, credentials_routes, get_issue_workflow_by_issue,
+    auth, billing_routes, categories_routes, credentials_routes, get_issue_workflow_by_issue,
     get_issue_workflow_by_pr, get_project_workflow_by_project, get_task, get_task_artifacts,
     get_task_prompts, get_task_proof, get_workflow_runtime_tree, github_webhook, handle_rpc,
     health_check, ingest_signal, intake_status, linear_routes, linear_source_routes, list_tasks,
@@ -222,6 +222,16 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/categories/{id}",
             axum::routing::put(categories_routes::save_category)
                 .delete(categories_routes::delete_category),
+        )
+        // ── Billing profiles (effective vs notional cost per model lane) ────
+        .route(
+            "/api/billing-profiles",
+            get(billing_routes::list_billing_profiles),
+        )
+        .route(
+            "/api/billing-profiles/{lane}",
+            axum::routing::put(billing_routes::save_billing_profile)
+                .delete(billing_routes::delete_billing_profile),
         )
         // ── Workflow authoring API (visual editor + MCP) ────────────────────
         .route("/api/authoring/catalog", get(workflows_routes::get_catalog))

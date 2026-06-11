@@ -8,8 +8,11 @@
 //! outputTokens, cacheReadTokens, cacheWriteTokens } }`. `-p` grants full
 //! tool access (write + shell); `--force`/`--trust` keep it non-interactive.
 //!
-//! Models are bare Cursor ids (e.g. `composer`, `sonnet-4`, `gpt-5`); the node's
-//! `model` is passed through verbatim, defaulting to [`DEFAULT_MODEL`]. Auth is
+//! Models are bare Cursor ids (e.g. `composer-2.5`, `sonnet-4`, `gpt-5`); the
+//! node's `model` is passed through verbatim, defaulting to [`DEFAULT_MODEL`].
+//! Note a `-fast` suffix selects Cursor's pricier "fast" tier (e.g.
+//! `composer-2.5-fast`, which is the account default if no model is given) — the
+//! harness always passes an explicit id, so it gets the standard tier. Auth is
 //! the `CURSOR_API_KEY` env var (a Cursor dashboard API key), materialized into
 //! the run environment by the server like the other providers — we don't manage
 //! it here. The idle watchdog mirrors [`crate::pi`]: a call is killed only if it
@@ -37,8 +40,10 @@ fn cursor_hooks_lock() -> &'static tokio::sync::Mutex<()> {
 /// Embedded Cursor hook script, materialized to `req.cwd/.cursor` at runtime.
 const CURSOR_HOOK_SCRIPT: &str = include_str!("../extensions/cursor-hooks/hook.js");
 
-/// Default model when a `cursor` node declares no `model` — Cursor's own model.
-const DEFAULT_MODEL: &str = "composer";
+/// Default model when a `cursor` node declares no `model` — Cursor's own model,
+/// standard tier. Explicitly NOT the bare `composer` (not a valid id) nor the
+/// `-fast` variant (pricier, and the account default when unspecified).
+const DEFAULT_MODEL: &str = "composer-2.5";
 
 /// Idle (no-output) watchdog: kill a call that emits no stdout for this long
 /// (a silently dropped connection), never one that is actively working.

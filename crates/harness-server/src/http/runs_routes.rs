@@ -95,6 +95,7 @@ pub struct RunsState {
     cred_store: OnceCell<harness_persist::CredentialStore>,
     project_store: OnceCell<ProjectStore>,
     category_store: OnceCell<harness_persist::CategoryStore>,
+    billing_store: OnceCell<harness_persist::BillingProfileStore>,
     linear_source_store: OnceCell<harness_persist::LinearSourceStore>,
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     /// Where project repos are cloned (one checkout dir per project).
@@ -160,6 +161,7 @@ impl RunsState {
             cred_store: OnceCell::new(),
             project_store: OnceCell::new(),
             category_store: OnceCell::new(),
+            billing_store: OnceCell::new(),
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             projects_dir,
@@ -192,6 +194,23 @@ impl RunsState {
         self.category_store
             .get_or_try_init(|| async {
                 harness_persist::CategoryStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the billing-profile store.
+    pub(crate) async fn billing_store(
+        &self,
+    ) -> Result<&harness_persist::BillingProfileStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.billing_store
+            .get_or_try_init(|| async {
+                harness_persist::BillingProfileStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -860,9 +879,19 @@ fn assemble_ab_evidence(runs: &[harness_persist::RunDetail]) -> String {
             Some(pr) => s.push_str(&format!("PR: {pr}\n")),
             None => s.push_str("PR: (none — arm produced no pull request)\n"),
         }
-        s.push_str("\nSteps:\n");
+        // Include each step's provider/model so the judge can see which steps
+        // (e.g. the late `gpt-review-fix` / `sonnet-final-review` reviewers) ran
+        // on which model — needed to weigh how much the shared reviewers shaped
+        // each arm versus the swapped implementer.
+        s.push_str("\nSteps (id [status] — provider/model):\n");
         for n in &r.nodes {
-            s.push_str(&format!("- {} [{}]\n", n.node_id, n.status));
+            let model = match (n.provider.as_deref(), n.model.as_deref()) {
+                (Some(p), Some(m)) => format!(" — {p}/{m}"),
+                (Some(p), None) => format!(" — {p}"),
+                (None, Some(m)) => format!(" — {m}"),
+                (None, None) => String::new(),
+            };
+            s.push_str(&format!("- {} [{}]{}\n", n.node_id, n.status, model));
         }
         // The final node is usually the summary describing the result. Truncate
         // so a long output can't blow the judge's context.
