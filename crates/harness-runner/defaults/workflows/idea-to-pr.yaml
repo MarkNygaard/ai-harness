@@ -61,11 +61,18 @@ nodes:
     artifact: plan.md
     provider: claude
     model: opus
+    # The plan decides everything downstream — run it at max reasoning effort.
+    effort: max
     context: fresh
     depends_on: [explore]
     prompt: |
       You are a planner. Turn the task + exploration into a concrete,
       one-pass-implementable plan. PLAN ONLY — write no code.
+
+      This plan is the contract the implementer follows verbatim, so its
+      thoroughness sets the ceiling on the result. Design for how the change
+      could FAIL, not just the happy path — a good plan leaves the implementer
+      nothing to re-decide and a reviewer little to add.
 
       ## Task
       $ARGUMENTS
@@ -86,14 +93,23 @@ nodes:
       - **Step-by-step tasks**: ordered; each names the file(s) and the
         concrete edit. Granular enough that an implementer follows them
         without re-deciding the approach.
+      - **Robustness & edge cases**: the failure modes and edge cases this
+        must handle — error paths, all relevant inputs/events (not just the
+        obvious one), and any reliability assumption (e.g. how data/flags
+        actually reach the code). Decide these HERE so review doesn't have to.
       - **Testing strategy**: unit tests to add/update + edge cases.
       - **Validation commands**: the project's verify chain (from
         CLAUDE.md / AGENTS.md).
-      - **Not building (scope limits)**: what to explicitly leave out.
+      - **Not building (scope limits)**: what to leave out — and one line of
+        *why* each cut is safe for THIS task. Do NOT cut something just because
+        the task's wording is literal or it's "extra"; weigh it against the
+        task's intent. If a cut is genuinely uncertain, FLAG it for the human
+        rather than silently dropping it.
       - **Acceptance criteria**: how we know it's done.
 
       Prefer minimal, surgical changes that fit existing patterns over
-      new abstractions. Honor CLAUDE.md / AGENTS.md.
+      new abstractions — but "minimal" means no needless scope, not skipping
+      robustness the task implies. Honor CLAUDE.md / AGENTS.md.
 
       After writing plan.md, output a one-line summary and:
       <promise>PLAN-DONE</promise>

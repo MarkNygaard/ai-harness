@@ -186,6 +186,23 @@ nodes:
 }
 
 #[test]
+fn parses_and_propagates_node_effort() {
+    let yaml = r#"
+name: efforts
+nodes:
+  - id: plan
+    effort: max
+    prompt: "plan it"
+  - id: build
+    depends_on: [plan]
+    prompt: "build it"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    assert_eq!(wf.node("plan").unwrap().effort.as_deref(), Some("max"));
+    assert_eq!(wf.node("build").unwrap().effort, None);
+}
+
+#[test]
 fn parses_and_propagates_node_artifact() {
     let yaml = r#"
 name: artifacts

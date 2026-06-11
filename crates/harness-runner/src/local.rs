@@ -250,6 +250,7 @@ impl LocalRunner {
             .run(PromptRequest {
                 provider: req.provider.map(str::to_string),
                 model: req.model.map(str::to_string),
+                effort: req.effort.map(str::to_string),
                 prompt,
                 cwd: self.workspace.clone(),
                 session: req.session.clone(),
@@ -450,6 +451,7 @@ mod tests {
             node_id: "n",
             provider: Some("claude"),
             model: Some("sonnet"),
+            effort: None,
             context: ContextMode::Shared,
             session: None,
             iteration: 1,

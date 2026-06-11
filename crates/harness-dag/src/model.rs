@@ -187,6 +187,11 @@ pub struct Node {
     /// Model override.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Reasoning-effort override for AI bodies (`low`|`medium`|`high`|`xhigh`|
+    /// `max`), passed to the agent CLI (`--effort` for claude/codex). Higher
+    /// effort suits high-leverage steps like planning. `None` → agent default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
     /// Session-handling mode for AI bodies.
     pub context: ContextMode,
     /// Optional category id (e.g. `planning`, `implementation`, `validation`)

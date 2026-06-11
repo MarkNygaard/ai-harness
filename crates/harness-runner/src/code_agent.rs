@@ -82,6 +82,7 @@ impl PromptAgent for CodeAgentRunner {
             prompt: req.prompt,
             project_root: req.cwd,
             model: req.model,
+            reasoning_effort: req.effort,
             env_vars: req.env_vars,
             ..AgentRequest::default()
         };
@@ -179,6 +180,7 @@ mod tests {
         PromptRequest {
             provider: provider.map(str::to_string),
             model: Some("sonnet".into()),
+            effort: None,
             prompt: "do it".into(),
             cwd: std::path::PathBuf::from("."),
             session: None,
