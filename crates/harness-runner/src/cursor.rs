@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -26,6 +27,12 @@ use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
+
+/// Process-local serialization for Cursor project hook materialization.
+fn cursor_hooks_lock() -> &'static tokio::sync::Mutex<()> {
+    static LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| tokio::sync::Mutex::new(()))
+}
 
 /// Embedded Cursor hook script, materialized to `req.cwd/.cursor` at runtime.
 const CURSOR_HOOK_SCRIPT: &str = include_str!("../extensions/cursor-hooks/hook.js");
@@ -119,64 +126,139 @@ impl CursorAgent {
 }
 
 /// RAII guard that removes harness-written Cursor hook files on drop, restoring
-/// any pre-existing `.cursor/hooks.json` the run overwrote.
+/// any pre-existing files the run overwrote.
 struct CursorHooksGuard {
     script_path: PathBuf,
     hooks_json_path: PathBuf,
+    hooks_payload_path: PathBuf,
     cursor_dir: PathBuf,
     created_dir: bool,
+    script_backup: Option<Vec<u8>>,
     hooks_json_backup: Option<Vec<u8>>,
+    hooks_payload_backup: Option<Vec<u8>>,
+}
+
+fn restore_file(path: &Path, backup: Option<Vec<u8>>) {
+    if let Some(backup) = backup {
+        let _ = std::fs::write(path, backup);
+    } else {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 impl Drop for CursorHooksGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.script_path);
-        if let Some(backup) = self.hooks_json_backup.take() {
-            let _ = std::fs::write(&self.hooks_json_path, backup);
-        } else {
-            let _ = std::fs::remove_file(&self.hooks_json_path);
-        }
+        restore_file(&self.script_path, self.script_backup.take());
+        restore_file(&self.hooks_json_path, self.hooks_json_backup.take());
+        restore_file(&self.hooks_payload_path, self.hooks_payload_backup.take());
         if self.created_dir {
             let _ = std::fs::remove_dir(&self.cursor_dir);
         }
     }
 }
 
-fn materialize_cursor_hooks(cwd: &Path) -> Result<CursorHooksGuard, AgentError> {
+fn backup_existing(path: &Path) -> Result<Option<Vec<u8>>, AgentError> {
+    if path.try_exists().map_err(|e| AgentError(e.to_string()))? {
+        std::fs::read(path)
+            .map(Some)
+            .map_err(|e| AgentError(e.to_string()))
+    } else {
+        Ok(None)
+    }
+}
+
+fn write_atomic(path: &Path, contents: &[u8], mode: Option<u32>) -> Result<(), AgentError> {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("cursor-hook");
+    let tmp_path = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
+
+    std::fs::write(&tmp_path, contents).map_err(|e| AgentError(e.to_string()))?;
+    #[cfg(unix)]
+    if let Some(mode) = mode {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&tmp_path)
+            .map_err(|e| AgentError(e.to_string()))?
+            .permissions();
+        perms.set_mode(mode);
+        std::fs::set_permissions(&tmp_path, perms).map_err(|e| AgentError(e.to_string()))?;
+    }
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        AgentError(e.to_string())
+    })
+}
+
+fn materialize_cursor_hooks(
+    cwd: &Path,
+    hooks: &harness_dag::NodeHooks,
+) -> Result<CursorHooksGuard, AgentError> {
     let cursor_dir = cwd.join(".cursor");
-    let created_dir = !cursor_dir.exists();
+    let created_dir = !cursor_dir
+        .try_exists()
+        .map_err(|e| AgentError(e.to_string()))?;
     std::fs::create_dir_all(&cursor_dir).map_err(|e| AgentError(e.to_string()))?;
 
     let script_path = cursor_dir.join("harness-hook.js");
-    std::fs::write(&script_path, CURSOR_HOOK_SCRIPT).map_err(|e| AgentError(e.to_string()))?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        if let Ok(meta) = std::fs::metadata(&script_path) {
-            let mut perms = meta.permissions();
-            perms.set_mode(0o755);
-            let _ = std::fs::set_permissions(&script_path, perms);
-        }
-    }
-
-    let value = crate::hooks::cursor_hooks_json(&script_path);
     let hooks_json_path = cursor_dir.join("hooks.json");
-    let hooks_json_backup = if hooks_json_path.exists() {
-        Some(std::fs::read(&hooks_json_path).map_err(|e| AgentError(e.to_string()))?)
-    } else {
-        None
-    };
-    let json = serde_json::to_string_pretty(&value).map_err(|e| AgentError(e.to_string()))?;
-    std::fs::write(&hooks_json_path, json).map_err(|e| AgentError(e.to_string()))?;
+    let hooks_payload_path = cursor_dir.join("harness-hooks.json");
 
-    Ok(CursorHooksGuard {
+    let backups = (
+        backup_existing(&script_path),
+        backup_existing(&hooks_json_path),
+        backup_existing(&hooks_payload_path),
+    );
+    let (script_backup, hooks_json_backup, hooks_payload_backup) = match backups {
+        (Ok(script), Ok(json), Ok(payload)) => (script, json, payload),
+        (script, json, payload) => {
+            if created_dir {
+                let _ = std::fs::remove_dir(&cursor_dir);
+            }
+            return Err(script
+                .err()
+                .or_else(|| json.err())
+                .or_else(|| payload.err())
+                .unwrap_or_else(|| AgentError("failed to back up Cursor hook files".into())));
+        }
+    };
+
+    let guard = CursorHooksGuard {
         script_path,
         hooks_json_path,
+        hooks_payload_path,
         cursor_dir,
         created_dir,
+        script_backup,
         hooks_json_backup,
-    })
+        hooks_payload_backup,
+    };
+
+    let hooks_payload = crate::hooks::omp_hooks_env(hooks);
+    let value = crate::hooks::cursor_hooks_json(&guard.script_path, &guard.hooks_payload_path);
+    let hooks_json = serde_json::to_string_pretty(&value).map_err(|e| AgentError(e.to_string()))?;
+
+    let write_result = (|| {
+        write_atomic(
+            &guard.script_path,
+            CURSOR_HOOK_SCRIPT.as_bytes(),
+            Some(0o755),
+        )?;
+        write_atomic(
+            &guard.hooks_payload_path,
+            hooks_payload.as_bytes(),
+            Some(0o600),
+        )?;
+        write_atomic(&guard.hooks_json_path, hooks_json.as_bytes(), None)?;
+        Ok::<(), AgentError>(())
+    })();
+
+    if let Err(err) = write_result {
+        drop(guard);
+        return Err(err);
+    }
+
+    Ok(guard)
 }
 
 #[async_trait]
@@ -185,13 +267,14 @@ impl PromptAgent for CursorAgent {
         let model = self.resolve_model(req.model.as_deref());
         let args = self.build_args(&req.prompt, &model, req.session.as_deref());
 
-        let (_hooks_guard, env_vars) = if let Some(hooks) = req.hooks.as_ref() {
-            let guard = materialize_cursor_hooks(&req.cwd)?;
-            let mut env_vars = req.env_vars.clone();
-            env_vars.insert("HARNESS_HOOKS".into(), crate::hooks::omp_hooks_env(hooks));
-            (Some(guard), env_vars)
+        let mut _hooks_lock = None;
+        let mut _hooks_guard = None;
+        let env_vars = if let Some(hooks) = req.hooks.as_ref() {
+            _hooks_lock = Some(cursor_hooks_lock().lock().await);
+            _hooks_guard = Some(materialize_cursor_hooks(&req.cwd, hooks)?);
+            req.env_vars.clone()
         } else {
-            (None, req.env_vars.clone())
+            req.env_vars.clone()
         };
 
         // One automatic retry, but ONLY on a stall (a transient dropped
@@ -398,6 +481,19 @@ fn usage_from_value(u: &serde_json::Value) -> Usage {
 mod tests {
     use super::*;
 
+    fn sample_hooks() -> harness_dag::NodeHooks {
+        harness_dag::NodeHooks {
+            pre_tool_use: vec![harness_dag::HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(harness_dag::HookDecision::Deny),
+                reason: Some("blocked".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        }
+    }
+
     #[test]
     fn parses_result_text_session_and_usage() {
         // The exact shape emitted by `cursor-agent -p --output-format json`.
@@ -476,10 +572,11 @@ mod tests {
         std::fs::write(&hooks_json, &original).unwrap();
 
         {
-            let guard = materialize_cursor_hooks(dir.path()).unwrap();
+            let guard = materialize_cursor_hooks(dir.path(), &sample_hooks()).unwrap();
             let current = std::fs::read(&hooks_json).unwrap();
             assert_ne!(current, original);
             assert!(cursor_dir.join("harness-hook.js").exists());
+            assert!(cursor_dir.join("harness-hooks.json").exists());
             drop(guard);
         }
 
@@ -494,12 +591,36 @@ mod tests {
         assert!(!cursor_dir.exists());
 
         {
-            let guard = materialize_cursor_hooks(dir.path()).unwrap();
+            let guard = materialize_cursor_hooks(dir.path(), &sample_hooks()).unwrap();
             assert!(cursor_dir.exists());
             assert!(cursor_dir.join("hooks.json").exists());
+            assert!(cursor_dir.join("harness-hooks.json").exists());
             drop(guard);
         }
 
         assert!(!cursor_dir.exists());
+    }
+
+    #[test]
+    fn cursor_hooks_guard_restores_existing_harness_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let cursor_dir = dir.path().join(".cursor");
+        std::fs::create_dir_all(&cursor_dir).unwrap();
+        let script = cursor_dir.join("harness-hook.js");
+        let payload = cursor_dir.join("harness-hooks.json");
+        let original_script = b"user script".to_vec();
+        let original_payload = b"user payload".to_vec();
+        std::fs::write(&script, &original_script).unwrap();
+        std::fs::write(&payload, &original_payload).unwrap();
+
+        {
+            let guard = materialize_cursor_hooks(dir.path(), &sample_hooks()).unwrap();
+            assert_ne!(std::fs::read(&script).unwrap(), original_script);
+            assert_ne!(std::fs::read(&payload).unwrap(), original_payload);
+            drop(guard);
+        }
+
+        assert_eq!(std::fs::read(&script).unwrap(), original_script);
+        assert_eq!(std::fs::read(&payload).unwrap(), original_payload);
     }
 }

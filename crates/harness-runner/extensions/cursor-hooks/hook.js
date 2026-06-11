@@ -27,6 +27,17 @@ function allow() {
 }
 
 function parseHarnessHooks() {
+  const file = process.env.HARNESS_HOOKS_FILE;
+  if (file) {
+    try {
+      const hooks = JSON.parse(fs.readFileSync(file, "utf8"));
+      if (!hooks || typeof hooks !== "object") return null;
+      return hooks;
+    } catch {
+      return null;
+    }
+  }
+
   const raw = process.env.HARNESS_HOOKS;
   if (!raw) return null;
   try {
@@ -120,8 +131,11 @@ function detectPhase(argvPhase, payload) {
   return "postToolUse";
 }
 
-function preDecisionMessage(rule) {
-  return rule.additional_context || rule.reason || "blocked by node hook";
+function preBlockMessage(rule) {
+  const parts = [rule.reason || "blocked by node hook"];
+  if (rule.additional_context) parts.push(rule.additional_context);
+  if (rule.system_message) parts.push(rule.system_message);
+  return parts.join("\n");
 }
 
 function joinMessage(rule) {
@@ -133,14 +147,29 @@ function joinMessage(rule) {
 
 function handlePre(hooks, targets) {
   const rules = hooks.pre_tool_use || [];
+  const messages = [];
   for (const rule of rules) {
     if (!ruleMatches(rule, targets)) continue;
     if (rule.decision === "deny" || rule.decision === "ask") {
+      const text = preBlockMessage(rule);
       respond({
-        permission: rule.decision,
-        agent_message: preDecisionMessage(rule),
+        // Cursor accepts "ask" in the schema but does not enforce it for
+        // preToolUse today; deny preserves NodeHooks' non-allowing semantics.
+        permission: "deny",
+        user_message: text,
+        agent_message: text,
       });
     }
+    const message = joinMessage(rule);
+    if (message) messages.push(message);
+  }
+  if (messages.length > 0) {
+    const text = messages.join("\n");
+    respond({
+      permission: "allow",
+      agent_message: text,
+      additional_context: text,
+    });
   }
   allow();
 }

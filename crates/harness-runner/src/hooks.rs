@@ -102,16 +102,24 @@ pub fn omp_hooks_env(hooks: &NodeHooks) -> String {
 
 /// Build a Cursor `.cursor/hooks.json` value (version 1) registering the
 /// bundled harness hook script on `preToolUse`, `postToolUse`, and
-/// `afterFileEdit`. The script reads hook rules from the `HARNESS_HOOKS` env var
-/// (same JSON as [`omp_hooks_env`]).
-pub fn cursor_hooks_json(script_path: &std::path::Path) -> Value {
-    let path = script_path.to_string_lossy();
-    let quoted = shlex::try_quote(&path).expect("script path must not contain NUL bytes");
-    let command = |phase: &str| format!("node {quoted} {phase}");
+/// `afterFileEdit`. The script reads hook rules from a harness-owned payload
+/// file (same JSON as [`omp_hooks_env`]).
+pub fn cursor_hooks_json(
+    script_path: &std::path::Path,
+    hooks_payload_path: &std::path::Path,
+) -> Value {
+    let script_path = script_path.to_string_lossy();
+    let payload_path = hooks_payload_path.to_string_lossy();
+    let quoted_script =
+        shlex::try_quote(&script_path).expect("script path must not contain NUL bytes");
+    let quoted_payload =
+        shlex::try_quote(&payload_path).expect("hook payload path must not contain NUL bytes");
+    let command =
+        |phase: &str| format!("HARNESS_HOOKS_FILE={quoted_payload} node {quoted_script} {phase}");
     json!({
         "version": 1,
         "hooks": {
-            "preToolUse": [{ "command": command("preToolUse") }],
+            "preToolUse": [{ "command": command("preToolUse"), "failClosed": true }],
             "postToolUse": [{ "command": command("postToolUse") }],
             "afterFileEdit": [{ "command": command("afterFileEdit") }],
         }
@@ -387,27 +395,34 @@ mod tests {
     #[test]
     fn cursor_hooks_json_registers_all_events() {
         let script = std::path::Path::new("/tmp/worktree/.cursor/harness-hook.js");
-        let value = cursor_hooks_json(script);
+        let payload = std::path::Path::new("/tmp/worktree/.cursor/harness-hooks.json");
+        let value = cursor_hooks_json(script, payload);
 
         assert_eq!(value["version"], 1);
         for event in ["preToolUse", "postToolUse", "afterFileEdit"] {
             let entries = value["hooks"][event].as_array().unwrap();
             assert_eq!(entries.len(), 1);
             let cmd = entries[0]["command"].as_str().unwrap();
-            assert!(cmd.starts_with("node "));
+            assert!(cmd.starts_with("HARNESS_HOOKS_FILE="));
             assert!(cmd.contains("harness-hook.js"));
             assert!(cmd.contains(event));
+            assert!(cmd.contains("harness-hooks.json"));
+            if event == "preToolUse" {
+                assert_eq!(entries[0]["failClosed"], true);
+            }
         }
     }
 
     #[test]
     fn cursor_hooks_json_quotes_path_with_spaces() {
         let script = std::path::Path::new("/tmp/my worktree/.cursor/harness-hook.js");
-        let value = cursor_hooks_json(script);
+        let payload = std::path::Path::new("/tmp/my worktree/.cursor/harness-hooks.json");
+        let value = cursor_hooks_json(script, payload);
         let pre_cmd = value["hooks"]["preToolUse"][0]["command"].as_str().unwrap();
-        assert!(pre_cmd.starts_with("node "));
+        assert!(pre_cmd.starts_with("HARNESS_HOOKS_FILE="));
         assert!(pre_cmd.contains("my worktree"));
         assert!(pre_cmd.contains("preToolUse"));
+        assert!(pre_cmd.contains("harness-hooks.json"));
     }
 
     const CURSOR_HOOK_SCRIPT: &str = include_str!("../extensions/cursor-hooks/hook.js");
@@ -469,9 +484,9 @@ mod tests {
             pre_tool_use: vec![HookRule {
                 matcher: Some("Write|Edit".into()),
                 decision: Some(HookDecision::Deny),
-                reason: None,
-                additional_context: Some("read-only".into()),
-                system_message: None,
+                reason: Some("read-only".into()),
+                additional_context: Some("do not edit source".into()),
+                system_message: Some("policy".into()),
             }],
             post_tool_use: vec![],
         };
@@ -485,7 +500,74 @@ mod tests {
         assert!(out.status.success());
         let v: Value = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(v["permission"], "deny");
-        assert_eq!(v["agent_message"], "read-only");
+        let message = v["agent_message"].as_str().unwrap();
+        assert!(message.contains("read-only"));
+        assert!(message.contains("do not edit source"));
+        assert!(message.contains("policy"));
+        assert_eq!(v["user_message"], v["agent_message"]);
+    }
+
+    #[test]
+    fn cursor_hook_maps_ask_to_blocking_pre_rule() {
+        if !node_available() {
+            return;
+        }
+        let (_dir, hook_path) = cursor_hook_fixture();
+
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Shell".into()),
+                decision: Some(HookDecision::Ask),
+                reason: Some("needs approval".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook(
+            &hook_path,
+            "preToolUse",
+            Some(&env),
+            r#"{"tool_name":"Shell"}"#,
+        );
+        assert!(out.status.success());
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["permission"], "deny");
+        assert_eq!(v["agent_message"], "needs approval");
+    }
+
+    #[test]
+    fn cursor_hook_injects_matching_pre_context_without_decision() {
+        if !node_available() {
+            return;
+        }
+        let (_dir, hook_path) = cursor_hook_fixture();
+
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: None,
+                reason: None,
+                additional_context: Some("Check the plan before editing.".into()),
+                system_message: Some("Stay scoped.".into()),
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook(
+            &hook_path,
+            "preToolUse",
+            Some(&env),
+            r#"{"tool_name":"Write"}"#,
+        );
+        assert!(out.status.success());
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["permission"], "allow");
+        let message = v["agent_message"].as_str().unwrap();
+        assert!(message.contains("Check the plan before editing."));
+        assert!(message.contains("Stay scoped."));
+        assert_eq!(v["additional_context"].as_str().unwrap(), message);
     }
 
     #[test]
