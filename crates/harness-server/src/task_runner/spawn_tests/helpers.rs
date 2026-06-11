@@ -55,6 +55,8 @@ impl harness_core::agent::CodeAgent for CapturingAgent {
                 input_tokens: 0,
                 output_tokens: 0,
                 total_tokens: 0,
+                cache_read_tokens: 0,
+                cache_creation_tokens: 0,
                 cost_usd: 0.0,
             },
             model: "mock".into(),

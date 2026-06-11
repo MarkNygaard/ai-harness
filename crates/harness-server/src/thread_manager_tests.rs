@@ -102,6 +102,8 @@ fn set_turn_token_usage_updates_usage() -> anyhow::Result<()> {
             input_tokens: 3,
             output_tokens: 5,
             total_tokens: 8,
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0,
             cost_usd: 0.1,
         },
     )?;

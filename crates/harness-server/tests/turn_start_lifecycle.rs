@@ -96,6 +96,8 @@ impl CodeAgent for MockAgent {
                         input_tokens: 11,
                         output_tokens: 13,
                         total_tokens: 24,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
                         cost_usd: 0.0,
                     },
                 })

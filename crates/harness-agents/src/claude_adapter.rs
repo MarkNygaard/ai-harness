@@ -314,6 +314,8 @@ pub fn parse_stream_json_usage(line: &str) -> Option<TokenUsage> {
         input_tokens: usage.input_tokens,
         output_tokens: usage.output_tokens,
         total_tokens: usage.total_tokens(),
+        cache_read_tokens: usage.cache_read_input_tokens,
+        cache_creation_tokens: usage.cache_creation_input_tokens,
         cost_usd: 0.0,
     })
 }
@@ -388,6 +390,10 @@ mod tests {
         assert_eq!(usage.input_tokens, 10);
         assert_eq!(usage.output_tokens, 3);
         assert_eq!(usage.total_tokens, 19);
+        // The cache breakdown must be preserved (regression: it was dropped,
+        // leaving claude nodes reporting only the tiny uncached input).
+        assert_eq!(usage.cache_read_tokens, 4);
+        assert_eq!(usage.cache_creation_tokens, 2);
     }
 
     #[test]

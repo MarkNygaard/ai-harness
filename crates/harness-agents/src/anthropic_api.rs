@@ -87,6 +87,10 @@ struct ContentBlock {
 struct Usage {
     input_tokens: u64,
     output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
 }
 
 #[async_trait]
@@ -154,7 +158,12 @@ impl CodeAgent for AnthropicApiAgent {
             token_usage: TokenUsage {
                 input_tokens: data.usage.input_tokens,
                 output_tokens: data.usage.output_tokens,
-                total_tokens: data.usage.input_tokens + data.usage.output_tokens,
+                total_tokens: data.usage.input_tokens
+                    + data.usage.output_tokens
+                    + data.usage.cache_read_input_tokens
+                    + data.usage.cache_creation_input_tokens,
+                cache_read_tokens: data.usage.cache_read_input_tokens,
+                cache_creation_tokens: data.usage.cache_creation_input_tokens,
                 cost_usd: 0.0, // caller computes
             },
             model: data.model,

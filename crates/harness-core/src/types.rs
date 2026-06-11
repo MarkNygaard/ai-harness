@@ -169,9 +169,19 @@ pub enum TurnStatus {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct TokenUsage {
+    /// Uncached input tokens (the full-price prompt portion).
     pub input_tokens: u64,
     pub output_tokens: u64,
+    /// Total across input + output + cache (read + creation).
     pub total_tokens: u64,
+    /// Cached prompt tokens served from cache (cheap). Kept separate from
+    /// `input_tokens` so usage/cost reporting matches the omp path; defaults to 0
+    /// for providers that don't report a cache breakdown.
+    #[serde(default)]
+    pub cache_read_tokens: u64,
+    /// Prompt tokens written to cache this turn (cache-creation).
+    #[serde(default)]
+    pub cache_creation_tokens: u64,
     pub cost_usd: f64,
 }
 
