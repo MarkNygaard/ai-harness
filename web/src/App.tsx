@@ -4,6 +4,7 @@ import { DashboardPage } from "./routes/dashboard/DashboardPage";
 import { RunsPage } from "./routes/runs/RunsPage";
 import { RunDetailPage } from "./routes/runs/RunDetailPage";
 import { RunPairComparisonPage } from "./routes/runs/RunPairComparisonPage";
+import { AbTestsPage } from "./routes/runs/AbTestsPage";
 import { WorkflowEditor } from "./routes/editor/WorkflowEditor";
 import { WorkflowsList } from "./routes/editor/WorkflowsList";
 import { ProjectsPage } from "./routes/projects/ProjectsPage";
@@ -30,6 +31,7 @@ export function App() {
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/runs" element={<RunsPage />} />
+          <Route path="/ab" element={<AbTestsPage />} />
           {/* Static segment before `:id` so it isn't captured as a run id. */}
           <Route
             path="/runs/pair/:pairId"
