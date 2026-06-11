@@ -879,6 +879,21 @@ fn assemble_ab_evidence(runs: &[harness_persist::RunDetail]) -> String {
             Some(pr) => s.push_str(&format!("PR: {pr}\n")),
             None => s.push_str("PR: (none — arm produced no pull request)\n"),
         }
+        // Include the plan the arm was built against (the `create-plan`
+        // artifact) so the judge can score how completely/correctly the
+        // implementer fulfilled it — the fair test of the swapped step,
+        // separate from absolute quality. Truncated to bound context.
+        if let Some(plan) = r
+            .nodes
+            .iter()
+            .find(|n| n.node_id == "create-plan")
+            .and_then(|n| n.artifact_content.as_deref())
+            .map(str::trim)
+            .filter(|p| !p.is_empty())
+        {
+            let truncated: String = plan.chars().take(4000).collect();
+            s.push_str(&format!("\nPlan it was built against:\n{truncated}\n"));
+        }
         // Include each step's provider/model so the judge can see which steps
         // (e.g. the late `gpt-review-fix` / `sonnet-final-review` reviewers) ran
         // on which model — needed to weigh how much the shared reviewers shaped

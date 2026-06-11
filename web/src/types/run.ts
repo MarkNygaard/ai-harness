@@ -184,6 +184,12 @@ export interface AbVerdict {
   review_share_b?: number;
   /** Whether the cheap implementer carried the work, or the reviewers rescued it. */
   review_assessment?: string;
+  /** Arm A: how completely/correctly the implementer fulfilled its plan (0–100). */
+  plan_fidelity_a?: number;
+  /** Arm B: how completely/correctly the implementer fulfilled its plan (0–100). */
+  plan_fidelity_b?: number;
+  /** Whether each implementer executed its plan faithfully, or left gaps. */
+  plan_assessment?: string;
 }
 
 /** The judge run for a pair: its run id, status, and parsed verdict (if done). */
