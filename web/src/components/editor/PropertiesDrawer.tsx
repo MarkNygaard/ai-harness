@@ -65,7 +65,7 @@ export function PropertiesDrawer({
       : providerModels;
 
   return (
-    <div className="flex w-80 flex-none flex-col border-l border-border bg-card">
+    <div className="flex w-1/3 min-w-[20rem] flex-none flex-col border-l border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <span className="text-sm font-semibold">Step settings</span>
         <button
