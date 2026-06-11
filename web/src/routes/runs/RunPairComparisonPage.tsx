@@ -235,7 +235,7 @@ export function RunPairComparisonPage() {
                   {arm.detail.id}
                 </Link>
               </div>
-              <TaskOverview nodes={arm.nodes} />
+              <TaskOverview nodes={arm.nodes} stacked />
             </section>
           ))}
         </div>

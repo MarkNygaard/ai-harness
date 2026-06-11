@@ -41,8 +41,18 @@ const statusVariant: Record<
 /**
  * Factory-style task overview: full-width, square-edged dashboard — headline
  * metrics, a milestone waterfall, time + token breakdowns, and detail tables.
+ *
+ * `stacked` renders the time and token breakdowns in one column (time first,
+ * tokens under it) instead of side-by-side — used by the A/B comparison, where
+ * each arm's overview already sits in a half-width column.
  */
-export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
+export function TaskOverview({
+  nodes,
+  stacked = false,
+}: {
+  nodes: NodeView[];
+  stacked?: boolean;
+}) {
   const now = Date.now();
   const byModel = useMemo(() => usageByModel(nodes), [nodes]);
   const totals = useMemo(() => sumUsage(nodes.map((n) => n.usage)), [nodes]);
@@ -101,8 +111,9 @@ export function TaskOverview({ nodes }: { nodes: NodeView[] }) {
         <Metric label="Models" value={String(byModel.length || "—")} />
       </div>
 
-      {/* Two-column body */}
-      <div className="grid gap-6 lg:grid-cols-2">
+      {/* Body: two columns (time | tokens) by default; one stacked column when
+          `stacked` (A/B view) so tokens sit under the time breakdowns. */}
+      <div className={`grid gap-6 ${stacked ? "" : "lg:grid-cols-2"}`}>
         <div className="flex flex-col gap-6">
           {catTotal > 0 && (
             <Section title="Time by category">
