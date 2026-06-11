@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
 import { ReactFlowProvider } from "@xyflow/react";
 import { Info } from "lucide-react";
@@ -15,7 +15,9 @@ import {
 } from "@/components/ui/sheet";
 import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
+import { GeoReport } from "@/components/geo/GeoReport";
 import { useCancelRun, useRunView } from "@/lib/runs";
+import { parseGeoVerdict } from "@/lib/geo";
 import type { RunStatus } from "@/types/run";
 const STATUS_VARIANT: Record<
   RunStatus,
@@ -27,13 +29,15 @@ const STATUS_VARIANT: Record<
   cancelled: "failed",
 };
 
-type Panel = "graph" | "overview";
+type Panel = "graph" | "overview" | "geo";
 
 export function RunDetailPage() {
   const { id = null } = useParams();
   const run = useRunView(id);
   const [panel, setPanel] = useState<Panel>("graph");
   const cancel = useCancelRun();
+  // A geo-audit run carries a structured verdict in its `analyze` node.
+  const geo = useMemo(() => parseGeoVerdict(run.nodes), [run.nodes]);
 
   const done = run.nodes.filter((n) =>
     ["success", "failed", "skipped", "cancelled"].includes(n.status),
@@ -126,6 +130,13 @@ export function RunDetailPage() {
               active={panel === "overview"}
               onClick={() => setPanel("overview")}
             />
+            {geo && (
+              <PanelTab
+                label="GEO"
+                active={panel === "geo"}
+                onClick={() => setPanel("geo")}
+              />
+            )}
           </div>
         </div>
 
@@ -134,6 +145,10 @@ export function RunDetailPage() {
             <ReactFlowProvider>
               <RunFlow nodes={run.nodes} />
             </ReactFlowProvider>
+          ) : panel === "geo" && geo ? (
+            <div className="h-full overflow-y-auto p-6">
+              <GeoReport verdict={geo} project={run.project} />
+            </div>
           ) : (
             <div className="h-full overflow-y-auto p-6">
               <TaskOverview nodes={run.nodes} />
