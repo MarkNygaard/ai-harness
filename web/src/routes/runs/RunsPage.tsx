@@ -12,9 +12,20 @@ import {
   useRuns,
   useWorkflowModels,
 } from "@/lib/runs";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { NO_PROJECT } from "@/lib/dashboard";
 import { useProjects } from "@/lib/projects";
-import { useCatalog } from "@/lib/authoring";
+import {
+  useCatalog,
+  useProjectWorkflows,
+  useWorkflowList,
+} from "@/lib/authoring";
 import type { ModelRef, RunStatus, RunSummary } from "@/types/run";
 
 const STATUS_VARIANT: Record<
@@ -179,7 +190,13 @@ function NewRunForm() {
   const [workflow, setWorkflow] = useState("idea-to-pr");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [real, setReal] = useState(false);
+
+  // Available workflows for the picker: project-scoped when a project is
+  // selected (its local workflows + bundled defaults), else the global list.
+  const globalWorkflows = useWorkflowList();
+  const projectWorkflows = useProjectWorkflows(project || null);
+  const workflows =
+    (project ? projectWorkflows.data : globalWorkflows.data) ?? [];
 
   // Selecting a project pre-fills its default workflow (if it declares one).
   function onProjectChange(name: string) {
@@ -196,7 +213,7 @@ function NewRunForm() {
         project: project || undefined,
         title: title.trim() || undefined,
         description: description.trim() || undefined,
-        real,
+        real: true,
       },
       { onSuccess: (res) => navigate(`/runs/${res.run_id}`) },
     );
@@ -239,14 +256,23 @@ function NewRunForm() {
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">
-              Workflow (bundled name or path)
+              Workflow
             </label>
-            <input
+            <Select
               value={workflow}
-              onChange={(e) => setWorkflow(e.target.value)}
-              placeholder="idea-to-pr"
-              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-            />
+              onValueChange={(v) => v != null && setWorkflow(v)}
+            >
+              <SelectTrigger className="h-8 w-full text-[12px]">
+                <SelectValue placeholder="Select a workflow…" />
+              </SelectTrigger>
+              <SelectContent>
+                {workflows.map((w) => (
+                  <SelectItem key={w.name} value={w.name}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">
@@ -271,16 +297,7 @@ function NewRunForm() {
               className="rounded-md border border-input bg-transparent p-2 text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={real}
-                onChange={(e) => setReal(e.target.checked)}
-                className="accent-[var(--accent-orange)]"
-              />
-              Use real agents (otherwise echo)
-            </label>
+          <div className="flex items-center justify-end gap-3">
             <Button
               type="submit"
               disabled={create.isPending || !project || !workflow.trim()}
@@ -314,10 +331,15 @@ function AbTestForm() {
   const [workflow, setWorkflow] = useState("idea-to-pr");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [real, setReal] = useState(false);
   const [swapIdx, setSwapIdx] = useState(0);
   const [challengerProvider, setChallengerProvider] = useState("");
   const [challengerModel, setChallengerModel] = useState("");
+
+  // Available workflows for the picker (project-scoped when one is selected).
+  const globalWorkflows = useWorkflowList();
+  const projectWorkflows = useProjectWorkflows(project || null);
+  const workflows =
+    (project ? projectWorkflows.data : globalWorkflows.data) ?? [];
 
   // The workflow's distinct provider+model pairs — the swap candidates.
   const models = useWorkflowModels(open && workflow ? workflow : null, project);
@@ -356,7 +378,7 @@ function AbTestForm() {
         project: project || undefined,
         title: title.trim() || undefined,
         description: description.trim() || undefined,
-        real,
+        real: true,
         swap_from: swapFrom,
         variant_a: swapFrom, // arm A = baseline (current model)
         variant_b: challenger,
@@ -425,12 +447,21 @@ function AbTestForm() {
             <label className="text-xs font-medium text-muted-foreground">
               Workflow
             </label>
-            <input
+            <Select
               value={workflow}
-              onChange={(e) => setWorkflow(e.target.value)}
-              placeholder="idea-to-pr"
-              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-            />
+              onValueChange={(v) => v != null && setWorkflow(v)}
+            >
+              <SelectTrigger className="h-8 w-full text-[12px]">
+                <SelectValue placeholder="Select a workflow…" />
+              </SelectTrigger>
+              <SelectContent>
+                {workflows.map((w) => (
+                  <SelectItem key={w.name} value={w.name}>
+                    {w.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="flex flex-col gap-1.5">
             <label className="text-xs font-medium text-muted-foreground">
@@ -538,16 +569,7 @@ function AbTestForm() {
               className="rounded-md border border-input bg-transparent p-2 text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
-          <div className="flex items-center justify-between gap-3">
-            <label className="flex items-center gap-2 text-xs text-muted-foreground">
-              <input
-                type="checkbox"
-                checked={real}
-                onChange={(e) => setReal(e.target.checked)}
-                className="accent-[var(--accent-orange)]"
-              />
-              Use real agents (otherwise echo)
-            </label>
+          <div className="flex items-center justify-end gap-3">
             <Button type="submit" disabled={!canSubmit}>
               <GitCompare className="h-3.5 w-3.5" />
               {pair.isPending ? "Starting…" : "Start A/B pair"}
