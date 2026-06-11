@@ -151,7 +151,8 @@ export function DashboardPage() {
 
           {days.map((day) => (
             <section key={day.label} className="flex flex-col gap-0.5">
-              <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <h2 className="flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                <span className="h-3 w-0.5 bg-status-running" aria-hidden />
                 {day.label}
               </h2>
               <div className="flex flex-col">
@@ -206,8 +207,8 @@ function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
   });
   return (
     <div
-      className={`flex items-center gap-3 border-l-2 border-status-running py-1.5 pr-1 pl-2 text-sm hover:bg-muted/30 ${
-        divider ? "border-t border-t-border/50" : ""
+      className={`flex items-center gap-3 px-1 py-1.5 text-sm hover:bg-muted/30 ${
+        divider ? "border-t border-border/50" : ""
       }`}
     >
       <span className="w-16 shrink-0 font-mono text-[11px] text-muted-foreground">

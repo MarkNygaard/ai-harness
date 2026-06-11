@@ -259,24 +259,25 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          Kimi-for-Coding
-          {configured ? (
-            <Badge variant="success">
-              <Check className="h-3 w-3" /> connected
-            </Badge>
-          ) : (
-            <Badge variant="outline">not connected</Badge>
-          )}
-        </div>
-        <Button size="sm" onClick={connect} disabled={phase === "pending"}>
-          {phase === "pending" && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          )}
-          {configured ? "Reconnect" : "Connect Kimi"}
-        </Button>
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        Kimi-for-Coding
+        {configured ? (
+          <Badge variant="success">
+            <Check className="h-3 w-3" /> connected
+          </Badge>
+        ) : (
+          <Badge variant="outline">not connected</Badge>
+        )}
       </div>
+      <Button
+        size="sm"
+        className="self-start"
+        onClick={connect}
+        disabled={phase === "pending"}
+      >
+        {phase === "pending" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {configured ? "Reconnect" : "Connect Kimi"}
+      </Button>
       <div>
         <p className="mb-3 text-xs text-muted-foreground">
           The Kimi-for-Coding subscription (<code>kimi-code/*</code> models)
@@ -372,24 +373,27 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          ChatGPT subscription
-          {configured ? (
-            <Badge variant="success">
-              <Check className="h-3 w-3" /> connected
-            </Badge>
-          ) : (
-            <Badge variant="outline">not connected</Badge>
-          )}
-        </div>
-        <Button size="sm" onClick={begin} disabled={phase === "exchanging"}>
-          {phase === "exchanging" && (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          )}
-          {configured ? "Reconnect" : "Connect ChatGPT"}
-        </Button>
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        ChatGPT subscription
+        {configured ? (
+          <Badge variant="success">
+            <Check className="h-3 w-3" /> connected
+          </Badge>
+        ) : (
+          <Badge variant="outline">not connected</Badge>
+        )}
       </div>
+      <Button
+        size="sm"
+        className="self-start"
+        onClick={begin}
+        disabled={phase === "exchanging"}
+      >
+        {phase === "exchanging" && (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        )}
+        {configured ? "Reconnect" : "Connect ChatGPT"}
+      </Button>
       <div>
         <p className="mb-3 text-xs text-muted-foreground">
           Uses your ChatGPT subscription for both the <strong>Codex</strong> CLI
@@ -468,27 +472,14 @@ function ProviderCard({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          {provider.label}
-          {configured ? (
-            <Badge variant="success">
-              <Check className="h-3 w-3" /> configured
-            </Badge>
-          ) : (
-            <Badge variant="outline">not set</Badge>
-          )}
-        </div>
-        {configured && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => del.mutate(provider.id)}
-            disabled={del.isPending}
-            title="Clear stored credential"
-          >
-            <Trash2 className="h-3.5 w-3.5" /> Clear
-          </Button>
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        {provider.label}
+        {configured ? (
+          <Badge variant="success">
+            <Check className="h-3 w-3" /> configured
+          </Badge>
+        ) : (
+          <Badge variant="outline">not set</Badge>
         )}
       </div>
       <div>
@@ -534,6 +525,19 @@ function ProviderCard({
               <span className="text-xs text-destructive">
                 {save.error.message}
               </span>
+            )}
+            {configured && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="ml-auto"
+                onClick={() => del.mutate(provider.id)}
+                disabled={del.isPending}
+                title="Clear stored credential"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Clear
+              </Button>
             )}
           </div>
         </form>
