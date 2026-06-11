@@ -7,9 +7,10 @@ description: |
 
   Runs against the project's `external_url` (set it on the Projects page; it's
   exposed as `$EXTERNAL_URL`). A `discover` step fetches the page + robots.txt +
-  headers (deliberately WITHOUT JavaScript — that's what an AI crawler sees);
-  four analysis steps then score dimensions in parallel — **technical**,
-  **crawlers**, **schema**, **content** — and a `synthesize` step combines them
+  llms.txt / llms-full.txt + sitemap.xml + headers (deliberately WITHOUT
+  JavaScript — that's what an AI crawler sees); four analysis steps then score
+  dimensions in parallel — **technical**, **crawlers** (access + llms.txt +
+  sitemap), **schema**, **content** — and a `synthesize` step combines them
   into a 0–100 composite, writes `geo-report.md`, and emits the structured
   verdict (severity-tagged findings whose `fix` is phrased for `idea-to-pr`).
 
@@ -37,6 +38,16 @@ nodes:
       # robots.txt — AI-crawler access rules.
       curl -fsSL --max-time 15 "$root/robots.txt" \
         -o "$ARTIFACTS_DIR/robots.txt" || echo "(no robots.txt)"
+      # llms.txt / llms-full.txt — the emerging AI-guidance standard. A strong
+      # GEO signal and an easy fix (just add the file). -f → no output on 404.
+      curl -fsSL --max-time 15 "$root/llms.txt" \
+        -o "$ARTIFACTS_DIR/llms.txt" || echo "(no llms.txt)"
+      curl -fsSL --max-time 15 "$root/llms-full.txt" \
+        -o "$ARTIFACTS_DIR/llms-full.txt" || echo "(no llms-full.txt)"
+      # sitemap.xml — page discovery for crawlers (robots.txt may also point to
+      # one via a Sitemap: line, which the crawlers step checks).
+      curl -fsSL --max-time 15 "$root/sitemap.xml" \
+        -o "$ARTIFACTS_DIR/sitemap.xml" || echo "(no sitemap.xml)"
       # Status as an AI bot vs a browser — a 403 for the bot but 200 for the
       # browser = AI crawlers silently blocked.
       curl -sS -o /dev/null -D "$ARTIFACTS_DIR/headers-gptbot.txt" \
@@ -45,6 +56,13 @@ nodes:
       curl -sS -o /dev/null -D "$ARTIFACTS_DIR/headers-browser.txt" \
         -w "browser_status=%{http_code}\n" --max-time 20 -A "Mozilla/5.0" "$url" || true
       echo "page.html: $(wc -c < "$ARTIFACTS_DIR/page.html" 2>/dev/null || echo 0) bytes"
+      for f in robots.txt llms.txt llms-full.txt sitemap.xml; do
+        if [ -s "$ARTIFACTS_DIR/$f" ]; then
+          echo "$f: present ($(wc -c < "$ARTIFACTS_DIR/$f") bytes)"
+        else
+          echo "$f: absent"
+        fi
+      done
       echo "DISCOVER-DONE"
     timeout: 120000
 
@@ -103,12 +121,31 @@ nodes:
     context: fresh
     depends_on: [discover]
     prompt: |
-      Score **AI-crawler access** for $EXTERNAL_URL (0–100), set `key` to
-      "crawlers". Read `$ARTIFACTS_DIR/robots.txt` and `headers-gptbot.txt` /
-      `headers-browser.txt`. Are the AI crawlers (GPTBot, ClaudeBot,
-      PerplexityBot, OAI-SearchBot, Google-Extended, …) allowed in robots.txt?
-      Does the bot user-agent get a 403/blocked while the browser gets 200
-      (= silently blocked at the edge — CRITICAL)? Emit ONLY the JSON.
+      Score **AI-crawler access & guidance** for $EXTERNAL_URL (0–100), set
+      `key` to "crawlers". Read `$ARTIFACTS_DIR/robots.txt`,
+      `headers-gptbot.txt` / `headers-browser.txt`, and
+      `$ARTIFACTS_DIR/llms.txt`, `llms-full.txt`, `sitemap.xml`. Any of those
+      files may be missing or empty — that means the resource is absent. If a
+      file contains an HTML page instead of its expected format (a soft-404),
+      also treat it as absent.
+
+      Assess:
+      - **robots.txt** — are the AI crawlers allowed? Check GPTBot,
+        OAI-SearchBot, ChatGPT-User, ClaudeBot, anthropic-ai, PerplexityBot,
+        Google-Extended, CCBot, Bytespider, Applebot-Extended, Amazonbot. A
+        blanket `Disallow: /` (explicit, or inherited from `User-agent: *`) for
+        a citing crawler is CRITICAL.
+      - **Edge blocking** — does the bot UA get a 403/blocked status while the
+        browser gets 200 (= silently blocked at the CDN/edge — CRITICAL)?
+      - **llms.txt** — present and valid (markdown headings, links to key
+        content)? Absent = high-severity quick win (add `/llms.txt`); present
+        but malformed = medium; comprehensive plus `/llms-full.txt` = full
+        marks for this part.
+      - **sitemap.xml** — present, and referenced via a `Sitemap:` line in
+        robots.txt? A missing sitemap, or one not referenced from robots.txt,
+        is a medium finding.
+
+      Emit ONLY the JSON.
     output_format: *dim_schema
 
   - id: schema
