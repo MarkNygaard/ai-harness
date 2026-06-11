@@ -16,8 +16,14 @@ description: |
   swapped implementer's credit — and it signals the pipeline's premise (a cheap
   implementer does the bulk; reviewers only polish) is breaking down.
 
+  It also scores plan-adherence per arm — how completely/correctly each arm
+  fulfilled the plan it was built against. The plan comes from the SAME planner
+  (Opus) in both arms, so this isolates the swapped implementer's execution from
+  the planner's design and from the shared reviewers.
+
   Output: `{ winner, score_a, score_b, reasoning, review_share_a,
-  review_share_b, review_assessment }`.
+  review_share_b, review_assessment, plan_fidelity_a, plan_fidelity_b,
+  plan_assessment }`.
 provider: claude
 model: opus
 nodes:
@@ -75,6 +81,22 @@ nodes:
         the two arms here too — an arm can win the overall verdict yet have
         leaned harder on the shared reviewers.
 
+      THEN a third analysis — plan adherence:
+      - The evidence includes each arm's "Plan it was built against" (from the
+        `create-plan` step). The plan comes from the SAME planner in both arms,
+        so scoring execution against it isolates the swapped implementer from
+        the planner's design and the shared reviewers.
+      - For each arm, score `plan_fidelity` (0–100): how completely and
+        correctly the delivered change fulfills THAT plan's tasks and acceptance
+        criteria — and credit the IMPLEMENTER, not the reviewers (use the
+        review_share you just computed: fidelity reached mostly via late-reviewer
+        rewrites is weak implementer fidelity).
+      - In `plan_assessment`, note per arm: did the implementer execute the plan
+        faithfully and completely, or leave gaps the reviewers had to close? Call
+        out deviations from the plan (good or bad). If the plan itself was thin
+        and the gaps are the plan's fault (not the implementer's), say so — that
+        points the fix upstream to planning, not the implementer.
+
       When done, emit ONLY the JSON verdict — no prose, no preamble.
     output_format:
       type: object
@@ -101,4 +123,13 @@ nodes:
         review_assessment:
           type: string
           description: "2–4 sentences: did the cheap implementer carry the work (premise holds) or did the shared reviewers rescue it (premise breaking down)? Compare the arms; flag if a reviewer model should be the implementer."
-      required: [winner, score_a, score_b, reasoning, review_share_a, review_share_b, review_assessment]
+        plan_fidelity_a:
+          type: integer
+          description: "Arm A: how completely/correctly the IMPLEMENTER fulfilled the plan it was built against, 0–100 (discount fidelity reached via late-reviewer rewrites)."
+        plan_fidelity_b:
+          type: integer
+          description: "Arm B: how completely/correctly the IMPLEMENTER fulfilled its plan, 0–100 (discount late-reviewer rewrites)."
+        plan_assessment:
+          type: string
+          description: "2–4 sentences: did each implementer execute its plan faithfully/completely, or leave gaps? Note deviations; if gaps are the plan's fault (thin plan), say the fix is upstream in planning."
+      required: [winner, score_a, score_b, reasoning, review_share_a, review_share_b, review_assessment, plan_fidelity_a, plan_fidelity_b, plan_assessment]

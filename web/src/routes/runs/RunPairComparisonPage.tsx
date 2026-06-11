@@ -364,6 +364,29 @@ function JudgePanel({
                 </p>
               </div>
             )}
+            {verdict.plan_assessment && (
+              <div className="flex flex-col gap-1 border-t border-border pt-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Plan adherence — implementer vs the plan
+                </span>
+                {(verdict.plan_fidelity_a != null ||
+                  verdict.plan_fidelity_b != null) && (
+                  <div className="text-[13px] text-muted-foreground">
+                    Plan fidelity — {labelA}{" "}
+                    <span className="tabular-nums text-foreground">
+                      {verdict.plan_fidelity_a ?? "—"}
+                    </span>{" "}
+                    vs {labelB}{" "}
+                    <span className="tabular-nums text-foreground">
+                      {verdict.plan_fidelity_b ?? "—"}
+                    </span>
+                  </div>
+                )}
+                <p className="text-[13px] text-muted-foreground">
+                  {verdict.plan_assessment}
+                </p>
+              </div>
+            )}
             <button
               type="button"
               onClick={() => run.mutate({ judge_model: chosen ?? undefined })}
