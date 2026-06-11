@@ -19,6 +19,9 @@ use sqlx::types::Json;
 mod credentials;
 pub use credentials::{CredentialStore, ProviderCredential};
 
+mod billing;
+pub use billing::{BillingProfile, BillingProfileInput, BillingProfileStore};
+
 mod projects;
 pub use projects::{Project, ProjectInput, ProjectStore};
 
