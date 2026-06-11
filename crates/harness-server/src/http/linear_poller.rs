@@ -51,7 +51,10 @@ pub(crate) fn spawn_poller(state: Arc<RunsState>) {
 }
 
 /// The Linear API key for `project` (project-scoped credential first, else global).
-async fn linear_key_for_project(state: &Arc<RunsState>, project: &str) -> Option<String> {
+pub(crate) async fn linear_key_for_project(
+    state: &Arc<RunsState>,
+    project: &str,
+) -> Option<String> {
     let store = state.cred_store().await.ok()?;
     let fields = store.get_for_project(project, "linear").await.ok()??;
     fields.get("api_key").filter(|k| !k.is_empty()).cloned()

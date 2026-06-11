@@ -11,8 +11,10 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use harness_persist::LinearSourceInput;
+use harness_sources::linear::LinearClient;
 use serde::Deserialize;
 
+use super::linear_poller::linear_key_for_project;
 use super::runs_routes::RunsState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -110,6 +112,118 @@ pub async fn list_sources(
 fn trimmed_non_empty(s: String) -> Option<String> {
     let trimmed = s.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateIssueBody {
+    /// The binding to file against (defaults to `idea-to-pr`). Determines the
+    /// team, source status, and eligibility label the issue is created with.
+    #[serde(default = "default_issue_workflow")]
+    pub workflow: String,
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+fn default_issue_workflow() -> String {
+    "idea-to-pr".to_string()
+}
+
+/// `POST /api/projects/{project}/linear-issues` — create a Linear issue from a
+/// task (e.g. a GEO finding) in the project's bound team + **source status**,
+/// tagged with the binding's eligibility label, so the poller can claim it and
+/// fire the workflow on its normal cadence. Returns the created issue.
+pub async fn create_issue(
+    Extension(state): Extension<Arc<RunsState>>,
+    axum::extract::Path(project): axum::extract::Path<String>,
+    Json(body): Json<CreateIssueBody>,
+) -> Response {
+    let Some(title) = trimmed_non_empty(body.title) else {
+        return err(StatusCode::BAD_REQUEST, "`title` is required");
+    };
+    let workflow = trimmed_non_empty(body.workflow).unwrap_or_else(default_issue_workflow);
+    if let Err(r) = ensure_project(&state, &project).await {
+        return r;
+    }
+
+    // The binding supplies team + source status + eligibility label.
+    let src_store = match state.linear_source_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let binding = match src_store.get(&project, &workflow).await {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "no Linear source configured for `{project}` / `{workflow}` — \
+                     set one up in the project's Linear settings first"
+                ),
+            )
+        }
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+
+    // API key: project-scoped credential first, else the global one.
+    let Some(api_key) = linear_key_for_project(&state, &project).await else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("no Linear API key for project `{project}` — add the `linear` credential"),
+        );
+    };
+    let client = LinearClient::new(api_key);
+
+    // issueCreate needs label *ids*; the binding stores the label *name*, so
+    // resolve it through discovery. No label on the binding → create without.
+    let label_ids = match binding.label.as_deref() {
+        Some(name) => match client.discover().await {
+            Ok(discovery) => {
+                let resolved = discovery
+                    .teams
+                    .iter()
+                    .find(|t| t.id == binding.team_id)
+                    .and_then(|t| t.labels.iter().find(|l| l.name.eq_ignore_ascii_case(name)));
+                match resolved {
+                    Some(label) => vec![label.id.clone()],
+                    None => {
+                        return err(
+                            StatusCode::UNPROCESSABLE_ENTITY,
+                            format!(
+                                "eligibility label `{name}` not found on team `{}` — \
+                                 check the project's Linear binding",
+                                binding.team_name
+                            ),
+                        )
+                    }
+                }
+            }
+            Err(e) => {
+                return err(
+                    StatusCode::BAD_GATEWAY,
+                    format!("Linear discovery failed: {e}"),
+                )
+            }
+        },
+        None => Vec::new(),
+    };
+
+    match client
+        .create_issue(
+            &binding.team_id,
+            &title,
+            &body.description,
+            Some(&binding.source_state_id),
+            &label_ids,
+        )
+        .await
+    {
+        Ok(issue) => (StatusCode::CREATED, Json(issue)).into_response(),
+        Err(e) => err(
+            StatusCode::BAD_GATEWAY,
+            format!("Linear issueCreate failed: {e}"),
+        ),
+    }
 }
 
 fn optional_trimmed_non_empty(s: Option<String>) -> Option<String> {

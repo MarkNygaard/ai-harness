@@ -4,6 +4,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "./api";
 import type {
+  CreatedLinearIssue,
+  CreateLinearIssueInput,
   LinearDiscovery,
   LinearSource,
   LinearSourceInput,
@@ -46,6 +48,21 @@ export function useLinearSource(
       apiJson<LinearSource | null>(
         `/api/projects/${encodeURIComponent(project!)}/linear-source?workflow=${encodeURIComponent(workflow!)}`,
         { signal },
+      ),
+  });
+}
+
+/** Create a Linear issue from a task/finding against the project's binding. */
+export function useCreateLinearIssue(project: string | null) {
+  return useMutation<CreatedLinearIssue, Error, CreateLinearIssueInput>({
+    mutationFn: (body) =>
+      apiJson<CreatedLinearIssue>(
+        `/api/projects/${encodeURIComponent(project!)}/linear-issues`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
       ),
   });
 }

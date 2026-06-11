@@ -46,6 +46,21 @@ export interface LinearSource {
   updated_at: string;
 }
 
+/** A Linear issue created via the harness (the fields surfaced back). */
+export interface CreatedLinearIssue {
+  id: string;
+  identifier: string;
+  url: string;
+}
+
+/** Body for creating a Linear issue from a task/finding. */
+export interface CreateLinearIssueInput {
+  /** Binding to file against; defaults to `idea-to-pr` server-side. */
+  workflow?: string;
+  title: string;
+  description: string;
+}
+
 /** Fields accepted when saving a Linear source binding. */
 export interface LinearSourceInput {
   workflow: string;
