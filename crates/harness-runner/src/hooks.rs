@@ -606,6 +606,66 @@ mod tests {
     }
 
     #[test]
+    fn cursor_hook_denies_bash_matcher_for_shell_tool() {
+        if !node_available() {
+            return;
+        }
+        let (_dir, hook_path) = cursor_hook_fixture();
+
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Bash".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("no shell".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook(
+            &hook_path,
+            "preToolUse",
+            Some(&env),
+            r#"{"tool_name":"Shell","tool_input":{"command":"rm -rf /"}}"#,
+        );
+        assert!(out.status.success());
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["permission"], "deny");
+        assert_eq!(v["agent_message"], "no shell");
+    }
+
+    #[test]
+    fn cursor_hook_denies_edit_matcher_for_write_tool() {
+        if !node_available() {
+            return;
+        }
+        let (_dir, hook_path) = cursor_hook_fixture();
+
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Edit|MultiEdit|NotebookEdit|Bash".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("read-only".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook(
+            &hook_path,
+            "preToolUse",
+            Some(&env),
+            r#"{"tool_name":"Write"}"#,
+        );
+        assert!(out.status.success());
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["permission"], "deny");
+        assert_eq!(v["agent_message"], "read-only");
+    }
+
+    #[test]
     fn cursor_hook_after_file_edit_matches_edit_write_matcher() {
         if !node_available() {
             return;

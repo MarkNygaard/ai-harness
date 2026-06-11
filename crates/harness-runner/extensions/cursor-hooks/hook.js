@@ -60,10 +60,32 @@ function extractToolName(payload) {
   return "";
 }
 
+const FILE_EDIT_TOOLS = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+
+/** Cursor vs Claude tool-name equivalents for matcher tests. */
+const TOOL_ALIASES = {
+  Shell: ["Shell", "Bash"],
+  Bash: ["Bash", "Shell"],
+  Write: FILE_EDIT_TOOLS,
+  Edit: FILE_EDIT_TOOLS,
+  MultiEdit: FILE_EDIT_TOOLS,
+  NotebookEdit: FILE_EDIT_TOOLS,
+};
+
+function expandToolAliases(names) {
+  const out = new Set(names);
+  for (const name of names) {
+    for (const alias of TOOL_ALIASES[name] || []) {
+      out.add(alias);
+    }
+  }
+  return [...out];
+}
+
 /** Names to test matchers against — one tool event or file-edit aliases. */
 function matchTargets(payload, argvPhase) {
   const tool = extractToolName(payload);
-  if (tool) return [tool];
+  if (tool) return expandToolAliases([tool]);
 
   const event =
     payload.hook_event_name ||
@@ -71,9 +93,8 @@ function matchTargets(payload, argvPhase) {
     payload.event ||
     "";
   if (event === "afterFileEdit" || argvPhase === "afterFileEdit") {
-    // afterFileEdit payloads carry file_path, not tool_name; workflows authored
-    // for Claude often match Edit|MultiEdit|Write.
-    return ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+    // afterFileEdit payloads carry file_path, not tool_name.
+    return FILE_EDIT_TOOLS;
   }
   return [""];
 }
