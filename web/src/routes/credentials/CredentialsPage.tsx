@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, KeyRound, Loader2, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -258,9 +258,9 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
   }
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-2">
-        <CardTitle className="flex items-center gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
           Kimi-for-Coding
           {configured ? (
             <Badge variant="success">
@@ -269,15 +269,15 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
           ) : (
             <Badge variant="outline">not connected</Badge>
           )}
-        </CardTitle>
+        </div>
         <Button size="sm" onClick={connect} disabled={phase === "pending"}>
           {phase === "pending" && (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           )}
           {configured ? "Reconnect" : "Connect Kimi"}
         </Button>
-      </CardHeader>
-      <CardContent>
+      </div>
+      <div>
         <p className="mb-3 text-xs text-muted-foreground">
           The Kimi-for-Coding subscription (<code>kimi-code/*</code> models)
           uses a device login — no API key. Click Connect, approve in the
@@ -313,8 +313,8 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
         )}
         {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
         <BillingFields lane="kimi" />
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -371,9 +371,9 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
   }
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-2">
-        <CardTitle className="flex items-center gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
           ChatGPT subscription
           {configured ? (
             <Badge variant="success">
@@ -382,15 +382,15 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
           ) : (
             <Badge variant="outline">not connected</Badge>
           )}
-        </CardTitle>
+        </div>
         <Button size="sm" onClick={begin} disabled={phase === "exchanging"}>
           {phase === "exchanging" && (
             <Loader2 className="h-3.5 w-3.5 animate-spin" />
           )}
           {configured ? "Reconnect" : "Connect ChatGPT"}
         </Button>
-      </CardHeader>
-      <CardContent>
+      </div>
+      <div>
         <p className="mb-3 text-xs text-muted-foreground">
           Uses your ChatGPT subscription for both the <strong>Codex</strong> CLI
           and <strong>omp</strong> (the <code>openai-codex/*</code> models on
@@ -438,8 +438,8 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
         )}
         {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
         <BillingFields lane="gpt" />
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -467,9 +467,9 @@ function ProviderCard({
   }
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between gap-2">
-        <CardTitle className="flex items-center gap-2">
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 text-sm font-semibold">
           {provider.label}
           {configured ? (
             <Badge variant="success">
@@ -478,7 +478,7 @@ function ProviderCard({
           ) : (
             <Badge variant="outline">not set</Badge>
           )}
-        </CardTitle>
+        </div>
         {configured && (
           <Button
             variant="ghost"
@@ -490,8 +490,8 @@ function ProviderCard({
             <Trash2 className="h-3.5 w-3.5" /> Clear
           </Button>
         )}
-      </CardHeader>
-      <CardContent>
+      </div>
+      <div>
         <p className="mb-3 text-xs text-muted-foreground">{provider.help}</p>
         <form onSubmit={submit} className="flex flex-col gap-3">
           {provider.fields.map((f) => (
@@ -540,7 +540,7 @@ function ProviderCard({
         {LANE_FOR_CREDENTIAL[provider.id] && (
           <BillingFields lane={LANE_FOR_CREDENTIAL[provider.id]} />
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
