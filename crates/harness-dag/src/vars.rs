@@ -26,6 +26,7 @@ pub const RECOGNIZED_VARS: &[&str] = &[
     "ARGUMENTS",
     "ARTIFACTS_DIR",
     "BASE_BRANCH",
+    "EXTERNAL_URL",
     "DOCS_DIR",
     "CONTEXT",
     "EXTERNAL_CONTEXT",
