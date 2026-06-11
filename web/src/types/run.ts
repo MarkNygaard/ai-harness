@@ -178,6 +178,12 @@ export interface AbVerdict {
   score_a: number;
   score_b: number;
   reasoning: string;
+  /** % of arm A's final change produced by the shared late reviewers (gpt/sonnet). */
+  review_share_a?: number;
+  /** % of arm B's final change produced by the shared late reviewers. */
+  review_share_b?: number;
+  /** Whether the cheap implementer carried the work, or the reviewers rescued it. */
+  review_assessment?: string;
 }
 
 /** The judge run for a pair: its run id, status, and parsed verdict (if done). */

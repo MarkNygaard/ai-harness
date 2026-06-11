@@ -10,7 +10,14 @@ description: |
   the trigger overrides it, so the judge itself is held constant across a
   comparison.
 
-  Output: a JSON verdict `{ winner, score_a, score_b, reasoning }`.
+  The judge then does a SECOND analysis: how much did the shared late-stage
+  reviewers (`gpt-review-fix`, `sonnet-final-review`) shape each arm? Those steps
+  run on the SAME models in both arms, so a heavy review contribution is not the
+  swapped implementer's credit — and it signals the pipeline's premise (a cheap
+  implementer does the bulk; reviewers only polish) is breaking down.
+
+  Output: `{ winner, score_a, score_b, reasoning, review_share_a,
+  review_share_b, review_assessment }`.
 provider: claude
 model: opus
 nodes:
@@ -39,7 +46,34 @@ nodes:
 
       Score each arm 0–100 (higher is better). Pick the winner, or "tie" if they
       are genuinely equivalent. Keep the reasoning to 2–4 sentences citing
-      concrete differences you saw in the diffs.
+      concrete differences you saw in the diffs. This is the OVERALL verdict on
+      the finished PR — everything included.
+
+      THEN do a second, separate analysis — the review-burden check:
+      - This pipeline's premise is that a cheap implementer does the bulk of the
+        work and the late reviewers only polish. The final review steps
+        (`gpt-review-fix`, then `sonnet-final-review`) run on the SAME models in
+        both arms (see each step's provider/model in the evidence), so whatever
+        THEY contributed is not the swapped implementer's credit.
+      - Attribute the diff: inspect the PR's commits with
+        `gh pr view <pr-url> --json commits` (and `gh api
+        repos/{owner}/{repo}/commits/{sha}` for per-commit additions/deletions if
+        useful). Commit authors encode the step + model that made them, e.g.
+        `gpt-review-fix (openai-codex/gpt-5.5)` and
+        `sonnet-final-review (claude/sonnet)` — use that to separate the late
+        reviewers' commits from the implement / early-review commits. If authors
+        are a single generic identity (older runs predate per-step attribution),
+        fall back to commit messages and say your confidence is lower.
+      - For each arm, estimate `review_share` (0–100): the percentage of the
+        final, merged change that the late reviewers produced (rewrites and
+        structural refactors count more than line count).
+      - In `review_assessment`, judge whether the premise held: did the
+        implementer carry the work (low review_share — good), or did the
+        reviewers rescue it (high review_share or a structural refactor — the
+        concept is breaking down)? If a reviewer model is consistently doing the
+        heavy lifting, note that it may be the better *implement* model. Compare
+        the two arms here too — an arm can win the overall verdict yet have
+        leaned harder on the shared reviewers.
 
       When done, emit ONLY the JSON verdict — no prose, no preamble.
     output_format:
@@ -58,4 +92,13 @@ nodes:
         reasoning:
           type: string
           description: "2–4 sentences justifying the verdict, citing concrete differences."
-      required: [winner, score_a, score_b, reasoning]
+        review_share_a:
+          type: integer
+          description: "Arm A: % (0–100) of the final change produced by the shared late reviewers (gpt-review-fix, sonnet-final-review) rather than the implementer."
+        review_share_b:
+          type: integer
+          description: "Arm B: % (0–100) of the final change produced by the shared late reviewers rather than the implementer."
+        review_assessment:
+          type: string
+          description: "2–4 sentences: did the cheap implementer carry the work (premise holds) or did the shared reviewers rescue it (premise breaking down)? Compare the arms; flag if a reviewer model should be the implementer."
+      required: [winner, score_a, score_b, reasoning, review_share_a, review_share_b, review_assessment]
