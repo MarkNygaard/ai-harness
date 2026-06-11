@@ -27,6 +27,9 @@ use tokio::process::Command;
 
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
 
+/// Embedded Cursor hook script, materialized to `req.cwd/.cursor` at runtime.
+const CURSOR_HOOK_SCRIPT: &str = include_str!("../extensions/cursor-hooks/hook.js");
+
 /// Default model when a `cursor` node declares no `model` — Cursor's own model.
 const DEFAULT_MODEL: &str = "composer";
 
@@ -115,17 +118,75 @@ impl CursorAgent {
     }
 }
 
+/// RAII guard that removes harness-written Cursor hook files on drop.
+struct CursorHooksGuard {
+    script_path: PathBuf,
+    hooks_json_path: PathBuf,
+    cursor_dir: PathBuf,
+    created_dir: bool,
+}
+
+impl Drop for CursorHooksGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.hooks_json_path);
+        let _ = std::fs::remove_file(&self.script_path);
+        if self.created_dir {
+            let _ = std::fs::remove_dir(&self.cursor_dir);
+        }
+    }
+}
+
+fn materialize_cursor_hooks(cwd: &Path) -> Result<CursorHooksGuard, AgentError> {
+    let cursor_dir = cwd.join(".cursor");
+    let created_dir = !cursor_dir.exists();
+    std::fs::create_dir_all(&cursor_dir).map_err(|e| AgentError(e.to_string()))?;
+
+    let script_path = cursor_dir.join("harness-hook.js");
+    std::fs::write(&script_path, CURSOR_HOOK_SCRIPT).map_err(|e| AgentError(e.to_string()))?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(meta) = std::fs::metadata(&script_path) {
+            let mut perms = meta.permissions();
+            perms.set_mode(0o755);
+            let _ = std::fs::set_permissions(&script_path, perms);
+        }
+    }
+
+    let value = crate::hooks::cursor_hooks_json(&script_path);
+    let hooks_json_path = cursor_dir.join("hooks.json");
+    let json = serde_json::to_string_pretty(&value).map_err(|e| AgentError(e.to_string()))?;
+    std::fs::write(&hooks_json_path, json).map_err(|e| AgentError(e.to_string()))?;
+
+    Ok(CursorHooksGuard {
+        script_path,
+        hooks_json_path,
+        cursor_dir,
+        created_dir,
+    })
+}
+
 #[async_trait]
 impl PromptAgent for CursorAgent {
     async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
         let model = self.resolve_model(req.model.as_deref());
         let args = self.build_args(&req.prompt, &model, req.session.as_deref());
 
+        let (_hooks_guard, env_vars) = if let Some(hooks) = req.hooks.as_ref() {
+            let guard = materialize_cursor_hooks(&req.cwd)?;
+            let mut env_vars = req.env_vars.clone();
+            env_vars.insert("HARNESS_HOOKS".into(), crate::hooks::omp_hooks_env(hooks));
+            (Some(guard), env_vars)
+        } else {
+            (None, req.env_vars.clone())
+        };
+
         // One automatic retry, but ONLY on a stall (a transient dropped
         // connection). A clean non-zero exit is deterministic — never retried.
         let mut attempt = 0u32;
         let (stdout, stderr, status) = loop {
-            match self.run_attempt(&args, &req.cwd, &req.env_vars).await? {
+            match self.run_attempt(&args, &req.cwd, &env_vars).await? {
                 Attempt::Done {
                     stdout,
                     stderr,
