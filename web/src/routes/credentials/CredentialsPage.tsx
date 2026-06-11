@@ -183,7 +183,7 @@ function ProviderSummary({
           >
             {configured ? "Configure" : "Connect"}
           </DialogTrigger>
-          <DialogContent className="max-h-[85vh] overflow-y-auto">
+          <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
             {/* The settings card carries its own title/help; keep an a11y title
                 without visually duplicating it. */}
             <DialogHeader className="sr-only">
