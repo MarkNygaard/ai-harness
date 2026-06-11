@@ -238,6 +238,13 @@ impl LocalRunner {
             Some(schema) => format!("{prompt}{}", output_format_directive(schema)),
             None => prompt,
         };
+        // Attribute commits this node makes to the step + provider/model that
+        // produced them, so PR history (and the A/B judge) can tell e.g. a
+        // `gpt-review-fix` rescue apart from `implement-tasks` work. Git reads
+        // GIT_AUTHOR_*/GIT_COMMITTER_* over config, so this overrides the
+        // image's global identity for the node's own commits.
+        let mut env_vars = self.env_vars.clone();
+        apply_commit_identity(&mut env_vars, req.node_id, req.provider, req.model);
         let result = self
             .agent
             .run(PromptRequest {
@@ -247,7 +254,7 @@ impl LocalRunner {
                 cwd: self.workspace.clone(),
                 session: req.session.clone(),
                 iteration: req.iteration,
-                env_vars: self.env_vars.clone(),
+                env_vars,
                 hooks: req.hooks.cloned(),
             })
             .await
@@ -286,6 +293,40 @@ impl NodeRunner for LocalRunner {
             }
         }
     }
+}
+
+/// Inject a per-node git identity so commits an AI node makes are attributable
+/// to the workflow step (and model) that authored them — e.g. distinguishing a
+/// `gpt-review-fix` rescue from `implement-tasks` work in an A/B arm. Sets both
+/// the author/committer identity (visible in `git log`, blame, and the GitHub
+/// PR commit list) and `HARNESS_NODE`/`HARNESS_PROVIDER`/`HARNESS_MODEL` (a
+/// machine-readable source for a commit-trailer hook or downstream tooling).
+/// These win over the image's global git config because git reads the
+/// `GIT_AUTHOR_*`/`GIT_COMMITTER_*` env vars ahead of `user.name`/`user.email`.
+fn apply_commit_identity(
+    env: &mut HashMap<String, String>,
+    node_id: &str,
+    provider: Option<&str>,
+    model: Option<&str>,
+) {
+    let provider_model = match (provider, model) {
+        (Some(p), Some(m)) => format!("{p}/{m}"),
+        (Some(p), None) => p.to_string(),
+        (None, Some(m)) => m.to_string(),
+        (None, None) => "unknown".to_string(),
+    };
+    let name = format!("{node_id} ({provider_model})");
+    let email = format!("{node_id}@node.harness");
+    env.insert("GIT_AUTHOR_NAME".into(), name.clone());
+    env.insert("GIT_COMMITTER_NAME".into(), name);
+    env.insert("GIT_AUTHOR_EMAIL".into(), email.clone());
+    env.insert("GIT_COMMITTER_EMAIL".into(), email);
+    env.insert("HARNESS_NODE".into(), node_id.to_string());
+    env.insert(
+        "HARNESS_PROVIDER".into(),
+        provider.unwrap_or("").to_string(),
+    );
+    env.insert("HARNESS_MODEL".into(), model.unwrap_or("").to_string());
 }
 
 /// Build the instruction appended to a prompt when a node declares an
@@ -449,6 +490,43 @@ mod tests {
             .await
             .unwrap();
         assert!(!out.success);
+    }
+
+    #[test]
+    fn commit_identity_attributes_node_and_model() {
+        let mut env = std::collections::HashMap::new();
+        super::apply_commit_identity(
+            &mut env,
+            "gpt-review-fix",
+            Some("openai-codex"),
+            Some("gpt-5.5"),
+        );
+        assert_eq!(
+            env.get("GIT_AUTHOR_NAME").unwrap(),
+            "gpt-review-fix (openai-codex/gpt-5.5)"
+        );
+        assert_eq!(
+            env.get("GIT_COMMITTER_NAME").unwrap(),
+            env.get("GIT_AUTHOR_NAME").unwrap()
+        );
+        assert_eq!(
+            env.get("GIT_AUTHOR_EMAIL").unwrap(),
+            "gpt-review-fix@node.harness"
+        );
+        assert_eq!(env.get("HARNESS_NODE").unwrap(), "gpt-review-fix");
+        assert_eq!(env.get("HARNESS_PROVIDER").unwrap(), "openai-codex");
+        assert_eq!(env.get("HARNESS_MODEL").unwrap(), "gpt-5.5");
+    }
+
+    #[test]
+    fn commit_identity_handles_missing_model() {
+        let mut env = std::collections::HashMap::new();
+        super::apply_commit_identity(&mut env, "implement-tasks", Some("cursor"), None);
+        assert_eq!(
+            env.get("GIT_AUTHOR_NAME").unwrap(),
+            "implement-tasks (cursor)"
+        );
+        assert_eq!(env.get("HARNESS_MODEL").unwrap(), "");
     }
 
     #[tokio::test]
