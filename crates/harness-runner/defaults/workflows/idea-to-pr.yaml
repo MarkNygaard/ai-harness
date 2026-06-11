@@ -344,6 +344,12 @@ nodes:
         Look at any prior iteration's commits — your previous self has
         already addressed those issues. Don't re-flag the same thing.
 
+        Also read `$ARTIFACTS_DIR/plan.md` — the plan you built against.
+        Fixing where the code *deviates* from the plan is in scope; *adding*
+        things the plan deliberately left out (its "Not building" section) is
+        not. If a scope cut looks wrong for the task, note it in your summary
+        for the human rather than expanding scope here.
+
         ## Review categories
 
         Note: `pi-simplify` has already run upstream and handled pure
@@ -433,6 +439,14 @@ nodes:
       and self-reviewed up to 3 times. Your job is to find what the
       upstream agent missed.
 
+      First read `$ARTIFACTS_DIR/plan.md` — the plan this PR was built
+      against. It is the scope contract: anything under its "Not building"
+      section was left out ON PURPOSE. Fixing where the code *deviates from
+      the plan* is in scope; *adding* capabilities the plan deliberately cut
+      is NOT — re-adding correctly-cut scope defeats the point of planning.
+      If you believe a scope cut was genuinely wrong for the task, SAY SO in
+      your output as a flag for the human; do not silently implement it.
+
       The PR branch is checked out at HEAD with all of the upstream
       agent's fixes applied. Use `gh pr view` and
       `git log --oneline origin/$BASE_BRANCH..HEAD` to understand the
@@ -450,7 +464,7 @@ nodes:
       - API design: inconsistent error shapes, leaky abstractions, breaking
         changes that aren't called out
 
-      For each issue you find, FIX IT directly:
+      For each genuine in-scope issue you find, FIX IT directly:
       1. Edit the relevant file(s).
       2. Commit with a conventional-commit message
          (e.g. `fix(scope): handle race in token refresh`).
@@ -489,6 +503,8 @@ nodes:
          prior fixes applied.
       3. `git log --oneline origin/$BASE_BRANCH..HEAD` — paper trail of
          self-review summaries and second-pass fix commits.
+      4. `$ARTIFACTS_DIR/plan.md` — the plan/scope contract this PR was built
+         against, including what it deliberately left out ("Not building").
 
       ## What to fix vs flag
 
@@ -526,8 +542,10 @@ nodes:
 
       ## What to look at (checklist)
 
-      - **Scope discipline**: does the PR match the original ask, or did
-        earlier agents drift?
+      - **Scope discipline**: does the PR match the plan + original ask?
+        Earlier reviewers may have *added* scope the plan deliberately cut —
+        flag that as drift, don't reward it. If a deliberate cut looks wrong
+        for the task, raise it as NEEDS_DISCUSSION rather than implementing it.
       - **Architectural risk**: coupling, leaky abstractions, contracts
         that are hard to evolve.
       - **Operational risk**: migrations, destructive operations, env-var
