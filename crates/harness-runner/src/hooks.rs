@@ -100,9 +100,9 @@ pub fn omp_hooks_env(hooks: &NodeHooks) -> String {
 }
 
 /// Build a Cursor `.cursor/hooks.json` value (version 1) registering the
-/// bundled harness hook script on `preToolUse` and `postToolUse`. The script
-/// reads hook rules from the `HARNESS_HOOKS` env var (same JSON as
-/// [`omp_hooks_env`]).
+/// bundled harness hook script on `preToolUse`, `postToolUse`, and
+/// `afterFileEdit`. The script reads hook rules from the `HARNESS_HOOKS` env var
+/// (same JSON as [`omp_hooks_env`]).
 pub fn cursor_hooks_json(script_path: &std::path::Path) -> Value {
     let path = script_path.to_string_lossy();
     let quoted = shlex::try_quote(&path).expect("script path must not contain NUL bytes");
@@ -112,6 +112,7 @@ pub fn cursor_hooks_json(script_path: &std::path::Path) -> Value {
         "hooks": {
             "preToolUse": [{ "command": command("preToolUse") }],
             "postToolUse": [{ "command": command("postToolUse") }],
+            "afterFileEdit": [{ "command": command("afterFileEdit") }],
         }
     })
 }
@@ -383,25 +384,19 @@ mod tests {
     }
 
     #[test]
-    fn cursor_hooks_json_registers_both_events() {
+    fn cursor_hooks_json_registers_all_events() {
         let script = std::path::Path::new("/tmp/worktree/.cursor/harness-hook.js");
         let value = cursor_hooks_json(script);
 
         assert_eq!(value["version"], 1);
-        let pre = value["hooks"]["preToolUse"].as_array().unwrap();
-        let post = value["hooks"]["postToolUse"].as_array().unwrap();
-        assert_eq!(pre.len(), 1);
-        assert_eq!(post.len(), 1);
-
-        let pre_cmd = pre[0]["command"].as_str().unwrap();
-        assert!(pre_cmd.starts_with("node "));
-        assert!(pre_cmd.contains("harness-hook.js"));
-        assert!(pre_cmd.contains("preToolUse"));
-
-        let post_cmd = post[0]["command"].as_str().unwrap();
-        assert!(post_cmd.starts_with("node "));
-        assert!(post_cmd.contains("harness-hook.js"));
-        assert!(post_cmd.contains("postToolUse"));
+        for event in ["preToolUse", "postToolUse", "afterFileEdit"] {
+            let entries = value["hooks"][event].as_array().unwrap();
+            assert_eq!(entries.len(), 1);
+            let cmd = entries[0]["command"].as_str().unwrap();
+            assert!(cmd.starts_with("node "));
+            assert!(cmd.contains("harness-hook.js"));
+            assert!(cmd.contains(event));
+        }
     }
 
     #[test]
@@ -565,5 +560,46 @@ mod tests {
         assert!(out.status.success());
         let v: Value = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(v["permission"], "allow");
+    }
+
+    #[test]
+    fn cursor_hook_aggregates_multiple_post_rules() {
+        if !node_available() {
+            return;
+        }
+        let (_dir, hook_path) = cursor_hook_fixture();
+
+        let hooks = NodeHooks {
+            pre_tool_use: vec![],
+            post_tool_use: vec![
+                HookRule {
+                    matcher: Some("Write".into()),
+                    decision: None,
+                    reason: None,
+                    additional_context: Some("Run cargo check".into()),
+                    system_message: None,
+                },
+                HookRule {
+                    matcher: Some("Write".into()),
+                    decision: None,
+                    reason: None,
+                    additional_context: None,
+                    system_message: Some("Update tests".into()),
+                },
+            ],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook(
+            &hook_path,
+            "afterFileEdit",
+            Some(&env),
+            r#"{"tool_name":"Write"}"#,
+        );
+        assert!(out.status.success());
+        let v: Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(v["permission"], "allow");
+        let message = v["agent_message"].as_str().unwrap();
+        assert!(message.contains("Run cargo check"));
+        assert!(message.contains("Update tests"));
     }
 }

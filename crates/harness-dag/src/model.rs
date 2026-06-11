@@ -95,7 +95,8 @@ pub struct ApprovalConfig {
 }
 
 /// Provider-agnostic per-node tool hooks (Archon-shaped). Translated by the
-/// runner into Claude Code settings.json hooks or the omp hook extension.
+/// runner into Claude Code settings.json hooks, the omp hook extension, or
+/// Cursor project hooks.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct NodeHooks {
     /// Fired before a tool runs; a `deny` decision blocks the call.

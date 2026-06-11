@@ -61,8 +61,11 @@ function extractToolName(payload) {
 }
 
 function detectPhase(argvPhase, payload) {
-  if (argvPhase === "preToolUse" || argvPhase === "postToolUse") {
-    return argvPhase;
+  if (argvPhase === "preToolUse") {
+    return "preToolUse";
+  }
+  if (argvPhase === "postToolUse" || argvPhase === "afterFileEdit") {
+    return "postToolUse";
   }
   const event =
     payload.hook_event_name ||
@@ -101,12 +104,14 @@ function handlePre(hooks, toolName) {
 
 function handlePost(hooks, toolName) {
   const rules = hooks.post_tool_use || [];
+  const messages = [];
   for (const rule of rules) {
     if (!testMatcher(rule.matcher, toolName)) continue;
     const message = joinMessage(rule);
-    if (message) {
-      respond({ permission: "allow", agent_message: message });
-    }
+    if (message) messages.push(message);
+  }
+  if (messages.length > 0) {
+    respond({ permission: "allow", agent_message: messages.join("\n") });
   }
   allow();
 }

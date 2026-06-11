@@ -118,18 +118,24 @@ impl CursorAgent {
     }
 }
 
-/// RAII guard that removes harness-written Cursor hook files on drop.
+/// RAII guard that removes harness-written Cursor hook files on drop, restoring
+/// any pre-existing `.cursor/hooks.json` the run overwrote.
 struct CursorHooksGuard {
     script_path: PathBuf,
     hooks_json_path: PathBuf,
     cursor_dir: PathBuf,
     created_dir: bool,
+    hooks_json_backup: Option<Vec<u8>>,
 }
 
 impl Drop for CursorHooksGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.hooks_json_path);
         let _ = std::fs::remove_file(&self.script_path);
+        if let Some(backup) = self.hooks_json_backup.take() {
+            let _ = std::fs::write(&self.hooks_json_path, backup);
+        } else {
+            let _ = std::fs::remove_file(&self.hooks_json_path);
+        }
         if self.created_dir {
             let _ = std::fs::remove_dir(&self.cursor_dir);
         }
@@ -156,6 +162,11 @@ fn materialize_cursor_hooks(cwd: &Path) -> Result<CursorHooksGuard, AgentError> 
 
     let value = crate::hooks::cursor_hooks_json(&script_path);
     let hooks_json_path = cursor_dir.join("hooks.json");
+    let hooks_json_backup = if hooks_json_path.exists() {
+        Some(std::fs::read(&hooks_json_path).map_err(|e| AgentError(e.to_string()))?)
+    } else {
+        None
+    };
     let json = serde_json::to_string_pretty(&value).map_err(|e| AgentError(e.to_string()))?;
     std::fs::write(&hooks_json_path, json).map_err(|e| AgentError(e.to_string()))?;
 
@@ -164,6 +175,7 @@ fn materialize_cursor_hooks(cwd: &Path) -> Result<CursorHooksGuard, AgentError> 
         hooks_json_path,
         cursor_dir,
         created_dir,
+        hooks_json_backup,
     })
 }
 
@@ -452,5 +464,42 @@ mod tests {
         );
         let resumed = agent.build_args("again", "composer", Some("sess-9"));
         assert!(resumed.windows(2).any(|w| w == ["--resume", "sess-9"]));
+    }
+
+    #[test]
+    fn cursor_hooks_guard_restores_existing_hooks_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let cursor_dir = dir.path().join(".cursor");
+        std::fs::create_dir_all(&cursor_dir).unwrap();
+        let hooks_json = cursor_dir.join("hooks.json");
+        let original = br#"{"version":1,"hooks":{"user":true}}"#.to_vec();
+        std::fs::write(&hooks_json, &original).unwrap();
+
+        {
+            let guard = materialize_cursor_hooks(dir.path()).unwrap();
+            let current = std::fs::read(&hooks_json).unwrap();
+            assert_ne!(current, original);
+            assert!(cursor_dir.join("harness-hook.js").exists());
+            drop(guard);
+        }
+
+        assert_eq!(std::fs::read(&hooks_json).unwrap(), original);
+        assert!(!cursor_dir.join("harness-hook.js").exists());
+    }
+
+    #[test]
+    fn cursor_hooks_guard_removes_materialized_dir_when_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let cursor_dir = dir.path().join(".cursor");
+        assert!(!cursor_dir.exists());
+
+        {
+            let guard = materialize_cursor_hooks(dir.path()).unwrap();
+            assert!(cursor_dir.exists());
+            assert!(cursor_dir.join("hooks.json").exists());
+            drop(guard);
+        }
+
+        assert!(!cursor_dir.exists());
     }
 }
