@@ -8,6 +8,8 @@ export interface Project {
   git_url: string;
   base_branch: string;
   default_workflow: string | null;
+  /** Deployed/live site URL; exposed to runs as `$EXTERNAL_URL` (e.g. GEO audit). */
+  external_url: string | null;
   /** mise tool specs provisioned before runs (e.g. "rust", "node@22", "pnpm"). */
   toolchains: string[];
   /** Per-project build-cache cap in GiB; `null` falls back to the env default. */
@@ -21,6 +23,8 @@ export interface RegisterProjectRequest {
   git_url: string;
   base_branch?: string;
   default_workflow?: string | null;
+  /** Deployed/live site URL; exposed to runs as `$EXTERNAL_URL`. */
+  external_url?: string | null;
   toolchains?: string[];
   /** Per-project build-cache cap in GiB; omitted/`null`/≤0 → env default. */
   cargo_target_cap_gb?: number | null;

@@ -75,6 +75,10 @@ pub struct RegisterProjectRequest {
     pub base_branch: Option<String>,
     #[serde(default)]
     pub default_workflow: Option<String>,
+    /// Optional deployed/live site URL for flows that analyze the running site
+    /// (e.g. a GEO audit); exposed to runs as `$EXTERNAL_URL`.
+    #[serde(default)]
+    pub external_url: Option<String>,
     /// `mise` tool specs to provision before runs (e.g. `rust`, `node@22`, `pnpm`).
     #[serde(default)]
     pub toolchains: Vec<String>,
@@ -166,6 +170,10 @@ pub async fn register_project(
         git_url,
         base_branch,
         default_workflow: req.default_workflow.filter(|w| !w.trim().is_empty()),
+        external_url: req
+            .external_url
+            .map(|u| u.trim().to_string())
+            .filter(|u| !u.is_empty()),
         // Drop blank entries so the form can send a trailing empty input.
         toolchains: req
             .toolchains
