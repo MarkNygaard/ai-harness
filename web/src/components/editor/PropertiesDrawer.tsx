@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { X } from "lucide-react";
+import { Markdown, ViewToggle } from "@/components/Markdown";
 import type { Catalog, EditorNode, NodeKindId } from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
 import { useCategories } from "@/lib/categories";
@@ -99,13 +101,10 @@ export function PropertiesDrawer({
 
         {/* Body by kind */}
         {kind === "prompt" && (
-          <Field label="Prompt">
-            <Textarea
-              rows={6}
-              value={node.prompt ?? ""}
-              onChange={(e) => set({ prompt: e.target.value })}
-            />
-          </Field>
+          <PromptField
+            value={node.prompt ?? ""}
+            onChange={(v) => set({ prompt: v })}
+          />
         )}
         {kind === "bash" && (
           <Field label="Bash">
@@ -346,6 +345,53 @@ export function PropertiesDrawer({
 
 function loopOf(node: EditorNode) {
   return node.loop ?? { prompt: "", until: "DONE", max_iterations: 3 };
+}
+
+/**
+ * The node's prompt: a textarea with an Edit/Preview switch so long prompts
+ * with markdown (headings, lists, tables) can be read formatted via the same
+ * renderer used elsewhere in the app.
+ */
+function PromptField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const [preview, setPreview] = useState(false);
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] font-medium text-muted-foreground">
+          Prompt
+        </span>
+        <ViewToggle
+          value={preview}
+          onChange={setPreview}
+          renderedLabel="Preview"
+          rawLabel="Edit"
+        />
+      </div>
+      {preview ? (
+        <div className="min-h-35 rounded-md border border-input bg-transparent p-2">
+          {value.trim() ? (
+            <Markdown>{value}</Markdown>
+          ) : (
+            <p className="text-[12px] italic text-muted-foreground">
+              Nothing to preview.
+            </p>
+          )}
+        </div>
+      ) : (
+        <Textarea
+          rows={6}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      )}
+    </div>
+  );
 }
 
 function Field({
