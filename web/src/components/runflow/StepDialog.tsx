@@ -6,6 +6,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
+import { Markdown } from "@/components/Markdown";
 import type { NodeView } from "@/types/run";
 import {
   elapsedMs,
@@ -98,15 +99,10 @@ export function StepDialog({
                 empty="No textual output for this step."
               />
               {view.artifact && (
-                <div className="mt-4">
-                  <div className="mb-1 font-mono text-xs font-medium text-muted-foreground">
-                    {view.artifact}
-                  </div>
-                  <TextOrEmpty
-                    text={view.artifact_content}
-                    empty="No artifact produced for this step."
-                  />
-                </div>
+                <ArtifactView
+                  name={view.artifact}
+                  content={view.artifact_content}
+                />
               )}
             </div>
           </>
@@ -124,6 +120,41 @@ function Meta({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
+/**
+ * A step's artifact (e.g. `exploration.md`): markdown files render formatted;
+ * this is read-only info, so there's no raw/source toggle. Non-markdown
+ * artifacts show as raw text.
+ */
+function ArtifactView({
+  name,
+  content,
+}: {
+  name: string;
+  content: string | null;
+}) {
+  const isMarkdown = /\.(md|markdown)$/i.test(name);
+  return (
+    <div className="mt-4">
+      <div className="mb-1 truncate font-mono text-xs font-medium text-muted-foreground">
+        {name}
+      </div>
+      {!content ? (
+        <p className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
+          No artifact produced for this step.
+        </p>
+      ) : isMarkdown ? (
+        <div className="max-h-[50vh] overflow-auto rounded-md bg-muted p-3">
+          <Markdown>{content}</Markdown>
+        </div>
+      ) : (
+        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
+          {content}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function TextOrEmpty({ text, empty }: { text: string | null; empty: string }) {
   return text ? (
     <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">

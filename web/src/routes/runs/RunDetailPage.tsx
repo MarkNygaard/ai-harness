@@ -13,6 +13,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { Markdown } from "@/components/Markdown";
 import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
 import { GeoReport } from "@/components/geo/GeoReport";
@@ -112,9 +113,11 @@ export function RunDetailPage() {
                   Description
                 </div>
                 {run.description ? (
-                  <p className="whitespace-pre-wrap text-sm">{run.description}</p>
+                  <Markdown>{run.description}</Markdown>
                 ) : (
-                  <p className="text-sm italic text-muted-foreground">No description</p>
+                  <p className="text-sm italic text-muted-foreground">
+                    No description
+                  </p>
                 )}
               </div>
             </SheetContent>
@@ -196,7 +199,9 @@ function Field({
   return (
     <>
       <dt className="text-muted-foreground">{label}</dt>
-      <dd className={mono ? "truncate font-mono text-xs" : "truncate"}>{value}</dd>
+      <dd className={mono ? "truncate font-mono text-xs" : "truncate"}>
+        {value}
+      </dd>
     </>
   );
 }
