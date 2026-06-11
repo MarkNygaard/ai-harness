@@ -454,11 +454,47 @@ fn accumulate(dst: &mut UsageBucket, src: &UsageBucket) {
 }
 
 /// Per-MTok USD rates for a model family.
-struct ModelRates {
+pub(crate) struct ModelRates {
     input: f64,
     output: f64,
     cache_read: f64,
     cache_write: f64,
+}
+
+impl ModelRates {
+    /// Notional USD cost of a token breakdown at these per-MTok rates.
+    pub(crate) fn cost_usd(
+        &self,
+        input: u64,
+        output: u64,
+        cache_read: u64,
+        cache_write: u64,
+    ) -> f64 {
+        (input as f64 * self.input
+            + output as f64 * self.output
+            + cache_read as f64 * self.cache_read
+            + cache_write as f64 * self.cache_write)
+            / 1_000_000.0
+    }
+}
+
+/// The billing **lane** a model belongs to — the coarse family that shares one
+/// subscription / rate bucket (`claude`, `gpt`, `kimi`, `composer`), matched the
+/// same way as [`rates_for_model`]. `other` for anything unrecognized. Used to
+/// roll per-node usage up to the subscription that actually pays for it.
+pub(crate) fn lane_for_model(model: &str) -> &'static str {
+    let m = model.to_ascii_lowercase();
+    if m.contains("opus") || m.contains("haiku") || m.contains("fable") || m.contains("sonnet") {
+        "claude"
+    } else if m.contains("gpt-5") || m.contains("codex") || m.contains("openai") {
+        "gpt"
+    } else if m.contains("kimi") || m.contains("moonshot") {
+        "kimi"
+    } else if m.contains("composer") {
+        "composer"
+    } else {
+        "other"
+    }
 }
 
 /// Notional per-MTok price table, matched by substring on the (lowercased) model
@@ -473,7 +509,7 @@ struct ModelRates {
 /// the entries most likely to drift, so re-check them here when prices change.
 /// Unknown models fall back to Sonnet-tier, which preserves the prior flat-rate
 /// behavior.
-fn rates_for_model(model: &str) -> ModelRates {
+pub(crate) fn rates_for_model(model: &str) -> ModelRates {
     let m = model.to_ascii_lowercase();
     if m.contains("opus") {
         ModelRates {

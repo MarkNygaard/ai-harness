@@ -55,7 +55,7 @@ struct SubscriptionUsage {
 }
 
 #[derive(Clone, Serialize)]
-struct UsageResponse {
+pub(crate) struct UsageResponse {
     subscriptions: Vec<SubscriptionUsage>,
 }
 
@@ -70,9 +70,15 @@ fn home_dir() -> PathBuf {
 
 /// `GET /api/usage` — per-subscription usage for connected CLIs (cached).
 pub async fn get_usage(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    Json(cached_usage(&state).await).into_response()
+}
+
+/// Cached per-subscription usage report (the body of [`get_usage`], reusable by
+/// internal callers like the billing calibrator).
+pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
     if let Some((at, resp)) = CACHE.lock().await.as_ref() {
         if at.elapsed() < CACHE_TTL {
-            return Json(resp.clone()).into_response();
+            return resp.clone();
         }
     }
 
@@ -80,7 +86,7 @@ pub async fn get_usage(Extension(state): Extension<Arc<RunsState>>) -> Response 
     let mut subscriptions = Vec::new();
 
     if creds.claude {
-        subscriptions.push(fetch_claude_usage(&state).await);
+        subscriptions.push(fetch_claude_usage(state).await);
     }
     // ChatGPT/Codex and Kimi both come from one omp broker call.
     if creds.codex || creds.kimi {
@@ -105,7 +111,28 @@ pub async fn get_usage(Extension(state): Extension<Arc<RunsState>>) -> Response 
 
     let resp = UsageResponse { subscriptions };
     *CACHE.lock().await = Some((Instant::now(), resp.clone()));
-    Json(resp).into_response()
+    resp
+}
+
+/// The weekly window (consumed %, reset time) for a subscription `cli`
+/// (`claude` | `codex` | `kimi`), if available. The calibrator pairs this with
+/// the tokens the harness spent in the window to estimate the plan's capacity.
+pub(crate) async fn weekly_window_for(
+    state: &RunsState,
+    cli: &str,
+) -> Option<(f64, Option<chrono::DateTime<chrono::Utc>>)> {
+    let report = cached_usage(state).await;
+    let sub = report
+        .subscriptions
+        .iter()
+        .find(|s| s.cli == cli && s.available)?;
+    let window = sub.windows.iter().find(|w| w.label == "Weekly")?;
+    let resets_at = window
+        .resets_at
+        .as_deref()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc));
+    Some((window.used_pct, resets_at))
 }
 
 fn unavailable(
