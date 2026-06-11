@@ -95,6 +95,7 @@ pub struct RunsState {
     cred_store: OnceCell<harness_persist::CredentialStore>,
     project_store: OnceCell<ProjectStore>,
     category_store: OnceCell<harness_persist::CategoryStore>,
+    billing_store: OnceCell<harness_persist::BillingProfileStore>,
     linear_source_store: OnceCell<harness_persist::LinearSourceStore>,
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     /// Where project repos are cloned (one checkout dir per project).
@@ -160,6 +161,7 @@ impl RunsState {
             cred_store: OnceCell::new(),
             project_store: OnceCell::new(),
             category_store: OnceCell::new(),
+            billing_store: OnceCell::new(),
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             projects_dir,
@@ -192,6 +194,23 @@ impl RunsState {
         self.category_store
             .get_or_try_init(|| async {
                 harness_persist::CategoryStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the billing-profile store.
+    pub(crate) async fn billing_store(
+        &self,
+    ) -> Result<&harness_persist::BillingProfileStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.billing_store
+            .get_or_try_init(|| async {
+                harness_persist::BillingProfileStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })

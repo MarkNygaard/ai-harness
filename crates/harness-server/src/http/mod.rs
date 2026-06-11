@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64};
 
 pub(crate) mod auth;
 pub(crate) mod background;
+pub(crate) mod billing_routes;
 pub(crate) mod builders;
 pub(crate) mod categories_routes;
 pub(crate) mod codex_routes;
