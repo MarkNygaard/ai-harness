@@ -42,6 +42,8 @@ struct RawNode {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
+    effort: Option<String>,
+    #[serde(default)]
     context: ContextMode,
     #[serde(default)]
     category: Option<String>,
@@ -95,6 +97,7 @@ impl RawNode {
             trigger_rule,
             provider,
             model,
+            effort,
             context,
             category,
             artifact,
@@ -165,6 +168,7 @@ impl RawNode {
                 trigger_rule,
                 provider,
                 model,
+                effort,
                 context,
                 category,
                 artifact,
@@ -185,6 +189,7 @@ struct NodeKindParts {
     trigger_rule: TriggerRule,
     provider: Option<String>,
     model: Option<String>,
+    effort: Option<String>,
     context: ContextMode,
     category: Option<String>,
     artifact: Option<String>,
@@ -214,6 +219,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             trigger_rule: parts.trigger_rule,
             provider: parts.provider,
             model: parts.model,
+            effort: parts.effort,
             context: parts.context,
             category: parts.category,
             artifact: parts.artifact,

@@ -88,6 +88,7 @@ mod tests {
         PromptRequest {
             provider: provider.map(str::to_string),
             model: None,
+            effort: None,
             prompt: "x".into(),
             cwd: PathBuf::from("."),
             session: None,

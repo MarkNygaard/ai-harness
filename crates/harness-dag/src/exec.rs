@@ -76,6 +76,8 @@ pub struct NodeRequest<'a> {
     pub node_id: &'a str,
     pub provider: Option<&'a str>,
     pub model: Option<&'a str>,
+    /// Reasoning-effort override (`low`..`max`), forwarded to the agent CLI.
+    pub effort: Option<&'a str>,
     pub context: ContextMode,
     /// Session id to continue (shared context / loop threading), if any.
     pub session: Option<String>,
@@ -700,6 +702,7 @@ async fn execute_body<R: NodeRunner>(
         node_id: &node.id,
         provider,
         model,
+        effort: node.effort.as_deref(),
         context: node.context,
         session: incoming_session,
         iteration,
@@ -797,6 +800,7 @@ async fn run_loop<R: NodeRunner>(
             node_id: &node.id,
             provider,
             model,
+            effort: node.effort.as_deref(),
             context: node.context,
             session: if cfg.fresh_context {
                 None
@@ -855,6 +859,7 @@ async fn run_loop<R: NodeRunner>(
                         node_id: &node.id,
                         provider,
                         model,
+                        effort: None,
                         context: node.context,
                         session: None,
                         iteration: i,

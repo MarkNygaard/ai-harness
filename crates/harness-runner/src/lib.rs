@@ -46,6 +46,8 @@ pub use worktree::{
 pub struct PromptRequest {
     pub provider: Option<String>,
     pub model: Option<String>,
+    /// Reasoning-effort override (`low`..`max`), forwarded to the agent CLI.
+    pub effort: Option<String>,
     pub prompt: String,
     pub cwd: PathBuf,
     /// Session to resume (for `context: shared` / loop threading), if any.
@@ -118,6 +120,7 @@ mod tests {
             .run(PromptRequest {
                 provider: Some("claude".into()),
                 model: None,
+                effort: None,
                 prompt: "hello".into(),
                 cwd: PathBuf::from("."),
                 session: None,
