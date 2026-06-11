@@ -110,53 +110,62 @@ export function DashboardPage() {
 
   return (
     <AppShell title="Dashboard">
-      <div className="flex w-full flex-col gap-4 p-6">
-        <SubscriptionsRow />
-        <div className="flex flex-wrap items-center gap-2">
-          <FilterButton active={filter === ALL} onClick={() => setFilter(ALL)}>
-            All
-          </FilterButton>
-          {projects.data?.map((p) => (
+      {/* Tasks fill 2/3 on the left; subscriptions sit in a 1/3 right rail. */}
+      <div className="grid w-full gap-6 p-6 lg:grid-cols-3">
+        <div className="flex flex-col gap-4 lg:col-span-2">
+          <div className="flex flex-wrap items-center gap-2">
             <FilterButton
-              key={p.name}
-              active={filter === p.name}
-              onClick={() => setFilter(p.name)}
+              active={filter === ALL}
+              onClick={() => setFilter(ALL)}
             >
-              {p.name}
+              All
             </FilterButton>
+            {projects.data?.map((p) => (
+              <FilterButton
+                key={p.name}
+                active={filter === p.name}
+                onClick={() => setFilter(p.name)}
+              >
+                {p.name}
+              </FilterButton>
+            ))}
+          </div>
+
+          {runs.isLoading && (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          )}
+          {runs.isError && (
+            <p className="text-sm text-destructive">
+              Failed to load runs: {runs.error.message}
+            </p>
+          )}
+          {!runs.isLoading && !runs.isError && days.length === 0 && (
+            <p className="text-sm text-muted-foreground">
+              {filter === ALL ? "No runs yet. " : "No runs for this project. "}
+              <Link to="/runs" className="underline">
+                Start one
+              </Link>
+              .
+            </p>
+          )}
+
+          {days.map((day) => (
+            <section key={day.label} className="flex flex-col gap-0.5">
+              <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                {day.label}
+              </h2>
+              <div className="flex flex-col">
+                {day.tasks.map((t, i) => (
+                  <TaskRow key={t.key} task={t} divider={i > 0} />
+                ))}
+              </div>
+            </section>
           ))}
         </div>
 
-        {runs.isLoading && (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        )}
-        {runs.isError && (
-          <p className="text-sm text-destructive">
-            Failed to load runs: {runs.error.message}
-          </p>
-        )}
-        {!runs.isLoading && !runs.isError && days.length === 0 && (
-          <p className="text-sm text-muted-foreground">
-            {filter === ALL ? "No runs yet. " : "No runs for this project. "}
-            <Link to="/runs" className="underline">
-              Start one
-            </Link>
-            .
-          </p>
-        )}
-
-        {days.map((day) => (
-          <section key={day.label} className="flex flex-col gap-1">
-            <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              {day.label}
-            </h2>
-            <div className="overflow-hidden rounded-md border border-border">
-              {day.tasks.map((t, i) => (
-                <TaskRow key={t.key} task={t} divider={i > 0} />
-              ))}
-            </div>
-          </section>
-        ))}
+        <div className="lg:col-span-1">
+          <SubscriptionsRow vertical />
+        </div>
       </div>
     </AppShell>
   );
@@ -186,28 +195,25 @@ function FilterButton({
   );
 }
 
-/** One dense line per task: title · project · workflow journey · finish time. */
+/**
+ * One line per task: finish time (left) · title (plain text) · project ·
+ * workflow labels. Only the workflow labels navigate — to their run.
+ */
 function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
-  // Title links to the build run (full pipeline graph) when present.
-  const primary =
-    task.runs.find((r) => r.workflow_name.includes("idea-to-pr")) ??
-    task.runs[task.runs.length - 1];
   const finishedTime = new Date(task.finishedAt).toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
   });
   return (
     <div
-      className={`flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-muted/40 ${
-        divider ? "border-t border-border" : ""
+      className={`flex items-center gap-3 px-1 py-1.5 text-sm hover:bg-muted/30 ${
+        divider ? "border-t border-border/50" : ""
       }`}
     >
-      <Link
-        to={`/runs/${primary.id}`}
-        className="min-w-0 flex-1 truncate font-medium hover:underline"
-      >
-        {task.title}
-      </Link>
+      <span className="w-16 shrink-0 font-mono text-[11px] text-muted-foreground">
+        {finishedTime}
+      </span>
+      <span className="min-w-0 flex-1 truncate font-medium">{task.title}</span>
       {task.project && (
         <Badge variant="outline" className="shrink-0 text-[10px]">
           {task.project}
@@ -229,9 +235,6 @@ function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
           </Link>
         ))}
       </div>
-      <span className="w-12 shrink-0 text-right font-mono text-[11px] text-muted-foreground">
-        {finishedTime}
-      </span>
     </div>
   );
 }

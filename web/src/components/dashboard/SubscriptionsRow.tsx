@@ -68,10 +68,11 @@ function SubscriptionCard({ sub }: { sub: SubscriptionUsage }) {
 }
 
 /**
- * Dashboard "Subscriptions" row: remaining usage per connected CLI. Hidden
- * entirely when nothing is connected (or the endpoint is unavailable).
+ * "Subscriptions": remaining usage per connected CLI. Hidden entirely when
+ * nothing is connected (or the endpoint is unavailable). `vertical` stacks the
+ * cards in one column — for the dashboard's narrow right rail.
  */
-export function SubscriptionsRow() {
+export function SubscriptionsRow({ vertical = false }: { vertical?: boolean }) {
   const usage = useUsage();
   const subs = usage.data?.subscriptions ?? [];
   if (usage.isLoading || subs.length === 0) return null;
@@ -80,7 +81,13 @@ export function SubscriptionsRow() {
       <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
         Subscriptions
       </h2>
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <div
+        className={
+          vertical
+            ? "flex flex-col gap-3"
+            : "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
+        }
+      >
         {subs.map((s) => (
           <SubscriptionCard key={s.cli} sub={s} />
         ))}
