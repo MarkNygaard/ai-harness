@@ -6,8 +6,8 @@
  */
 "use strict";
 
-function failOpen() {
-  console.log(JSON.stringify({ permission: "allow" }));
+function failOpen(event) {
+  console.log(JSON.stringify(event === "postToolUse" ? {} : { permission: "allow" }));
   process.exit(0);
 }
 
@@ -18,7 +18,7 @@ try {
   try {
     hooks = JSON.parse(process.env.HARNESS_HOOKS || "{}");
   } catch {
-    failOpen();
+    failOpen(event);
   }
 
   let stdinData = "";
@@ -43,10 +43,24 @@ try {
       stdinPayload.name ||
       "";
 
+    function matcherCandidates(name) {
+      const candidates = [name];
+      if (name === "Shell") candidates.push("Bash");
+      if (name === "Bash") candidates.push("Shell");
+      if (name.startsWith("MCP:")) {
+        candidates.push(`mcp__${name.slice(4).replace(/[:.]/g, "__")}`);
+      }
+      if (name.startsWith("mcp__")) {
+        candidates.push(`MCP:${name.slice(5).replace(/__/g, ":")}`);
+      }
+      return candidates;
+    }
+
     function testMatcher(matcher, name) {
       if (!matcher) return true;
       try {
-        return new RegExp(matcher).test(name);
+        const regex = new RegExp(matcher);
+        return matcherCandidates(name).some((candidate) => regex.test(candidate));
       } catch (e) {
         console.error("invalid hook matcher regex:", matcher, e);
         return false;
@@ -56,10 +70,13 @@ try {
     function decide() {
       if (event === "preToolUse") {
         for (const rule of hooks.pre_tool_use || []) {
-          if (testMatcher(rule.matcher, toolName) && rule.decision === "deny") {
-            const msg =
-              rule.reason || rule.additional_context || "blocked by node hook";
-            return { permission: "deny", agent_message: msg };
+          if (testMatcher(rule.matcher, toolName)) {
+            const decision = rule.decision || "allow";
+            if (decision === "deny" || decision === "ask") {
+              const msg =
+                rule.reason || rule.additional_context || "blocked by node hook";
+              return { permission: decision, user_message: msg, agent_message: msg };
+            }
           }
         }
         return { permission: "allow" };
@@ -72,14 +89,14 @@ try {
             if (rule.additional_context) parts.push(rule.additional_context);
             if (rule.system_message) parts.push(rule.system_message);
             if (parts.length > 0) {
-              return { permission: "allow", agent_message: parts.join("\n\n") };
+              return { additional_context: parts.join("\n\n") };
             }
           }
         }
-        return { permission: "allow" };
+        return {};
       }
 
-      return { permission: "allow" };
+      return event === "postToolUse" ? {} : { permission: "allow" };
     }
 
     const result = decide();

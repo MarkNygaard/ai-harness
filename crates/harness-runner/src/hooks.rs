@@ -118,6 +118,49 @@ pub fn cursor_hooks_json(_hooks: &NodeHooks, script_path: &std::path::Path) -> V
     })
 }
 
+/// Merge the transient harness Cursor hook commands into an existing
+/// `.cursor/hooks.json` value without dropping project/team hooks already
+/// configured in the worktree. Invalid or non-object existing config is
+/// treated as absent so the harness hooks still run fail-open.
+pub(crate) fn merge_cursor_hooks_json(original: Option<&[u8]>, harness: Value) -> Value {
+    let Some(bytes) = original else {
+        return harness;
+    };
+    let Ok(mut merged) = serde_json::from_slice::<Value>(bytes) else {
+        return harness;
+    };
+    let Some(merged_obj) = merged.as_object_mut() else {
+        return harness;
+    };
+    if let Some(version) = harness.get("version").cloned() {
+        merged_obj.entry("version").or_insert(version);
+    }
+    let Some(harness_hooks) = harness.get("hooks").and_then(Value::as_object) else {
+        return merged;
+    };
+    let hooks_value = merged_obj.entry("hooks").or_insert_with(|| json!({}));
+    if !hooks_value.is_object() {
+        *hooks_value = json!({});
+    }
+    let hooks_obj = hooks_value
+        .as_object_mut()
+        .expect("hooks_value forced to object above");
+    for (event, entries) in harness_hooks {
+        let Some(entries) = entries.as_array() else {
+            continue;
+        };
+        let target = hooks_obj.entry(event.clone()).or_insert_with(|| json!([]));
+        if !target.is_array() {
+            *target = json!([]);
+        }
+        target
+            .as_array_mut()
+            .expect("target forced to array above")
+            .extend(entries.iter().cloned());
+    }
+    merged
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -553,8 +596,8 @@ mod tests {
             Some(v) => v,
             None => return,
         };
-        assert_eq!(out["permission"], "allow");
-        assert_eq!(out["agent_message"], "Run cargo check");
+        assert_eq!(out["additional_context"], "Run cargo check");
+        assert!(out.get("permission").is_none());
     }
 
     #[test]
@@ -610,8 +653,8 @@ mod tests {
             Some(v) => v,
             None => return,
         };
-        assert_eq!(out["permission"], "allow");
-        assert_eq!(out["agent_message"], "check formatting");
+        assert_eq!(out["additional_context"], "check formatting");
+        assert!(out.get("permission").is_none());
     }
     #[test]
     fn cursor_hook_falls_back_to_camelcase_tool_name() {
@@ -633,5 +676,83 @@ mod tests {
         };
         assert_eq!(out["permission"], "deny");
         assert_eq!(out["agent_message"], "read-only");
+    }
+
+    #[test]
+    fn cursor_hook_shell_alias_matches_bash_rules() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Bash".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("no shell".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("preToolUse", &env, r#"{"tool_name":"Shell"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "deny");
+        assert_eq!(out["agent_message"], "no shell");
+        assert_eq!(out["user_message"], "no shell");
+    }
+
+    #[test]
+    fn cursor_hook_pre_ask_is_preserved() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Shell".into()),
+                decision: Some(HookDecision::Ask),
+                reason: Some("confirm shell".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("preToolUse", &env, r#"{"tool_name":"Shell"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "ask");
+        assert_eq!(out["agent_message"], "confirm shell");
+        assert_eq!(out["user_message"], "confirm shell");
+    }
+
+    #[test]
+    fn merge_cursor_hooks_json_appends_without_dropping_existing_hooks() {
+        let harness = json!({
+            "version": 1,
+            "hooks": {
+                "preToolUse": [{"command": "node /tmp/harness-hook.js preToolUse"}],
+                "postToolUse": [{"command": "node /tmp/harness-hook.js postToolUse"}],
+            }
+        });
+        let original = br#"{
+            "version": 1,
+            "metadata": {"owner": "repo"},
+            "hooks": {
+                "preToolUse": [{"command": ".cursor/hooks/security.sh", "matcher": "Shell"}],
+                "afterFileEdit": [{"command": ".cursor/hooks/format.sh"}]
+            }
+        }"#;
+
+        let merged = merge_cursor_hooks_json(Some(original), harness);
+
+        assert_eq!(merged["metadata"]["owner"], "repo");
+        assert_eq!(
+            merged["hooks"]["afterFileEdit"].as_array().unwrap().len(),
+            1
+        );
+        let pre = merged["hooks"]["preToolUse"].as_array().unwrap();
+        assert_eq!(pre.len(), 2);
+        assert_eq!(pre[0]["command"], ".cursor/hooks/security.sh");
+        assert_eq!(pre[1]["command"], "node /tmp/harness-hook.js preToolUse");
+        assert_eq!(merged["hooks"]["postToolUse"].as_array().unwrap().len(), 1);
     }
 }

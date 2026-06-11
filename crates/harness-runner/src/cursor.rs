@@ -18,6 +18,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -121,11 +122,13 @@ impl CursorAgent {
 
 /// Guards the materialized `<cwd>/.cursor/hooks.json`.  If the file already
 /// existed we back up its contents and restore them on drop; otherwise we
-/// delete the file.  The bundled hook script lives in `_dir`, a `TempDir`
-/// that cleans itself up.
+/// delete the file. The `_lock` serializes writers per worktree so concurrent
+/// Cursor runs cannot snapshot or restore each other's transient hook config.
+/// The bundled hook script lives in `_dir`, a `TempDir` that cleans itself up.
 struct CursorHooksGuard {
     hooks_json: std::path::PathBuf,
     _dir: tempfile::TempDir,
+    _lock: Option<tokio::sync::OwnedMutexGuard<()>>,
     /// Original contents of `hooks_json` if it pre-existed; restored on drop.
     original: Option<Vec<u8>>,
 }
@@ -139,6 +142,51 @@ impl Drop for CursorHooksGuard {
     }
 }
 
+fn cursor_hooks_mutex(cwd: &Path) -> Arc<tokio::sync::Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Weak<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let key = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut locks = locks.lock().expect("cursor hook lock map poisoned");
+    if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+        return lock;
+    }
+    let lock = Arc::new(tokio::sync::Mutex::new(()));
+    locks.insert(key, Arc::downgrade(&lock));
+    lock
+}
+
+fn ensure_cursor_hooks_path(cursor_dir: &Path, hooks_json: &Path) -> Result<(), AgentError> {
+    if let Ok(metadata) = std::fs::symlink_metadata(cursor_dir) {
+        if metadata.file_type().is_symlink() {
+            return Err(AgentError(format!(
+                "refusing to write Cursor hooks through symlinked directory `{}`",
+                cursor_dir.display()
+            )));
+        }
+        if !metadata.is_dir() {
+            return Err(AgentError(format!(
+                "refusing to write Cursor hooks because `{}` is not a directory",
+                cursor_dir.display()
+            )));
+        }
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(hooks_json) {
+        if metadata.file_type().is_symlink() {
+            return Err(AgentError(format!(
+                "refusing to overwrite symlinked Cursor hooks file `{}`",
+                hooks_json.display()
+            )));
+        }
+        if !metadata.is_file() {
+            return Err(AgentError(format!(
+                "refusing to overwrite Cursor hooks path `{}` because it is not a file",
+                hooks_json.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl PromptAgent for CursorAgent {
     async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
@@ -147,6 +195,7 @@ impl PromptAgent for CursorAgent {
 
         let mut env_vars = req.env_vars.clone();
         let _hooks_guard = if let Some(hooks) = req.hooks.as_ref() {
+            let hooks_lock = cursor_hooks_mutex(&req.cwd).lock_owned().await;
             let dir = tempfile::Builder::new()
                 .prefix("harness-cursor-hooks-")
                 .tempdir()
@@ -156,16 +205,20 @@ impl PromptAgent for CursorAgent {
                 .map_err(|e| AgentError(e.to_string()))?;
 
             let cursor_dir = req.cwd.join(".cursor");
-            std::fs::create_dir_all(&cursor_dir).map_err(|e| AgentError(e.to_string()))?;
             let hooks_json = cursor_dir.join("hooks.json");
+            ensure_cursor_hooks_path(&cursor_dir, &hooks_json)?;
+            std::fs::create_dir_all(&cursor_dir).map_err(|e| AgentError(e.to_string()))?;
+            ensure_cursor_hooks_path(&cursor_dir, &hooks_json)?;
             let original = std::fs::read(&hooks_json).ok();
             let value = crate::hooks::cursor_hooks_json(hooks, &script_path);
+            let value = crate::hooks::merge_cursor_hooks_json(original.as_deref(), value);
             std::fs::write(&hooks_json, serde_json::to_string_pretty(&value).unwrap())
                 .map_err(|e| AgentError(e.to_string()))?;
             env_vars.insert("HARNESS_HOOKS".into(), crate::hooks::omp_hooks_env(hooks));
             Some(CursorHooksGuard {
                 hooks_json,
                 _dir: dir,
+                _lock: Some(hooks_lock),
                 original,
             })
         } else {
@@ -455,6 +508,7 @@ mod tests {
             let guard = CursorHooksGuard {
                 hooks_json: hooks_json.clone(),
                 _dir: script_dir,
+                _lock: None,
                 original: Some(b"original".to_vec()),
             };
             std::fs::write(&hooks_json, b"overwritten").unwrap();
@@ -474,6 +528,7 @@ mod tests {
             let guard = CursorHooksGuard {
                 hooks_json: hooks_json.clone(),
                 _dir: script_dir,
+                _lock: None,
                 original: None,
             };
             drop(guard);
