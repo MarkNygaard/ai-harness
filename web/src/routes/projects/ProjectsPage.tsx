@@ -123,6 +123,16 @@ function ProjectRow({ project }: { project: Project }) {
               default: {project.default_workflow}
             </div>
           )}
+          {project.external_url && (
+            <a
+              href={project.external_url}
+              target="_blank"
+              rel="noreferrer"
+              className="truncate text-[11px] text-accent-orange hover:underline"
+            >
+              {project.external_url}
+            </a>
+          )}
           {project.toolchains.length > 0 && (
             <div className="mt-1 flex flex-wrap gap-1">
               {project.toolchains.map((t) => (
@@ -392,6 +402,7 @@ function RegisterForm() {
   const [gitUrl, setGitUrl] = useState("");
   const [baseBranch, setBaseBranch] = useState("");
   const [defaultWorkflow, setDefaultWorkflow] = useState("");
+  const [externalUrl, setExternalUrl] = useState("");
   const [toolchains, setToolchains] = useState("");
   const [warning, setWarning] = useState<string | null>(null);
 
@@ -405,6 +416,7 @@ function RegisterForm() {
         // Empty → server auto-detects the repo's default branch (origin/HEAD).
         base_branch: baseBranch.trim() || undefined,
         default_workflow: defaultWorkflow.trim() || null,
+        external_url: externalUrl.trim() || null,
         // Comma/space-separated mise specs → array (server drops blanks too).
         toolchains: toolchains
           .split(/[,\s]+/)
@@ -419,6 +431,7 @@ function RegisterForm() {
             setGitUrl("");
             setBaseBranch("");
             setDefaultWorkflow("");
+            setExternalUrl("");
             setToolchains("");
           }
         },
@@ -477,6 +490,22 @@ function RegisterForm() {
               placeholder="idea-to-pr"
               className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
             />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-muted-foreground">
+              External URL (optional)
+            </span>
+            <input
+              value={externalUrl}
+              onChange={(e) => setExternalUrl(e.target.value)}
+              placeholder="https://ticket0.ai/"
+              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            />
+            <span className="text-[10px] text-muted-foreground">
+              The project's deployed site. Exposed to runs as{" "}
+              <code>$EXTERNAL_URL</code> (used by flows that analyze the live
+              site, e.g. a GEO audit).
+            </span>
           </label>
           <label className="flex flex-col gap-1">
             <span className="text-xs font-medium text-muted-foreground">

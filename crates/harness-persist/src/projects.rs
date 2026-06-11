@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS harness_projects (
     git_url          text NOT NULL,
     base_branch      text NOT NULL DEFAULT 'main',
     default_workflow text,
+    external_url     text,
     toolchains       jsonb NOT NULL DEFAULT '[]'::jsonb,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now()
@@ -33,6 +34,10 @@ const ALTER_PROJECTS_TOOLCHAINS: &str =
 /// default (`HARNESS_CARGO_TARGET_CAP_GB`, else 50 GiB). Idempotent.
 const ALTER_PROJECTS_CAP: &str =
     "ALTER TABLE harness_projects ADD COLUMN IF NOT EXISTS cargo_target_cap_gb integer";
+/// The project's deployed/live site URL, for flows that analyze the running site
+/// (e.g. a GEO audit). Exposed to runs as `$EXTERNAL_URL`. Idempotent.
+const ALTER_PROJECTS_EXTERNAL_URL: &str =
+    "ALTER TABLE harness_projects ADD COLUMN IF NOT EXISTS external_url text";
 
 /// A registered project (matches `harness_projects`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -45,6 +50,9 @@ pub struct Project {
     pub base_branch: String,
     /// Workflow used when a run for this project names none.
     pub default_workflow: Option<String>,
+    /// The project's deployed/live site URL (for flows that analyze the running
+    /// site, e.g. a GEO audit). Exposed to runs as `$EXTERNAL_URL`.
+    pub external_url: Option<String>,
     /// `mise` tool specs provisioned before a run (e.g. `rust`, `node@22`,
     /// `pnpm`). Installed on demand onto the persistent volume — no image rebuild.
     #[sqlx(json)]
@@ -61,6 +69,7 @@ pub struct ProjectInput {
     pub git_url: String,
     pub base_branch: String,
     pub default_workflow: Option<String>,
+    pub external_url: Option<String>,
     pub toolchains: Vec<String>,
     pub cargo_target_cap_gb: Option<i32>,
 }
@@ -88,13 +97,16 @@ impl ProjectStore {
             .execute(&store.pool)
             .await?;
         sqlx::query(ALTER_PROJECTS_CAP).execute(&store.pool).await?;
+        sqlx::query(ALTER_PROJECTS_EXTERNAL_URL)
+            .execute(&store.pool)
+            .await?;
         Ok(store)
     }
 
     /// All projects, alphabetical.
     pub async fn list(&self) -> Result<Vec<Project>, PersistError> {
         let rows = sqlx::query_as::<_, Project>(
-            "SELECT name, git_url, base_branch, default_workflow, toolchains, cargo_target_cap_gb, created_at, updated_at
+            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, cargo_target_cap_gb, created_at, updated_at
              FROM harness_projects ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -105,7 +117,7 @@ impl ProjectStore {
     /// One project by name, if present.
     pub async fn get(&self, name: &str) -> Result<Option<Project>, PersistError> {
         let row = sqlx::query_as::<_, Project>(
-            "SELECT name, git_url, base_branch, default_workflow, toolchains, cargo_target_cap_gb, created_at, updated_at
+            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, cargo_target_cap_gb, created_at, updated_at
              FROM harness_projects WHERE name = $1",
         )
         .bind(name)
@@ -118,21 +130,23 @@ impl ProjectStore {
     /// on update; `updated_at` always advances.
     pub async fn upsert(&self, name: &str, input: &ProjectInput) -> Result<Project, PersistError> {
         let row = sqlx::query_as::<_, Project>(
-            "INSERT INTO harness_projects (name, git_url, base_branch, default_workflow, toolchains, cargo_target_cap_gb, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, now(), now())
+            "INSERT INTO harness_projects (name, git_url, base_branch, default_workflow, external_url, toolchains, cargo_target_cap_gb, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now())
              ON CONFLICT (name) DO UPDATE SET
                 git_url               = excluded.git_url,
                 base_branch           = excluded.base_branch,
                 default_workflow      = excluded.default_workflow,
+                external_url          = excluded.external_url,
                 toolchains            = excluded.toolchains,
                 cargo_target_cap_gb   = excluded.cargo_target_cap_gb,
                 updated_at            = now()
-             RETURNING name, git_url, base_branch, default_workflow, toolchains, cargo_target_cap_gb, created_at, updated_at",
+             RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains, cargo_target_cap_gb, created_at, updated_at",
         )
         .bind(name)
         .bind(&input.git_url)
         .bind(&input.base_branch)
         .bind(input.default_workflow.as_deref())
+        .bind(input.external_url.as_deref())
         .bind(sqlx::types::Json(&input.toolchains))
         .bind(input.cargo_target_cap_gb)
         .fetch_one(&self.pool)
@@ -149,7 +163,7 @@ impl ProjectStore {
         let row = sqlx::query_as::<_, Project>(
             "UPDATE harness_projects SET cargo_target_cap_gb = $2, updated_at = now()
              WHERE name = $1
-             RETURNING name, git_url, base_branch, default_workflow, toolchains,
+             RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains,
                        cargo_target_cap_gb, created_at, updated_at",
         )
         .bind(name)
@@ -199,6 +213,7 @@ mod tests {
                     git_url: "https://github.com/me/ticket0.git".into(),
                     base_branch: "main".into(),
                     default_workflow: None,
+                    external_url: None,
                     toolchains: vec![],
                     cargo_target_cap_gb: None,
                 },
@@ -218,6 +233,7 @@ mod tests {
                     git_url: "https://github.com/me/ticket0.git".into(),
                     base_branch: "develop".into(),
                     default_workflow: Some("idea-to-pr".into()),
+                    external_url: Some("https://ticket0.ai/".into()),
                     toolchains: vec!["rust".into(), "pnpm".into()],
                     cargo_target_cap_gb: None,
                 },

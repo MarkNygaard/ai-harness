@@ -1173,6 +1173,9 @@ pub(crate) async fn start_run(
         }
         Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     };
+    // The project's deployed site URL, exposed to nodes as `$EXTERNAL_URL`
+    // (empty when unset). Used by flows that analyze the running site (GEO audit).
+    let external_url = project_row.external_url.clone();
 
     // Empty `workflow` → the project's default; base branch → request or project.
     let workflow_name = {
@@ -1259,6 +1262,7 @@ pub(crate) async fn start_run(
             title,
             description,
             base_branch,
+            external_url,
             project,
             toolchains,
             ab,
@@ -1287,6 +1291,7 @@ async fn execute_run_task(
     title: Option<String>,
     description: String,
     base_branch: String,
+    external_url: Option<String>,
     project: String,
     toolchains: Vec<String>,
     ab: Option<AbInfo>,
@@ -1413,6 +1418,7 @@ async fn execute_run_task(
         .set("WORKFLOW_ID", run_id.clone())
         .set("ARTIFACTS_DIR", artifacts.display().to_string())
         .set("BASE_BRANCH", base_branch)
+        .set("EXTERNAL_URL", external_url.clone().unwrap_or_default())
         .set("DOCS_DIR", "docs")
         .set("TASK_TITLE", title.clone().unwrap_or_default())
         .set("TASK_DESCRIPTION", description.clone())
