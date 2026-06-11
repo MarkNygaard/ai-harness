@@ -119,16 +119,23 @@ impl CursorAgent {
     }
 }
 
-/// Removes the materialized `<cwd>/.cursor/hooks.json` on drop. The script
-/// itself lives in `_dir`, a `TempDir` that cleans itself up. We remove only
-/// the file (not `.cursor/`, which may have pre-existed in the worktree).
+/// Guards the materialized `<cwd>/.cursor/hooks.json`.  If the file already
+/// existed we back up its contents and restore them on drop; otherwise we
+/// delete the file.  The bundled hook script lives in `_dir`, a `TempDir`
+/// that cleans itself up.
 struct CursorHooksGuard {
     hooks_json: std::path::PathBuf,
     _dir: tempfile::TempDir,
+    /// Original contents of `hooks_json` if it pre-existed; restored on drop.
+    original: Option<Vec<u8>>,
 }
 impl Drop for CursorHooksGuard {
     fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.hooks_json);
+        if let Some(ref contents) = self.original {
+            let _ = std::fs::write(&self.hooks_json, contents);
+        } else {
+            let _ = std::fs::remove_file(&self.hooks_json);
+        }
     }
 }
 
@@ -151,14 +158,15 @@ impl PromptAgent for CursorAgent {
             let cursor_dir = req.cwd.join(".cursor");
             std::fs::create_dir_all(&cursor_dir).map_err(|e| AgentError(e.to_string()))?;
             let hooks_json = cursor_dir.join("hooks.json");
+            let original = std::fs::read(&hooks_json).ok();
             let value = crate::hooks::cursor_hooks_json(hooks, &script_path);
             std::fs::write(&hooks_json, serde_json::to_string_pretty(&value).unwrap())
                 .map_err(|e| AgentError(e.to_string()))?;
-
             env_vars.insert("HARNESS_HOOKS".into(), crate::hooks::omp_hooks_env(hooks));
             Some(CursorHooksGuard {
                 hooks_json,
                 _dir: dir,
+                original,
             })
         } else {
             None
@@ -434,5 +442,42 @@ mod tests {
         );
         let resumed = agent.build_args("again", "composer", Some("sess-9"));
         assert!(resumed.windows(2).any(|w| w == ["--resume", "sess-9"]));
+    }
+    #[test]
+    fn cursor_hooks_guard_restores_pre_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cursor_dir = dir.path().join(".cursor");
+        std::fs::create_dir_all(&cursor_dir).unwrap();
+        let hooks_json = cursor_dir.join("hooks.json");
+        std::fs::write(&hooks_json, b"original").unwrap();
+        {
+            let script_dir = tempfile::tempdir().unwrap();
+            let guard = CursorHooksGuard {
+                hooks_json: hooks_json.clone(),
+                _dir: script_dir,
+                original: Some(b"original".to_vec()),
+            };
+            std::fs::write(&hooks_json, b"overwritten").unwrap();
+            drop(guard);
+        }
+        assert_eq!(std::fs::read(&hooks_json).unwrap(), b"original");
+    }
+    #[test]
+    fn cursor_hooks_guard_deletes_file_when_no_original() {
+        let dir = tempfile::tempdir().unwrap();
+        let cursor_dir = dir.path().join(".cursor");
+        std::fs::create_dir_all(&cursor_dir).unwrap();
+        let hooks_json = cursor_dir.join("hooks.json");
+        std::fs::write(&hooks_json, b"temp").unwrap();
+        {
+            let script_dir = tempfile::tempdir().unwrap();
+            let guard = CursorHooksGuard {
+                hooks_json: hooks_json.clone(),
+                _dir: script_dir,
+                original: None,
+            };
+            drop(guard);
+        }
+        assert!(!hooks_json.exists());
     }
 }

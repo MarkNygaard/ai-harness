@@ -1,9 +1,8 @@
 //! Pure translation helpers: turn provider-agnostic [`NodeHooks`] into
-//! provider-specific artifacts (Claude Code settings.json, omp extension config).
-
+//! provider-specific artifacts (Claude Code `settings.json`, omp extension
+//! config, Cursor `hooks.json`).
 use harness_dag::model::{HookDecision, NodeHooks};
 use serde_json::{json, Value};
-
 /// Build the Claude Code settings.json value plus the decision payload files it
 /// references. Each hook command is `cat <shlex-quoted-path>` (the caller writes
 /// the payloads into the same temp dir and substitutes the absolute path).
@@ -592,5 +591,47 @@ mod tests {
             None => return,
         };
         assert_eq!(out["permission"], "allow");
+    }
+    #[test]
+    fn cursor_hook_post_system_message_only() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![],
+            post_tool_use: vec![HookRule {
+                matcher: Some("Edit".into()),
+                decision: None,
+                reason: None,
+                additional_context: None,
+                system_message: Some("check formatting".into()),
+            }],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("postToolUse", &env, r#"{"tool_name":"Edit"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "allow");
+        assert_eq!(out["agent_message"], "check formatting");
+    }
+    #[test]
+    fn cursor_hook_falls_back_to_camelcase_tool_name() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![HookRule {
+                matcher: Some("Write".into()),
+                decision: Some(HookDecision::Deny),
+                reason: Some("read-only".into()),
+                additional_context: None,
+                system_message: None,
+            }],
+            post_tool_use: vec![],
+        };
+        let env = omp_hooks_env(&hooks);
+        let out = run_cursor_hook("preToolUse", &env, r#"{"toolName":"Write"}"#);
+        let out = match out {
+            Some(v) => v,
+            None => return,
+        };
+        assert_eq!(out["permission"], "deny");
+        assert_eq!(out["agent_message"], "read-only");
     }
 }
