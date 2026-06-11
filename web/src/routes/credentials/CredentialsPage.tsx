@@ -16,6 +16,16 @@ import {
   type KimiConnectStart,
   type CodexConnectStart,
 } from "@/lib/credentials";
+import { LANE_FOR_CREDENTIAL } from "@/lib/billing";
+import { BillingFields } from "./BillingFields";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 /** A field the user pastes for a provider. */
 interface ProviderField {
@@ -104,18 +114,87 @@ export function CredentialsPage() {
           </p>
         )}
 
-        <KimiConnectCard configured={configured.get("pi") ?? false} />
-        <CodexConnectCard configured={configured.get("codex") ?? false} />
-
         {PROVIDERS.map((p) => (
-          <ProviderCard
+          <ProviderSummary
             key={p.id}
-            provider={p}
+            label={p.label}
+            help={p.help}
             configured={configured.get(p.id) ?? false}
-          />
+          >
+            <ProviderCard
+              provider={p}
+              configured={configured.get(p.id) ?? false}
+            />
+          </ProviderSummary>
         ))}
+        <ProviderSummary
+          label="Kimi-for-Coding"
+          help="Connect your Kimi subscription for `provider: pi` nodes."
+          configured={configured.get("pi") ?? false}
+        >
+          <KimiConnectCard configured={configured.get("pi") ?? false} />
+        </ProviderSummary>
+        <ProviderSummary
+          label="ChatGPT (Codex)"
+          help="Connect your ChatGPT/Codex subscription for gpt-5.5 review steps."
+          configured={configured.get("codex") ?? false}
+        >
+          <CodexConnectCard configured={configured.get("codex") ?? false} />
+        </ProviderSummary>
       </div>
     </AppShell>
+  );
+}
+
+/**
+ * Compact provider row: name + connection status + a button that opens a dialog
+ * with the full settings (credential fields / connect flow + subscription cost).
+ * Keeps the page scannable — details live behind "Configure"/"Connect".
+ */
+function ProviderSummary({
+  label,
+  help,
+  configured,
+  children,
+}: {
+  label: string;
+  help?: string;
+  configured: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <Card>
+      <CardContent className="flex items-center justify-between gap-3 py-3">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-sm font-medium">{label}</span>
+          {configured ? (
+            <Badge variant="success">
+              <Check className="h-3 w-3" /> connected
+            </Badge>
+          ) : (
+            <Badge variant="outline">not set</Badge>
+          )}
+        </div>
+        <Dialog>
+          <DialogTrigger
+            render={
+              <Button variant={configured ? "outline" : "default"} size="sm" />
+            }
+          >
+            {configured ? "Configure" : "Connect"}
+          </DialogTrigger>
+          <DialogContent className="max-h-[85vh] overflow-y-auto">
+            {/* The settings card carries its own title/help; keep an a11y title
+                without visually duplicating it. */}
+            <DialogHeader className="sr-only">
+              <DialogTitle>{label}</DialogTitle>
+              {help && <DialogDescription>{help}</DialogDescription>}
+            </DialogHeader>
+            {children}
+          </DialogContent>
+        </Dialog>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -233,6 +312,7 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
           </p>
         )}
         {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
+        <BillingFields lane="kimi" />
       </CardContent>
     </Card>
   );
@@ -357,6 +437,7 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
           </p>
         )}
         {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}
+        <BillingFields lane="gpt" />
       </CardContent>
     </Card>
   );
@@ -456,6 +537,9 @@ function ProviderCard({
             )}
           </div>
         </form>
+        {LANE_FOR_CREDENTIAL[provider.id] && (
+          <BillingFields lane={LANE_FOR_CREDENTIAL[provider.id]} />
+        )}
       </CardContent>
     </Card>
   );
