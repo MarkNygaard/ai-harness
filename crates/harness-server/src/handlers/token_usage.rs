@@ -526,13 +526,16 @@ fn rates_for_model(model: &str) -> ModelRates {
         }
     } else if m.contains("composer") {
         // Cursor Composer 2.5 (cursor.com/docs/models-and-pricing, Jun 2026):
-        // standard tier $0.50 in / $2.50 out. Cursor doesn't publish cache rates,
-        // so assume the common 0.1x cache-read and no cache-write surcharge.
-        // (A "fast" tier at $3/$15 exists; standard is the default.)
+        // standard tier $0.50 in / $2.50 out / $0.20 cache-read. cache_read
+        // dominates a coding run (millions of cached tokens), so the published
+        // $0.20 — NOT a 0.1x-of-input guess — is what reconciles notional cost
+        // with Cursor's usage dashboard. No write-cache rate is published; keep
+        // input-rate as a safe upper bound (writes are ~0 in practice).
+        // (A "fast" tier at $3/$15/$0.35 exists; standard is the default.)
         ModelRates {
             input: 0.50,
             output: 2.50,
-            cache_read: 0.05,
+            cache_read: 0.20,
             cache_write: 0.50,
         }
     } else {
