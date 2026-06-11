@@ -337,6 +337,29 @@ function JudgePanel({
             <p className="text-[13px] text-muted-foreground">
               {verdict.reasoning}
             </p>
+            {verdict.review_assessment && (
+              <div className="flex flex-col gap-1 border-t border-border pt-2">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  Review burden — shared gpt-5.5 / sonnet reviewers
+                </span>
+                {(verdict.review_share_a != null ||
+                  verdict.review_share_b != null) && (
+                  <div className="text-[13px] text-muted-foreground">
+                    Late-reviewer share — {labelA}{" "}
+                    <span className="tabular-nums text-foreground">
+                      {verdict.review_share_a ?? "—"}%
+                    </span>{" "}
+                    vs {labelB}{" "}
+                    <span className="tabular-nums text-foreground">
+                      {verdict.review_share_b ?? "—"}%
+                    </span>
+                  </div>
+                )}
+                <p className="text-[13px] text-muted-foreground">
+                  {verdict.review_assessment}
+                </p>
+              </div>
+            )}
             <button
               type="button"
               onClick={() => run.mutate({ judge_model: chosen ?? undefined })}
