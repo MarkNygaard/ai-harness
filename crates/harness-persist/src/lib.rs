@@ -85,6 +85,17 @@ pub struct RunDailyCount {
     pub count: i64,
 }
 
+/// Summed token usage for one model over a time window — the input to billing
+/// calibration (roll per-node usage up to the subscription that pays for it).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ModelTokenSum {
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+}
+
 /// A persisted per-node row (matches `harness_run_nodes`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct PersistedNode {
@@ -734,6 +745,29 @@ impl RunStore {
                AND status IN ('completed', 'failed', 'cancelled')
              GROUP BY project, day, status
              ORDER BY day DESC",
+        )
+        .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Summed token usage per model across all nodes finished since `since`.
+    /// Feeds billing calibration: roll usage up by model lane, price it, and
+    /// compare against how much of a subscription window it consumed.
+    pub async fn token_sums_by_model_since(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<ModelTokenSum>, PersistError> {
+        let rows = sqlx::query_as::<_, ModelTokenSum>(
+            "SELECT model,
+                    COALESCE(SUM(input_tokens), 0)  AS input_tokens,
+                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+                    COALESCE(SUM(cache_read), 0)    AS cache_read,
+                    COALESCE(SUM(cache_write), 0)   AS cache_write
+             FROM harness_run_nodes
+             WHERE model IS NOT NULL AND ended_at >= $1
+             GROUP BY model",
         )
         .bind(since)
         .fetch_all(&self.pool)

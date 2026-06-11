@@ -53,6 +53,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // Self-host a loopback omp auth-broker so the dashboard's subscription-usage
     // cards work off the local omp creds (skipped if OMP_AUTH_BROKER_URL is set).
     super::usage_routes::spawn_local_broker();
+    // Measure subscription effective cost: pair the weekly usage gauge with the
+    // tokens spent on each dedicated lane (kimi, codex) to keep their billing
+    // profiles' estimated monthly value calibrated.
+    crate::billing_calibration::spawn_billing_calibrator(runs_state.clone());
     // Linear poller (Slice 3a, dry-run): logs which eligible issues each enabled
     // binding WOULD fire — no claim, no transition, no run triggered.
     super::linear_poller::spawn_poller(runs_state.clone());
