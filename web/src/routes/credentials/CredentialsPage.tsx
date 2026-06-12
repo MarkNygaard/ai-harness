@@ -32,6 +32,9 @@ interface ProviderField {
   key: string;
   label: string;
   multiline?: boolean;
+  /** Non-secret fields (e.g. an email) render as a plain text input. */
+  secret?: boolean;
+  placeholder?: string;
   help: string;
 }
 
@@ -69,6 +72,13 @@ const PROVIDERS: {
         key: "token",
         label: "GitHub token (PAT)",
         help: "Sets GH_TOKEN / GITHUB_TOKEN and authenticates git clone/fetch over HTTPS.",
+      },
+      {
+        key: "git_author_email",
+        label: "Commit author email (optional)",
+        secret: false,
+        placeholder: "you@users.noreply.github.com",
+        help: "Authors PR commits with this email so platforms that validate the commit author against a GitHub account (e.g. Vercel) accept them. Use your GitHub-verified or no-reply address. A per-project override wins; unset → a per-step synthetic address.",
       },
     ],
   },
@@ -275,7 +285,9 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
         onClick={connect}
         disabled={phase === "pending"}
       >
-        {phase === "pending" && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+        {phase === "pending" && (
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        )}
         {configured ? "Reconnect" : "Connect Kimi"}
       </Button>
       <div>
@@ -502,13 +514,13 @@ function ProviderCard({
                 />
               ) : (
                 <input
-                  type="password"
+                  type={f.secret === false ? "text" : "password"}
                   autoComplete="off"
                   value={values[f.key] ?? ""}
                   onChange={(e) =>
                     setValues((v) => ({ ...v, [f.key]: e.target.value }))
                   }
-                  placeholder="paste here"
+                  placeholder={f.placeholder ?? "paste here"}
                   className="h-8 rounded-md border border-input bg-transparent px-2.5 text-[12px] outline-none focus:ring-2 focus:ring-ring"
                 />
               )}

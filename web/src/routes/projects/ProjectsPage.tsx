@@ -37,19 +37,26 @@ import { ProjectLinearDialog } from "@/components/projects/ProjectLinearDialog";
 import type { Project } from "@/types/project";
 
 /** Display metadata for each per-project credential provider. */
+/** Keyed by credential *field* (field names are unique across providers). */
 const PROJECT_CRED_META: Record<
   string,
-  { label: string; placeholder: string; help: string }
+  { label: string; placeholder: string; help: string; secret?: boolean }
 > = {
-  linear: {
+  api_key: {
     label: "Linear API key",
     placeholder: "lin_api_…",
     help: "Personal API key for this project's Linear workspace. Overrides the global Linear key; used by the Linear trigger to discover teams and claim issues.",
   },
-  github: {
+  token: {
     label: "GitHub token",
     placeholder: "ghp_… / github_pat_…",
     help: "PAT with repo + pull-request access for this project's repo. Overrides the global GitHub token; used to clone the repo and open PRs.",
+  },
+  git_author_email: {
+    label: "GitHub commit author email",
+    placeholder: "you@users.noreply.github.com",
+    secret: false,
+    help: "Authors this project's PR commits with this email so platforms that validate the commit author against a GitHub account (e.g. Vercel) accept them. Overrides the global value; unset → a per-step synthetic address.",
   },
 };
 
@@ -189,7 +196,7 @@ function ProjectCredentialsDialog({ project }: { project: string }) {
         <div className="flex flex-col gap-4">
           {PROJECT_CREDENTIALS.map(({ provider, field }) => (
             <CredentialField
-              key={provider}
+              key={`${provider}:${field}`}
               project={project}
               provider={provider}
               field={field}
@@ -330,7 +337,7 @@ function CredentialField({
   field: string;
   configured: boolean;
 }) {
-  const meta = PROJECT_CRED_META[provider];
+  const meta = PROJECT_CRED_META[field];
   const set = useSetProjectCredential(project);
   const del = useDeleteProjectCredential(project);
   const [value, setValue] = useState("");
@@ -359,11 +366,13 @@ function CredentialField({
       </div>
       <div className="flex items-center gap-2">
         <input
-          type="password"
+          type={meta.secret === false ? "text" : "password"}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           placeholder={
-            configured ? "set — paste a new value to replace" : meta.placeholder
+            configured && meta.secret !== false
+              ? "set — paste a new value to replace"
+              : meta.placeholder
           }
           className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
         />

@@ -83,13 +83,20 @@ impl CredentialStore {
         Self::from_pool(pool, key).await
     }
 
-    /// Store (upsert) a provider's credential fields.
+    /// Store a provider's credential fields, **merging** into any already
+    /// stored. Editors only ever send the fields the user just typed (secret
+    /// values are never returned, so the form is blank), so a plain overwrite
+    /// would wipe sibling fields — e.g. saving a commit-author email would drop
+    /// the token. Merge keeps the others; clear the whole credential via
+    /// [`Self::delete`].
     pub async fn set(
         &self,
         provider: &str,
         fields: &BTreeMap<String, String>,
     ) -> Result<(), PersistError> {
-        let json = serde_json::to_vec(fields).map_err(|e| PersistError::Crypto(e.to_string()))?;
+        let mut merged = self.get(provider).await?.unwrap_or_default();
+        merged.extend(fields.iter().map(|(k, v)| (k.clone(), v.clone())));
+        let json = serde_json::to_vec(&merged).map_err(|e| PersistError::Crypto(e.to_string()))?;
         let blob = encrypt(&self.key, &json)?;
         sqlx::query(
             "INSERT INTO harness_credentials (provider, data, updated_at)
@@ -142,14 +149,20 @@ impl CredentialStore {
 
     // ── Project-scoped credentials (project-first, global fallback) ──────────
 
-    /// Store (upsert) a **project-scoped** credential.
+    /// Store a **project-scoped** credential, **merging** into any already
+    /// stored for this (project, provider) — see [`Self::set`] for why.
     pub async fn set_project(
         &self,
         project: &str,
         provider: &str,
         fields: &BTreeMap<String, String>,
     ) -> Result<(), PersistError> {
-        let json = serde_json::to_vec(fields).map_err(|e| PersistError::Crypto(e.to_string()))?;
+        let mut merged = self
+            .get_project(project, provider)
+            .await?
+            .unwrap_or_default();
+        merged.extend(fields.iter().map(|(k, v)| (k.clone(), v.clone())));
+        let json = serde_json::to_vec(&merged).map_err(|e| PersistError::Crypto(e.to_string()))?;
         let blob = encrypt(&self.key, &json)?;
         sqlx::query(
             "INSERT INTO harness_project_credentials (project, provider, data, updated_at)
@@ -316,6 +329,56 @@ mod tests {
 
         store.delete(&provider).await.unwrap();
         assert!(store.get(&provider).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn set_merges_fields_preserving_siblings() {
+        let Ok(url) = std::env::var("HARNESS_DATABASE_URL") else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        if !crate::is_test_db(&url) {
+            eprintln!("skipping: HARNESS_DATABASE_URL is not a test database");
+            return;
+        }
+        let store = CredentialStore::connect(&url, [4u8; 32]).await.unwrap();
+        let provider = format!(
+            "github-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+
+        // Set the token, then later add an author email (token field omitted).
+        store
+            .set(
+                &provider,
+                &BTreeMap::from([("token".into(), "ghp_x".into())]),
+            )
+            .await
+            .unwrap();
+        store
+            .set(
+                &provider,
+                &BTreeMap::from([(
+                    "git_author_email".into(),
+                    "me@users.noreply.github.com".into(),
+                )]),
+            )
+            .await
+            .unwrap();
+
+        let got = store.get(&provider).await.unwrap().expect("present");
+        // The token survives the second save (merge, not overwrite).
+        assert_eq!(got.get("token").unwrap(), "ghp_x");
+        assert_eq!(
+            got.get("git_author_email").unwrap(),
+            "me@users.noreply.github.com"
+        );
+
+        store.delete(&provider).await.unwrap();
     }
 
     #[tokio::test]

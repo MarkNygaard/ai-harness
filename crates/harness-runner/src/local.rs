@@ -317,7 +317,16 @@ fn apply_commit_identity(
         (None, None) => "unknown".to_string(),
     };
     let name = format!("{node_id} ({provider_model})");
-    let email = format!("{node_id}@node.harness");
+    // A configured commit-author email (resolved per-project, else global, from
+    // the github credential and passed in as HARNESS_GIT_AUTHOR_EMAIL) wins, so
+    // platforms that validate the author against a GitHub account — e.g. Vercel
+    // — accept the PR's commits. Node/model provenance stays in the *name*.
+    // Falls back to the per-node synthetic address when unset.
+    let email = env
+        .get("HARNESS_GIT_AUTHOR_EMAIL")
+        .filter(|v| !v.is_empty())
+        .cloned()
+        .unwrap_or_else(|| format!("{node_id}@node.harness"));
     env.insert("GIT_AUTHOR_NAME".into(), name.clone());
     env.insert("GIT_COMMITTER_NAME".into(), name);
     env.insert("GIT_AUTHOR_EMAIL".into(), email.clone());
@@ -518,6 +527,41 @@ mod tests {
         assert_eq!(env.get("HARNESS_NODE").unwrap(), "gpt-review-fix");
         assert_eq!(env.get("HARNESS_PROVIDER").unwrap(), "openai-codex");
         assert_eq!(env.get("HARNESS_MODEL").unwrap(), "gpt-5.5");
+    }
+
+    #[test]
+    fn commit_identity_uses_configured_author_email_keeping_name() {
+        let mut env = std::collections::HashMap::new();
+        env.insert(
+            "HARNESS_GIT_AUTHOR_EMAIL".to_string(),
+            "1234+me@users.noreply.github.com".to_string(),
+        );
+        super::apply_commit_identity(&mut env, "implement-tasks", Some("claude"), Some("opus"));
+        // Configured email is used for author + committer…
+        assert_eq!(
+            env.get("GIT_AUTHOR_EMAIL").unwrap(),
+            "1234+me@users.noreply.github.com"
+        );
+        assert_eq!(
+            env.get("GIT_COMMITTER_EMAIL").unwrap(),
+            "1234+me@users.noreply.github.com"
+        );
+        // …but node/model provenance stays in the name.
+        assert_eq!(
+            env.get("GIT_AUTHOR_NAME").unwrap(),
+            "implement-tasks (claude/opus)"
+        );
+    }
+
+    #[test]
+    fn commit_identity_ignores_empty_author_email() {
+        let mut env = std::collections::HashMap::new();
+        env.insert("HARNESS_GIT_AUTHOR_EMAIL".to_string(), String::new());
+        super::apply_commit_identity(&mut env, "implement-tasks", Some("claude"), Some("opus"));
+        assert_eq!(
+            env.get("GIT_AUTHOR_EMAIL").unwrap(),
+            "implement-tasks@node.harness"
+        );
     }
 
     #[test]
