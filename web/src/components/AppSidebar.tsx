@@ -8,7 +8,9 @@ import {
   IconLayoutDashboard,
   IconRocket,
   IconTags,
+  IconWorldSearch,
 } from "@tabler/icons-react";
+import { useRuns } from "@/lib/runs";
 import {
   Sidebar,
   SidebarContent,
@@ -29,24 +31,6 @@ interface NavItem {
   /** Active when the path equals href, or (for prefixes) starts with `match`. */
   match?: string;
 }
-const OPERATIONS: NavItem[] = [
-  { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
-  { href: "/runs", label: "Runs", icon: IconRocket, match: "/runs" },
-  { href: "/ab", label: "A/B Tests", icon: IconGitCompare, match: "/ab" },
-  {
-    href: "/projects",
-    label: "Projects",
-    icon: IconFolderCog,
-    match: "/projects",
-  },
-  {
-    href: "/editor",
-    label: "Workflows",
-    icon: IconBinaryTree2,
-    match: "/editor",
-  },
-];
-
 const SYSTEM: NavItem[] = [
   {
     href: "/credentials",
@@ -70,6 +54,38 @@ function isActive(pathname: string, item: NavItem): boolean {
 /** Left navigation, mirroring home-ops-agent's sidebar (base-nova). */
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { pathname } = useLocation();
+  // The GEO Audit page is only useful once a geo-audit run exists — show its
+  // nav entry conditionally (the run list is cached/shared across pages).
+  const runs = useRuns({});
+  const hasGeoAudit = !!runs.data?.some((r) => r.workflow_name === "geo-audit");
+
+  const operations: NavItem[] = [
+    { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
+    { href: "/runs", label: "Runs", icon: IconRocket, match: "/runs" },
+    { href: "/ab", label: "A/B Tests", icon: IconGitCompare, match: "/ab" },
+    ...(hasGeoAudit
+      ? [
+          {
+            href: "/geo",
+            label: "GEO Audit",
+            icon: IconWorldSearch,
+            match: "/geo",
+          } as NavItem,
+        ]
+      : []),
+    {
+      href: "/projects",
+      label: "Projects",
+      icon: IconFolderCog,
+      match: "/projects",
+    },
+    {
+      href: "/editor",
+      label: "Workflows",
+      icon: IconBinaryTree2,
+      match: "/editor",
+    },
+  ];
 
   const group = (label: string, items: NavItem[]) => (
     <SidebarGroup>
@@ -108,7 +124,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {group("Operations", OPERATIONS)}
+        {group("Operations", operations)}
         {group("System", SYSTEM)}
       </SidebarContent>
       <SidebarFooter>
