@@ -150,7 +150,7 @@ export function RunDetailPage() {
             </ReactFlowProvider>
           ) : panel === "geo" && geo ? (
             <div className="h-full overflow-y-auto p-6">
-              <GeoReport verdict={geo} project={run.project} />
+              <GeoReport verdict={geo} project={run.project} runId={id} />
             </div>
           ) : (
             <div className="h-full overflow-y-auto p-6">

@@ -23,6 +23,7 @@ pub(crate) mod builders;
 pub(crate) mod categories_routes;
 pub(crate) mod codex_routes;
 pub(crate) mod credentials_routes;
+pub(crate) mod geo_routes;
 pub(crate) mod http_router;
 pub(crate) mod init;
 pub(crate) mod kimi_routes;
