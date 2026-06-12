@@ -34,9 +34,12 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
+# `jq` is used by the multi-repo idea-to-pr bash nodes (install-deps,
+# verify-pr-base) to parse the `.pr-list` / `$HARNESS_REPOS` JSON — a plain
+# `bash:` node hard-fails without it (same rationale as `gh` below).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl git bash xz-utils unzip \
+        ca-certificates curl git bash xz-utils unzip jq \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI. The idea-to-pr pipeline's finalize / verify-pr-base / verify-pr-title
