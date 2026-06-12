@@ -20,6 +20,14 @@ Execute each task from the plan, validating after every change.
 
 **This step assumes setup is complete** - branch exists, PR is created, plan is confirmed.
 
+**Multi-repo workspaces**: if `$HARNESS_REPOS` is set, this project spans
+several repos, each checked out in its own folder at the workspace root (see the
+exploration/plan for which folder is which). Make changes in **whichever repo(s)
+the plan targets** — a fix may touch one or several. Run each repo's own
+type-check / tests **inside that repo's folder** (`cd "$folder"`), using that
+repo's package manager. When `$HARNESS_REPOS` is unset, there's a single repo at
+the root, as usual.
+
 ---
 
 ## Phase 1: LOAD - Read Context

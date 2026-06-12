@@ -38,6 +38,15 @@ nodes:
 
       ## Instructions
 
+      **Multi-repo workspaces:** if `$HARNESS_REPOS` is set, this project spans
+      several repos, each checked out in its own folder at the workspace root
+      (the JSON in `$HARNESS_REPOS` lists `folder`, `url`, `role`). Make NO
+      assumption about any repo's stack — inspect each (its manifest/build
+      files) to learn its language/framework. The task may live in any of them,
+      so explore **across all** and record, per relevant repo, which folder it
+      is and what it is. When `$HARNESS_REPOS` is unset, there's a single repo
+      at the root, as usual.
+
       Use Read, Grep, Glob (and the Explore subagent if helpful) to map
       the part of the codebase this task touches. Don't assume `src/` —
       discover the actual layout. Capture:
