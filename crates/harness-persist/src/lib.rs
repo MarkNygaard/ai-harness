@@ -23,7 +23,7 @@ mod billing;
 pub use billing::{BillingProfile, BillingProfileInput, BillingProfileStore};
 
 mod projects;
-pub use projects::{Project, ProjectInput, ProjectStore};
+pub use projects::{Project, ProjectInput, ProjectRepo, ProjectStore};
 
 mod categories;
 pub use categories::{Category, CategoryInput, CategoryStore};

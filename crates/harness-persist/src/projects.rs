@@ -10,7 +10,7 @@
 //! copy is the server's responsibility (it owns the filesystem layout).
 
 use chrono::{DateTime, Utc};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 use crate::PersistError;
@@ -23,6 +23,7 @@ CREATE TABLE IF NOT EXISTS harness_projects (
     default_workflow text,
     external_url     text,
     toolchains       jsonb NOT NULL DEFAULT '[]'::jsonb,
+    repos            jsonb NOT NULL DEFAULT '[]'::jsonb,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now()
 )";
@@ -38,6 +39,31 @@ const ALTER_PROJECTS_CAP: &str =
 /// (e.g. a GEO audit). Exposed to runs as `$EXTERNAL_URL`. Idempotent.
 const ALTER_PROJECTS_EXTERNAL_URL: &str =
     "ALTER TABLE harness_projects ADD COLUMN IF NOT EXISTS external_url text";
+/// Additional repos for a multi-repo project (frontend + backend, etc.), each
+/// checked out into its own folder in the run workspace. Empty = single-repo
+/// (the `git_url`/`base_branch` columns). Idempotent.
+const ALTER_PROJECTS_REPOS: &str =
+    "ALTER TABLE harness_projects ADD COLUMN IF NOT EXISTS repos jsonb NOT NULL DEFAULT '[]'::jsonb";
+
+/// One repo in a multi-repo project. The harness makes **no** assumption about
+/// its stack — the agent inspects the checked-out repo to learn its language /
+/// framework. `role` is a free-text hint (e.g. "customer storefront"), not a
+/// fixed taxonomy.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ProjectRepo {
+    /// Clone source (https or ssh).
+    pub url: String,
+    /// Branch this repo's per-run branch is cut from. Blank/omitted → `main`
+    /// (normalized when a project is registered).
+    #[serde(default)]
+    pub base_branch: String,
+    /// Subdirectory in the run workspace this repo is checked out into
+    /// (e.g. `frontend`, `orders-api`).
+    pub folder: String,
+    /// Optional human hint about what this repo is, passed to the agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+}
 
 /// A registered project (matches `harness_projects`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -57,6 +83,10 @@ pub struct Project {
     /// `pnpm`). Installed on demand onto the persistent volume — no image rebuild.
     #[sqlx(json)]
     pub toolchains: Vec<String>,
+    /// Additional repos checked out alongside `git_url` for a multi-repo project
+    /// (each in its own `folder`). Empty = single-repo (the default).
+    #[sqlx(json)]
+    pub repos: Vec<ProjectRepo>,
     /// Per-project build-cache cap in GiB; `None` falls back to the env default.
     pub cargo_target_cap_gb: Option<i32>,
     pub created_at: DateTime<Utc>,
@@ -71,6 +101,7 @@ pub struct ProjectInput {
     pub default_workflow: Option<String>,
     pub external_url: Option<String>,
     pub toolchains: Vec<String>,
+    pub repos: Vec<ProjectRepo>,
     pub cargo_target_cap_gb: Option<i32>,
 }
 
@@ -100,13 +131,16 @@ impl ProjectStore {
         sqlx::query(ALTER_PROJECTS_EXTERNAL_URL)
             .execute(&store.pool)
             .await?;
+        sqlx::query(ALTER_PROJECTS_REPOS)
+            .execute(&store.pool)
+            .await?;
         Ok(store)
     }
 
     /// All projects, alphabetical.
     pub async fn list(&self) -> Result<Vec<Project>, PersistError> {
         let rows = sqlx::query_as::<_, Project>(
-            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, cargo_target_cap_gb, created_at, updated_at
+            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, created_at, updated_at
              FROM harness_projects ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -117,7 +151,7 @@ impl ProjectStore {
     /// One project by name, if present.
     pub async fn get(&self, name: &str) -> Result<Option<Project>, PersistError> {
         let row = sqlx::query_as::<_, Project>(
-            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, cargo_target_cap_gb, created_at, updated_at
+            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, created_at, updated_at
              FROM harness_projects WHERE name = $1",
         )
         .bind(name)
@@ -130,17 +164,18 @@ impl ProjectStore {
     /// on update; `updated_at` always advances.
     pub async fn upsert(&self, name: &str, input: &ProjectInput) -> Result<Project, PersistError> {
         let row = sqlx::query_as::<_, Project>(
-            "INSERT INTO harness_projects (name, git_url, base_branch, default_workflow, external_url, toolchains, cargo_target_cap_gb, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now())
+            "INSERT INTO harness_projects (name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
              ON CONFLICT (name) DO UPDATE SET
                 git_url               = excluded.git_url,
                 base_branch           = excluded.base_branch,
                 default_workflow      = excluded.default_workflow,
                 external_url          = excluded.external_url,
                 toolchains            = excluded.toolchains,
+                repos                 = excluded.repos,
                 cargo_target_cap_gb   = excluded.cargo_target_cap_gb,
                 updated_at            = now()
-             RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains, cargo_target_cap_gb, created_at, updated_at",
+             RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, created_at, updated_at",
         )
         .bind(name)
         .bind(&input.git_url)
@@ -148,6 +183,7 @@ impl ProjectStore {
         .bind(input.default_workflow.as_deref())
         .bind(input.external_url.as_deref())
         .bind(sqlx::types::Json(&input.toolchains))
+        .bind(sqlx::types::Json(&input.repos))
         .bind(input.cargo_target_cap_gb)
         .fetch_one(&self.pool)
         .await?;
@@ -164,7 +200,7 @@ impl ProjectStore {
             "UPDATE harness_projects SET cargo_target_cap_gb = $2, updated_at = now()
              WHERE name = $1
              RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains,
-                       cargo_target_cap_gb, created_at, updated_at",
+                       repos, cargo_target_cap_gb, created_at, updated_at",
         )
         .bind(name)
         .bind(cap_gb)
@@ -215,6 +251,7 @@ mod tests {
                     default_workflow: None,
                     external_url: None,
                     toolchains: vec![],
+                    repos: vec![],
                     cargo_target_cap_gb: None,
                 },
             )
@@ -223,6 +260,7 @@ mod tests {
         assert_eq!(created.git_url, "https://github.com/me/ticket0.git");
         assert_eq!(created.base_branch, "main");
         assert!(created.toolchains.is_empty());
+        assert!(created.repos.is_empty());
         assert_eq!(created.cargo_target_cap_gb, None);
 
         // Update changes fields + advances updated_at, preserves created_at.
@@ -235,6 +273,20 @@ mod tests {
                     default_workflow: Some("idea-to-pr".into()),
                     external_url: Some("https://ticket0.ai/".into()),
                     toolchains: vec!["rust".into(), "pnpm".into()],
+                    repos: vec![
+                        ProjectRepo {
+                            url: "https://github.com/me/storefront.git".into(),
+                            base_branch: "main".into(),
+                            folder: "frontend".into(),
+                            role: Some("customer storefront".into()),
+                        },
+                        ProjectRepo {
+                            url: "https://github.com/me/orders-api.git".into(),
+                            base_branch: "master".into(),
+                            folder: "backend".into(),
+                            role: None,
+                        },
+                    ],
                     cargo_target_cap_gb: None,
                 },
             )
@@ -244,6 +296,13 @@ mod tests {
         assert_eq!(updated.created_at, created.created_at);
         assert_eq!(updated.default_workflow.as_deref(), Some("idea-to-pr"));
         assert_eq!(updated.toolchains, vec!["rust", "pnpm"]);
+        assert_eq!(updated.repos.len(), 2);
+        assert_eq!(updated.repos[0].folder, "frontend");
+        assert_eq!(
+            updated.repos[0].role.as_deref(),
+            Some("customer storefront")
+        );
+        assert_eq!(updated.repos[1].base_branch, "master");
         assert_eq!(updated.cargo_target_cap_gb, None);
 
         let with_cap = store
