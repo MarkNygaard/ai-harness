@@ -92,6 +92,31 @@ pub fn clone_repo(git_url: &str, dest: &Path, token: Option<&str>) -> Result<(),
     finish(cmd, "git clone")
 }
 
+/// Clone `git_url` into `dest` and cut a fresh `new_branch` off
+/// `origin/<base_branch>` — the multi-repo analog of [`Worktree::create`] (which
+/// worktrees an *existing* local clone). Used to lay out each repo of a
+/// multi-repo project into its own folder in the run workspace. Auth as in
+/// [`clone_repo`].
+pub fn clone_run_branch(
+    git_url: &str,
+    dest: &Path,
+    base_branch: &str,
+    new_branch: &str,
+    token: Option<&str>,
+) -> Result<(), WorktreeError> {
+    clone_repo(git_url, dest, token)?;
+    run_git(
+        dest,
+        &[
+            "checkout",
+            "-b",
+            new_branch,
+            &format!("origin/{base_branch}"),
+        ],
+    )?;
+    Ok(())
+}
+
 /// Fetch + prune `repo` from its origin (so a project's checkout has the latest
 /// `base_branch` before a run cuts a worktree off it). Auth as in [`clone_repo`].
 pub fn fetch_repo(repo: &Path, token: Option<&str>) -> Result<(), WorktreeError> {
