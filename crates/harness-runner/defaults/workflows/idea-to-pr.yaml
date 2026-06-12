@@ -126,33 +126,37 @@ nodes:
   - id: install-deps
     category: setup
     bash: |
-      set -euo pipefail
-      if [ -f pnpm-lock.yaml ]; then
-        echo "Detected pnpm project"
-        pnpm install --frozen-lockfile
-        if [ -f prisma/schema.prisma ] || grep -q '"db:generate"' package.json 2>/dev/null; then
-          pnpm db:generate
-        fi
-      elif [ -f Cargo.toml ]; then
-        echo "Detected Cargo project"
-        cargo fetch --locked
-      elif [ -f package-lock.json ]; then
-        echo "Detected npm project"
-        npm ci
-      elif [ -f uv.lock ]; then
-        echo "Detected uv project"
-        uv sync --locked
-      elif [ -f poetry.lock ]; then
-        echo "Detected poetry project"
-        poetry install --no-interaction
-      elif [ -f go.mod ]; then
-        echo "Detected Go project"
-        go mod download
+      set -uo pipefail
+      # Detect the lockfile in $1 and install. Runs in a subshell so the cd is
+      # scoped; returns the install command's exit code.
+      install_in() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          if [ -f pnpm-lock.yaml ]; then
+            echo "[$1] pnpm"
+            pnpm install --frozen-lockfile || exit 1
+            if [ -f prisma/schema.prisma ] || grep -q '"db:generate"' package.json 2>/dev/null; then
+              pnpm db:generate || exit 1
+            fi
+          elif [ -f Cargo.toml ]; then echo "[$1] cargo"; cargo fetch --locked || exit 1
+          elif [ -f package-lock.json ]; then echo "[$1] npm"; npm ci || exit 1
+          elif [ -f uv.lock ]; then echo "[$1] uv"; uv sync --locked || exit 1
+          elif [ -f poetry.lock ]; then echo "[$1] poetry"; poetry install --no-interaction || exit 1
+          elif [ -f go.mod ]; then echo "[$1] go"; go mod download || exit 1
+          else
+            echo "[$1] no recognized lockfile — skipping. If this needs setup, \
+            add the command to its CLAUDE.md so downstream agents can run it."
+          fi )
+      }
+      # Multi-repo: install each repo's deps in its folder. Single-repo: root.
+      rc=0
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        while read -r folder; do
+          install_in "$folder" || rc=1
+        done < <(echo "$HARNESS_REPOS" | jq -r '.[].folder')
       else
-        echo "No recognized lockfile — skipping install step. \
-        If this project needs setup, add the command to its CLAUDE.md \
-        so downstream agents can run it themselves."
+        install_in . || rc=1
       fi
+      exit $rc
     depends_on: [create-plan]
     timeout: 300000
 
@@ -258,15 +262,31 @@ nodes:
   - id: verify-pr-base
     category: delivery
     bash: |
-      set -euo pipefail
-      EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
-      if [ "$ACTUAL" != "$EXPECTED" ]; then
-        PR_NUMBER=$(gh pr view --json number -q '.number')
-        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      set -uo pipefail
+      # Verify every PR this run opened targets its intended base; re-target if
+      # drifted. `.pr-list` has one entry per PR ({folder, number, url, base,
+      # head}); single-repo is a 1-entry list with folder ".".
+      check_pr_base() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          actual=$(gh pr view --json baseRefName -q '.baseRefName')
+          num=$(gh pr view --json number -q '.number')
+          if [ "$actual" != "$2" ]; then
+            echo "Base mismatch on PR #$num ($1): expected=$2 actual=$actual — re-targeting" >&2
+            gh pr edit "$num" --base "$2"
+          else
+            echo "PR #$num ($1) base verified: $2"
+          fi )
+      }
+      LIST="$ARTIFACTS_DIR/.pr-list"
+      if [ -s "$LIST" ]; then
+        while read -r entry; do
+          folder=$(echo "$entry" | jq -r '.folder')
+          base=$(echo "$entry" | jq -r '.base')
+          check_pr_base "$folder" "$base"
+        done < <(jq -c '.[]' "$LIST")
       else
-        echo "PR base verified: $EXPECTED"
+        # No list (e.g. nothing changed) — verify the current-dir PR if present.
+        check_pr_base "." "$BASE_BRANCH"
       fi
     depends_on: [finalize-pr]
 
@@ -279,6 +299,14 @@ nodes:
     prompt: |
       Verify the PR title follows the conventional-commits format.
       If it doesn't, rewrite it via `gh pr edit`.
+
+      ## Which PR(s)
+      Run `cat $ARTIFACTS_DIR/.pr-list` — it lists every PR this run opened, as
+      JSON objects `{folder, number, url, base, head}`. Apply everything below
+      to **each** PR: `cd` into its `folder` first (for a single-repo run there
+      is one entry with `folder: "."`, so this is a no-op), and use that entry's
+      `base` wherever the steps say `$BASE_BRANCH`. Each PR's title is judged
+      against the change in its own repo.
 
       ## Task
       $ARGUMENTS
