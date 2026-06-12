@@ -1276,6 +1276,8 @@ pub(crate) async fn start_run(
     let task_state = state.clone();
     let task_run_id = run_id.clone();
     let toolchains = project_row.toolchains.clone();
+    let git_url = project_row.git_url.clone();
+    let repos = project_row.repos.clone();
     let real = req.real;
     // `description` is the task spec; fall back to the deprecated `args` alias.
     let description = if req.description.is_empty() {
@@ -1296,6 +1298,8 @@ pub(crate) async fn start_run(
             base_branch,
             external_url,
             project,
+            git_url,
+            repos,
             toolchains,
             ab,
             btx,
@@ -1325,16 +1329,27 @@ async fn execute_run_task(
     base_branch: String,
     external_url: Option<String>,
     project: String,
+    git_url: String,
+    repos: Vec<harness_persist::ProjectRepo>,
     toolchains: Vec<String>,
     ab: Option<AbInfo>,
     btx: broadcast::Sender<RunEvent>,
 ) {
     // The workspace is an isolated per-run worktree off the project checkout's
     // `origin/<base_branch>` (so concurrent runs in the same project don't
-    // collide). `_worktree` is held for the run's lifetime and removed on drop.
-    // A setup failure fails the run visibly rather than running anywhere else.
-    let (workspace, _worktree) = match resolve_workspace(&state, &project, &run_id, &base_branch)
-        .await
+    // collide). For a multi-repo project it's instead a container dir with each
+    // repo freshly cloned into its folder. `_workspace_guard` is held for the
+    // run's lifetime and cleans up on drop. A setup failure fails the run
+    // visibly rather than running anywhere else.
+    let (workspace, _workspace_guard, repo_layout) = match resolve_workspace(
+        &state,
+        &project,
+        &run_id,
+        &base_branch,
+        &git_url,
+        &repos,
+    )
+    .await
     {
         Ok(v) => v,
         Err(e) => {
@@ -1388,6 +1403,15 @@ async fn execute_run_task(
         ("CARGO_PROFILE_DEV_DEBUG".to_string(), "1".to_string()),
         ("CARGO_PROFILE_TEST_DEBUG".to_string(), "1".to_string()),
     ]);
+
+    // Multi-repo project: tell the run where each repo is checked out (folder +
+    // url + branch + role) so a repo-aware workflow can enumerate them. Empty
+    // for single-repo runs (the variable is simply absent).
+    if !repo_layout.is_empty() {
+        if let Ok(json) = serde_json::to_string(&repo_layout) {
+            run_env.insert("HARNESS_REPOS".to_string(), json);
+        }
+    }
 
     // Keep that shared cache from ballooning (it grew to ~128 GB on the cluster).
     // The two dominant size drivers of debug builds are full debuginfo and
@@ -1600,40 +1624,164 @@ async fn execute_run_task(
     state.live.lock().await.remove(&run_id);
 }
 
-/// Resolve a run's workspace: fetch the project's checkout and cut an isolated
-/// worktree off `origin/<base_branch>`. Returns the worktree dir + a guard that
-/// removes it on drop. Errors (missing checkout, bad branch) fail the run — there
-/// is no global-root fallback.
+/// Cleans up a run's workspace on drop. Single-repo runs use a git worktree
+/// (its own `Drop` removes it); multi-repo runs use a container dir of fresh
+/// clones, removed wholesale.
+enum WorkspaceGuard {
+    Worktree(#[allow(dead_code)] harness_runner::Worktree),
+    Dir(PathBuf),
+}
+
+impl Drop for WorkspaceGuard {
+    fn drop(&mut self) {
+        match self {
+            // The inner Worktree's own Drop removes it.
+            WorkspaceGuard::Worktree(_) => {}
+            WorkspaceGuard::Dir(dir) => {
+                let _ = std::fs::remove_dir_all(dir);
+            }
+        }
+    }
+}
+
+/// One repo's checkout in a multi-repo run, surfaced to the workflow as
+/// `HARNESS_REPOS` (JSON). Empty list = single-repo run.
+#[derive(Debug, Clone, Serialize)]
+struct RunRepo {
+    folder: String,
+    url: String,
+    base_branch: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    role: Option<String>,
+}
+
+/// Derive a checkout folder name from a git URL (its repo basename, sans `.git`),
+/// e.g. `https://github.com/me/storefront.git` → `storefront`.
+fn repo_basename(git_url: &str) -> String {
+    let trimmed = git_url.trim_end_matches('/');
+    let last = trimmed.rsplit(['/', ':']).next().unwrap_or(trimmed);
+    let name = last.strip_suffix(".git").unwrap_or(last);
+    if name.is_empty() {
+        "repo".to_string()
+    } else {
+        name.to_string()
+    }
+}
+
+/// A folder must be a single, safe path segment (no separators, no traversal).
+fn valid_folder(folder: &str) -> bool {
+    !folder.is_empty()
+        && folder != "."
+        && folder != ".."
+        && folder
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+}
+
+/// Resolve a run's workspace.
+///
+/// **Single-repo** (`repos` empty): fetch the project's checkout and cut an
+/// isolated worktree off `origin/<base_branch>` — the original behavior.
+///
+/// **Multi-repo**: lay out a container dir with the primary repo (`git_url`, in
+/// a folder derived from its name) plus each linked repo cloned into its
+/// `folder`, every repo on a fresh `run/<id>` branch off its own base. Returns
+/// the workspace dir, a cleanup guard, and the repo layout (empty for
+/// single-repo). Errors fail the run — there is no global-root fallback.
 async fn resolve_workspace(
     state: &Arc<RunsState>,
     project: &str,
     run_id: &str,
     base_branch: &str,
-) -> Result<(PathBuf, harness_runner::Worktree), String> {
-    let checkout = state.projects_dir.join(project);
-    if !checkout.exists() {
-        return Err(format!(
-            "project `{project}` has no checkout at {} — re-register it",
-            checkout.display()
-        ));
-    }
-    let token = state.github_token_for_project(project).await;
-    let base = base_branch.to_string();
-    let branch = format!("run/{run_id}");
-    let dest = state.projects_dir.join(".worktrees").join(run_id);
-    let made = tokio::task::spawn_blocking(move || {
-        // Best-effort fetch so the worktree is cut off the latest remote tip.
-        let _ = harness_runner::fetch_repo(&checkout, token.as_deref());
-        if let Some(parent) = dest.parent() {
-            let _ = std::fs::create_dir_all(parent);
+    git_url: &str,
+    repos: &[harness_persist::ProjectRepo],
+) -> Result<(PathBuf, WorkspaceGuard, Vec<RunRepo>), String> {
+    if repos.is_empty() {
+        let checkout = state.projects_dir.join(project);
+        if !checkout.exists() {
+            return Err(format!(
+                "project `{project}` has no checkout at {} — re-register it",
+                checkout.display()
+            ));
         }
-        harness_runner::Worktree::create(&checkout, &format!("origin/{base}"), &branch, &dest)
+        let token = state.github_token_for_project(project).await;
+        let base = base_branch.to_string();
+        let branch = format!("run/{run_id}");
+        let dest = state.projects_dir.join(".worktrees").join(run_id);
+        let made = tokio::task::spawn_blocking(move || {
+            // Best-effort fetch so the worktree is cut off the latest remote tip.
+            let _ = harness_runner::fetch_repo(&checkout, token.as_deref());
+            if let Some(parent) = dest.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            harness_runner::Worktree::create(&checkout, &format!("origin/{base}"), &branch, &dest)
+        })
+        .await;
+        return match made {
+            Ok(Ok(wt)) => Ok((wt.path.clone(), WorkspaceGuard::Worktree(wt), Vec::new())),
+            Ok(Err(e)) => Err(format!("worktree create failed: {e}")),
+            Err(e) => Err(format!("worktree task panicked: {e}")),
+        };
+    }
+
+    // Multi-repo: primary repo first (folder derived from its URL), then linked.
+    let mut layout = vec![RunRepo {
+        folder: repo_basename(git_url),
+        url: git_url.to_string(),
+        base_branch: base_branch.to_string(),
+        role: Some("primary".to_string()),
+    }];
+    for r in repos {
+        layout.push(RunRepo {
+            folder: r.folder.clone(),
+            url: r.url.clone(),
+            base_branch: r.base_branch.clone(),
+            role: r.role.clone(),
+        });
+    }
+    // Validate folders: safe segments, no duplicates.
+    let mut seen = std::collections::HashSet::new();
+    for repo in &layout {
+        if !valid_folder(&repo.folder) {
+            return Err(format!(
+                "invalid repo folder `{}` (use a simple name like `frontend`)",
+                repo.folder
+            ));
+        }
+        if !seen.insert(repo.folder.clone()) {
+            return Err(format!("duplicate repo folder `{}`", repo.folder));
+        }
+    }
+
+    let token = state.github_token_for_project(project).await;
+    let run_branch = format!("run/{run_id}");
+    let container = state.projects_dir.join(".worktrees").join(run_id);
+    let clones = layout.clone();
+    let container_for_task = container.clone();
+    let made = tokio::task::spawn_blocking(move || {
+        std::fs::create_dir_all(&container_for_task)
+            .map_err(|e| format!("create workspace dir: {e}"))?;
+        for repo in &clones {
+            let dest = container_for_task.join(&repo.folder);
+            harness_runner::clone_run_branch(
+                &repo.url,
+                &dest,
+                &repo.base_branch,
+                &run_branch,
+                token.as_deref(),
+            )
+            .map_err(|e| format!("clone `{}` into `{}` failed: {e}", repo.url, repo.folder))?;
+        }
+        Ok::<(), String>(())
     })
     .await;
     match made {
-        Ok(Ok(wt)) => Ok((wt.path.clone(), wt)),
-        Ok(Err(e)) => Err(format!("worktree create failed: {e}")),
-        Err(e) => Err(format!("worktree task panicked: {e}")),
+        Ok(Ok(())) => Ok((container.clone(), WorkspaceGuard::Dir(container), layout)),
+        Ok(Err(e)) => {
+            let _ = std::fs::remove_dir_all(&container);
+            Err(e)
+        }
+        Err(e) => Err(format!("workspace task panicked: {e}")),
     }
 }
 
@@ -2005,5 +2153,31 @@ mod tests {
         let reg = Arc::new(AgentRegistry::new("codex"));
         let state = RunsState::new(None, reg, std::path::PathBuf::from("/tmp"), None, None);
         assert_eq!(state.public_url, None);
+    }
+
+    #[test]
+    fn repo_basename_strips_git_and_path() {
+        assert_eq!(
+            super::repo_basename("https://github.com/me/storefront.git"),
+            "storefront"
+        );
+        assert_eq!(
+            super::repo_basename("https://github.com/me/orders-api"),
+            "orders-api"
+        );
+        assert_eq!(super::repo_basename("git@github.com:me/app.git"), "app");
+        assert_eq!(super::repo_basename("https://x/y/"), "y");
+    }
+
+    #[test]
+    fn valid_folder_accepts_simple_names_only() {
+        assert!(super::valid_folder("frontend"));
+        assert!(super::valid_folder("orders-api"));
+        assert!(super::valid_folder("app_2"));
+        assert!(!super::valid_folder(""));
+        assert!(!super::valid_folder("."));
+        assert!(!super::valid_folder(".."));
+        assert!(!super::valid_folder("a/b"));
+        assert!(!super::valid_folder("../escape"));
     }
 }
