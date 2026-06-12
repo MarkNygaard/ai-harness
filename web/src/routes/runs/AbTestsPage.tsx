@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { ArrowRight, GitCompare } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { AbTestForm } from "@/components/runs/AbTestForm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useRuns } from "@/lib/runs";
@@ -70,6 +71,7 @@ export function AbTestsPage() {
   return (
     <AppShell title="A/B Tests">
       <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
+        <AbTestForm />
         <section className="flex flex-col gap-2">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             A/B test pairs
@@ -85,11 +87,8 @@ export function AbTestsPage() {
           )}
           {runs.data && pairs.length === 0 && (
             <p className="text-sm text-muted-foreground">
-              No A/B tests yet. Start one from the{" "}
-              <Link to="/runs" className="underline">
-                Runs
-              </Link>{" "}
-              page (the “A/B” trigger) to compare two provider+model arms.
+              No A/B tests yet. Use “New A/B test” above to compare two
+              provider+model arms on the same task.
             </p>
           )}
 
