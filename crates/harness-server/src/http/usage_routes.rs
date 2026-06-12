@@ -21,10 +21,12 @@ use std::time::{Duration, Instant};
 use axum::extract::Extension;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
+use chrono::{DateTime, Datelike, TimeZone, Utc};
 use serde::Serialize;
 use tokio::sync::Mutex;
 
 use super::runs_routes::RunsState;
+use crate::handlers::token_usage::{lane_for_model, rates_for_model};
 
 /// Cache floor — at/above Claude's ~3-minute polling floor and omp's 5-minute
 /// report TTL, so the dashboard never hammers the upstream `/usage` endpoints.
@@ -108,6 +110,13 @@ pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
             ));
         }
     }
+    // Cursor has no usage API for individual plans, so we self-track: this
+    // month's Cursor (composer-lane) spend at list rates vs the subscription
+    // price entered in the UI. Shown only when a Cursor credential is added AND
+    // that price is configured (the fn checks both).
+    if let Some(sub) = fetch_cursor_usage(state).await {
+        subscriptions.push(sub);
+    }
 
     let resp = UsageResponse { subscriptions };
     *CACHE.lock().await = Some((Instant::now(), resp.clone()));
@@ -147,6 +156,93 @@ fn unavailable(
         error: Some(err.into()),
         windows: Vec::new(),
     }
+}
+
+// ── Cursor (self-tracked: no usage API for individual plans) ─────────────────
+
+/// First instant of `now`'s calendar month (UTC); falls back to `now`.
+fn month_start_utc(now: DateTime<Utc>) -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(now.year(), now.month(), 1, 0, 0, 0)
+        .single()
+        .unwrap_or(now)
+}
+
+/// First instant of the month after `now` (UTC) — the budget's reset point.
+fn next_month_start_utc(now: DateTime<Utc>) -> DateTime<Utc> {
+    let (year, month) = if now.month() == 12 {
+        (now.year() + 1, 1)
+    } else {
+        (now.year(), now.month() + 1)
+    };
+    Utc.with_ymd_and_hms(year, month, 1, 0, 0, 0)
+        .single()
+        .unwrap_or(now)
+}
+
+/// Cursor usage card. Cursor exposes no usage API for individual (Pro) plans,
+/// so we self-track: sum this calendar month's Cursor (`composer`-lane) token
+/// spend at list rates — the same pricing path the billing calibrator uses —
+/// and show it against the subscription price configured for the `composer`
+/// lane (the "$20" entered on the Credentials page). Returns `None` (no card)
+/// until that subscription price is set.
+async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
+    // Only when a Cursor credential has been added (an api_key is stored).
+    let store = state.cred_store().await.ok()?;
+    let has_cursor_cred = store
+        .get("cursor")
+        .await
+        .ok()
+        .flatten()
+        .and_then(|f| f.get("api_key").map(|k| !k.is_empty()))
+        .unwrap_or(false);
+    if !has_cursor_cred {
+        return None;
+    }
+
+    let monthly_price = match state.billing_store().await {
+        Ok(store) => store
+            .list()
+            .await
+            .ok()?
+            .into_iter()
+            .find(|p| p.lane == "composer")
+            .filter(|p| p.billing_mode == "subscription" && p.monthly_price_usd > 0.0)
+            .map(|p| p.monthly_price_usd)?,
+        Err(_) => return None,
+    };
+
+    let now = Utc::now();
+    let sums = match state.store().await {
+        Ok(store) => match store.token_sums_by_model_since(month_start_utc(now)).await {
+            Ok(s) => s,
+            Err(e) => return Some(unavailable("cursor", "Cursor (Pro)", e.to_string())),
+        },
+        Err(e) => return Some(unavailable("cursor", "Cursor (Pro)", e)),
+    };
+    let spend_usd: f64 = sums
+        .iter()
+        .filter(|s| lane_for_model(&s.model) == "composer")
+        .map(|s| {
+            rates_for_model(&s.model).cost_usd(
+                s.input_tokens.max(0) as u64,
+                s.output_tokens.max(0) as u64,
+                s.cache_read.max(0) as u64,
+                s.cache_write.max(0) as u64,
+            )
+        })
+        .sum();
+
+    Some(SubscriptionUsage {
+        cli: "cursor",
+        label: "Cursor (Pro)",
+        available: true,
+        error: None,
+        windows: vec![UsageWindow {
+            label: "This month".to_string(),
+            used_pct: spend_usd / monthly_price * 100.0,
+            resets_at: Some(next_month_start_utc(now).to_rfc3339()),
+        }],
+    })
 }
 
 // ── Claude (first-party Claude Code usage) ───────────────────────────────────
@@ -435,6 +531,25 @@ fn broker_subscription(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn month_boundaries_are_first_of_month_utc() {
+        let now = Utc.with_ymd_and_hms(2026, 6, 17, 9, 30, 0).unwrap();
+        assert_eq!(
+            month_start_utc(now),
+            Utc.with_ymd_and_hms(2026, 6, 1, 0, 0, 0).unwrap()
+        );
+        assert_eq!(
+            next_month_start_utc(now),
+            Utc.with_ymd_and_hms(2026, 7, 1, 0, 0, 0).unwrap()
+        );
+        // December rolls the year.
+        let dec = Utc.with_ymd_and_hms(2026, 12, 5, 0, 0, 0).unwrap();
+        assert_eq!(
+            next_month_start_utc(dec),
+            Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap()
+        );
+    }
 
     #[test]
     fn parses_claude_access_token() {

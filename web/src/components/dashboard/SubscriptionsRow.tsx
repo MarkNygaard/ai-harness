@@ -5,12 +5,13 @@ import {
   type UsageWindow,
 } from "@/lib/usage";
 
-/** "Resets in 22h" / "Resets in 14m" from an absolute reset timestamp. */
+/** "Resets in 12d" / "Resets in 22h" / "Resets in 14m" from an absolute time. */
 function resetsLabel(iso: string | null): string {
   if (!iso) return "";
   const ms = Date.parse(iso) - Date.now();
   if (Number.isNaN(ms) || ms <= 0) return "resets soon";
   const hours = Math.round(ms / 3_600_000);
+  if (hours >= 48) return `Resets in ${Math.round(hours / 24)}d`;
   if (hours >= 1) return `Resets in ${hours}h`;
   return `Resets in ${Math.max(1, Math.round(ms / 60_000))}m`;
 }
