@@ -38,6 +38,15 @@ nodes:
 
       ## Instructions
 
+      **Multi-repo workspaces:** if `$HARNESS_REPOS` is set, this project spans
+      several repos, each checked out in its own folder at the workspace root
+      (the JSON in `$HARNESS_REPOS` lists `folder`, `url`, `role`). Make NO
+      assumption about any repo's stack — inspect each (its manifest/build
+      files) to learn its language/framework. The task may live in any of them,
+      so explore **across all** and record, per relevant repo, which folder it
+      is and what it is. When `$HARNESS_REPOS` is unset, there's a single repo
+      at the root, as usual.
+
       Use Read, Grep, Glob (and the Explore subagent if helpful) to map
       the part of the codebase this task touches. Don't assume `src/` —
       discover the actual layout. Capture:
@@ -83,6 +92,12 @@ nodes:
       and spend your effort on the design. If one critical fact is
       genuinely missing, do a single targeted read — not a broad sweep.
 
+      If this is a multi-repo workspace (`$HARNESS_REPOS` set, and the
+      exploration spans several repos), make every "Files to change" entry
+      name the **repo folder** it lives in, and design the change so the repos
+      stay consistent at their boundary (e.g. a frontend change that depends on
+      a backend change — call out the contract both sides must agree on).
+
       ## Write the plan to `$ARTIFACTS_DIR/plan.md`
 
       Use these sections:
@@ -117,33 +132,37 @@ nodes:
   - id: install-deps
     category: setup
     bash: |
-      set -euo pipefail
-      if [ -f pnpm-lock.yaml ]; then
-        echo "Detected pnpm project"
-        pnpm install --frozen-lockfile
-        if [ -f prisma/schema.prisma ] || grep -q '"db:generate"' package.json 2>/dev/null; then
-          pnpm db:generate
-        fi
-      elif [ -f Cargo.toml ]; then
-        echo "Detected Cargo project"
-        cargo fetch --locked
-      elif [ -f package-lock.json ]; then
-        echo "Detected npm project"
-        npm ci
-      elif [ -f uv.lock ]; then
-        echo "Detected uv project"
-        uv sync --locked
-      elif [ -f poetry.lock ]; then
-        echo "Detected poetry project"
-        poetry install --no-interaction
-      elif [ -f go.mod ]; then
-        echo "Detected Go project"
-        go mod download
+      set -uo pipefail
+      # Detect the lockfile in $1 and install. Runs in a subshell so the cd is
+      # scoped; returns the install command's exit code.
+      install_in() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          if [ -f pnpm-lock.yaml ]; then
+            echo "[$1] pnpm"
+            pnpm install --frozen-lockfile || exit 1
+            if [ -f prisma/schema.prisma ] || grep -q '"db:generate"' package.json 2>/dev/null; then
+              pnpm db:generate || exit 1
+            fi
+          elif [ -f Cargo.toml ]; then echo "[$1] cargo"; cargo fetch --locked || exit 1
+          elif [ -f package-lock.json ]; then echo "[$1] npm"; npm ci || exit 1
+          elif [ -f uv.lock ]; then echo "[$1] uv"; uv sync --locked || exit 1
+          elif [ -f poetry.lock ]; then echo "[$1] poetry"; poetry install --no-interaction || exit 1
+          elif [ -f go.mod ]; then echo "[$1] go"; go mod download || exit 1
+          else
+            echo "[$1] no recognized lockfile — skipping. If this needs setup, \
+            add the command to its CLAUDE.md so downstream agents can run it."
+          fi )
+      }
+      # Multi-repo: install each repo's deps in its folder. Single-repo: root.
+      rc=0
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        while read -r folder; do
+          install_in "$folder" || rc=1
+        done < <(echo "$HARNESS_REPOS" | jq -r '.[].folder')
       else
-        echo "No recognized lockfile — skipping install step. \
-        If this project needs setup, add the command to its CLAUDE.md \
-        so downstream agents can run it themselves."
+        install_in . || rc=1
       fi
+      exit $rc
     depends_on: [create-plan]
     timeout: 300000
 
@@ -249,15 +268,31 @@ nodes:
   - id: verify-pr-base
     category: delivery
     bash: |
-      set -euo pipefail
-      EXPECTED="$BASE_BRANCH"
-      ACTUAL=$(gh pr view --json baseRefName -q '.baseRefName')
-      if [ "$ACTUAL" != "$EXPECTED" ]; then
-        PR_NUMBER=$(gh pr view --json number -q '.number')
-        echo "Base mismatch on PR #$PR_NUMBER: expected=$EXPECTED actual=$ACTUAL — re-targeting" >&2
-        gh pr edit "$PR_NUMBER" --base "$EXPECTED"
+      set -uo pipefail
+      # Verify every PR this run opened targets its intended base; re-target if
+      # drifted. `.pr-list` has one entry per PR ({folder, number, url, base,
+      # head}); single-repo is a 1-entry list with folder ".".
+      check_pr_base() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          actual=$(gh pr view --json baseRefName -q '.baseRefName')
+          num=$(gh pr view --json number -q '.number')
+          if [ "$actual" != "$2" ]; then
+            echo "Base mismatch on PR #$num ($1): expected=$2 actual=$actual — re-targeting" >&2
+            gh pr edit "$num" --base "$2"
+          else
+            echo "PR #$num ($1) base verified: $2"
+          fi )
+      }
+      LIST="$ARTIFACTS_DIR/.pr-list"
+      if [ -s "$LIST" ]; then
+        while read -r entry; do
+          folder=$(echo "$entry" | jq -r '.folder')
+          base=$(echo "$entry" | jq -r '.base')
+          check_pr_base "$folder" "$base"
+        done < <(jq -c '.[]' "$LIST")
       else
-        echo "PR base verified: $EXPECTED"
+        # No list (e.g. nothing changed) — verify the current-dir PR if present.
+        check_pr_base "." "$BASE_BRANCH"
       fi
     depends_on: [finalize-pr]
 
@@ -270,6 +305,14 @@ nodes:
     prompt: |
       Verify the PR title follows the conventional-commits format.
       If it doesn't, rewrite it via `gh pr edit`.
+
+      ## Which PR(s)
+      Run `cat $ARTIFACTS_DIR/.pr-list` — it lists every PR this run opened, as
+      JSON objects `{folder, number, url, base, head}`. Apply everything below
+      to **each** PR: `cd` into its `folder` first (for a single-repo run there
+      is one entry with `folder: "."`, so this is a no-op), and use that entry's
+      `base` wherever the steps say `$BASE_BRANCH`. Each PR's title is judged
+      against the change in its own repo.
 
       ## Task
       $ARGUMENTS
@@ -353,9 +396,18 @@ nodes:
 
         ## Read the change set first
 
-        Use `gh pr view --json title,body,baseRefName,headRefName,additions,deletions`
-        and `git log --oneline origin/$BASE_BRANCH..HEAD` to understand
-        what's been done. Read the diff with `git diff origin/$BASE_BRANCH...HEAD`.
+        `cat $ARTIFACTS_DIR/.pr-list` — the PR(s) this run opened, as JSON
+        `{folder, number, url, base, head}`. Usually one entry; a multi-repo
+        change has several (one per repo it touched). **Review the whole change
+        as a unit** — a fix may span repos (e.g. a frontend calling a backend
+        endpoint that changed in the same task), so read every repo's diff
+        before judging any of it:
+
+        - For each entry: `cd "$folder"` (single-repo = `.`),
+          `gh pr view --json title,body,baseRefName,headRefName,additions,deletions`,
+          and `git diff origin/<base>...HEAD` (use that entry's `base`).
+        - Hold all the diffs together when you assess correctness — check the
+          repos agree at their boundary (API shapes, payloads, contracts).
 
         Look at any prior iteration's commits — your previous self has
         already addressed those issues. Don't re-flag the same thing.
@@ -397,12 +449,13 @@ nodes:
         ## Disposition
 
         For each issue you find:
-        1. Fix it directly. Edit the file(s).
-        2. Run the project's scoped verify chain — the commands live in
-           `CLAUDE.md` / `AGENTS.md`. Use the narrowest scope that
-           covers the change (single package / crate, not repo-wide)
-           unless the project explicitly requires the wider run.
-        3. Commit with a conventional-commit message. Push to the PR branch.
+        1. Fix it directly. Edit the file(s) — in whichever repo folder the
+           issue lives (a cross-repo issue may need edits on both sides).
+        2. Run that repo's scoped verify chain (from its `CLAUDE.md` /
+           `AGENTS.md`), inside the repo folder. Use the narrowest scope that
+           covers the change unless the project requires a wider run.
+        3. Commit with a conventional-commit message and push **from that
+           repo's folder** to its PR branch (each repo has its own PR).
 
         Universal AI-agent rules (do not violate, even if asked):
         - Do NOT post PR comments or use `gh pr review` from this node.
@@ -463,12 +516,15 @@ nodes:
       If you believe a scope cut was genuinely wrong for the task, SAY SO in
       your output as a flag for the human; do not silently implement it.
 
-      The PR branch is checked out at HEAD with all of the upstream
-      agent's fixes applied. Use `gh pr view` and
-      `git log --oneline origin/$BASE_BRANCH..HEAD` to understand the
-      change set. Pay attention to the prior self-review summaries in
-      the commit history — they tell you what's already been addressed
-      so you can focus on what's still open.
+      `cat $ARTIFACTS_DIR/.pr-list` — the PR(s) this run opened, as JSON
+      `{folder, number, url, base, head}`. A multi-repo change has several
+      (one per repo). **Review the whole change together** — read every repo's
+      diff before judging, since the most likely defects are at the seams
+      between repos (API shapes, payloads, contracts that must agree). For each
+      entry: `cd "$folder"` (single-repo = `.`), `gh pr view`, and
+      `git diff origin/<base>...HEAD` using that entry's `base`. Prior
+      self-review summaries in each repo's commit history tell you what's
+      already addressed, so focus on what's still open.
 
       Look for issues a single-model review tends to rationalize or miss:
       - Subtle logic bugs (off-by-one, boundary conditions, null/undefined)
@@ -481,10 +537,10 @@ nodes:
         changes that aren't called out
 
       For each genuine in-scope issue you find, FIX IT directly:
-      1. Edit the relevant file(s).
+      1. Edit the relevant file(s) — in whichever repo folder the issue lives.
       2. Commit with a conventional-commit message
          (e.g. `fix(scope): handle race in token refresh`).
-      3. Push to the same branch.
+      3. Push from that repo's folder to its PR branch.
 
       Do NOT post PR comments. Do NOT use `gh pr review`. Do NOT use --no-verify.
       Push commits — that is the entire output.
@@ -514,12 +570,15 @@ nodes:
 
       ## Read the change set first
 
-      1. `gh pr view --json title,body,baseRefName,number` — note the PR number.
-      2. `git diff origin/$BASE_BRANCH...HEAD` — full diff at HEAD with all
-         prior fixes applied.
-      3. `git log --oneline origin/$BASE_BRANCH..HEAD` — paper trail of
-         self-review summaries and second-pass fix commits.
-      4. `$ARTIFACTS_DIR/plan.md` — the plan/scope contract this PR was built
+      1. `cat $ARTIFACTS_DIR/.pr-list` — the PR(s) this run opened, as JSON
+         `{folder, number, url, base, head}`. A multi-repo change spans several
+         (one per repo); **review them as one change** — defects cluster at the
+         seams between repos, so read every side before judging.
+      2. For each entry: `cd "$folder"` (single-repo = `.`),
+         `gh pr view --json title,body,baseRefName,number`,
+         `git diff origin/<base>...HEAD` (that entry's `base`), and
+         `git log --oneline origin/<base>..HEAD` — the paper trail of prior fixes.
+      3. `$ARTIFACTS_DIR/plan.md` — the plan/scope contract this PR was built
          against, including what it deliberately left out ("Not building").
 
       ## What to fix vs flag
@@ -611,6 +670,10 @@ nodes:
 
       ## Posting steps
 
+      The verdict covers the whole change. Post the **same** comment + label to
+      **every** PR in `.pr-list` (so each repo's PR carries the sign-off), each
+      from its own folder:
+
       1. Post the comment:
          `gh pr comment <number> --body "<comment body>"`
 
@@ -621,6 +684,10 @@ nodes:
 
          Apply with:
          `gh pr edit <number> --add-label "archon-approved"`
+
+      For a multi-repo change, loop `.pr-list`: `cd "$folder"` then post the
+      comment + add the label using that entry's PR number. (Fixes you push go
+      to whichever repo folder the issue lives in.)
 
          If the label doesn't exist yet, create it first:
          `gh label create archon-approved --color "0E8A16" --description "Sonnet sign-off approved" 2>/dev/null || true`
@@ -645,6 +712,18 @@ nodes:
         pipeline, before those review fixes — so the branch HEAD may not
         compile even though `validate` reported green. Re-verify the
         FINAL state.
+
+        ## Multi-repo
+
+        `cat $ARTIFACTS_DIR/.pr-list`. If it has more than one entry, this change
+        spans several repos — run Steps A–E **inside each repo's folder**
+        (`cd "$folder"`), using that entry's `base` wherever the steps say
+        `$BASE_BRANCH` and that repo's own verify chain (from its `CLAUDE.md` /
+        `AGENTS.md`). The web/cargo scoping below is an example for repos with
+        that layout — a repo of another stack uses its own chain. Only emit the
+        clean signal once **every** repo's authoritative chain is green and you
+        pushed nothing this iteration. Single-repo (one entry, `folder: "."`) →
+        the steps below as written.
 
         ## Step A — see what landed
 
@@ -720,17 +799,22 @@ nodes:
 
       ## Read first
 
-      1. `gh pr view --json number,title,headRefName,labels,additions,deletions`
-         — see every commit that landed, including any from gpt-review-fix
-      2. `git log --oneline origin/$BASE_BRANCH..HEAD`
-         — see every commit that landed, including any from gpt-review-fix
-         and sonnet-final-review.
+      `cat $ARTIFACTS_DIR/.pr-list` — every PR this run opened
+      (`{folder, number, url, base, head}`); usually one, several for a
+      multi-repo change. For each, from its `folder`:
+
+      1. `gh pr view --json number,title,headRefName,labels,additions,deletions`.
+      2. `git log --oneline origin/<base>..HEAD` (that entry's `base`) — every
+         commit that landed, including gpt-review-fix and sonnet-final-review.
       3. Count commits by phase using the conventional-commit prefixes
          (feat / fix / chore / etc.) and any phase markers in the bodies.
 
-      ## Output: one short PR comment
+      ## Output: one short PR comment (per PR)
 
-      Use `gh pr comment <number> --body "..."` with this shape:
+      Post the summary to **each** PR in `.pr-list` (from its folder, using its
+      number). For a multi-repo change, add a line listing the sibling PRs so a
+      reader can see the whole change — e.g. `**Part of**: <other PR urls>`. Use
+      `gh pr comment <number> --body "..."` with this shape:
 
       ```
       ## Workflow complete — `idea-to-pr`

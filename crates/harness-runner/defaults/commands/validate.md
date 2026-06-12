@@ -19,6 +19,14 @@ the complete test suite. Running it now — before review — just doubles the c
 This step is **language-agnostic**. Do NOT assume Node/npm, Rust, or any
 particular toolchain — discover the project's actual verify chain.
 
+**Multi-repo workspaces**: if `$HARNESS_REPOS` is set, this is a container with
+each repo in its own folder (see the JSON for `folder`/`role`). Run the quick
+pre-check **inside each repo the change touched** (`cd "$folder"`), using that
+repo's own verify chain — each repo may be a different stack. The verdict
+`passed` is `true` only if **every** touched repo passes; the `summary` should
+name the repo that failed, if any. Single-repo (unset) → run at the root as
+below.
+
 ---
 
 ## Phase 1 — Find the verify chain

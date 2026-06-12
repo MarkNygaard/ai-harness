@@ -11,11 +11,44 @@ argument-hint: (no arguments - reads from workflow artifacts)
 
 ## Your Mission
 
-Finalize the implementation and create the PR:
+Finalize the implementation and create the PR(s):
 1. Commit all changes
 2. Push to remote
 3. Create PR using project's template (if exists)
 4. Mark PR as ready for review
+
+---
+
+## Phase 0: Determine the repo(s) to finalize
+
+This may be a **single-repo** or a **multi-repo** workspace:
+
+- **Single-repo** (the default): the workspace root *is* the git repo. Run
+  everything below at the root. There is one repo, `folder` = `.`.
+- **Multi-repo**: the environment variable `$HARNESS_REPOS` is set to a JSON
+  array of `{ folder, url, base_branch, role }`. The workspace root is a
+  *container* — each repo is checked out in its `folder` subdirectory and is
+  already on the run branch `run/$WORKFLOW_ID`. The root is **not** a git repo,
+  so every `git`/`gh` command must run **inside a repo folder**.
+
+```bash
+echo "${HARNESS_REPOS:-}"   # empty = single-repo; JSON array = multi-repo
+```
+
+**Build the finalize list** — only repos that actually changed get a PR:
+
+- Single-repo: the one repo, if `git status --porcelain` is non-empty.
+- Multi-repo: for each entry in `$HARNESS_REPOS`, check
+  `git -C "$folder" status --porcelain`; include only the folders with changes.
+  A fix that touched just the backend → only that repo gets a PR. **Skip
+  unchanged repos — never create an empty commit or empty PR.**
+
+Then **repeat Phases 1–3 once per repo in the finalize list**, running all
+commands inside that repo's folder (`cd "$folder"`; for single-repo `folder=.`
+so this is a no-op), using that repo's own base branch:
+
+- Single-repo base = `$BASE_BRANCH`.
+- Multi-repo base = that entry's `base_branch` from `$HARNESS_REPOS`.
 
 ---
 
@@ -193,8 +226,12 @@ EOF
 gh pr create \
   --title "{plan-title}" \
   --body-file $ARTIFACTS_DIR/pr-body.md \
-  --base $BASE_BRANCH
+  --base "$REPO_BASE"
 ```
+
+`$REPO_BASE` is `$BASE_BRANCH` for a single-repo run, or the current repo's
+`base_branch` from `$HARNESS_REPOS` for a multi-repo run. (`gh` infers which
+repo from the folder you're in.)
 
 **If PR already exists**, update it:
 
@@ -216,24 +253,42 @@ gh pr ready {pr-number} 2>/dev/null || true
 gh pr view --json number,url,headRefName,baseRefName
 ```
 
-### 3.5 Write PR Number Registry
+### 3.5 Write the PR Registry
 
-Write PR number for downstream review steps:
+Downstream review/verify steps consume **`$ARTIFACTS_DIR/.pr-list`** — a JSON
+array with one entry per PR this run opened. Append the current repo's PR to it
+(inside the repo's folder so `gh` resolves the right PR):
 
 ```bash
-PR_NUMBER=$(gh pr view --json number -q '.number')
-PR_URL=$(gh pr view --json url -q '.url')
-echo "$PR_NUMBER" > $ARTIFACTS_DIR/.pr-number
-echo "$PR_URL" > $ARTIFACTS_DIR/.pr-url
+# Capture this repo's PR.
+NUM=$(gh pr view --json number -q '.number')
+URL=$(gh pr view --json url -q '.url')
+HEAD=$(gh pr view --json headRefName -q '.headRefName')
+# `$REPO_FOLDER` is "." for single-repo, else the repo's folder name.
+jq -n --arg folder "$REPO_FOLDER" --argjson number "$NUM" \
+      --arg url "$URL" --arg base "$REPO_BASE" --arg head "$HEAD" \
+      '{folder:$folder, number:$number, url:$url, base:$base, head:$head}' \
+  >> $ARTIFACTS_DIR/.pr-list.jsonl
 ```
+
+After all repos are finalized, assemble the array and a back-compat pointer to
+the first PR:
+
+```bash
+jq -s '.' $ARTIFACTS_DIR/.pr-list.jsonl > $ARTIFACTS_DIR/.pr-list
+jq -r '.[0].number' $ARTIFACTS_DIR/.pr-list > $ARTIFACTS_DIR/.pr-number
+jq -r '.[0].url'    $ARTIFACTS_DIR/.pr-list > $ARTIFACTS_DIR/.pr-url
+```
+
+(For a single-repo run, `.pr-list` is a one-element array with `folder: "."` —
+downstream steps treat single- and multi-repo uniformly.)
 
 **PHASE_3_CHECKPOINT:**
 
-- [ ] PR created or updated
+- [ ] A PR created/updated for **every changed repo** (none for unchanged ones)
 - [ ] PR body uses template (if available)
-- [ ] PR ready for review
-- [ ] PR URL captured
-- [ ] PR number registry written
+- [ ] Each PR ready for review
+- [ ] `.pr-list` written (one entry per PR) + `.pr-number`/`.pr-url` pointer
 
 ---
 
