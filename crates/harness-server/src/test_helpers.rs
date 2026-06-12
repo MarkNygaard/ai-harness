@@ -219,17 +219,6 @@ async fn make_state_inner(
         harness_observe::event_store::EventStore::new_with_database_url(dir, Some(&database_url))
             .await?,
     );
-    let signal_detector = harness_gc::signal_detector::SignalDetector::new(
-        server.config.gc.signal_thresholds.clone().into(),
-        harness_core::types::ProjectId::new(),
-    );
-    let draft_store = harness_gc::draft_store::DraftStore::new(dir)?;
-    let gc_agent = Arc::new(harness_gc::gc_agent::GcAgent::new(
-        server.config.gc.clone(),
-        signal_detector,
-        draft_store,
-        project_root.to_path_buf(),
-    ));
     let thread_db = crate::thread_db::ThreadDb::open_with_database_url(
         &harness_core::config::dirs::default_db_path(dir, "threads"),
         Some(&database_url),
@@ -253,7 +242,6 @@ async fn make_state_inner(
         tasks.clone(),
         server.agent_registry.clone(),
         Arc::new(server.config.clone()),
-        Default::default(),
         events.clone(),
         vec![],
         None,
@@ -287,9 +275,7 @@ async fn make_state_inner(
             maintenance_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         },
         engines: crate::http::EngineServices {
-            skills: Default::default(),
             rules: Default::default(),
-            gc_agent,
         },
         observability: crate::http::ObservabilityServices {
             events,

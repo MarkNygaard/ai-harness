@@ -6,34 +6,20 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 pub struct Scheduler {
-    pub gc_interval: Duration,
     pub health_interval: Duration,
-    pub self_evolution_interval: Duration,
     /// How often the disk workspace GC scan runs. Default: 1 hour.
     pub workspace_gc_interval: Duration,
 }
 
 impl Scheduler {
-    pub fn from_grade(grade: Grade) -> Self {
+    pub fn from_grade(_grade: Grade) -> Self {
         Self {
-            gc_interval: grade.recommended_gc_interval(),
             health_interval: Duration::from_secs(24 * 3600),
-            self_evolution_interval: Duration::from_secs(24 * 3600),
             workspace_gc_interval: Duration::from_secs(3600),
         }
     }
 
     pub fn start(self, state: Arc<AppState>) {
-        let gc_state = state.clone();
-        let gc_interval = self.gc_interval;
-        tokio::spawn(async move {
-            loop {
-                sleep(gc_interval).await;
-                tracing::info!("scheduler: triggering periodic GC run");
-                crate::handlers::gc::gc_run(&gc_state, None, None).await;
-            }
-        });
-
         let health_state = state.clone();
         let health_interval = self.health_interval;
         tokio::spawn(async move {
@@ -82,7 +68,6 @@ impl Scheduler {
         let review_config = state.core.server.config.review.clone();
         let retry_config = state.core.server.config.retry_scheduler.clone();
         let reconciliation_config = state.core.server.config.reconciliation.clone();
-        crate::self_evolution::start(state.clone(), self.self_evolution_interval);
         crate::periodic_reviewer::start(state.clone(), review_config);
         crate::periodic_retry::start(state.clone(), retry_config);
         crate::reconciliation::start(state, reconciliation_config);
@@ -147,33 +132,10 @@ mod tests {
     }
 
     #[test]
-    fn from_grade_d_returns_1h_gc_interval() {
+    fn from_grade_returns_default_intervals() {
         let s = Scheduler::from_grade(Grade::D);
-        assert_eq!(s.gc_interval, Duration::from_secs(3600));
         assert_eq!(s.health_interval, Duration::from_secs(24 * 3600));
-        assert_eq!(s.self_evolution_interval, Duration::from_secs(24 * 3600));
         assert_eq!(s.workspace_gc_interval, Duration::from_secs(3600));
-    }
-
-    #[test]
-    fn from_grade_a_returns_7d_gc_interval() {
-        let s = Scheduler::from_grade(Grade::A);
-        assert_eq!(s.gc_interval, Duration::from_secs(7 * 24 * 3600));
-        assert_eq!(s.health_interval, Duration::from_secs(24 * 3600));
-        assert_eq!(s.self_evolution_interval, Duration::from_secs(24 * 3600));
-        assert_eq!(s.workspace_gc_interval, Duration::from_secs(3600));
-    }
-
-    #[test]
-    fn from_grade_b_returns_3d_gc_interval() {
-        let s = Scheduler::from_grade(Grade::B);
-        assert_eq!(s.gc_interval, Duration::from_secs(3 * 24 * 3600));
-    }
-
-    #[test]
-    fn from_grade_c_returns_1d_gc_interval() {
-        let s = Scheduler::from_grade(Grade::C);
-        assert_eq!(s.gc_interval, Duration::from_secs(24 * 3600));
     }
 
     #[tokio::test]

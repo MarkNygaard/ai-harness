@@ -1301,12 +1301,10 @@ dependencies = [
  "harness-core",
  "harness-dag",
  "harness-exec",
- "harness-gc",
  "harness-observe",
  "harness-rules",
  "harness-runner",
  "harness-server",
- "harness-skills",
  "harness-workflow",
  "libc",
  "reqwest",
@@ -1366,25 +1364,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "uuid",
-]
-
-[[package]]
-name = "harness-gc"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "harness-core",
- "harness-observe",
- "harness-rules",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -1506,13 +1485,11 @@ dependencies = [
  "harness-core",
  "harness-dag",
  "harness-exec",
- "harness-gc",
  "harness-observe",
  "harness-persist",
  "harness-protocol",
  "harness-rules",
  "harness-runner",
- "harness-skills",
  "harness-sources",
  "harness-workflow",
  "hmac",
@@ -1532,22 +1509,6 @@ dependencies = [
  "tokio-tungstenite 0.26.2",
  "tower 0.5.3",
  "tower-http",
- "tracing",
- "uuid",
-]
-
-[[package]]
-name = "harness-skills"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "glob",
- "harness-core",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
  "tracing",
  "uuid",
 ]

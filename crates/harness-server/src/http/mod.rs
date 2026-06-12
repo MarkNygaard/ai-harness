@@ -149,12 +149,10 @@ pub async fn serve(server: Arc<HarnessServer>, addr: SocketAddr) -> anyhow::Resu
     // Startup summary — one clean line instead of scattered logs.
     {
         let guard_count = state.engines.rules.read().await.guards().len();
-        let skill_count = state.engines.skills.read().await.list().len();
         let task_count = state.core.tasks.list_all().len();
         tracing::info!(
             project = %state.core.project_root.display(),
             guards = guard_count,
-            skills = skill_count,
             pending_tasks = task_count,
             "harness: ready"
         );

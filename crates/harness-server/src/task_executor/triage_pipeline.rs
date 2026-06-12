@@ -1,7 +1,6 @@
 use super::helpers::{
-    augment_prompt_with_skills, build_task_event, run_agent_streaming,
-    run_agent_streaming_with_options, telemetry_for_timeout, update_status,
-    RunAgentStreamingOptions,
+    build_task_event, run_agent_streaming, run_agent_streaming_with_options, telemetry_for_timeout,
+    update_status, RunAgentStreamingOptions,
 };
 use crate::task_runner::{
     mutate_and_persist, CreateTaskRequest, RoundResult, TaskId, TaskPhase, TaskStatus, TaskStore,
@@ -19,7 +18,6 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 use std::time::Duration;
-use tokio::sync::RwLock;
 
 const GITHUB_ISSUE_LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
 const UNKNOWN_REPO_SLUG: &str = "{owner}/{repo}";
@@ -435,7 +433,6 @@ pub(crate) async fn run_plan_for_prompt(
     cargo_env: &HashMap<String, String>,
     project: &Path,
     req: &CreateTaskRequest,
-    skills: &RwLock<harness_skills::store::SkillStore>,
     events: &EventStore,
 ) -> anyhow::Result<(Option<String>, prompts::TriageComplexity, u32)> {
     let prompt_text = req.prompt.as_deref().unwrap_or_default();
@@ -447,7 +444,6 @@ pub(crate) async fn run_plan_for_prompt(
     .await?;
 
     let plan_prompt = prompts::plan_for_prompt_task(prompt_text);
-    let plan_prompt = augment_prompt_with_skills(skills, events, task_id, plan_prompt).await;
     let prompt_built_at = Utc::now();
     let agent_started_at = Utc::now();
 
@@ -592,7 +588,6 @@ pub(crate) async fn run_triage_plan_pipeline(
     cargo_env: &HashMap<String, String>,
     project: &Path,
     req: &CreateTaskRequest,
-    skills: &RwLock<harness_skills::store::SkillStore>,
     events: &EventStore,
 ) -> anyhow::Result<TriagePlanPipelineOutcome> {
     run_triage_plan_pipeline_with_issue_fetcher(
@@ -606,7 +601,6 @@ pub(crate) async fn run_triage_plan_pipeline(
         cargo_env,
         project,
         req,
-        skills,
         events,
         fetch_typed_issue_snapshot_boxed,
     )
@@ -625,7 +619,6 @@ async fn run_triage_plan_pipeline_with_issue_fetcher(
     cargo_env: &HashMap<String, String>,
     project: &Path,
     req: &CreateTaskRequest,
-    skills: &RwLock<harness_skills::store::SkillStore>,
     events: &EventStore,
     issue_fetcher: IssueFetchFn,
 ) -> anyhow::Result<TriagePlanPipelineOutcome> {
@@ -638,7 +631,6 @@ async fn run_triage_plan_pipeline_with_issue_fetcher(
     update_status(store, task_id, TaskStatus::Triaging, 0).await?;
 
     let triage_prompt = prompts::triage_prompt(issue).to_prompt_string();
-    let triage_prompt = augment_prompt_with_skills(skills, events, task_id, triage_prompt).await;
     let triage_prompt_built_at = Utc::now();
     let triage_started_at = Utc::now();
     let triage_req = AgentRequest {
@@ -854,7 +846,6 @@ async fn run_triage_plan_pipeline_with_issue_fetcher(
     update_status(store, task_id, TaskStatus::Planning, 0).await?;
 
     let plan_prompt = prompts::plan_prompt(issue, &triage_resp.output).to_prompt_string();
-    let plan_prompt = augment_prompt_with_skills(skills, events, task_id, plan_prompt).await;
     let plan_prompt_built_at = Utc::now();
     let plan_started_at = Utc::now();
     let plan_req = AgentRequest {
@@ -982,8 +973,6 @@ pub(crate) async fn run_replan_for_issue(
     cargo_env: &HashMap<String, String>,
     project: &Path,
     req: &CreateTaskRequest,
-    skills: &RwLock<harness_skills::store::SkillStore>,
-    events: &EventStore,
 ) -> anyhow::Result<String> {
     tracing::info!(task_id = %task_id, issue, "pipeline: starting replan phase");
     mutate_and_persist(store, task_id, |state| {
@@ -992,7 +981,6 @@ pub(crate) async fn run_replan_for_issue(
     .await?;
 
     let prompt = prompts::replan_prompt(issue, prior_plan, plan_issue).to_prompt_string();
-    let prompt = augment_prompt_with_skills(skills, events, task_id, prompt).await;
     let plan_req = AgentRequest {
         prompt,
         project_root: project.to_path_buf(),
@@ -1110,7 +1098,6 @@ mod tests {
             turn_timeout_secs: 30,
             ..CreateTaskRequest::default()
         };
-        let skills = RwLock::new(harness_skills::store::SkillStore::new());
         let events = EventStore::new_noop_for_tests();
 
         let outcome = run_triage_plan_pipeline(
@@ -1124,7 +1111,6 @@ mod tests {
             &HashMap::new(),
             dir.path(),
             &req,
-            &skills,
             &events,
         )
         .await?;

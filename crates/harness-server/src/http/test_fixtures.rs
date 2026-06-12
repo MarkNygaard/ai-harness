@@ -167,17 +167,6 @@ async fn make_read_only_route_test_state_with_project_root(
     review_queue_config.max_concurrent_tasks = server.config.review.max_concurrent_tasks.max(1);
     let review_task_queue = Arc::new(crate::task_queue::TaskQueue::new(&review_queue_config));
 
-    let signal_detector = harness_gc::signal_detector::SignalDetector::new(
-        server.config.gc.signal_thresholds.clone().into(),
-        harness_core::types::ProjectId::new(),
-    );
-    let draft_store = harness_gc::draft_store::DraftStore::new(dir)?;
-    let gc_agent = Arc::new(harness_gc::gc_agent::GcAgent::new(
-        server.config.gc.clone(),
-        signal_detector,
-        draft_store,
-        project_root.to_path_buf(),
-    ));
     let (notification_tx, _) = tokio::sync::broadcast::channel(32);
     let (ws_shutdown_tx, _) = tokio::sync::broadcast::channel(1);
     let events = Arc::new(harness_observe::event_store::EventStore::new_noop_for_tests());
@@ -205,9 +194,7 @@ async fn make_read_only_route_test_state_with_project_root(
             maintenance_active: Arc::new(AtomicBool::new(false)),
         },
         engines: EngineServices {
-            skills: Arc::new(RwLock::new(harness_skills::store::SkillStore::new())),
             rules: Arc::new(RwLock::new(harness_rules::engine::RuleEngine::new())),
-            gc_agent,
         },
         observability: ObservabilityServices {
             events,

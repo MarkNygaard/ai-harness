@@ -12,14 +12,13 @@ use crate::{
 use async_trait::async_trait;
 use harness_agents::registry::AgentRegistry;
 use harness_core::{agent::CodeAgent, config::HarnessConfig, interceptor::TurnInterceptor};
-use harness_skills::store::SkillStore;
 use harness_workflow::issue_lifecycle::{
     is_feedback_claim_placeholder, IssueLifecycleState, IssueWorkflowInstance,
 };
 use harness_workflow::runtime::GITHUB_ISSUE_PR_DEFINITION_ID;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::Semaphore;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum QueueDomain {
@@ -121,7 +120,6 @@ pub struct DefaultExecutionService {
     tasks: Arc<TaskStore>,
     agent_registry: Arc<AgentRegistry>,
     server_config: Arc<HarnessConfig>,
-    skills: Arc<RwLock<SkillStore>>,
     events: Arc<harness_observe::event_store::EventStore>,
     interceptors: Vec<Arc<dyn TurnInterceptor>>,
     workspace_mgr: Option<Arc<WorkspaceManager>>,
@@ -313,7 +311,6 @@ impl DefaultExecutionService {
         tasks: Arc<TaskStore>,
         agent_registry: Arc<AgentRegistry>,
         server_config: Arc<HarnessConfig>,
-        skills: Arc<RwLock<SkillStore>>,
         events: Arc<harness_observe::event_store::EventStore>,
         interceptors: Vec<Arc<dyn TurnInterceptor>>,
         workspace_mgr: Option<Arc<WorkspaceManager>>,
@@ -329,7 +326,6 @@ impl DefaultExecutionService {
             tasks,
             agent_registry,
             server_config,
-            skills,
             events,
             interceptors,
             workspace_mgr,
@@ -1078,7 +1074,6 @@ impl ExecutionService for DefaultExecutionService {
             prepared.agent,
             prepared.reviewer,
             self.server_config.clone(),
-            self.skills.clone(),
             self.events.clone(),
             self.interceptors.clone(),
             prepared.req,
@@ -1134,7 +1129,6 @@ impl ExecutionService for DefaultExecutionService {
 
         // Spawn a background tokio task that waits for a concurrency slot then executes.
         let tasks = self.tasks.clone();
-        let skills = self.skills.clone();
         let events = self.events.clone();
         let interceptors = self.interceptors.clone();
         let workspace_mgr = self.workspace_mgr.clone();
@@ -1186,7 +1180,6 @@ impl ExecutionService for DefaultExecutionService {
                         agent,
                         reviewer,
                         server_config,
-                        skills,
                         events,
                         interceptors,
                         req,

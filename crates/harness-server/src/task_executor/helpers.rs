@@ -4,14 +4,12 @@ use harness_core::agent::{AgentRequest, AgentResponse, StreamItem};
 use harness_core::error::HarnessError;
 use harness_core::interceptor::{ToolUseEvent, TurnInterceptor};
 use harness_core::types::{
-    ContextItem, Decision, Event, EventMetadata, SessionId, SkillId, ThreadId, TurnFailure, TurnId,
+    ContextItem, Decision, Event, EventMetadata, SessionId, ThreadId, TurnFailure, TurnId,
     TurnStatus, TurnTelemetry,
 };
-use harness_observe::event_store::EventStore;
 use harness_protocol::{notifications::Notification, notifications::RpcNotification};
 use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 pub(crate) mod streaming;
 pub(crate) use streaming::{
@@ -380,25 +378,10 @@ pub(crate) async fn update_status(
     crate::task_runner::update_status(store, task_id, status, round).await
 }
 
-/// Build the context item list for an agent request: skills matching the prompt
-/// trigger patterns plus any cascading AGENTS.md content found under
-/// `project_root`.
-pub(crate) async fn collect_context_items(
-    skills: &RwLock<harness_skills::store::SkillStore>,
-    project_root: &Path,
-    prompt: &str,
-) -> Vec<ContextItem> {
-    let mut items: Vec<ContextItem> = {
-        let guard = skills.read().await;
-        guard
-            .match_prompt(prompt)
-            .into_iter()
-            .map(|s| ContextItem::Skill {
-                id: s.id.to_string(),
-                content: s.content.clone(),
-            })
-            .collect()
-    };
+/// Build the context item list for an agent request: cascading AGENTS.md
+/// content found under `project_root`.
+pub(crate) async fn collect_context_items(project_root: &Path) -> Vec<ContextItem> {
+    let mut items: Vec<ContextItem> = Vec::new();
     let agents_md = harness_core::agents_md::load_agents_md(project_root);
     if !agents_md.is_empty() {
         items.push(ContextItem::AgentsMd { content: agents_md });
@@ -423,135 +406,6 @@ pub(crate) fn inject_project_context_into_prompt(project_root: &Path, prompt: St
          The following trusted project instructions were loaded from AGENTS.md / CLAUDE.md files. \
          Follow them for this task.\n\n{project_context}"
     )
-}
-
-/// Return all skills whose trigger patterns match `prompt`, including their IDs
-/// and names for observability/event logging.
-pub(crate) async fn matched_skills_for_prompt(
-    skills: &RwLock<harness_skills::store::SkillStore>,
-    prompt: &str,
-) -> Vec<(SkillId, String)> {
-    let guard = skills.read().await;
-    guard
-        .match_prompt(prompt)
-        .into_iter()
-        .map(|s| (s.id.clone(), s.name.clone()))
-        .collect()
-}
-
-/// Collect matched skills and all skills from the store, record usage for
-/// matches, and return both.
-///
-/// Lock discipline: holds read lock briefly to collect data, drops it, then
-/// acquires write lock only if there are matches. Never holds both locks
-/// simultaneously.
-async fn collect_and_record_skill_matches(
-    skills: &RwLock<harness_skills::store::SkillStore>,
-    prompt: &str,
-) -> (Vec<(SkillId, String, String)>, Vec<(String, String)>) {
-    {
-        let guard = skills.read().await;
-        if guard.list().is_empty() {
-            return (vec![], vec![]);
-        }
-    }
-    let (matched, all) = {
-        let guard = skills.read().await;
-        let matched: Vec<(SkillId, String, String)> = guard
-            .match_prompt(prompt)
-            .into_iter()
-            .map(|s| (s.id.clone(), s.name.clone(), s.content.clone()))
-            .collect();
-        let all: Vec<(String, String)> = guard
-            .list()
-            .iter()
-            .map(|s| (s.name.clone(), s.description.clone()))
-            .collect();
-        (matched, all)
-    };
-    if !matched.is_empty() {
-        let mut guard = skills.write().await;
-        for (id, _, _) in &matched {
-            guard.record_use(id);
-        }
-    }
-    (matched, all)
-}
-
-/// Augment a prompt with matching skills: match once, record usage, log `skill_used` events,
-/// and return the augmented prompt string. Replaces the repeated
-/// `matched_skills_for_prompt` + `inject_skills_into_prompt` + event-log loop pattern.
-pub(crate) async fn augment_prompt_with_skills(
-    skills: &RwLock<harness_skills::store::SkillStore>,
-    events: &EventStore,
-    task_id: &TaskId,
-    prompt: String,
-) -> String {
-    let (matched, all_skills) = collect_and_record_skill_matches(skills, &prompt).await;
-
-    for (skill_id, skill_name, _) in &matched {
-        let mut ev = Event::new(
-            SessionId::new(),
-            "skill_used",
-            "task_runner",
-            Decision::Pass,
-        );
-        ev.reason = Some(skill_name.clone());
-        ev.detail = Some(format!(
-            "task_id={} skill_id={}",
-            task_id.as_str(),
-            skill_id.as_str()
-        ));
-        if let Err(err) = events.log(&ev).await {
-            tracing::warn!(error = %err, "failed to log skill_used event");
-        }
-    }
-
-    let listing = harness_core::prompts::build_available_skills_listing(
-        all_skills.iter().map(|(n, d)| (n.as_str(), d.as_str())),
-    );
-    let section = harness_core::prompts::build_matched_skills_section(
-        matched.iter().map(|(_, n, c)| (n.as_str(), c.as_str())),
-    );
-    let mut additions = listing;
-    additions.push_str(&section);
-
-    if additions.is_empty() {
-        prompt
-    } else {
-        prompt + &additions
-    }
-}
-
-/// Match skills against the prompt, record usage for each match, and return a
-/// string to append directly to the agent prompt.
-///
-/// Since harness uses single-turn `claude -p`, context items are not visible to
-/// agents — this function injects skill content into the prompt text itself.
-///
-/// Two sections are appended:
-/// - **Available Skills**: a brief listing of every skill (name + description).
-/// - **Relevant Skills**: full content of skills whose trigger patterns matched.
-///
-/// Returns an empty string when the store is empty (no sections added).
-/// The "Relevant Skills" section is omitted when no skills match.
-pub(crate) async fn inject_skills_into_prompt(
-    skills: &RwLock<harness_skills::store::SkillStore>,
-    prompt: &str,
-) -> String {
-    let (matched_data, all_skills) = collect_and_record_skill_matches(skills, prompt).await;
-
-    let listing = harness_core::prompts::build_available_skills_listing(
-        all_skills.iter().map(|(n, d)| (n.as_str(), d.as_str())),
-    );
-    let section = harness_core::prompts::build_matched_skills_section(
-        matched_data
-            .iter()
-            .map(|(_, n, c)| (n.as_str(), c.as_str())),
-    );
-    let mut result = listing;
-    result.push_str(&section);
-    result
 }
 
 /// Persist a completed stream item as a task artifact when it carries content

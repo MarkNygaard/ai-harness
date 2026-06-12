@@ -235,17 +235,6 @@ pub(super) async fn make_test_state_with_project_root(
         harness_observe::event_store::EventStore::new_with_database_url(dir, Some(&database_url))
             .await?,
     );
-    let signal_detector = harness_gc::signal_detector::SignalDetector::new(
-        server.config.gc.signal_thresholds.clone().into(),
-        harness_core::types::ProjectId::new(),
-    );
-    let draft_store = harness_gc::draft_store::DraftStore::new(dir)?;
-    let gc_agent = Arc::new(harness_gc::gc_agent::GcAgent::new(
-        server.config.gc.clone(),
-        signal_detector,
-        draft_store,
-        project_root.to_path_buf(),
-    ));
     let thread_db = crate::thread_db::ThreadDb::open_with_database_url(
         &harness_core::config::dirs::default_db_path(dir, "threads"),
         Some(&database_url),
@@ -271,7 +260,6 @@ pub(super) async fn make_test_state_with_project_root(
         tasks.clone(),
         server.agent_registry.clone(),
         Arc::new(server.config.clone()),
-        Default::default(),
         events.clone(),
         vec![],
         None,
@@ -303,13 +291,9 @@ pub(super) async fn make_test_state_with_project_root(
             maintenance_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         },
         engines: crate::http::EngineServices {
-            skills: Arc::new(tokio::sync::RwLock::new(
-                harness_skills::store::SkillStore::new(),
-            )),
             rules: Arc::new(tokio::sync::RwLock::new(
                 harness_rules::engine::RuleEngine::new(),
             )),
-            gc_agent,
         },
         observability: crate::http::ObservabilityServices {
             events,
@@ -392,9 +376,7 @@ pub(super) async fn make_test_state_with_issue_workflows(
             maintenance_active: state.core.maintenance_active.clone(),
         },
         engines: crate::http::EngineServices {
-            skills: state.engines.skills.clone(),
             rules: state.engines.rules.clone(),
-            gc_agent: state.engines.gc_agent.clone(),
         },
         observability: crate::http::ObservabilityServices {
             events: state.observability.events.clone(),
@@ -480,7 +462,6 @@ pub(super) async fn make_test_state_with_workflow_runtime_config_and_registry(
         state.core.tasks.clone(),
         state.core.server.agent_registry.clone(),
         Arc::new(state.core.server.config.clone()),
-        state.engines.skills.clone(),
         state.observability.events.clone(),
         state.interceptors.clone(),
         None,
@@ -510,9 +491,7 @@ pub(super) async fn make_test_state_with_workflow_runtime_config_and_registry(
             maintenance_active: state.core.maintenance_active.clone(),
         },
         engines: crate::http::EngineServices {
-            skills: state.engines.skills.clone(),
             rules: state.engines.rules.clone(),
-            gc_agent: state.engines.gc_agent.clone(),
         },
         observability: crate::http::ObservabilityServices {
             events: state.observability.events.clone(),

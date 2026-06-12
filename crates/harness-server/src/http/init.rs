@@ -133,7 +133,7 @@ async fn build_review_store(
 /// Initialization is split into five ordered phases — each phase's outputs
 /// become inputs to the next.  Dependency edges:
 ///   storage → engines → registry (needs storage.tasks for orphan cleanup)
-///   registry → intake  (needs engines.gc_agent + events, registry.project_registry)
+///   registry → intake  (needs registry.project_registry)
 ///   intake   → services (needs interceptors wired to engines.rules + events)
 pub async fn build_app_state(server: Arc<HarnessServer>) -> anyhow::Result<AppState> {
     let dir = expand_tilde(&server.config.server.data_dir);
@@ -204,10 +204,9 @@ pub async fn build_app_state(server: Arc<HarnessServer>) -> anyhow::Result<AppSt
         return Err(error);
     }
 
-    // Phase 4: intake — task queue, Feishu/GitHub pollers, quality trigger, completion callback
+    // Phase 4: intake — task queue, Feishu/GitHub pollers, completion callback
     // (including Q-value wrapper).
-    // Depends on: engines.gc_agent + engines.events (quality trigger),
-    //             registry.project_registry (unused directly but ordering is stable).
+    // Depends on: registry.project_registry (unused directly but ordering is stable).
     let intake =
         builders::intake::build_intake(&server, &storage, &engines, &registry, &project_root, &dir)
             .await?;
@@ -296,9 +295,7 @@ pub async fn build_app_state(server: Arc<HarnessServer>) -> anyhow::Result<AppSt
             maintenance_active,
         },
         engines: EngineServices {
-            skills: engines.skills,
             rules: engines.rules,
-            gc_agent: engines.gc_agent,
         },
         observability: ObservabilityServices {
             events: engines
@@ -348,7 +345,6 @@ pub(crate) fn build_completion_callback(
     feishu_intake: &Option<Arc<crate::intake::feishu::FeishuIntake>>,
     github_pollers: &[(String, Arc<dyn crate::intake::IntakeSource>)],
     review_config: harness_core::config::agents::AgentReviewConfig,
-    quality_trigger: Option<Arc<crate::quality_trigger::QualityTrigger>>,
     config_github_token: Option<String>,
     issue_workflow_store: Option<Arc<harness_workflow::issue_lifecycle::IssueWorkflowStore>>,
 ) -> Option<task_runner::CompletionCallback> {
@@ -368,54 +364,16 @@ pub(crate) fn build_completion_callback(
         let fi_source: Arc<dyn crate::intake::IntakeSource> = fi.clone();
         sources.insert(fi_source.name().to_string(), fi_source);
     }
-    if sources.is_empty() && !review_config.review_bot_auto_trigger && quality_trigger.is_none() {
+    if sources.is_empty() && !review_config.review_bot_auto_trigger {
         return None;
     }
     let sources = Arc::new(sources);
     Some(Arc::new(move |task: task_runner::TaskState| {
         let sources = sources.clone();
         let review_config = review_config.clone();
-        let quality_trigger = quality_trigger.clone();
         let github_token = config_github_token.clone();
         let issue_workflow_store = issue_workflow_store.clone();
         Box::pin(async move {
-            // Grade recent events and auto-trigger GC if quality is poor.
-            if let Some(qt) = quality_trigger {
-                let task_ctx = task.pr_url.as_ref().and_then(|pr| {
-                    // Find the most recent implementation-affecting round.
-                    // agent_review_fix rounds always store detail: None, so if
-                    // the most recent such round is a fix round we have no
-                    // usable diff for the final PR state — skip cross-review
-                    // entirely to avoid judging stale initial-implement content
-                    // and spuriously downgrading an already-fixed PR.
-                    let last_impl_round = task
-                        .rounds
-                        .iter()
-                        .rev()
-                        .find(|r| r.action == "implement" || r.action == "agent_review_fix");
-                    let diff = match last_impl_round {
-                        Some(r) if r.action == "implement" => {
-                            // Use the full implement-agent output as review context.
-                            // The implementation prompt contract requires a PR_URL line
-                            // but does not mandate unified-diff format, so accepting
-                            // any non-empty detail avoids silently dropping valid rounds.
-                            r.detail.clone().unwrap_or_default()
-                        }
-                        // agent_review_fix (detail always None) or no round at all
-                        _ => String::new(),
-                    };
-                    if diff.is_empty() {
-                        None
-                    } else {
-                        Some(crate::quality_trigger::TaskReviewContext {
-                            diff,
-                            pr_description: pr.clone(),
-                        })
-                    }
-                });
-                qt.check_and_maybe_trigger(task_ctx.as_ref()).await;
-            }
-
             // Auto-trigger review bot comment when task completes with a PR URL.
             if review_config.review_bot_auto_trigger {
                 if let task_runner::TaskStatus::Done = &task.status {

@@ -15,9 +15,7 @@ harness-core = { workspace = true }
 harness-server = { workspace = true }
 harness-workflow = { workspace = true }
 harness-agents = { workspace = true }
-harness-gc = { workspace = true }
 harness-rules = { workspace = true }
-harness-skills = { workspace = true }
 harness-exec = { workspace = true }
 harness-observe = { workspace = true }
 harness-runner = { workspace = true }

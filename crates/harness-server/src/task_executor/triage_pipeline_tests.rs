@@ -145,7 +145,6 @@ async fn run_plan_for_prompt_keeps_prompt_only_plan_text_out_of_rounds_and_event
         prompt: Some("secret prompt".to_string()),
         ..Default::default()
     };
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
 
     let (plan, complexity, turns) = run_plan_for_prompt(
         &PromptPlanningAgent,
@@ -154,7 +153,6 @@ async fn run_plan_for_prompt_keeps_prompt_only_plan_text_out_of_rounds_and_event
         &HashMap::new(),
         dir.path(),
         &req,
-        &skills,
         &events,
     )
     .await
@@ -203,7 +201,6 @@ async fn run_plan_for_prompt_redacts_failure_metadata_before_persisting() {
         prompt: Some("secret prompt".to_string()),
         ..Default::default()
     };
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
 
     let err = run_plan_for_prompt(
         &FailingPromptPlanningAgent,
@@ -212,7 +209,6 @@ async fn run_plan_for_prompt_redacts_failure_metadata_before_persisting() {
         &HashMap::new(),
         dir.path(),
         &req,
-        &skills,
         &events,
     )
     .await
@@ -377,7 +373,6 @@ async fn setup_issue_task_harness() -> anyhow::Result<(
     EventStore,
     TaskId,
     CreateTaskRequest,
-    RwLock<harness_skills::store::SkillStore>,
 )> {
     let dir = tempfile::tempdir()?;
     let database_url = crate::test_helpers::test_database_url()?;
@@ -394,8 +389,7 @@ async fn setup_issue_task_harness() -> anyhow::Result<(
         turn_timeout_secs: 30,
         ..CreateTaskRequest::default()
     };
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
-    Ok((dir, store, events, task_id, req, skills))
+    Ok((dir, store, events, task_id, req))
 }
 
 #[tokio::test]
@@ -403,7 +397,7 @@ async fn actionable_review_issue_skip_is_promoted_to_plan() -> anyhow::Result<()
     if !crate::test_helpers::db_tests_enabled().await {
         return Ok(());
     }
-    let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
+    let (dir, store, events, task_id, req) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new(
         "Looks abstract.\nCOMPLEXITY=low\nTRIAGE_REASON=agent_skip_review_label\nTRIAGE=SKIP",
     );
@@ -419,7 +413,6 @@ async fn actionable_review_issue_skip_is_promoted_to_plan() -> anyhow::Result<()
         &HashMap::new(),
         dir.path(),
         &req,
-        &skills,
         &events,
         actionable_review_issue_fetcher,
     )
@@ -455,7 +448,7 @@ async fn actionable_issue_without_labels_skip_is_promoted_to_plan() -> anyhow::R
     if !crate::test_helpers::db_tests_enabled().await {
         return Ok(());
     }
-    let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
+    let (dir, store, events, task_id, req) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new(
         "Skip.\nCOMPLEXITY=medium\nTRIAGE_REASON=agent_skip\nTRIAGE=SKIP",
     );
@@ -471,7 +464,6 @@ async fn actionable_issue_without_labels_skip_is_promoted_to_plan() -> anyhow::R
         &HashMap::new(),
         dir.path(),
         &req,
-        &skills,
         &events,
         actionable_no_label_issue_fetcher,
     )
@@ -504,7 +496,7 @@ async fn abstract_issue_skip_stays_skipped() -> anyhow::Result<()> {
     if !crate::test_helpers::db_tests_enabled().await {
         return Ok(());
     }
-    let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
+    let (dir, store, events, task_id, req) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new("Not actionable.\nCOMPLEXITY=low\nTRIAGE=SKIP");
 
     let outcome = run_triage_plan_pipeline_with_issue_fetcher(
@@ -518,7 +510,6 @@ async fn abstract_issue_skip_stays_skipped() -> anyhow::Result<()> {
         &HashMap::new(),
         dir.path(),
         &req,
-        &skills,
         &events,
         abstract_review_issue_fetcher,
     )
@@ -545,7 +536,7 @@ async fn skip_on_review_label_true_keeps_legacy_skip_reason_for_non_actionable_i
     if !crate::test_helpers::db_tests_enabled().await {
         return Ok(());
     }
-    let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
+    let (dir, store, events, task_id, req) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new("Skip.\nCOMPLEXITY=low\nTRIAGE=SKIP");
     let triage_config = ProjectTriageConfig {
         skip_on_review_label: Some(true),
@@ -562,7 +553,6 @@ async fn skip_on_review_label_true_keeps_legacy_skip_reason_for_non_actionable_i
         &HashMap::new(),
         dir.path(),
         &req,
-        &skills,
         &events,
         abstract_review_issue_fetcher,
     )
@@ -587,7 +577,7 @@ async fn github_fetch_failure_falls_back_to_agent_skip() -> anyhow::Result<()> {
     if !crate::test_helpers::db_tests_enabled().await {
         return Ok(());
     }
-    let (dir, store, events, task_id, req, skills) = setup_issue_task_harness().await?;
+    let (dir, store, events, task_id, req) = setup_issue_task_harness().await?;
     let agent = TriageStaticStreamAgent::new(
         "Skip.\nCOMPLEXITY=low\nTRIAGE_REASON=agent_skip\nTRIAGE=SKIP",
     );
@@ -603,7 +593,6 @@ async fn github_fetch_failure_falls_back_to_agent_skip() -> anyhow::Result<()> {
         &HashMap::new(),
         dir.path(),
         &req,
-        &skills,
         &events,
         failing_issue_fetcher,
     )

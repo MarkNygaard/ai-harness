@@ -2,7 +2,6 @@ use harness_core::agent::CodeAgent;
 use harness_core::types::{Decision, Event, SessionId};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 use super::request::{
     detect_main_worktree, summarize_request_description, CreateTaskRequest,
@@ -345,7 +344,6 @@ pub async fn spawn_task(
     agent: Arc<dyn CodeAgent>,
     reviewer: Option<Arc<dyn CodeAgent>>,
     server_config: std::sync::Arc<harness_core::config::HarnessConfig>,
-    skills: Arc<RwLock<harness_skills::store::SkillStore>>,
     events: Arc<harness_observe::event_store::EventStore>,
     interceptors: Vec<Arc<dyn harness_core::interceptor::TurnInterceptor>>,
     req: CreateTaskRequest,
@@ -361,7 +359,6 @@ pub async fn spawn_task(
         agent,
         reviewer,
         server_config,
-        skills,
         events,
         interceptors,
         req,
@@ -413,7 +410,6 @@ pub async fn spawn_preregistered_task(
     agent: Arc<dyn CodeAgent>,
     reviewer: Option<Arc<dyn CodeAgent>>,
     server_config: std::sync::Arc<harness_core::config::HarnessConfig>,
-    skills: Arc<RwLock<harness_skills::store::SkillStore>>,
     events: Arc<harness_observe::event_store::EventStore>,
     interceptors: Vec<Arc<dyn harness_core::interceptor::TurnInterceptor>>,
     req: CreateTaskRequest,
@@ -430,7 +426,6 @@ pub async fn spawn_preregistered_task(
         agent,
         reviewer,
         server_config,
-        skills,
         events,
         interceptors,
         req,
@@ -452,7 +447,6 @@ pub(super) async fn spawn_task_with_worktree_detector<F>(
     agent: Arc<dyn CodeAgent>,
     reviewer: Option<Arc<dyn CodeAgent>>,
     server_config: std::sync::Arc<harness_core::config::HarnessConfig>,
-    skills: Arc<RwLock<harness_skills::store::SkillStore>>,
     events: Arc<harness_observe::event_store::EventStore>,
     interceptors: Vec<Arc<dyn harness_core::interceptor::TurnInterceptor>>,
     mut req: CreateTaskRequest,
@@ -635,12 +629,8 @@ where
                     })
                     .await?;
 
-                    let context_items = crate::task_executor::helpers::collect_context_items(
-                        &skills,
-                        &project_root,
-                        req.prompt.as_deref().unwrap_or_default(),
-                    )
-                    .await;
+                    let context_items =
+                        crate::task_executor::helpers::collect_context_items(&project_root).await;
 
                     let turn_timeout = effective_turn_timeout(req.turn_timeout_secs);
                     let run_result = crate::parallel_dispatch::run_parallel_subtasks(
@@ -836,7 +826,6 @@ where
                 &id,
                 agent.as_ref(),
                 reviewer.as_deref(),
-                skills.clone(),
                 events.clone(),
                 interceptors.clone(),
                 &req,

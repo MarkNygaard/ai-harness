@@ -1,8 +1,8 @@
 use super::helpers::{
     build_task_event, collect_context_items, detect_modified_files,
-    inject_project_context_into_prompt, inject_skills_into_prompt, matched_skills_for_prompt,
-    run_agent_streaming_with_options, run_on_error, run_post_execute, run_post_tool_use,
-    run_pre_execute, telemetry_for_timeout, update_status, RunAgentStreamingOptions,
+    inject_project_context_into_prompt, run_agent_streaming_with_options, run_on_error,
+    run_post_execute, run_post_tool_use, run_pre_execute, telemetry_for_timeout, update_status,
+    RunAgentStreamingOptions,
 };
 use crate::task_runner::{
     mutate_and_persist, CreateTaskRequest, TaskFailureKind, TaskId, TaskStatus, TaskStore,
@@ -12,9 +12,7 @@ use chrono::Utc;
 use harness_core::agent::{AgentRequest, AgentResponse, CodeAgent};
 use harness_core::interceptor::ToolUseEvent;
 use harness_core::tool_isolation::validate_tool_usage;
-use harness_core::types::{
-    ContextItem, Decision, Event, ExecutionPhase, SessionId, TurnFailure, TurnFailureKind,
-};
+use harness_core::types::{ContextItem, Decision, ExecutionPhase, TurnFailure, TurnFailureKind};
 use harness_core::{lang_detect, prompts};
 use std::collections::HashMap;
 use std::path::Path;
@@ -157,7 +155,6 @@ pub(crate) async fn run_implement_phase(
     _review_config: &harness_core::config::agents::AgentReviewConfig,
     interceptors: &Arc<Vec<Arc<dyn harness_core::interceptor::TurnInterceptor>>>,
     events: &Arc<harness_observe::event_store::EventStore>,
-    skills: &Arc<tokio::sync::RwLock<harness_skills::store::SkillStore>>,
     cargo_env: &HashMap<String, String>,
     git: Option<&harness_core::config::project::GitConfig>,
     repo_slug: &str,
@@ -281,46 +278,12 @@ pub(crate) async fn run_implement_phase(
     let first_prompt =
         prepend_constitution(first_prompt, server_config.server.constitution_enabled);
 
-    // Inject skill content directly into the prompt text.
-    // Since harness uses single-turn `claude -p`, context items are not visible
-    // to the agent — we must embed skill content in the prompt string itself.
-    // Also records usage for any matched skills via record_use().
-    //
-    // Match against the task prompt before appending project instruction files.
-    // Otherwise AGENTS.md / CLAUDE.md trigger phrases can cause unrelated skills
-    // to be injected and logged as used.
-    let skill_match_prompt = first_prompt.clone();
-    let matched_skills = matched_skills_for_prompt(skills, &skill_match_prompt).await;
-    let skill_additions = inject_skills_into_prompt(skills, &skill_match_prompt).await;
-
     // Inject project instructions directly into the prompt text.
     // AgentRequest.context is retained for observability, but CLI agents do not
     // receive it automatically in single-turn mode.
     let first_prompt = inject_project_context_into_prompt(project, first_prompt);
-    let first_prompt = if skill_additions.is_empty() {
-        first_prompt
-    } else {
-        first_prompt + &skill_additions
-    };
-    for (skill_id, skill_name) in matched_skills {
-        let mut skill_event = Event::new(
-            SessionId::new(),
-            "skill_used",
-            "task_runner",
-            Decision::Pass,
-        );
-        skill_event.reason = Some(skill_name);
-        skill_event.detail = Some(format!(
-            "task_id={} skill_id={}",
-            task_id.as_str(),
-            skill_id.as_str()
-        ));
-        if let Err(err) = events.log(&skill_event).await {
-            tracing::warn!(error = %err, "failed to log skill_used event");
-        }
-    }
 
-    let context_items = collect_context_items(skills, project, &skill_match_prompt).await;
+    let context_items = collect_context_items(project).await;
 
     let initial_allowed_tools: Option<Vec<String>> = None;
     let capability_prompt_note: Option<&'static str> = None;

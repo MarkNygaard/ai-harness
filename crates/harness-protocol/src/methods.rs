@@ -1,6 +1,4 @@
-use harness_core::types::{
-    DraftId, Event, EventFilters, ExecPlanId, MetricFilters, ProjectId, SkillId, ThreadId, TurnId,
-};
+use harness_core::types::{Event, EventFilters, ExecPlanId, MetricFilters, ThreadId, TurnId};
 use serde::{de, Deserialize, Deserializer, Serialize};
 use std::path::PathBuf;
 
@@ -72,49 +70,6 @@ pub enum Method {
         decision: harness_core::agent::ApprovalDecision,
     },
 
-    // === GC Agent ===
-    GcRun {
-        project_id: Option<ProjectId>,
-    },
-    GcStatus,
-    GcDrafts {
-        project_id: Option<ProjectId>,
-    },
-    GcAdopt {
-        draft_id: DraftId,
-    },
-    GcReject {
-        draft_id: DraftId,
-        reason: Option<String>,
-    },
-
-    // === Skill system ===
-    SkillCreate {
-        name: String,
-        content: String,
-    },
-    SkillList {
-        query: Option<String>,
-    },
-    SkillGet {
-        skill_id: SkillId,
-    },
-    SkillDelete {
-        skill_id: SkillId,
-    },
-    /// Return governance fields for a single skill.
-    SkillGovernanceView {
-        skill_id: SkillId,
-    },
-    /// Return parsed status transitions from `skill_governance_tick` events.
-    SkillGovernanceHistory {
-        since: Option<chrono::DateTime<chrono::Utc>>,
-        until: Option<chrono::DateTime<chrono::Utc>>,
-        limit: Option<usize>,
-    },
-    /// Return all skills classified as Dormant or Stale, sorted by staleness.
-    SkillStale,
-
     // === Rule engine ===
     RuleLoad {
         project_root: PathBuf,
@@ -158,14 +113,6 @@ pub enum Method {
         pr: Option<u64>,
     },
 
-    // === Learn feedback loop ===
-    LearnRules {
-        project_root: PathBuf,
-    },
-    LearnSkills {
-        project_root: PathBuf,
-    },
-
     // === Health & Stats ===
     HealthCheck {
         project_root: PathBuf,
@@ -179,10 +126,6 @@ pub enum Method {
     AgentList,
 
     // === VibeGuard ===
-    Preflight {
-        project_root: PathBuf,
-        task_description: String,
-    },
     CrossReview {
         project_root: PathBuf,
         target: String,
@@ -327,15 +270,6 @@ impl Method {
             Self::TurnCancel { .. } => "turn/cancel",
             Self::TurnStatus { .. } => "turn/status",
             Self::TurnRespondApproval { .. } => "turn/respond_approval",
-            Self::GcRun { .. } => "gc/run",
-            Self::GcStatus => "gc/status",
-            Self::GcDrafts { .. } => "gc/drafts",
-            Self::GcAdopt { .. } => "gc/adopt",
-            Self::GcReject { .. } => "gc/reject",
-            Self::SkillCreate { .. } => "skill/create",
-            Self::SkillList { .. } => "skill/list",
-            Self::SkillGet { .. } => "skill/get",
-            Self::SkillDelete { .. } => "skill/delete",
             Self::RuleLoad { .. } => "rule/load",
             Self::RuleCheck { .. } => "rule/check",
             Self::ExecPlanInit { .. } => "exec_plan/init",
@@ -346,16 +280,10 @@ impl Method {
             Self::MetricsCollect { .. } => "metrics/collect",
             Self::MetricsQuery { .. } => "metrics/query",
             Self::TaskClassify { .. } => "task/classify",
-            Self::LearnRules { .. } => "learn/rules",
-            Self::LearnSkills { .. } => "learn/skills",
             Self::HealthCheck { .. } => "health/check",
             Self::StatsQuery { .. } => "stats/query",
             Self::AgentList => "agent/list",
-            Self::Preflight { .. } => "preflight",
             Self::CrossReview { .. } => "cross_review",
-            Self::SkillGovernanceView { .. } => "skill/governance/view",
-            Self::SkillGovernanceHistory { .. } => "skill/governance/history",
-            Self::SkillStale => "skill/stale",
         }
     }
 }
