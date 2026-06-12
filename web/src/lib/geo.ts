@@ -4,7 +4,12 @@
  * Parsed from the run's node output so the report view can render a dashboard
  * and turn each finding into an `idea-to-pr` task.
  */
-import { useQueries } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiJson } from "./api";
 import { nodesFromDetail, useRuns } from "./runs";
 import type { NodeView, RunDetail } from "@/types/run";
@@ -127,6 +132,82 @@ export function geoTaskDescription(f: GeoFinding, url: string): string {
     .trim();
 }
 
+// ── Per-finding triage state (persisted server-side, keyed by audit run) ─────
+
+/** What the user did with a finding in the report. */
+export type GeoFindingAction = "built" | "issued" | "ignored";
+
+/** A remembered finding action (mirrors the server's `GeoFindingState`). */
+export interface GeoFindingState {
+  finding_key: string;
+  action: GeoFindingAction;
+  ref_run_id: string | null;
+  issue_identifier: string | null;
+  issue_url: string | null;
+}
+
+/** Body for recording a finding's state. */
+export interface SetGeoFindingState {
+  finding_key: string;
+  action: GeoFindingAction;
+  ref_run_id?: string;
+  issue_identifier?: string;
+  issue_url?: string;
+}
+
+/**
+ * Stable key for a finding within a run's report. Findings have no id, so we
+ * derive one from `category` + `title` (deterministic for a given verdict).
+ */
+export function findingKey(f: GeoFinding): string {
+  return `${f.category}::${f.title}`;
+}
+
+/** Remembered finding states for an audit run, keyed by `finding_key`. */
+export function useGeoFindingStates(runId: string | null) {
+  return useQuery<GeoFindingState[], Error>({
+    queryKey: ["geo-findings", runId],
+    enabled: !!runId,
+    queryFn: ({ signal }) =>
+      apiJson<GeoFindingState[]>(
+        `/api/runs/${encodeURIComponent(runId!)}/geo-findings`,
+        { signal },
+      ),
+  });
+}
+
+/** Record a finding's state (Build this / Create issue / Ignore). */
+export function useSetGeoFindingState(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<GeoFindingState, Error, SetGeoFindingState>({
+    mutationFn: (body) =>
+      apiJson<GeoFindingState>(
+        `/api/runs/${encodeURIComponent(runId!)}/geo-findings`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      ),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["geo-findings", runId] }),
+  });
+}
+
+/** Forget a finding's state — the "Rebuild" / "Unignore" action. */
+export function useClearGeoFindingState(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<unknown, Error, string>({
+    mutationFn: (key) =>
+      apiJson(
+        `/api/runs/${encodeURIComponent(runId!)}/geo-findings?key=${encodeURIComponent(key)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["geo-findings", runId] }),
+  });
+}
+
 /** One audit's score at a point in time, for the trajectory view. */
 export interface GeoScorePoint {
   runId: string;
@@ -162,9 +243,16 @@ export function useGeoHistory(project: string | null): {
     if (!d.data) return;
     const v = parseGeoVerdict(nodesFromDetail(d.data));
     if (v) {
-      points.push({ runId: auditRuns[i].id, at: auditRuns[i].recorded_at, score: v.score });
+      points.push({
+        runId: auditRuns[i].id,
+        at: auditRuns[i].recorded_at,
+        score: v.score,
+      });
     }
   });
   points.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-  return { points, loading: runs.isLoading || details.some((d) => d.isLoading) };
+  return {
+    points,
+    loading: runs.isLoading || details.some((d) => d.isLoading),
+  };
 }

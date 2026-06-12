@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Check } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -7,13 +8,17 @@ import { useCreateRun } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
 import { useProjectCredentials } from "@/lib/credentials";
 import { useCreateLinearIssue, useLinearSources } from "@/lib/linear";
-import type { CreatedLinearIssue } from "@/types/linear";
 import {
   SEVERITY_RANK,
+  findingKey,
   geoTaskDescription,
   ratingColor,
+  useClearGeoFindingState,
+  useGeoFindingStates,
   useGeoHistory,
+  useSetGeoFindingState,
   type GeoFinding,
+  type GeoFindingState,
   type GeoSeverity,
   type GeoVerdict,
 } from "@/lib/geo";
@@ -30,17 +35,20 @@ const SEV_VARIANT: Record<GeoSeverity, "failed" | "running" | "secondary"> = {
 
 /**
  * Renders a geo-audit verdict: score dashboard, per-dimension scores, and the
- * findings. Each finding can be acted on two ways: "Build this" fires
- * `idea-to-pr` immediately, and (when the project has Linear configured)
- * "Create issue" files it into Linear with the eligibility label so the poller
- * picks it up. A bulk action files every finding at once.
+ * findings. Each finding can be acted on: "Build this" fires `idea-to-pr`, and
+ * (when the project has Linear configured) "Create issue" files it into Linear
+ * with the eligibility label. Acted-on findings get a green check and a
+ * "Rebuild" to restore the buttons; "Ignore" dims and skips them. All three are
+ * **persisted per audit run**, so the report shows the same state next visit.
  */
 export function GeoReport({
   verdict,
   project,
+  runId,
 }: {
   verdict: GeoVerdict;
   project: string | null;
+  runId: string | null;
 }) {
   const projects = useProjects();
   // external_url lands with the project-external-url change; read it loosely so
@@ -68,64 +76,108 @@ export function GeoReport({
   );
   const linearEnabled = hasLinearKey && hasBinding;
 
-  // Created issues keyed by the finding's index in `findings` — shared between
-  // the per-finding buttons and the bulk action so neither double-files.
-  const [issues, setIssues] = useState<Record<number, CreatedLinearIssue>>({});
-  const [filing, setFiling] = useState<number | "bulk" | null>(null);
-  const [fileError, setFileError] = useState<string | null>(null);
+  // Persisted per-finding triage state, keyed by finding_key and scoped to this
+  // audit run. Built / issued / ignored survive reloads and revisits.
+  const states = useGeoFindingStates(runId);
+  const stateByKey: Record<string, GeoFindingState> = {};
+  for (const s of states.data ?? []) stateByKey[s.finding_key] = s;
+
+  const createRun = useCreateRun();
   const createIssue = useCreateLinearIssue(project);
+  const setState = useSetGeoFindingState(runId);
+  const clearState = useClearGeoFindingState(runId);
+  const [busy, setBusy] = useState<string | "bulk" | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
-  // Findings the user has dismissed (by index). Ignored ones are skipped by the
-  // bulk action and can't be built/filed until un-ignored. Session-scoped.
-  const [ignored, setIgnored] = useState<Set<number>>(() => new Set());
-  function toggleIgnore(idx: number) {
-    setIgnored((prev) => {
-      const next = new Set(prev);
-      if (next.has(idx)) next.delete(idx);
-      else next.add(idx);
-      return next;
-    });
-  }
-
-  async function fileFinding(idx: number, f: GeoFinding) {
-    if (issues[idx]) return;
+  // File one finding into Linear and remember it (skips if already acted on).
+  async function issueOne(f: GeoFinding) {
+    const key = findingKey(f);
+    if (stateByKey[key]) return;
     const created = await createIssue.mutateAsync({
       title: f.title,
       description: geoTaskDescription(f, url),
     });
-    setIssues((prev) => ({ ...prev, [idx]: created }));
+    await setState.mutateAsync({
+      finding_key: key,
+      action: "issued",
+      issue_identifier: created.identifier,
+      issue_url: created.url,
+    });
   }
 
-  async function fileOne(idx: number, f: GeoFinding) {
-    setFileError(null);
-    setFiling(idx);
+  async function build(f: GeoFinding) {
+    setActionError(null);
+    setBusy(findingKey(f));
     try {
-      await fileFinding(idx, f);
+      const res = await createRun.mutateAsync({
+        workflow: IDEA_WORKFLOW,
+        project: project ?? undefined,
+        real: true,
+        title: f.title,
+        description: geoTaskDescription(f, url),
+      });
+      await setState.mutateAsync({
+        finding_key: findingKey(f),
+        action: "built",
+        ref_run_id: res.run_id,
+      });
     } catch (e) {
-      setFileError((e as Error).message);
+      setActionError((e as Error).message);
     } finally {
-      setFiling(null);
+      setBusy(null);
     }
   }
 
-  async function fileAll() {
-    setFileError(null);
-    setFiling("bulk");
+  async function createIssueOne(f: GeoFinding) {
+    setActionError(null);
+    setBusy(findingKey(f));
     try {
-      for (let i = 0; i < findings.length; i++) {
-        if (ignored.has(i)) continue;
-        await fileFinding(i, findings[i]);
+      await issueOne(f);
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function ignore(f: GeoFinding) {
+    setActionError(null);
+    try {
+      await setState.mutateAsync({
+        finding_key: findingKey(f),
+        action: "ignored",
+      });
+    } catch (e) {
+      setActionError((e as Error).message);
+    }
+  }
+
+  // "Rebuild" / "Unignore" — forget the state, restoring the action buttons.
+  async function reset(f: GeoFinding) {
+    setActionError(null);
+    try {
+      await clearState.mutateAsync(findingKey(f));
+    } catch (e) {
+      setActionError((e as Error).message);
+    }
+  }
+
+  async function createAll() {
+    setActionError(null);
+    setBusy("bulk");
+    try {
+      for (const f of findings) {
+        if (stateByKey[findingKey(f)]) continue;
+        await issueOne(f);
       }
     } catch (e) {
-      setFileError((e as Error).message);
+      setActionError((e as Error).message);
     } finally {
-      setFiling(null);
+      setBusy(null);
     }
   }
 
-  const unfiled = findings.filter(
-    (_, i) => !issues[i] && !ignored.has(i),
-  ).length;
+  const untouched = findings.filter((f) => !stateByKey[findingKey(f)]).length;
 
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
@@ -195,38 +247,41 @@ export function GeoReport({
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             Findings ({findings.length}) — “Build this” fixes it via idea-to-pr
           </h3>
-          {linearEnabled && unfiled > 0 && (
+          {linearEnabled && untouched > 0 && (
             <Button
               type="button"
               size="sm"
               variant="outline"
-              disabled={filing !== null}
-              onClick={fileAll}
+              disabled={busy !== null}
+              onClick={createAll}
             >
-              {filing === "bulk"
+              {busy === "bulk"
                 ? "Filing…"
-                : `Create Linear issues for all (${unfiled})`}
+                : `Create Linear issues for all (${untouched})`}
             </Button>
           )}
         </div>
-        {fileError && (
-          <p className="text-[11px] text-destructive">{fileError}</p>
+        {actionError && (
+          <p className="text-[11px] text-destructive">{actionError}</p>
         )}
         <div className="flex flex-col gap-2">
-          {findings.map((f, i) => (
-            <FindingRow
-              key={i}
-              finding={f}
-              project={project}
-              url={url}
-              linearEnabled={linearEnabled}
-              issue={issues[i]}
-              filing={filing === i}
-              ignored={ignored.has(i)}
-              onCreateIssue={() => fileOne(i, f)}
-              onToggleIgnore={() => toggleIgnore(i)}
-            />
-          ))}
+          {findings.map((f, i) => {
+            const key = findingKey(f);
+            return (
+              <FindingRow
+                key={i}
+                finding={f}
+                linearEnabled={linearEnabled}
+                buildable={!!project}
+                state={stateByKey[key]}
+                busy={busy === key || busy === "bulk"}
+                onBuild={() => build(f)}
+                onCreateIssue={() => createIssueOne(f)}
+                onIgnore={() => ignore(f)}
+                onReset={() => reset(f)}
+              />
+            );
+          })}
         </div>
       </section>
     </div>
@@ -281,30 +336,33 @@ function GeoHistory({ project }: { project: string | null }) {
 
 function FindingRow({
   finding,
-  project,
-  url,
   linearEnabled,
-  issue,
-  filing,
-  ignored,
+  buildable,
+  state,
+  busy,
+  onBuild,
   onCreateIssue,
-  onToggleIgnore,
+  onIgnore,
+  onReset,
 }: {
   finding: GeoFinding;
-  project: string | null;
-  url: string;
   linearEnabled: boolean;
-  issue: CreatedLinearIssue | undefined;
-  filing: boolean;
-  ignored: boolean;
+  buildable: boolean;
+  state: GeoFindingState | undefined;
+  busy: boolean;
+  onBuild: () => void;
   onCreateIssue: () => void;
-  onToggleIgnore: () => void;
+  onIgnore: () => void;
+  onReset: () => void;
 }) {
-  const create = useCreateRun();
+  const action = state?.action;
+  const ignored = action === "ignored";
+  const done = action === "built" || action === "issued";
   return (
     <div
       className={cn(
         "border-l-2 border-border bg-card p-3 pl-3",
+        done && "border-l-status-success",
         ignored && "opacity-50",
       )}
     >
@@ -325,69 +383,86 @@ function FindingRow({
           {finding.title}
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          {linearEnabled &&
-            (issue ? (
-              <a
-                href={issue.url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs text-accent-orange hover:underline"
-                title="Open the Linear issue"
+          {done ? (
+            <>
+              <Check className="size-4 text-status-success" aria-label="done" />
+              {action === "built" && state?.ref_run_id ? (
+                <Link
+                  to={`/runs/${state.ref_run_id}`}
+                  className="text-xs text-accent-orange hover:underline"
+                >
+                  Building →
+                </Link>
+              ) : action === "issued" && state?.issue_url ? (
+                <a
+                  href={state.issue_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs text-accent-orange hover:underline"
+                  title="Open the Linear issue"
+                >
+                  {state.issue_identifier ?? "Issue"} →
+                </a>
+              ) : null}
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={onReset}
+                title="Clear this and bring back the actions"
               >
-                {issue.identifier} →
-              </a>
-            ) : (
+                Rebuild
+              </Button>
+            </>
+          ) : ignored ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={onReset}
+              title="Restore this finding"
+            >
+              Unignore
+            </Button>
+          ) : (
+            <>
+              {linearEnabled && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  title="Create a Linear issue (AI Eligible) for this finding"
+                  onClick={onCreateIssue}
+                >
+                  {busy ? "Working…" : "Create issue"}
+                </Button>
+              )}
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={filing || !project || ignored}
-                title="Create a Linear issue (AI Eligible) for this finding"
-                onClick={onCreateIssue}
+                disabled={busy || !buildable}
+                title={
+                  buildable
+                    ? "Build a fix via idea-to-pr"
+                    : "Run has no project to open a PR against"
+                }
+                onClick={onBuild}
               >
-                {filing ? "Filing…" : "Create issue"}
+                {busy ? "Working…" : "Build this"}
               </Button>
-            ))}
-          {create.data ? (
-            <Link
-              to={`/runs/${create.data.run_id}`}
-              className="text-xs text-accent-orange hover:underline"
-            >
-              Building →
-            </Link>
-          ) : (
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={create.isPending || !project || ignored}
-              title={!project ? "Run has no project to open a PR against" : ""}
-              onClick={() =>
-                create.mutate({
-                  workflow: IDEA_WORKFLOW,
-                  project: project ?? undefined,
-                  real: true,
-                  title: finding.title,
-                  description: geoTaskDescription(finding, url),
-                })
-              }
-            >
-              {create.isPending ? "Starting…" : "Build this"}
-            </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={onIgnore}
+                title="Ignore this finding (won't be built or filed)"
+              >
+                Ignore
+              </Button>
+            </>
           )}
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost"
-            onClick={onToggleIgnore}
-            title={
-              ignored
-                ? "Restore this finding"
-                : "Ignore this finding (won't be built or filed)"
-            }
-          >
-            {ignored ? "Unignore" : "Ignore"}
-          </Button>
         </div>
       </div>
       {finding.detail && (
@@ -399,11 +474,6 @@ function FindingRow({
         <span className="text-muted-foreground">Fix: </span>
         {finding.fix}
       </p>
-      {create.isError && (
-        <p className="mt-1 text-[11px] text-destructive">
-          {create.error.message}
-        </p>
-      )}
     </div>
   );
 }
