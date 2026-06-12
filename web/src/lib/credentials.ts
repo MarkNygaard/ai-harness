@@ -45,10 +45,11 @@ export function useSetCredential() {
 // `configured` only reports presence.
 // ---------------------------------------------------------------------------
 
-/** Providers that can be overridden per project, and the field each expects. */
+/** Provider fields that can be overridden per project. */
 export const PROJECT_CREDENTIALS: { provider: string; field: string }[] = [
   { provider: "linear", field: "api_key" },
   { provider: "github", field: "token" },
+  { provider: "github", field: "git_author_email" },
 ];
 
 export function useProjectCredentials(project: string | null) {

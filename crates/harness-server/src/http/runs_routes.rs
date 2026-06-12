@@ -268,6 +268,19 @@ impl RunsState {
         fields.get("token").filter(|v| !v.is_empty()).cloned()
     }
 
+    /// The configured commit-author email for `project` (project github
+    /// credential overrides global). Authors PR commits with a
+    /// GitHub-recognized address so platforms that validate the commit author
+    /// against a GitHub account (e.g. Vercel) accept them.
+    pub(crate) async fn github_author_email_for_project(&self, project: &str) -> Option<String> {
+        let store = self.cred_store().await.ok()?;
+        let fields = store.get_for_project(project, "github").await.ok()??;
+        fields
+            .get("git_author_email")
+            .filter(|v| !v.is_empty())
+            .cloned()
+    }
+
     /// Lazily connect (and migrate) the persistence store.
     pub(crate) async fn store(&self) -> Result<&RunStore, String> {
         let url = self
@@ -1399,6 +1412,13 @@ async fn execute_run_task(
         match state.cred_store().await {
             Ok(store) => crate::http::credentials_routes::materialize(store).await,
             Err(e) => tracing::info!("credentials not materialized: {e}"),
+        }
+        // Author this run's commits with the configured GitHub-recognized email
+        // (project github credential overrides global), so platforms that
+        // validate the commit author against a GitHub account — e.g. Vercel —
+        // accept the PR. Provenance stays in the per-node author name.
+        if let Some(email) = state.github_author_email_for_project(&project).await {
+            run_env.insert("HARNESS_GIT_AUTHOR_EMAIL".to_string(), email);
         }
         // `provider: pi` → omp; `cursor` → cursor-agent; others → CodeAgent registry.
         let code = Arc::new(CodeAgentRunner::new(state.agent_registry.clone()));
