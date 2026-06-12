@@ -1290,16 +1290,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "harness-api"
-version = "0.1.0"
-dependencies = [
- "harness-core",
- "harness-exec",
- "harness-protocol",
- "harness-sandbox",
-]
-
-[[package]]
 name = "harness-cli"
 version = "0.1.0"
 dependencies = [
@@ -1313,7 +1303,6 @@ dependencies = [
  "harness-exec",
  "harness-gc",
  "harness-observe",
- "harness-protocol",
  "harness-rules",
  "harness-runner",
  "harness-server",
@@ -1412,7 +1401,6 @@ dependencies = [
  "opentelemetry_sdk",
  "serde",
  "serde_json",
- "sha2",
  "sqlx",
  "tempfile",
  "thiserror 2.0.18",
@@ -1458,7 +1446,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "glob",
  "harness-core",
  "regex",
  "serde",
@@ -1593,7 +1580,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tokio-stream",
  "tracing",
  "uuid",
 ]
