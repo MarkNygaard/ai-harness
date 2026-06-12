@@ -18,7 +18,7 @@ use axum::extract::{Extension, Path as AxumPath};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use harness_persist::ProjectInput;
+use harness_persist::{ProjectInput, ProjectRepo};
 use serde::Deserialize;
 
 use super::runs_routes::{self as cache, RunsState};
@@ -82,6 +82,11 @@ pub struct RegisterProjectRequest {
     /// `mise` tool specs to provision before runs (e.g. `rust`, `node@22`, `pnpm`).
     #[serde(default)]
     pub toolchains: Vec<String>,
+    /// Additional repos for a multi-repo project (frontend + backend, etc.).
+    /// Empty = single-repo (the `git_url` above). Each entry needs `url` +
+    /// `folder`; blank `base_branch` defaults to `main`.
+    #[serde(default)]
+    pub repos: Vec<ProjectRepo>,
     /// Per-project build-cache cap in GiB; omitted/`null`/≤0 → env default.
     #[serde(default)]
     pub cargo_target_cap_gb: Option<i32>,
@@ -180,6 +185,32 @@ pub async fn register_project(
             .into_iter()
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty())
+            .collect(),
+        // Keep only repos with a url + folder; default a blank branch to `main`.
+        repos: req
+            .repos
+            .into_iter()
+            .filter_map(|r| {
+                let url = r.url.trim().to_string();
+                let folder = r.folder.trim().to_string();
+                if url.is_empty() || folder.is_empty() {
+                    return None;
+                }
+                let base_branch = match r.base_branch.trim() {
+                    "" => "main".to_string(),
+                    b => b.to_string(),
+                };
+                let role = r
+                    .role
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty());
+                Some(ProjectRepo {
+                    url,
+                    base_branch,
+                    folder,
+                    role,
+                })
+            })
             .collect(),
         cargo_target_cap_gb: req.cargo_target_cap_gb.filter(|v| *v > 0),
     };

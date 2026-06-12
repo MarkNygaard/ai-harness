@@ -3,6 +3,19 @@
  * git repo; mirrors the Rust `Project` DTO in `harness-persist`.
  */
 
+/**
+ * One repo in a multi-repo project. The harness makes no stack assumption — the
+ * agent inspects the checkout to learn its language/framework. `role` is a
+ * free-text hint, not a fixed taxonomy.
+ */
+export interface ProjectRepo {
+  url: string;
+  base_branch: string;
+  /** Subdirectory in the run workspace this repo is checked out into. */
+  folder: string;
+  role?: string;
+}
+
 export interface Project {
   name: string;
   git_url: string;
@@ -12,6 +25,8 @@ export interface Project {
   external_url: string | null;
   /** mise tool specs provisioned before runs (e.g. "rust", "node@22", "pnpm"). */
   toolchains: string[];
+  /** Extra repos for a multi-repo project; empty = single-repo (`git_url`). */
+  repos: ProjectRepo[];
   /** Per-project build-cache cap in GiB; `null` falls back to the env default. */
   cargo_target_cap_gb: number | null;
   created_at: string;
@@ -26,6 +41,8 @@ export interface RegisterProjectRequest {
   /** Deployed/live site URL; exposed to runs as `$EXTERNAL_URL`. */
   external_url?: string | null;
   toolchains?: string[];
+  /** Extra repos for a multi-repo project; empty/omitted = single-repo. */
+  repos?: ProjectRepo[];
   /** Per-project build-cache cap in GiB; omitted/`null`/≤0 → env default. */
   cargo_target_cap_gb?: number | null;
 }
