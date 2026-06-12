@@ -137,22 +137,14 @@ mod tests {
     }
 
     #[test]
-    fn slash_style_gc_run() -> anyhow::Result<()> {
-        let json = r#"{"jsonrpc":"2.0","id":3,"method":"gc/run","params":{}}"#;
-        let req: RpcRequest = decode_request(json)?;
-        assert!(matches!(req.method, Method::GcRun { .. }));
-        Ok(())
-    }
-
-    #[test]
-    fn skill_stale_accepts_empty_params() -> anyhow::Result<()> {
+    fn unit_method_accepts_empty_params() -> anyhow::Result<()> {
         // JSON-RPC clients that always send params: {} must not be rejected.
-        let json = r#"{"jsonrpc":"2.0","id":9,"method":"skill/stale","params":{}}"#;
+        let json = r#"{"jsonrpc":"2.0","id":9,"method":"initialize","params":{}}"#;
         let req: RpcRequest = decode_request(json)?;
-        assert!(matches!(req.method, Method::SkillStale));
-        let json_null = r#"{"jsonrpc":"2.0","id":10,"method":"skill/stale","params":null}"#;
+        assert!(matches!(req.method, Method::Initialize));
+        let json_null = r#"{"jsonrpc":"2.0","id":10,"method":"initialize","params":null}"#;
         let req2: RpcRequest = decode_request(json_null)?;
-        assert!(matches!(req2.method, Method::SkillStale));
+        assert!(matches!(req2.method, Method::Initialize));
         Ok(())
     }
 
@@ -181,9 +173,6 @@ mod tests {
 
         let m = Method::Initialize;
         assert_eq!(m.method_name(), "initialize");
-
-        let m = Method::GcRun { project_id: None };
-        assert_eq!(m.method_name(), "gc/run");
 
         let m = Method::ExecPlanInit {
             spec: String::new(),

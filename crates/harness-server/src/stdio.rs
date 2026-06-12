@@ -187,17 +187,6 @@ mod tests {
         )
         .await?;
         let events = Arc::new(harness_observe::event_store::EventStore::new(dir).await?);
-        let signal_detector = harness_gc::signal_detector::SignalDetector::new(
-            server.config.gc.signal_thresholds.clone().into(),
-            harness_core::types::ProjectId::new(),
-        );
-        let draft_store = harness_gc::draft_store::DraftStore::new(dir)?;
-        let gc_agent = Arc::new(harness_gc::gc_agent::GcAgent::new(
-            server.config.gc.clone(),
-            signal_detector,
-            draft_store,
-            dir.to_path_buf(),
-        ));
         let thread_db = crate::thread_db::ThreadDb::open(
             &harness_core::config::dirs::default_db_path(dir, "threads"),
         )
@@ -215,7 +204,6 @@ mod tests {
             tasks.clone(),
             server.agent_registry.clone(),
             Arc::new(server.config.clone()),
-            Default::default(),
             events.clone(),
             vec![],
             None,
@@ -249,9 +237,7 @@ mod tests {
                 maintenance_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             },
             engines: crate::http::EngineServices {
-                skills: Arc::new(RwLock::new(harness_skills::store::SkillStore::new())),
                 rules: Arc::new(RwLock::new(harness_rules::engine::RuleEngine::new())),
-                gc_agent,
             },
             observability: crate::http::ObservabilityServices {
                 events,

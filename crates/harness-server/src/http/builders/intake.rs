@@ -19,22 +19,15 @@ pub(crate) struct IntakeBundle {
 /// Initialize task queue, intake sources (Feishu, GitHub), quality trigger,
 /// and the completion callback (including Q-value wrapper when available).
 ///
-/// Depends on: `storage` (q_values), `engines` (gc_agent, events),
-/// `registry` (project_registry) — must follow all three.
+/// Depends on: `storage` (q_values), `registry` (project_registry).
 pub(crate) async fn build_intake(
     server: &Arc<HarnessServer>,
     storage: &StorageBundle,
-    engines: &EnginesBundle,
+    _engines: &EnginesBundle,
     registry: &RegistryBundle,
     project_root: &Path,
     _data_dir: &Path,
 ) -> anyhow::Result<IntakeBundle> {
-    let events = engines
-        .events
-        .as_ref()
-        .expect("build_intake requires a ready event store")
-        .clone();
-
     // ── Task queues ───────────────────────────────────────────────────────────
     let memory_pressure =
         server
@@ -112,56 +105,11 @@ pub(crate) async fn build_intake(
         }
     }
 
-    // ── Quality trigger ───────────────────────────────────────────────────────
-    let quality_trigger = {
-        let gc_cfg = &server.config.gc;
-        let default_name = server
-            .agent_registry
-            .resolved_default_agent_name()
-            .map(|s| s.to_owned());
-        let all_names: Vec<String> = server
-            .agent_registry
-            .list()
-            .iter()
-            .map(|&s| s.to_owned())
-            .collect();
-        let challenger = all_names.iter().find_map(|name| {
-            if Some(name.as_str()) == default_name.as_deref() {
-                return None;
-            }
-            let agent = server.agent_registry.get(name)?;
-            if agent.capabilities().iter().any(|c| {
-                matches!(
-                    c,
-                    harness_core::types::Capability::Write
-                        | harness_core::types::Capability::Execute
-                )
-            }) {
-                None
-            } else {
-                Some(agent)
-            }
-        });
-        Arc::new(crate::quality_trigger::QualityTrigger::new(
-            events.clone(),
-            engines.gc_agent.clone(),
-            server.agent_registry.clone(),
-            project_root.to_path_buf(),
-            gc_cfg.auto_gc_grades.clone(),
-            gc_cfg.auto_gc_cooldown_secs,
-            challenger,
-            gc_cfg.auto_adopt,
-            gc_cfg.auto_adopt_path_prefix.clone(),
-            gc_cfg.gc_run_timeout_secs,
-        ))
-    };
-
     // ── Completion callback ───────────────────────────────────────────────────
     let completion_callback = crate::http::build_completion_callback(
         &feishu_intake,
         &github_pollers,
         server.config.agents.review.clone(),
-        Some(quality_trigger),
         server.config.server.github_token.clone(),
         registry.issue_workflow_store.clone(),
     );

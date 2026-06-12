@@ -16,7 +16,6 @@ use harness_core::{config::project::load_project_config, prompts};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration, Instant};
 
 /// RAII guard that removes the per-task Cargo target directory on drop.
@@ -84,7 +83,6 @@ pub(crate) async fn run_task(
     task_id: &TaskId,
     agent: &dyn CodeAgent,
     reviewer: Option<&dyn CodeAgent>,
-    skills: Arc<RwLock<harness_skills::store::SkillStore>>,
     events: Arc<harness_observe::event_store::EventStore>,
     interceptors: Arc<Vec<Arc<dyn harness_core::interceptor::TurnInterceptor>>>,
     req: &CreateTaskRequest,
@@ -153,7 +151,6 @@ pub(crate) async fn run_task(
             server_config,
             interceptors.as_ref(),
             &events,
-            &skills,
             &cargo_env,
             turn_timeout,
             effective_max_turns,
@@ -257,7 +254,6 @@ pub(crate) async fn run_task(
                 &cargo_env,
                 &project,
                 req,
-                &skills,
                 &events,
             )
             .await?
@@ -284,7 +280,7 @@ pub(crate) async fn run_task(
             // startup recovery: no pr_url/plan checkpoint → mark failed, re-queue manually.
             update_status(store, task_id, TaskStatus::Planning, 0).await?;
             triage_pipeline::run_plan_for_prompt(
-                agent, store, task_id, &cargo_env, &project, req, &skills, &events,
+                agent, store, task_id, &cargo_env, &project, req, &events,
             )
             .await?
         } else {
@@ -363,7 +359,6 @@ pub(crate) async fn run_task(
             review_config,
             &interceptors,
             &events,
-            &skills,
             &cargo_env,
             git,
             &repo_slug,
@@ -462,8 +457,6 @@ pub(crate) async fn run_task(
                             &cargo_env,
                             &project,
                             req,
-                            &skills,
-                            &events,
                         )
                         .await?;
                         turns_used += 1;
@@ -586,7 +579,6 @@ pub(crate) async fn run_task(
                     pr_url.as_deref().unwrap_or(""),
                     project_config.review_type.as_str(),
                     &events,
-                    &skills,
                     &cargo_env,
                     effective_max_turns,
                     review_head_probe,

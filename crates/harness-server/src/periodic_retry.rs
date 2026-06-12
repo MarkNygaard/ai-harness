@@ -726,7 +726,6 @@ mod tests {
             state.core.tasks.clone(),
             state.core.server.agent_registry.clone(),
             Arc::new(state.core.server.config.clone()),
-            state.engines.skills.clone(),
             state.observability.events.clone(),
             state.interceptors.clone(),
             None,

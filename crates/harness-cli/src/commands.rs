@@ -116,12 +116,6 @@ pub enum Command {
         database_url: Option<String>,
     },
 
-    /// GC Agent commands
-    Gc {
-        #[command(subcommand)]
-        cmd: GcCommand,
-    },
-
     /// Rule engine commands
     Rule {
         #[command(subcommand)]
@@ -133,12 +127,6 @@ pub enum Command {
     ExecPolicy {
         #[command(subcommand)]
         cmd: ExecPolicyCommand,
-    },
-
-    /// Skill system commands
-    Skill {
-        #[command(subcommand)]
-        cmd: SkillCommand,
     },
 
     /// ExecPlan management
@@ -181,27 +169,6 @@ pub enum Command {
         /// passing this flag returns an error.
         #[arg(long)]
         project: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand)]
-pub enum GcCommand {
-    /// Run GC agent
-    Run {
-        /// Project directory
-        project: Option<PathBuf>,
-    },
-    /// Show GC status
-    Status,
-    /// List pending drafts
-    Drafts { project: Option<PathBuf> },
-    /// Adopt a draft
-    Adopt { draft_id: String },
-    /// Reject a draft
-    Reject {
-        draft_id: String,
-        #[arg(long)]
-        reason: Option<String>,
     },
 }
 
@@ -249,23 +216,6 @@ pub enum ExecPolicyCommand {
         )]
         command: Vec<String>,
     },
-}
-
-#[derive(Subcommand)]
-pub enum SkillCommand {
-    /// List available skills
-    List {
-        #[arg(long)]
-        query: Option<String>,
-    },
-    /// Create a new skill
-    Create {
-        name: String,
-        #[arg(long)]
-        file: PathBuf,
-    },
-    /// Delete a skill
-    Delete { skill_id: String },
 }
 
 #[derive(Args)]
@@ -323,18 +273,6 @@ fn configured_rule_engine(
         config.rules.requirements_path.clone(),
     );
     engine
-}
-
-fn configured_skill_store(
-    config: &harness_core::config::HarnessConfig,
-) -> anyhow::Result<harness_skills::store::SkillStore> {
-    let project_root = std::env::current_dir()?;
-    let mut store = harness_skills::store::SkillStore::new()
-        .with_persist_dir(config.server.data_dir.join("skills"))
-        .with_discovery(&project_root);
-    store.load_builtin();
-    store.discover()?;
-    Ok(store)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -726,10 +664,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             }
         }
 
-        Command::Gc { cmd } => {
-            crate::gc::run_gc(cmd, &config).await?;
-        }
-
         Command::Rule { cmd } => {
             match cmd {
                 RuleCommand::Load { project } => {
@@ -820,38 +754,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                     serde_json::to_string(&result)?
                 };
                 println!("{rendered}");
-            }
-        },
-
-        Command::Skill { cmd } => match cmd {
-            SkillCommand::List { query } => {
-                let store = configured_skill_store(&config)?;
-                let skills = if let Some(q) = query {
-                    store.search(&q).into_iter().cloned().collect::<Vec<_>>()
-                } else {
-                    store.list().to_vec()
-                };
-                for s in &skills {
-                    println!("{} [{}]: {}", s.name, s.id, s.description);
-                }
-                if skills.is_empty() {
-                    println!("No skills found");
-                }
-            }
-            SkillCommand::Create { name, file } => {
-                let content = std::fs::read_to_string(&file)?;
-                let mut store = configured_skill_store(&config)?;
-                store.create(name.clone(), content);
-                println!("Created skill: {name}");
-            }
-            SkillCommand::Delete { skill_id } => {
-                let mut store = configured_skill_store(&config)?;
-                let deleted = if let Some(skill) = store.get_by_name(&skill_id).cloned() {
-                    store.delete(&skill.id)
-                } else {
-                    store.delete(&harness_core::types::SkillId::from_str(&skill_id))
-                };
-                println!("Deleted skill: {deleted}");
             }
         },
 
@@ -1293,39 +1195,6 @@ mod tests {
                 assert_eq!(actor.as_deref(), Some("alice"));
             }
             _ => panic!("expected Exec command"),
-        }
-    }
-
-    #[test]
-    fn cli_parses_gc_subcommands() {
-        let cli = Cli::try_parse_from(["harness", "gc", "run", "/tmp/proj"])
-            .expect("gc run should parse");
-        match cli.command {
-            Command::Gc {
-                cmd: GcCommand::Run { project },
-            } => {
-                assert_eq!(project, Some(PathBuf::from("/tmp/proj")));
-            }
-            _ => panic!("expected Gc Run command"),
-        }
-
-        let cli = Cli::try_parse_from(["harness", "gc", "status"]).expect("gc status should parse");
-        assert!(matches!(
-            cli.command,
-            Command::Gc {
-                cmd: GcCommand::Status
-            }
-        ));
-
-        let cli = Cli::try_parse_from(["harness", "gc", "adopt", "draft-123"])
-            .expect("gc adopt should parse");
-        match cli.command {
-            Command::Gc {
-                cmd: GcCommand::Adopt { draft_id },
-            } => {
-                assert_eq!(draft_id, "draft-123");
-            }
-            _ => panic!("expected Gc Adopt command"),
         }
     }
 

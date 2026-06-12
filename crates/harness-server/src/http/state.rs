@@ -78,11 +78,9 @@ pub struct CoreServices {
     pub maintenance_active: Arc<AtomicBool>,
 }
 
-/// Engine services: skills, rules, and garbage collection.
+/// Engine services: rule enforcement.
 pub struct EngineServices {
-    pub skills: Arc<tokio::sync::RwLock<harness_skills::store::SkillStore>>,
     pub rules: Arc<tokio::sync::RwLock<harness_rules::engine::RuleEngine>>,
-    pub gc_agent: Arc<harness_gc::gc_agent::GcAgent>,
 }
 
 /// Observability services: event store and telemetry.

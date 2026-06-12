@@ -10,7 +10,6 @@ use harness_core::tool_isolation::validate_tool_usage;
 use helpers::update_status;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tokio::time::{sleep, Duration, Instant};
 
 #[allow(clippy::too_many_arguments)]
@@ -24,7 +23,6 @@ pub(crate) async fn run_non_implementation_task(
     server_config: &harness_core::config::HarnessConfig,
     interceptors: &[Arc<dyn harness_core::interceptor::TurnInterceptor>],
     events: &Arc<harness_observe::event_store::EventStore>,
-    skills: &Arc<RwLock<harness_skills::store::SkillStore>>,
     cargo_env: &HashMap<String, String>,
     turn_timeout: Duration,
     effective_max_turns: Option<u32>,
@@ -45,13 +43,8 @@ pub(crate) async fn run_non_implementation_task(
         system_input.prompt().to_string(),
         server_config.server.constitution_enabled,
     );
-    let skill_match_prompt = prompt.clone();
-    let skill_additions = helpers::inject_skills_into_prompt(skills, &skill_match_prompt).await;
     prompt = helpers::inject_project_context_into_prompt(project, prompt);
-    if !skill_additions.is_empty() {
-        prompt.push_str(&skill_additions);
-    }
-    let context_items = helpers::collect_context_items(skills, project, &skill_match_prompt).await;
+    let context_items = helpers::collect_context_items(project).await;
     let allowed_tools = Some(restricted_tools(CapabilityProfile::Standard)?);
     if let Some(note) = CapabilityProfile::Standard.prompt_note() {
         prompt = format!("{note}\n\n{prompt}");

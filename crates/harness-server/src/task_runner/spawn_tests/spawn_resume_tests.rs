@@ -19,7 +19,6 @@ async fn resumed_pr_manual_conflict_fails_before_review_loop() -> anyhow::Result
     let store =
         TaskStore::open_with_database_url(&dir.path().join("tasks.db"), Some(&database_url))
             .await?;
-    let skills = Arc::new(RwLock::new(harness_skills::store::SkillStore::new()));
     let events = Arc::new(
         harness_observe::event_store::EventStore::new_with_database_url(
             dir.path(),
@@ -48,7 +47,6 @@ async fn resumed_pr_manual_conflict_fails_before_review_loop() -> anyhow::Result
         agent.clone(),
         None,
         Default::default(),
-        skills,
         events,
         vec![],
         req,
@@ -97,7 +95,6 @@ async fn resumed_pr_clean_conflict_gate_enters_review_loop() -> anyhow::Result<(
     let store =
         TaskStore::open_with_database_url(&dir.path().join("tasks.db"), Some(&database_url))
             .await?;
-    let skills = Arc::new(RwLock::new(harness_skills::store::SkillStore::new()));
     let events = Arc::new(
         harness_observe::event_store::EventStore::new_with_database_url(
             dir.path(),
@@ -127,7 +124,6 @@ async fn resumed_pr_clean_conflict_gate_enters_review_loop() -> anyhow::Result<(
         agent.clone(),
         None,
         legacy_hosted_bot_server_config(),
-        skills,
         events,
         vec![],
         req,
@@ -166,7 +162,6 @@ async fn resumed_pr_rebase_push_requires_fresh_review_prompt() -> anyhow::Result
     let store =
         TaskStore::open_with_database_url(&dir.path().join("tasks.db"), Some(&database_url))
             .await?;
-    let skills = Arc::new(RwLock::new(harness_skills::store::SkillStore::new()));
     let events = Arc::new(
         harness_observe::event_store::EventStore::new_with_database_url(
             dir.path(),
@@ -196,7 +191,6 @@ async fn resumed_pr_rebase_push_requires_fresh_review_prompt() -> anyhow::Result
         agent.clone(),
         None,
         legacy_hosted_bot_server_config(),
-        skills,
         events,
         vec![],
         req,

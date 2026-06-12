@@ -1,100 +1,10 @@
 use super::build_app_state;
-use crate::{
-    server::HarnessServer,
-    test_helpers::{HomeGuard, HOME_LOCK},
-    thread_manager::ThreadManager,
-};
+use crate::{server::HarnessServer, test_helpers::HOME_LOCK, thread_manager::ThreadManager};
 use harness_agents::registry::AgentRegistry;
 use harness_core::{
-    config::HarnessConfig, types::EventFilters, types::RuleId, types::Severity,
-    types::SkillLocation, types::Violation,
+    config::HarnessConfig, types::EventFilters, types::RuleId, types::Severity, types::Violation,
 };
 use std::sync::Arc;
-
-#[tokio::test]
-async fn persisted_skills_survive_restart() -> anyhow::Result<()> {
-    if !crate::test_helpers::db_tests_enabled().await {
-        return Ok(());
-    }
-    // Hold the shared HOME_LOCK so no sibling test races on HOME.
-    let _lock = HOME_LOCK.lock().await;
-    let _ = crate::test_helpers::test_database_url()?;
-
-    let sandbox = tempfile::tempdir()?;
-    let project_root = sandbox.path().join("project");
-    std::fs::create_dir_all(&project_root)?;
-    let data_dir = sandbox.path().join("data");
-    let database_url = crate::test_helpers::ensure_test_database_url_override()?;
-
-    // Redirect HOME to an empty sandbox directory so that
-    // $HOME/.harness/skills/ cannot shadow the persisted skill under
-    // data_dir, keeping the test isolated from machine state.
-    let fake_home = sandbox.path().join("home");
-    std::fs::create_dir_all(&fake_home)?;
-    // SAFETY: HOME_LOCK is held above; HomeGuard::drop restores HOME
-    // unconditionally, even when an assertion below panics.
-    let _env_guard = unsafe { HomeGuard::set(&fake_home) };
-
-    let startup = |project_root: &std::path::Path, data_dir: &std::path::Path| {
-        let project_root = project_root.to_path_buf();
-        let data_dir = data_dir.to_path_buf();
-        let database_url = database_url.clone();
-        async move {
-            let mut config = HarnessConfig::default();
-            config.server.project_root = project_root;
-            config.server.data_dir = data_dir;
-            config.server.database_url = Some(database_url);
-            let server = Arc::new(HarnessServer::new(
-                config,
-                ThreadManager::new(),
-                AgentRegistry::new("test"),
-            ));
-            build_app_state(server).await
-        }
-    };
-
-    // First startup: create a skill so it gets persisted to disk.
-    {
-        let state = startup(&project_root, &data_dir).await?;
-        let mut skills = state.engines.skills.write().await;
-        skills.create("my-test-skill".to_string(), "# My test skill".to_string());
-    }
-
-    // Assert the skill file was physically written to data_dir/skills/
-    // before the second startup, catching a broken persist_dir path early.
-    let persisted_path = data_dir.join("skills").join("my-test-skill.md");
-    assert!(
-        persisted_path.exists(),
-        "expected skill file to be written to {}",
-        persisted_path.display()
-    );
-
-    // Second startup: verify the persisted skill is reloaded via discover().
-    {
-        let state = startup(&project_root, &data_dir).await?;
-        let skills = state.engines.skills.read().await;
-        let reloaded = skills
-            .list()
-            .iter()
-            .find(|s| s.name == "my-test-skill")
-            .ok_or_else(|| {
-                anyhow::anyhow!("expected persisted skill to be reloaded after restart")
-            })?;
-        // Skills persisted via store.create() are stored in data_dir/skills/
-        // and loaded with SkillLocation::User so they can override same-named
-        // builtins after restart (User priority > System priority).
-        assert_eq!(
-            reloaded.location,
-            SkillLocation::User,
-            "reloaded skill has location {:?}; expected User (data_dir/skills/)",
-            reloaded.location
-        );
-    }
-
-    Ok(())
-    // _env_guard dropped here -> HOME restored unconditionally
-    // _lock dropped here -> next test may proceed
-}
 
 #[tokio::test]
 async fn build_app_state_auto_registers_builtin_guard() -> anyhow::Result<()> {

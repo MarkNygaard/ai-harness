@@ -38,7 +38,6 @@ pub use harness_workflow::plan_db;
 pub mod post_validator;
 pub mod project_registry;
 pub mod q_value_store;
-pub mod quality_trigger;
 pub mod redact;
 pub mod review_store;
 pub mod router;
@@ -49,10 +48,8 @@ pub mod runtime_project_cache;
 pub mod runtime_project_cache_state;
 pub mod runtime_state_store;
 pub mod scheduler;
-pub mod self_evolution;
 pub mod server;
 pub mod services;
-pub mod skill_governor;
 pub mod stale_workflow_recovery;
 pub mod stdio;
 pub mod task_db;
@@ -83,6 +80,3 @@ mod runtime_state_store_tests;
 
 #[cfg(test)]
 mod thread_manager_tests;
-
-#[cfg(test)]
-mod quality_trigger_tests;

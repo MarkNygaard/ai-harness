@@ -2,98 +2,13 @@ use super::super::*;
 use super::helpers::{
     wait_for_captured_phases, wait_until, BlockingInterceptor, CapturingAgent, PhaseCapturingAgent,
 };
-use harness_core::types::{ContextItem, EventFilters, ExecutionPhase};
+use harness_core::types::{EventFilters, ExecutionPhase};
 use tokio::time::Duration;
 
 fn legacy_hosted_bot_server_config() -> std::sync::Arc<harness_core::config::HarnessConfig> {
     let mut config = harness_core::config::HarnessConfig::default();
     config.agents.review.review_bot_auto_trigger = true;
     std::sync::Arc::new(config)
-}
-
-#[tokio::test]
-async fn skills_are_injected_into_agent_context() -> anyhow::Result<()> {
-    if !crate::test_helpers::db_tests_enabled().await {
-        return Ok(());
-    }
-    let _lock = crate::test_helpers::HOME_LOCK.lock().await;
-    let dir = crate::test_helpers::tempdir_in_home("harness-test-")?;
-    let database_url = crate::test_helpers::test_database_url()?;
-    let store =
-        TaskStore::open_with_database_url(&dir.path().join("tasks.db"), Some(&database_url))
-            .await?;
-
-    let mut skill_store = harness_skills::store::SkillStore::new();
-    skill_store.create(
-        "test-skill".to_string(),
-        "<!-- trigger-patterns: test task -->\ndo something useful".to_string(),
-    );
-    let skills = Arc::new(RwLock::new(skill_store));
-
-    let agent = CapturingAgent::new();
-    let agent_clone = agent.clone();
-
-    let req = CreateTaskRequest {
-        prompt: Some("test task".into()),
-        issue: None,
-        pr: None,
-        agent: None,
-        project: Some(dir.path().to_path_buf()),
-        wait_secs: 0,
-        max_rounds: Some(0),
-        turn_timeout_secs: 30,
-        max_budget_usd: None,
-        ..Default::default()
-    };
-
-    let events = Arc::new(
-        harness_observe::event_store::EventStore::new_with_database_url(
-            dir.path(),
-            Some(&database_url),
-        )
-        .await?,
-    );
-    let queue = crate::task_queue::TaskQueue::unbounded();
-    let permit = queue.acquire("test", 0).await?;
-    spawn_task(
-        store,
-        agent_clone,
-        None,
-        Default::default(),
-        skills,
-        events,
-        vec![],
-        req,
-        None,
-        permit,
-        None,
-        None,
-        None,
-        vec![],
-    )
-    .await;
-
-    wait_until(Duration::from_secs(3), || {
-        agent
-            .captured
-            .try_lock()
-            .map(|captured| !captured.is_empty())
-            .unwrap_or(false)
-    })
-    .await?;
-
-    let captured = agent.captured.lock().await;
-    assert!(
-        !captured.is_empty(),
-        "expected skills to be injected into AgentRequest.context"
-    );
-    assert!(
-        captured
-            .iter()
-            .any(|item| matches!(item, ContextItem::Skill { .. })),
-        "expected at least one ContextItem::Skill"
-    );
-    Ok(())
 }
 
 #[tokio::test]
@@ -107,7 +22,6 @@ async fn blocking_interceptor_fails_task() -> anyhow::Result<()> {
     let store =
         TaskStore::open_with_database_url(&dir.path().join("tasks.db"), Some(&database_url))
             .await?;
-    let skills = Arc::new(RwLock::new(harness_skills::store::SkillStore::new()));
     let agent = CapturingAgent::new();
     let events = Arc::new(
         harness_observe::event_store::EventStore::new_with_database_url(
@@ -140,7 +54,6 @@ async fn blocking_interceptor_fails_task() -> anyhow::Result<()> {
         agent,
         None,
         Default::default(),
-        skills,
         events,
         interceptors,
         req,
@@ -191,7 +104,6 @@ async fn spawn_blocking_panic_surfaces_error_and_event() -> anyhow::Result<()> {
     let store =
         TaskStore::open_with_database_url(&dir.path().join("tasks.db"), Some(&database_url))
             .await?;
-    let skills = Arc::new(RwLock::new(harness_skills::store::SkillStore::new()));
     let agent = CapturingAgent::new();
     let events = Arc::new(
         harness_observe::event_store::EventStore::new_with_database_url(
@@ -221,7 +133,6 @@ async fn spawn_blocking_panic_surfaces_error_and_event() -> anyhow::Result<()> {
         agent,
         None,
         Default::default(),
-        skills,
         events.clone(),
         vec![],
         req,
@@ -297,7 +208,6 @@ async fn execution_phase_is_set_on_initial_implementation_turn() -> anyhow::Resu
     let store =
         TaskStore::open_with_database_url(&dir.path().join("tasks.db"), Some(&database_url))
             .await?;
-    let skills = Arc::new(RwLock::new(harness_skills::store::SkillStore::new()));
     let events = Arc::new(
         harness_observe::event_store::EventStore::new_with_database_url(
             dir.path(),
@@ -326,7 +236,6 @@ async fn execution_phase_is_set_on_initial_implementation_turn() -> anyhow::Resu
         agent_clone,
         None,
         Default::default(),
-        skills,
         events,
         vec![],
         req,
@@ -363,7 +272,6 @@ async fn validation_phase_is_set_on_review_loop_turns() -> anyhow::Result<()> {
     let store =
         TaskStore::open_with_database_url(&dir.path().join("tasks.db"), Some(&database_url))
             .await?;
-    let skills = Arc::new(RwLock::new(harness_skills::store::SkillStore::new()));
     let events = Arc::new(
         harness_observe::event_store::EventStore::new_with_database_url(
             dir.path(),
@@ -396,7 +304,6 @@ async fn validation_phase_is_set_on_review_loop_turns() -> anyhow::Result<()> {
         agent_clone,
         None,
         legacy_hosted_bot_server_config(),
-        skills,
         events,
         vec![],
         req,

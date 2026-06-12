@@ -106,27 +106,6 @@ pub async fn handle_request(state: &AppState, req: RpcRequest) -> Option<RpcResp
             handlers::thread::turn_respond_approval(state, id, turn_id, request_id, decision).await,
         ),
 
-        // === Skills ===
-        Method::SkillCreate { name, content } => {
-            Some(handlers::skills::skill_create(state, id, name, content).await)
-        }
-        Method::SkillList { query } => Some(handlers::skills::skill_list(state, id, query).await),
-        Method::SkillGet { skill_id } => {
-            Some(handlers::skills::skill_get(state, id, skill_id).await)
-        }
-        Method::SkillDelete { skill_id } => {
-            Some(handlers::skills::skill_delete(state, id, skill_id).await)
-        }
-        Method::SkillGovernanceView { skill_id } => {
-            Some(handlers::skills::skill_governance_view(state, id, skill_id).await)
-        }
-        Method::SkillGovernanceHistory {
-            since,
-            until,
-            limit,
-        } => Some(handlers::skills::skill_governance_history(state, id, since, until, limit).await),
-        Method::SkillStale => Some(handlers::skills::skill_stale(state, id).await),
-
         // === Events / Metrics ===
         Method::EventLog { event } => Some(handlers::observe::event_log(state, id, *event).await),
         Method::EventQuery { filters } => {
@@ -148,17 +127,6 @@ pub async fn handle_request(state: &AppState, req: RpcRequest) -> Option<RpcResp
             files,
         } => Some(handlers::rules::rule_check(state, id, project_root, files).await),
 
-        // === GC ===
-        Method::GcRun { project_id } => Some(handlers::gc::gc_run(state, id, project_id).await),
-        Method::GcStatus => Some(handlers::gc::gc_status(state, id).await),
-        Method::GcDrafts { project_id } => {
-            Some(handlers::gc::gc_drafts(state, id, project_id).await)
-        }
-        Method::GcAdopt { draft_id } => Some(handlers::gc::gc_adopt(state, id, draft_id).await),
-        Method::GcReject { draft_id, reason } => {
-            Some(handlers::gc::gc_reject(state, id, draft_id, reason).await)
-        }
-
         // === ExecPlan ===
         Method::ExecPlanInit { spec, project_root } => {
             Some(handlers::exec::exec_plan_init(state, id, spec, project_root).await)
@@ -173,14 +141,6 @@ pub async fn handle_request(state: &AppState, req: RpcRequest) -> Option<RpcResp
         // === Task classification ===
         Method::TaskClassify { prompt, issue, pr } => {
             Some(handlers::classify::task_classify(id, prompt, issue, pr).await)
-        }
-
-        // === Learn feedback loop ===
-        Method::LearnRules { project_root } => {
-            Some(handlers::learn::learn_rules(state, id, project_root).await)
-        }
-        Method::LearnSkills { project_root } => {
-            Some(handlers::learn::learn_skills(state, id, project_root).await)
         }
 
         // === Health & Stats ===
@@ -201,10 +161,6 @@ pub async fn handle_request(state: &AppState, req: RpcRequest) -> Option<RpcResp
         }
 
         // === VibeGuard ===
-        Method::Preflight {
-            project_root,
-            task_description,
-        } => Some(handlers::preflight::preflight(state, id, project_root, task_description).await),
         Method::CrossReview {
             project_root,
             target,

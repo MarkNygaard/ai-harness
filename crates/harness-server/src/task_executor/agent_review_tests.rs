@@ -8,7 +8,7 @@ use harness_observe::event_store::EventStore;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tokio::time::Duration;
 
 struct SequenceAgent {
@@ -181,7 +181,6 @@ async fn reviewer_request_uses_read_only_network_sandbox() -> anyhow::Result<()>
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 1,
@@ -204,7 +203,6 @@ async fn reviewer_request_uses_read_only_network_sandbox() -> anyhow::Result<()>
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         Some(super::agent_review::ReviewHeadProbe::Static(Ok(
@@ -242,7 +240,6 @@ async fn claude_reviewer_request_uses_configured_sandbox() -> anyhow::Result<()>
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 1,
@@ -265,7 +262,6 @@ async fn claude_reviewer_request_uses_configured_sandbox() -> anyhow::Result<()>
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         None,
@@ -291,7 +287,6 @@ async fn unresolved_issues_after_max_rounds_fail_local_review() -> anyhow::Resul
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 1,
@@ -314,7 +309,6 @@ async fn unresolved_issues_after_max_rounds_fail_local_review() -> anyhow::Resul
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         None,
@@ -348,7 +342,6 @@ async fn final_impasse_round_does_not_push_unreviewed_fix() -> anyhow::Result<()
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 3,
@@ -384,7 +377,6 @@ async fn final_impasse_round_does_not_push_unreviewed_fix() -> anyhow::Result<()
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         None,
@@ -430,7 +422,6 @@ async fn changed_fix_round_requires_pr_head_advance() -> anyhow::Result<()> {
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 2,
@@ -457,7 +448,6 @@ async fn changed_fix_round_requires_pr_head_advance() -> anyhow::Result<()> {
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         None,
@@ -485,7 +475,6 @@ async fn changed_fix_round_rejects_false_noop_marker() -> anyhow::Result<()> {
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 2,
@@ -512,7 +501,6 @@ async fn changed_fix_round_rejects_false_noop_marker() -> anyhow::Result<()> {
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         None,
@@ -548,7 +536,6 @@ async fn noop_fix_round_ignores_validation_cache_artifacts() -> anyhow::Result<(
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 2,
@@ -578,7 +565,6 @@ async fn noop_fix_round_ignores_validation_cache_artifacts() -> anyhow::Result<(
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         None,
@@ -606,7 +592,6 @@ async fn noop_fix_round_rejects_validation_source_artifacts() -> anyhow::Result<
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 2,
@@ -636,7 +621,6 @@ async fn noop_fix_round_rejects_validation_source_artifacts() -> anyhow::Result<
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         None,
@@ -670,7 +654,6 @@ async fn malformed_reviewer_output_fails_local_review() -> anyhow::Result<()> {
     let task_id = TaskId::new();
     store.insert(&TaskState::new(task_id.clone())).await;
     let events = EventStore::new(dir.path()).await?;
-    let skills = RwLock::new(harness_skills::store::SkillStore::new());
     let config = harness_core::config::agents::AgentReviewConfig {
         enabled: true,
         max_rounds: 1,
@@ -693,7 +676,6 @@ async fn malformed_reviewer_output_fails_local_review() -> anyhow::Result<()> {
         "https://github.com/owner/repo/pull/1",
         "standard",
         &events,
-        &skills,
         &HashMap::new(),
         None,
         None,

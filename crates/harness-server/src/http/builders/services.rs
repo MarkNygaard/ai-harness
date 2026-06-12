@@ -87,7 +87,6 @@ pub(crate) async fn build_services(
         tasks.clone(),
         server.agent_registry.clone(),
         Arc::new(server.config.clone()),
-        engines.skills.clone(),
         events.clone(),
         interceptors.clone(),
         registry.workspace_mgr.clone(),

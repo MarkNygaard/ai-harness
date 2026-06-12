@@ -3,8 +3,8 @@ use super::*;
 mod helpers;
 mod spawn_classify_tests;
 mod spawn_decomposition_tests;
+mod spawn_lifecycle_tests;
 mod spawn_resume_tests;
-mod spawn_skills_tests;
 
 pub(super) fn tid(s: &str) -> harness_core::types::TaskId {
     harness_core::types::TaskId(s.to_string())
