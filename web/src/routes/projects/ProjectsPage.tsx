@@ -34,7 +34,7 @@ import {
   useSetProjectCacheCap,
 } from "@/lib/projects";
 import { ProjectLinearDialog } from "@/components/projects/ProjectLinearDialog";
-import type { Project } from "@/types/project";
+import type { Project, ProjectRepo } from "@/types/project";
 
 /** Display metadata for each per-project credential provider. */
 /** Keyed by credential *field* (field names are unique across providers). */
@@ -145,6 +145,23 @@ function ProjectRow({ project }: { project: Project }) {
               {project.toolchains.map((t) => (
                 <Badge key={t} variant="secondary" className="text-[10px]">
                   {t}
+                </Badge>
+              ))}
+            </div>
+          )}
+          {project.repos?.length > 0 && (
+            <div className="mt-1 flex flex-wrap gap-1">
+              <Badge variant="outline" className="text-[10px]">
+                multi-repo
+              </Badge>
+              {project.repos.map((r) => (
+                <Badge
+                  key={r.folder}
+                  variant="secondary"
+                  className="font-mono text-[10px]"
+                  title={`${r.url}${r.role ? ` — ${r.role}` : ""}`}
+                >
+                  {r.folder}
                 </Badge>
               ))}
             </div>
@@ -413,7 +430,22 @@ function RegisterForm() {
   const [defaultWorkflow, setDefaultWorkflow] = useState("");
   const [externalUrl, setExternalUrl] = useState("");
   const [toolchains, setToolchains] = useState("");
+  // Extra repos for a multi-repo project. Empty = single-repo (the Git URL
+  // above). Each row needs a url + folder; blank branch defaults to `main`.
+  const [repos, setRepos] = useState<ProjectRepo[]>([]);
   const [warning, setWarning] = useState<string | null>(null);
+
+  function addRepo() {
+    setRepos((r) => [...r, { url: "", base_branch: "", folder: "", role: "" }]);
+  }
+  function updateRepo(i: number, patch: Partial<ProjectRepo>) {
+    setRepos((r) =>
+      r.map((repo, j) => (j === i ? { ...repo, ...patch } : repo)),
+    );
+  }
+  function removeRepo(i: number) {
+    setRepos((r) => r.filter((_, j) => j !== i));
+  }
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -431,6 +463,15 @@ function RegisterForm() {
           .split(/[,\s]+/)
           .map((t) => t.trim())
           .filter(Boolean),
+        // Keep only rows with a url + folder; server defaults a blank branch.
+        repos: repos
+          .map((r) => ({
+            url: r.url.trim(),
+            base_branch: r.base_branch.trim(),
+            folder: r.folder.trim(),
+            role: r.role?.trim() || undefined,
+          }))
+          .filter((r) => r.url && r.folder),
       },
       {
         onSuccess: (res) => {
@@ -442,6 +483,7 @@ function RegisterForm() {
             setDefaultWorkflow("");
             setExternalUrl("");
             setToolchains("");
+            setRepos([]);
           }
         },
       },
@@ -531,6 +573,75 @@ function RegisterForm() {
               rebuild).
             </span>
           </label>
+
+          {/* Multi-repo: additional repos checked out alongside the Git URL. */}
+          <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                Additional repos (optional — multi-repo project)
+              </span>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={addRepo}
+              >
+                <IconPlus className="size-3.5" /> Add repo
+              </Button>
+            </div>
+            <span className="text-[10px] text-muted-foreground">
+              Leave empty for a single-repo project. Add repos to span e.g. a
+              frontend + backend — each is checked out into its folder, and a
+              run works and opens a PR across whichever repos it changes. The
+              Git URL above is the primary repo.
+            </span>
+            {repos.map((repo, i) => (
+              <div
+                key={i}
+                className="flex flex-col gap-2 border-t border-border/50 pt-2"
+              >
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    value={repo.folder}
+                    onChange={(e) => updateRepo(i, { folder: e.target.value })}
+                    placeholder="folder (e.g. backend)"
+                    className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <input
+                    value={repo.base_branch}
+                    onChange={(e) =>
+                      updateRepo(i, { base_branch: e.target.value })
+                    }
+                    placeholder="base branch (default main)"
+                    className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+                  />
+                </div>
+                <input
+                  value={repo.url}
+                  onChange={(e) => updateRepo(i, { url: e.target.value })}
+                  placeholder="https://github.com/you/backend.git"
+                  className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    value={repo.role ?? ""}
+                    onChange={(e) => updateRepo(i, { role: e.target.value })}
+                    placeholder="role (optional, e.g. orders + payments API)"
+                    className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 text-[12px] outline-none focus:ring-2 focus:ring-ring"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => removeRepo(i)}
+                  >
+                    <IconTrash className="size-3.5" /> Remove
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div className="flex items-center gap-2">
             <Button
               type="submit"
