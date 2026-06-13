@@ -1,5 +1,4 @@
 use crate::task_runner;
-use dashmap::DashMap;
 use harness_protocol::notifications::RpcNotification;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -60,10 +59,6 @@ pub struct CoreServices {
     pub home_dir: std::path::PathBuf,
     pub tasks: Arc<task_runner::TaskStore>,
     pub thread_db: Option<crate::thread_db::ThreadDb>,
-    pub plan_db: Option<crate::plan_db::PlanDb>,
-    /// In-memory plan cache hydrated from `plan_db` on startup.
-    /// Write-through: every mutation must also persist via `plan_db`.
-    pub plan_cache: Arc<DashMap<String, harness_exec::plan::ExecPlan>>,
     pub issue_workflow_store: Option<Arc<harness_workflow::issue_lifecycle::IssueWorkflowStore>>,
     pub project_workflow_store:
         Option<Arc<harness_workflow::project_lifecycle::ProjectWorkflowStore>>,

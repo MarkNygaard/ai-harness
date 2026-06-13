@@ -1300,7 +1300,6 @@ dependencies = [
  "harness-agents",
  "harness-core",
  "harness-dag",
- "harness-exec",
  "harness-observe",
  "harness-rules",
  "harness-runner",
@@ -1352,19 +1351,6 @@ dependencies = [
  "serde_yaml",
  "thiserror 2.0.18",
  "tokio",
-]
-
-[[package]]
-name = "harness-exec"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "harness-core",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "uuid",
 ]
 
 [[package]]
@@ -1484,7 +1470,6 @@ dependencies = [
  "harness-agents",
  "harness-core",
  "harness-dag",
- "harness-exec",
  "harness-observe",
  "harness-persist",
  "harness-protocol",
@@ -1533,7 +1518,6 @@ dependencies = [
  "dashmap",
  "futures",
  "harness-core",
- "harness-exec",
  "serde",
  "serde_json",
  "sha2",

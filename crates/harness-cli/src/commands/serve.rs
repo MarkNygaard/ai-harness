@@ -258,26 +258,19 @@ pub async fn run(
     server.startup_projects = parsed_projects;
     server.startup_default_project = startup_default_project;
 
-    let effective_transport = match transport.as_deref() {
-        Some("stdio") => harness_core::config::server::Transport::Stdio,
-        Some("http") => harness_core::config::server::Transport::Http,
-        Some("web_socket") => harness_core::config::server::Transport::WebSocket,
-        Some(other) => anyhow::bail!("unknown transport: {other}"),
-        None => serve_config.server.transport,
-    };
-
-    match effective_transport {
-        harness_core::config::server::Transport::Stdio => server.serve_stdio().await?,
-        harness_core::config::server::Transport::Http
-        | harness_core::config::server::Transport::WebSocket => {
-            let addr = if let Some(p) = port {
-                format!("127.0.0.1:{p}").parse()?
-            } else {
-                serve_config.server.http_addr
-            };
-            Arc::new(server).serve_http(addr).await?
-        }
+    // Only HTTP transport remains (the stdio / websocket JSON-RPC data plane was
+    // removed); `--transport http` is accepted for back-compat, anything else errors.
+    match transport.as_deref() {
+        None | Some("http") => {}
+        Some(other) => anyhow::bail!("unsupported transport: {other} (only `http` is supported)"),
     }
+
+    let addr = if let Some(p) = port {
+        format!("127.0.0.1:{p}").parse()?
+    } else {
+        serve_config.server.http_addr
+    };
+    Arc::new(server).serve_http(addr).await?;
 
     Ok(())
 }

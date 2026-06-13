@@ -44,8 +44,6 @@ use std::collections::HashMap;
 use tokio::time::Instant;
 
 pub(crate) use run_task::run_task;
-// Re-export so existing call sites in handlers/ don't need updating.
-pub(crate) use turn_lifecycle::run_turn_lifecycle;
 pub(crate) use validation_gate::run_test_gate;
 
 /// Extract tool list from a capability profile, returning an error if the
