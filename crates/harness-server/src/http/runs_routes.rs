@@ -927,7 +927,7 @@ fn assemble_ab_evidence(runs: &[harness_persist::RunDetail]) -> String {
             s.push_str(&format!("\nPlan it was built against:\n{truncated}\n"));
         }
         // Include each step's provider/model so the judge can see which steps
-        // (e.g. the late `gpt-review-fix` / `sonnet-final-review` reviewers) ran
+        // (e.g. the late `gpt-review-fix` / `sonnet-review-fix` reviewers) ran
         // on which model — needed to weigh how much the shared reviewers shaped
         // each arm versus the swapped implementer.
         s.push_str("\nSteps (id [status] — provider/model):\n");

@@ -11,7 +11,7 @@ description: |
   comparison.
 
   The judge then does a SECOND analysis: how much did the shared late-stage
-  reviewers (`gpt-review-fix`, `sonnet-final-review`) shape each arm? Those steps
+  reviewers (`gpt-review-fix`, `sonnet-review-fix`) shape each arm? Those steps
   run on the SAME models in both arms, so a heavy review contribution is not the
   swapped implementer's credit — and it signals the pipeline's premise (a cheap
   implementer does the bulk; reviewers only polish) is breaking down.
@@ -58,7 +58,7 @@ nodes:
       THEN do a second, separate analysis — the review-burden check:
       - This pipeline's premise is that a cheap implementer does the bulk of the
         work and the late reviewers only polish. The final review steps
-        (`gpt-review-fix`, then `sonnet-final-review`) run on the SAME models in
+        (`gpt-review-fix`, then `sonnet-review-fix`) run on the SAME models in
         both arms (see each step's provider/model in the evidence), so whatever
         THEY contributed is not the swapped implementer's credit.
       - Attribute the diff: inspect the PR's commits with
@@ -66,7 +66,7 @@ nodes:
         repos/{owner}/{repo}/commits/{sha}` for per-commit additions/deletions if
         useful). Commit authors encode the step + model that made them, e.g.
         `gpt-review-fix (openai-codex/gpt-5.5)` and
-        `sonnet-final-review (claude/sonnet)` — use that to separate the late
+        `sonnet-review-fix (claude/sonnet)` — use that to separate the late
         reviewers' commits from the implement / early-review commits. If authors
         are a single generic identity (older runs predate per-step attribution),
         fall back to commit messages and say your confidence is lower.
@@ -116,7 +116,7 @@ nodes:
           description: "2–4 sentences justifying the verdict, citing concrete differences."
         review_share_a:
           type: integer
-          description: "Arm A: % (0–100) of the final change produced by the shared late reviewers (gpt-review-fix, sonnet-final-review) rather than the implementer."
+          description: "Arm A: % (0–100) of the final change produced by the shared late reviewers (gpt-review-fix, sonnet-review-fix) rather than the implementer."
         review_share_b:
           type: integer
           description: "Arm B: % (0–100) of the final change produced by the shared late reviewers rather than the implementer."
