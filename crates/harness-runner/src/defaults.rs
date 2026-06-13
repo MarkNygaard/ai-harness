@@ -199,7 +199,7 @@ mod tests {
             node("explore").when.as_deref(),
             Some("$gather-feedback.output.has_feedback == 'true'")
         );
-        assert_eq!(deps("final-validate"), vec!["sonnet-final-review"]);
+        assert_eq!(deps("final-validate"), vec!["sonnet-review-fix"]);
         assert!(
             matches!(&node("final-validate").kind, harness_dag::NodeKind::Command(name) if name == "validate")
         );
