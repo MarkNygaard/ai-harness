@@ -1,9 +1,9 @@
 # Deploying ai-harness to `home-ops` — handoff brief
 
 This is a self-contained brief for the **home-ops cluster AI**. It describes how
-to add `ai-harness` (the control plane) to the Flux GitOps repo. It mirrors the
-existing **`archon`** app (`kubernetes/apps/automation/archon/`), which is the
-closest analog (custom ghcr image, CloudNativePG, Envoy route, SOPS secret).
+to add `ai-harness` (the control plane) to the Flux GitOps repo. Model it on the
+closest existing analog under `kubernetes/apps/automation/` — a custom-image app
+that uses a ghcr image, CloudNativePG, an Envoy route, and a SOPS secret.
 
 > Scope note: this deploys the **control plane only**. Workflow runs currently
 > execute **in-process inside this pod** (no per-run Job pods yet — that's a later
@@ -31,7 +31,7 @@ closest analog (custom ghcr image, CloudNativePG, Envoy route, SOPS secret).
 
 ## 3. Files to create — `kubernetes/apps/automation/ai-harness/`
 
-Mirror `archon`. Adapt these to current conventions/versions.
+Mirror the closest existing analog app. Adapt these to current conventions/versions.
 
 ### `ks.yaml`
 ```yaml
@@ -60,7 +60,7 @@ spec:
 ```
 Then add `./ai-harness/ks.yaml` to `kubernetes/apps/automation/kustomization.yaml`.
 
-### `app/ocirepository.yaml` — the bjw-s app-template chart (copy archon's, name `ai-harness`).
+### `app/ocirepository.yaml` — the bjw-s app-template chart (copy the analog app's, name `ai-harness`).
 
 ### `app/helmrelease.yaml`
 ```yaml
@@ -151,7 +151,7 @@ harness **UI** (encrypted at rest in Postgres under `HARNESS_SECRET_KEY`). The
 only secrets in SOPS are the DB URL, this encryption key, and an optional API
 token — all infra, never provider tokens.
 
-### `app/kustomization.yaml` — list the resources above (copy archon's).
+### `app/kustomization.yaml` — list the resources above (copy the analog app's).
 
 ## 4. Postgres — database + role on the existing CNPG cluster
 
@@ -179,8 +179,8 @@ spec:
   login: true
 ```
 Otherwise create the role+db with a one-off `psql` against `postgres-rw` and put
-the password in the secret above. (Match whatever pattern `archon`'s `archon` db
-uses today.)
+the password in the secret above. (Match whatever pattern the existing analog
+app's database uses today.)
 
 ## 5. Verify
 

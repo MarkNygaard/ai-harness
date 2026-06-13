@@ -14,7 +14,8 @@ per-project **toolchains on demand** via `mise`. Originally seeded from
 [majiayu000/harness](https://github.com/majiayu000/harness) (MIT); substantial
 portions of its runtime are still used.
 
-- Authoritative design: [docs/PLAN.md](docs/PLAN.md), [docs/PHASES.md](docs/PHASES.md).
+- The current code is authoritative for design; the architecture/glossary below
+  is the in-repo overview.
 - Authoring workflow DAGs (node types, `when:`/`$node.output`/`output_format`,
   `trigger_rule`, good-practices): [docs/authoring-workflows.md](docs/authoring-workflows.md).
 - Inherited design specs in [docs/reference/](docs/reference/) are **background

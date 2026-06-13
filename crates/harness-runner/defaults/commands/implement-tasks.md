@@ -290,7 +290,7 @@ No issues encountered.
 
 ## Next Step
 
-Continue to `archon-validate` for full validation suite.
+Continue to `validate` for full validation suite.
 ```
 
 **PHASE_4_CHECKPOINT:**
@@ -338,7 +338,7 @@ Progress written to: `$ARTIFACTS_DIR/implementation.md`
 
 ### Next Step
 
-Proceed to `archon-validate` for full validation (lint, build, integration tests).
+Proceed to `validate` for full validation (lint, build, integration tests).
 ```
 
 ---

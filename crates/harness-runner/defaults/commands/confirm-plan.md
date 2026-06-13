@@ -43,7 +43,7 @@ If not found, STOP with error:
 ```
 ❌ Plan context not found at $ARTIFACTS_DIR/plan-context.md
 
-Run archon-plan-setup first.
+Run plan-setup first.
 ```
 
 ### 1.2 Extract Verification Targets
@@ -257,10 +257,10 @@ No issues found. Plan research is valid.
 ## Next Step
 
 {If PROCEED or PROCEED WITH CAUTION:}
-Continue to `archon-implement-tasks` to execute the plan.
+Continue to `implement-tasks` to execute the plan.
 
 {If STOP:}
-Revise the plan to address blockers, then re-run `archon-plan-setup`.
+Revise the plan to address blockers, then re-run `plan-setup`.
 ```
 
 **PHASE_5_CHECKPOINT:**
@@ -303,7 +303,7 @@ Confirmation written to: `$ARTIFACTS_DIR/plan-confirmation.md`
 
 ### Next Step
 
-Proceed to `archon-implement-tasks` to execute the plan.
+Proceed to `implement-tasks` to execute the plan.
 ```
 
 ### If Blocked:
@@ -325,7 +325,7 @@ The plan references files or patterns that no longer exist. Options:
 
 1. **Update the plan** to reflect current codebase state
 2. **Restore missing files** if they were accidentally deleted
-3. **Re-run planning** with `/archon-plan` to generate a fresh plan
+3. **Re-run planning** with `/plan` to generate a fresh plan
 
 ### Artifact
 

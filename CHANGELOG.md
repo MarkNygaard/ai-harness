@@ -10,5 +10,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Initial work. `ai-harness` is seeded from
 [majiayu000/harness](https://github.com/majiayu000/harness) (MIT) and is being
 adapted into a Kubernetes-native AI coding harness with Linear triggers,
-user-authored workflow DAGs, and UI-managed toolchain provisioning. See
-[docs/PLAN.md](docs/PLAN.md) and [docs/PHASES.md](docs/PHASES.md).
+user-authored workflow DAGs, and UI-managed toolchain provisioning.

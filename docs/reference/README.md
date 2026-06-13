@@ -7,9 +7,9 @@ storage layer, agent/codex adapters, multi-project model, backlog polling, and
 project cache.
 
 They describe majiayu's design as of the seed copy and are **not** authoritative
-for `ai-harness`. The authoritative plan lives in [../PLAN.md](../PLAN.md) and
-[../PHASES.md](../PHASES.md). Treat anything here as background that may have
-drifted; verify against the current code before relying on it.
+for `ai-harness`. The current code (and the top-level `AGENTS.md`) is the
+authoritative reference. Treat anything here as background that may have drifted;
+verify against the current code before relying on it.
 
 majiayu's project-history material (postmortems, GC reports, audits, issue
 write-ups, bug/todo notes, validation evidence) was removed during the Phase 0

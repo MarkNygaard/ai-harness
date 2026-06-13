@@ -678,19 +678,19 @@ nodes:
          `gh pr comment <number> --body "<comment body>"`
 
       2. Set a PR label matching the verdict:
-         - APPROVE → `archon-approved`
-         - REQUEST_CHANGES → `archon-request-changes`
-         - NEEDS_DISCUSSION → `archon-needs-discussion`
+         - APPROVE → `harness-approved`
+         - REQUEST_CHANGES → `harness-request-changes`
+         - NEEDS_DISCUSSION → `harness-needs-discussion`
 
          Apply with:
-         `gh pr edit <number> --add-label "archon-approved"`
+         `gh pr edit <number> --add-label "harness-approved"`
 
       For a multi-repo change, loop `.pr-list`: `cd "$folder"` then post the
       comment + add the label using that entry's PR number. (Fixes you push go
       to whichever repo folder the issue lives in.)
 
          If the label doesn't exist yet, create it first:
-         `gh label create archon-approved --color "0E8A16" --description "Sonnet sign-off approved" 2>/dev/null || true`
+         `gh label create harness-approved --color "0E8A16" --description "Sonnet sign-off approved" 2>/dev/null || true`
          Use color `0E8A16` (green) for approved, `D73A4A` (red) for
          request-changes, `FBCA04` (yellow) for needs-discussion.
 
@@ -819,7 +819,7 @@ nodes:
       ```
       ## Workflow complete — `idea-to-pr`
 
-      **Sonnet verdict**: <archon-approved | archon-request-changes | archon-needs-discussion>
+      **Sonnet verdict**: <harness-approved | harness-request-changes | harness-needs-discussion>
         (see Sonnet 4.6 sign-off comment above for details)
 
       **Diff**: +<additions> / -<deletions>
@@ -832,7 +832,7 @@ nodes:
 
       Rules:
       - One short comment. No "review agents have not yet run" wording —
-        they ran. No "next steps" / "@archon" suggestion blocks.
+        they ran. No "next steps" suggestion blocks.
       - No deviations table, no validation table, no follow-up issue
         suggestions. Sonnet's comment covers those if needed.
       - If commit counts can't be cleanly inferred from prefixes, just

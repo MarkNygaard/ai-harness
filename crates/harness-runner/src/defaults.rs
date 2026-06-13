@@ -1,6 +1,5 @@
 //! Built-in default workflows and commands, compiled into the binary so a fresh
-//! project gets the standard pipeline without copying any files — the way Archon
-//! ships `.archon/{workflows,commands}/defaults`.
+//! project gets the standard pipeline without copying any files.
 //!
 //! Resolution order is **project-first**: a project's
 //! `.harness/workflows/<name>.yaml` or `.harness/commands/<name>.md` shadows the

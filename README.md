@@ -59,8 +59,6 @@ under Kubernetes *or* plain Docker.
 - **[AGENTS.md](AGENTS.md)** — the canonical guide for humans and agents:
   build/verify commands, architecture glossary, server-operation & worktree
   rules, and the PR workflow. **Start here.**
-- [docs/PLAN.md](docs/PLAN.md) — architecture & design decisions.
-- [docs/PHASES.md](docs/PHASES.md) — phased build roadmap.
 - [docs/authoring-workflows.md](docs/authoring-workflows.md) — authoring
   workflow DAGs (node types, `when:` / `$node.output` / `output_format`,
   `trigger_rule`, and good practices).

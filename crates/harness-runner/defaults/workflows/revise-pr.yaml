@@ -525,15 +525,15 @@ nodes:
          `gh pr comment <number> --body "<comment body>"`
 
       2. Set a PR label matching the verdict:
-         - APPROVE -> `archon-approved`
-         - REQUEST_CHANGES -> `archon-request-changes`
-         - NEEDS_DISCUSSION -> `archon-needs-discussion`
+         - APPROVE -> `harness-approved`
+         - REQUEST_CHANGES -> `harness-request-changes`
+         - NEEDS_DISCUSSION -> `harness-needs-discussion`
 
          Apply with:
-         `gh pr edit <number> --add-label "archon-approved"`
+         `gh pr edit <number> --add-label "harness-approved"`
 
          If the label doesn't exist yet, create it first:
-         `gh label create archon-approved --color "0E8A16" --description "Sonnet sign-off approved" 2>/dev/null || true`
+         `gh label create harness-approved --color "0E8A16" --description "Sonnet sign-off approved" 2>/dev/null || true`
          Use color `0E8A16` (green) for approved, `D73A4A` (red) for
          request-changes, `FBCA04` (yellow) for needs-discussion.
 
