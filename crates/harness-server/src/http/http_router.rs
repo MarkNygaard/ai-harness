@@ -1,5 +1,4 @@
 use axum::{
-    extract::DefaultBodyLimit,
     middleware,
     routing::{get, post},
     Extension, Router,
@@ -7,13 +6,9 @@ use axum::{
 use std::sync::Arc;
 
 use super::{
-    auth, billing_routes, categories_routes, credentials_routes, geo_routes,
-    get_issue_workflow_by_issue, get_issue_workflow_by_pr, get_project_workflow_by_project,
-    get_task, get_task_artifacts, get_task_prompts, get_task_proof, get_workflow_runtime_tree,
-    github_webhook, health_check, ingest_signal, intake_status, linear_routes,
-    linear_source_routes, list_tasks, mcp_routes, password_reset, project_authoring_routes,
-    project_queue_stats, runs_routes, state::AppState, stream_task_sse, task_mutation_routes,
-    task_routes, workflows_routes,
+    auth, billing_routes, categories_routes, credentials_routes, geo_routes, health_check,
+    linear_routes, linear_source_routes, mcp_routes, password_reset, project_authoring_routes,
+    runs_routes, state::AppState, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -71,116 +66,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/favicon.ico", get(crate::dashboard::favicon))
         .route("/health", get(health_check))
-        .route("/tasks", post(task_routes::create_task))
-        .route("/tasks", get(list_tasks))
-        .route("/tasks/batch", post(task_routes::create_tasks_batch))
-        .route("/tasks/{id}", get(get_task))
-        .route("/tasks/{id}/cancel", post(task_routes::cancel_task))
-        .route("/tasks/{id}/merge", post(task_mutation_routes::merge_task))
-        .route("/tasks/{id}/artifacts", get(get_task_artifacts))
-        .route("/tasks/{id}/prompts", get(get_task_prompts))
-        .route("/tasks/{id}/proof", get(get_task_proof))
-        .route("/tasks/{id}/stream", get(stream_task_sse))
-        .route(
-            "/projects",
-            post(crate::handlers::projects::register_project)
-                .get(crate::handlers::projects::list_projects),
-        )
-        .route(
-            "/projects/{id}",
-            get(crate::handlers::projects::get_project)
-                .delete(crate::handlers::projects::delete_project),
-        )
-        .route("/projects/queue-stats", get(project_queue_stats))
-        .route("/api/dashboard", get(crate::handlers::dashboard::dashboard))
-        .route("/api/overview", get(crate::handlers::overview::overview))
-        .route("/api/worktrees", get(crate::handlers::worktrees::worktrees))
-        .route(
-            "/api/operator-snapshot",
-            get(crate::handlers::operator_snapshot::operator_snapshot),
-        )
-        .route("/api/intake", get(intake_status))
-        .route(
-            "/api/workflows/issues/by-issue",
-            get(get_issue_workflow_by_issue),
-        )
-        .route("/api/workflows/issues/by-pr", get(get_issue_workflow_by_pr))
-        .route(
-            "/api/workflows/projects/by-project",
-            get(get_project_workflow_by_project),
-        )
-        .route(
-            "/api/workflows/runtime/tree",
-            get(get_workflow_runtime_tree),
-        )
-        .route(
-            "/api/workflows/runtime/merge",
-            post(task_mutation_routes::merge_workflow_runtime),
-        )
-        .route(
-            "/api/workflows/runtime/cancel",
-            post(task_mutation_routes::cancel_workflow_runtime),
-        )
-        .route(
-            "/api/runtime-hosts",
-            get(crate::handlers::runtime_hosts::list_runtime_hosts),
-        )
-        .route(
-            "/api/runtime-hosts/register",
-            post(crate::handlers::runtime_hosts::register_runtime_host),
-        )
-        .route(
-            "/api/runtime-hosts/{host_id}/heartbeat",
-            post(crate::handlers::runtime_hosts::heartbeat_runtime_host),
-        )
-        .route(
-            "/api/runtime-hosts/{host_id}/deregister",
-            post(crate::handlers::runtime_hosts::deregister_runtime_host),
-        )
-        .route(
-            "/api/runtime-hosts/{host_id}/tasks/claim",
-            post(crate::handlers::runtime_hosts::claim_task_for_runtime_host),
-        )
-        .route(
-            "/api/runtime-hosts/{host_id}/runtime-jobs/claim",
-            post(crate::handlers::runtime_hosts::claim_runtime_job_for_runtime_host),
-        )
-        .route(
-            "/api/runtime-hosts/{host_id}/runtime-jobs/{runtime_job_id}/complete",
-            post(crate::handlers::runtime_hosts::complete_runtime_job_for_runtime_host),
-        )
-        .route(
-            "/api/runtime-hosts/{host_id}/projects",
-            get(crate::handlers::runtime_project_cache::list_runtime_host_projects),
-        )
-        .route(
-            "/api/runtime-hosts/{host_id}/projects/sync",
-            post(crate::handlers::runtime_project_cache::sync_runtime_host_projects),
-        )
-        .route(
-            "/api/token-usage",
-            get(crate::handlers::token_usage::token_usage),
-        )
-        .route(
-            "/webhook",
-            post(github_webhook).layer(DefaultBodyLimit::max(
-                state.core.server.config.server.max_webhook_body_bytes,
-            )),
-        )
-        .route(
-            "/webhook/feishu",
-            post(crate::intake::feishu::feishu_webhook).layer(DefaultBodyLimit::max(
-                state.core.server.config.server.max_webhook_body_bytes,
-            )),
-        )
-        .route(
-            "/signals",
-            post(ingest_signal).layer(DefaultBodyLimit::max(
-                state.core.server.config.server.max_webhook_body_bytes,
-            )),
-        )
         .route("/auth/reset-password", post(password_reset))
-        .route("/reconcile", post(crate::handlers::reconcile::handle))
         // ── Runs API (harness-dag execution model) ──────────────────────────
         // Under /api so the SPA can own `/runs/{id}` as a client route.
         .route(

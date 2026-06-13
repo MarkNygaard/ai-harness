@@ -8,7 +8,6 @@ use std::sync::{Arc, Mutex};
 use tracing_subscriber::fmt::writer::MakeWriter;
 
 mod exec;
-mod reconcile;
 mod serve;
 mod status;
 
@@ -152,17 +151,6 @@ pub enum Command {
         /// Print raw combined JSON instead of a compact text summary.
         #[arg(long)]
         json: bool,
-    },
-
-    /// Reconcile harness task state against GitHub PR/issue state
-    Reconcile {
-        /// Report transitions without applying them
-        #[arg(long)]
-        dry_run: bool,
-        /// Deprecated: reconciliation uses each task's stored project root;
-        /// passing this flag returns an error.
-        #[arg(long)]
-        project: Option<PathBuf>,
     },
 }
 
@@ -781,10 +769,6 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             json,
         } => {
             status::run(&config, url, project_id, runtime_limit, json).await?;
-        }
-
-        Command::Reconcile { dry_run, project } => {
-            reconcile::run(dry_run, project, &config).await?;
         }
     }
 

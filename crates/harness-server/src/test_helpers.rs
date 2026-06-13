@@ -1,8 +1,5 @@
 use std::path::PathBuf;
-use std::sync::{
-    atomic::{AtomicBool, AtomicU64},
-    Arc, Mutex, OnceLock,
-};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use harness_core::db::{pg_open_pool, pg_schema_for_path, resolve_database_url};
@@ -58,7 +55,7 @@ impl Drop for HomeGuard {
     }
 }
 
-use crate::{http::AppState, server::HarnessServer, thread_manager::ThreadManager};
+use crate::{http::AppState, server::HarnessServer};
 use harness_agents::registry::AgentRegistry;
 use harness_core::config::HarnessConfig;
 
@@ -204,54 +201,11 @@ async fn make_state_inner(
     let db_setup_guard = acquire_db_state_guard().await;
     let database_url = ensure_test_database_url_override()?;
     config.server.database_url = Some(database_url.clone());
-    let server = Arc::new(HarnessServer::new(
-        config,
-        ThreadManager::new(),
-        agent_registry,
-    ));
+    let server = Arc::new(HarnessServer::new(config, agent_registry));
     let password_reset_rate_limit = server.config.server.password_reset_rate_limit_per_hour;
-    let tasks = crate::task_runner::TaskStore::open_with_database_url(
-        &harness_core::config::dirs::default_db_path(dir, "tasks"),
-        Some(&database_url),
-    )
-    .await?;
     let events = Arc::new(
         harness_observe::event_store::EventStore::new_with_database_url(dir, Some(&database_url))
             .await?,
-    );
-    let thread_db = crate::thread_db::ThreadDb::open_with_database_url(
-        &harness_core::config::dirs::default_db_path(dir, "threads"),
-        Some(&database_url),
-    )
-    .await?;
-    let (notification_tx, _) = tokio::sync::broadcast::channel(64);
-    let task_queue = Arc::new(crate::task_queue::TaskQueue::new(&Default::default()));
-
-    // Service layer — use concrete defaults backed by the same infrastructure.
-    let project_svc = crate::services::project::DefaultProjectService::new(
-        // Tests that don't need a registry still get a lightweight one.
-        crate::project_registry::ProjectRegistry::open_with_database_url(
-            &harness_core::config::dirs::default_db_path(dir, "projects"),
-            Some(&database_url),
-        )
-        .await?,
-        project_root.to_path_buf(),
-    );
-    let task_svc = crate::services::task::DefaultTaskService::new(tasks.clone());
-    let execution_svc = crate::services::execution::DefaultExecutionService::new(
-        tasks.clone(),
-        server.agent_registry.clone(),
-        Arc::new(server.config.clone()),
-        events.clone(),
-        vec![],
-        None,
-        task_queue.clone(),
-        task_queue.clone(),
-        None,
-        None,
-        None,
-        None,
-        vec![],
     );
     drop(db_setup_guard);
 
@@ -262,59 +216,17 @@ async fn make_state_inner(
             home_dir: std::env::var("HOME")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| project_root.to_path_buf()),
-            tasks,
-            thread_db: Some(thread_db),
-            issue_workflow_store: None,
-            project_workflow_store: None,
-            workflow_runtime_store: None,
-            project_registry: None,
-            runtime_state_store: None,
-            q_values: None,
-            maintenance_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        },
-        engines: crate::http::EngineServices {
-            rules: Default::default(),
         },
         observability: crate::http::ObservabilityServices {
             events,
-            signal_rate_limiter: Arc::new(crate::http::rate_limit::SignalRateLimiter::new(100)),
             password_reset_rate_limiter: Arc::new(
                 crate::http::rate_limit::PasswordResetRateLimiter::new(password_reset_rate_limit),
             ),
-            review_store: None,
         },
-        concurrency: crate::http::ConcurrencyServices {
-            task_queue,
-            review_task_queue: Arc::new(crate::task_queue::TaskQueue::new(&Default::default())),
-            workspace_mgr: None,
+        notifications: crate::http::NotificationServices {
+            ws_shutdown_tx: tokio::sync::broadcast::channel(1).0,
         },
         #[cfg(test)]
         _db_state_guard: None,
-        runtime_hosts: Arc::new(crate::runtime_hosts::RuntimeHostManager::new()),
-        runtime_project_cache: Arc::new(
-            crate::runtime_project_cache::RuntimeProjectCacheManager::new(),
-        ),
-        runtime_state_persist_lock: tokio::sync::Mutex::new(()),
-        runtime_state_dirty: std::sync::atomic::AtomicBool::new(false),
-        notifications: crate::http::NotificationServices {
-            notification_tx,
-            notification_lagged_total: Arc::new(AtomicU64::new(0)),
-            notification_lag_log_every: 1,
-            notify_tx: None,
-            initializing: Arc::new(AtomicBool::new(true)),
-            initialized: Arc::new(AtomicBool::new(true)),
-            ws_shutdown_tx: tokio::sync::broadcast::channel(1).0,
-        },
-        interceptors: vec![],
-        startup_statuses: vec![],
-        degraded_subsystems: vec![],
-        intake: crate::http::IntakeServices {
-            feishu_intake: None,
-            github_pollers: vec![],
-            completion_callback: None,
-        },
-        project_svc,
-        task_svc,
-        execution_svc,
     })
 }
