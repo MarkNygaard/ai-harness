@@ -407,144 +407,71 @@ nodes:
 
       When done, output: <promise>GPT-REVIEW-DONE</promise>
 
-  # 12. Third model-diverse review pass — final sign-off with verdict label.
-  - id: sonnet-final-review
+  # 12. Third model-diverse review-and-fix pass — like gpt-review-fix, on a
+  #     different model. Reviews and fixes; posts no comment and sets no label.
+  - id: sonnet-review-fix
     category: validation
     depends_on: [gpt-review-fix]
     provider: claude
     model: sonnet
     context: fresh
     prompt: |
-      You are the third model-diverse review pass on a PR revision that has been:
-      1. Planned (strategic planning agent)
-      2. Implemented (implementation agent)
-      3. Self-reviewed up to 3 iterations, fix-and-push each round
-      4. Reviewed with a second-pass agent that also pushed fixes
-
-      You bring a different training-data / bias profile than the two
-      earlier reviewers — your job is to catch what they rationalized
-      or missed, fix what's concretely fixable, and surface judgment-
-      call questions for the human.
+      You are the third, model-diverse review-and-fix pass on a PR revision
+      that has already been planned, implemented, self-reviewed (kimi, up to 3
+      rounds), and reviewed by a second model (gpt) that pushed its own fixes.
+      You bring a different training-data / bias profile than the two earlier
+      reviewers — catch what they rationalized or missed, and FIX what is
+      concretely fixable.
 
       ## Read the change set first
 
       1. `gh pr view --json title,body,baseRefName,number` — note the PR number.
-      2. `git diff origin/$resolve-pr.output.base...HEAD` — full diff at HEAD with all
-         prior fixes applied.
+      2. `git diff origin/$resolve-pr.output.base...HEAD` — full diff at HEAD with
+         all prior fixes applied.
       3. `git log --oneline origin/$resolve-pr.output.base..HEAD` — paper trail of
-         self-review summaries and second-pass fix commits.
+         self-review summaries and second-pass fix commits; focus on what is
+         still open.
 
-      ## What to fix vs flag
+      Look for issues two prior review passes tend to rationalize or miss:
+      - Subtle logic bugs (off-by-one, boundary conditions, null/undefined)
+      - Race conditions, idempotency gaps in async code or DB writes
+      - Performance: N+1 queries, unbounded loops, large in-memory payloads
+      - Security: injection, XSS, missing auth checks, PII in logs, secrets
+      - API design: inconsistent error shapes, leaky abstractions, breaking
+        changes that are not called out
+      - Test honesty: tests pin real invariants, not happy paths only
+      - Upstream guardrail compliance: `CLAUDE.md` / `AGENTS.md` is auto-loaded
+        into your context. Verify the upstream agents respected its rules — no
+        `--no-verify`, no migrations executed, no scope-violating commands, no
+        lockfile churn unrelated to the change.
 
-      Classify every finding as one of:
+      For each genuine in-scope issue you find, FIX IT directly:
+      1. Edit the relevant file(s).
+      2. Run the project's scoped verify chain — see `CLAUDE.md` / `AGENTS.md`
+         for the commands; use the narrowest scope that covers the change.
+      3. Commit with a conventional-commit message and push to the same branch.
 
-      - **Concrete fixable bug** (off-by-one, null/undefined, missing
-        try/catch, broken test, dead branch, etc.): FIX IT.
-        - Edit the file(s)
-        - Run the project's scoped verify chain — see `CLAUDE.md` /
-          `AGENTS.md` for the commands. Use the narrowest scope that
-          covers the change.
-        - Commit with a conventional-commit message and push.
-        - Universal AI-agent rules: do NOT skip commit hooks, do NOT
-          use `--no-verify`, do NOT execute database / schema migrations
-          (`prisma migrate`, `sqlx migrate run`, etc.) — edit the
-          schema + SQL only, flag the migration for the human. Follow
-          additional project-specific prohibitions in `CLAUDE.md` /
-          `AGENTS.md`.
+      Universal rules: do NOT skip commit hooks, do NOT use `--no-verify`, do
+      NOT execute database / schema migrations (`prisma migrate`,
+      `sqlx migrate run`, etc.) — edit the schema + SQL only and flag the
+      migration for the human in your output.
 
-      - **Judgment-call concern** (scope ambiguity, architectural risk,
-        "is X the right approach"): do NOT touch the code. Surface it
-        in the summary comment for the human.
+      If a finding is fixable but you are not confident your fix is correct, or
+      it is a judgment call (scope ambiguity, architectural risk), do NOT touch
+      the code — flag it in your output for the human instead.
 
-      If a finding is fixable but you're not confident your fix is
-      correct, prefer flagging over fixing.
+      Do NOT post PR comments. Do NOT use `gh pr review`. Do NOT set PR labels.
+      Push commits — that is the entire output. If you genuinely find nothing,
+      push nothing.
 
-      ## Verdict rubric (used in the comment + label)
-
-      - **APPROVE** — code is mergeable as-is, optionally after the fixes
-        you just pushed. No judgment-call concerns remain.
-      - **REQUEST_CHANGES** — concrete, fixable issue you chose NOT to
-        fix (e.g. ambiguous, broader scope) — surfaced for human.
-      - **NEEDS_DISCUSSION** — architectural concern, scope ambiguity,
-        or risk that needs human judgment, not a fix.
-
-      ## What to look at (checklist)
-
-      - **Scope discipline**: does the PR match the original ask, or did
-        earlier agents drift?
-      - **Architectural risk**: coupling, leaky abstractions, contracts
-        that are hard to evolve.
-      - **Operational risk**: migrations, destructive operations, env-var
-        surface, anything that needs a human deploy step.
-      - **Test honesty**: tests pin real invariants, not happy paths only.
-      - **Upstream guardrail compliance**: `CLAUDE.md` / `AGENTS.md`
-        is auto-loaded into your context. Verify the upstream agents
-        respected its rules — no `--no-verify`, no migrations
-        executed, no scope-violating commands, no lockfile churn
-        unrelated to the change. Any violation -> REQUEST_CHANGES.
-
-      ## Output: sized PR comment + PR label
-
-      Pick a comment shape based on the verdict:
-
-      ### If APPROVE — terse comment (one paragraph)
-
-      ```
-      ## Sonnet 4.6 sign-off — APPROVE ✅
-
-      <one short paragraph: what the PR does + your read on quality>
-
-      <if you pushed fixes this phase, list commit short-shas + one line each>
-      <if you pushed nothing this phase, say "No additional fixes needed.">
-
-      🤖 Final sign-off by Claude Sonnet 4.6
-      ```
-
-      ### If REQUEST_CHANGES or NEEDS_DISCUSSION — full structured comment
-
-      ```
-      ## Sonnet 4.6 sign-off — <REQUEST_CHANGES | NEEDS_DISCUSSION>
-
-      ### What I fixed this phase
-      <list of commit short-shas + one line each, or "Nothing pushed.">
-
-      ### Open items the human should look at
-      <bulleted list. For REQUEST_CHANGES: concrete file:line items.
-       For NEEDS_DISCUSSION: questions to decide.>
-
-      ### Risk
-      <migrations / destructive ops / env-var changes / etc. State
-       what the human needs to do before/after merge. Skip if none.>
-
-      🤖 Final sign-off by Claude Sonnet 4.6
-      ```
-
-      ## Posting steps
-
-      1. Post the comment:
-         `gh pr comment <number> --body "<comment body>"`
-
-      2. Set a PR label matching the verdict:
-         - APPROVE -> `harness-approved`
-         - REQUEST_CHANGES -> `harness-request-changes`
-         - NEEDS_DISCUSSION -> `harness-needs-discussion`
-
-         Apply with:
-         `gh pr edit <number> --add-label "harness-approved"`
-
-         If the label doesn't exist yet, create it first:
-         `gh label create harness-approved --color "0E8A16" --description "Sonnet sign-off approved" 2>/dev/null || true`
-         Use color `0E8A16` (green) for approved, `D73A4A` (red) for
-         request-changes, `FBCA04` (yellow) for needs-discussion.
-
-      3. Output: <promise>SONNET-SIGNOFF-DONE</promise>
+      When done, output: <promise>SONNET-REVIEW-DONE</promise>
 
   # 13. Final scoped verify gate — review/fix nodes above may push commits
   #     after the earlier validate node, so verify the branch HEAD again.
   - id: final-validate
     category: validation
     command: validate
-    depends_on: [sonnet-final-review]
+    depends_on: [sonnet-review-fix]
     provider: pi
     model: kimi-code/kimi-for-coding
     context: fresh
@@ -591,8 +518,9 @@ nodes:
       Read the commit history since the base branch to ground the summary:
       `git log --oneline origin/$resolve-pr.output.base..HEAD`
 
-      The three-review chain (kimi self-review loop, gpt-review-fix, sonnet)
-      already ran in this same workflow, so do NOT suggest running additional
+      The three-review chain (kimi self-review loop, gpt-review-fix,
+      sonnet-review-fix) already ran in this same workflow, so do NOT suggest
+      running additional
       review agents.
 
       Do NOT change labels or title; the poller will move the Linear card back
