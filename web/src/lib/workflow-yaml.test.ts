@@ -162,3 +162,18 @@ it("round-trips artifact through toYaml/fromYaml", () => {
   expect(back.nodes[0].artifact).toBe("exploration.md");
   expect(back.nodes[1].artifact).toBeUndefined();
 });
+
+it("round-trips effort through toYaml/fromYaml", () => {
+  const wf: EditorWorkflow = {
+    name: "demo",
+    nodes: [
+      { id: "plan", prompt: "plan", effort: "max" },
+      { id: "build", prompt: "build" },
+    ],
+  };
+  const yaml = toYaml(wf);
+  expect(yaml).toContain("effort: max");
+  const back = fromYaml(yaml);
+  expect(back.nodes[0].effort).toBe("max");
+  expect(back.nodes[1].effort).toBeUndefined();
+});
