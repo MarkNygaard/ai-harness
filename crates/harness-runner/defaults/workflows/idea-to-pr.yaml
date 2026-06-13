@@ -5,11 +5,13 @@ description: |
 
   Flow: Claude plans (a read-only Sonnet `explore` feeding a lean Opus
   `create-plan`), Kimi (via Pi, on the Kimi-for-Coding subscription)
-  implements and self-reviews up to 5x, gpt-5.x via omp does a second-pass review
-  with fixes, and Claude Sonnet signs off — then a final build gate.
+  implements and self-reviews up to 5x, gpt-5.x via omp does a second-pass
+  review-with-fixes, and Claude Sonnet does a third model-diverse
+  review-with-fixes — then a final build gate and a workflow-summary comment.
 
   Output: a PR against the project's base branch (auto-detected from
-  `$BASE_BRANCH`), with a verdict comment + PR label.
+  `$BASE_BRANCH`), with a single workflow-summary comment (diff + commit
+  breakdown across the three review-fix passes).
 
   Project-specific rules — package manager, verify chain, conventional-
   commit scope vocabulary, agent prohibitions (no `--no-verify`, no
@@ -550,155 +552,76 @@ nodes:
       When done, output: <promise>GPT-REVIEW-DONE</promise>
 
 
-  - id: sonnet-final-review
+  - id: sonnet-review-fix
     category: validation
     depends_on: [gpt-review-fix]
     provider: claude
     model: sonnet
     context: fresh
     prompt: |
-      You are the third model-diverse review pass on a PR that has been:
-      1. Planned (strategic planning agent)
-      2. Implemented (implementation agent)
-      3. Self-reviewed up to 3 iterations, fix-and-push each round
-      4. Reviewed with a second-pass agent that also pushed fixes
+      You are the third, model-diverse review-and-fix pass on a PR that has
+      already been planned, implemented, self-reviewed (kimi, up to 3 rounds),
+      and reviewed by a second model (gpt) that pushed its own fixes. You bring
+      a different training-data / bias profile than the two earlier reviewers —
+      your job is to catch what they rationalized or missed, and FIX what is
+      concretely fixable.
 
-      You bring a different training-data / bias profile than the two
-      earlier reviewers — your job is to catch what they rationalized
-      or missed, fix what's concretely fixable, and surface judgment-
-      call questions for the human.
+      First read `$ARTIFACTS_DIR/plan.md` — the plan this PR was built against.
+      It is the scope contract: anything under its "Not building" section was
+      left out ON PURPOSE. Fixing where the code *deviates from the plan* is in
+      scope; *adding* capabilities the plan deliberately cut is NOT — re-adding
+      correctly-cut scope defeats the point of planning. If you believe a scope
+      cut was genuinely wrong for the task, SAY SO in your output as a flag for
+      the human; do not silently implement it.
 
-      ## Read the change set first
+      `cat $ARTIFACTS_DIR/.pr-list` — the PR(s) this run opened, as JSON
+      `{folder, number, url, base, head}`. A multi-repo change has several
+      (one per repo). **Review the whole change together** — read every repo's
+      diff before judging, since the most likely defects are at the seams
+      between repos (API shapes, payloads, contracts that must agree). For each
+      entry: `cd "$folder"` (single-repo = `.`), `gh pr view`,
+      `git diff origin/<base>...HEAD` using that entry's `base`, and
+      `git log --oneline origin/<base>..HEAD` — the paper trail of prior fixes
+      tells you what is already addressed, so focus on what is still open.
 
-      1. `cat $ARTIFACTS_DIR/.pr-list` — the PR(s) this run opened, as JSON
-         `{folder, number, url, base, head}`. A multi-repo change spans several
-         (one per repo); **review them as one change** — defects cluster at the
-         seams between repos, so read every side before judging.
-      2. For each entry: `cd "$folder"` (single-repo = `.`),
-         `gh pr view --json title,body,baseRefName,number`,
-         `git diff origin/<base>...HEAD` (that entry's `base`), and
-         `git log --oneline origin/<base>..HEAD` — the paper trail of prior fixes.
-      3. `$ARTIFACTS_DIR/plan.md` — the plan/scope contract this PR was built
-         against, including what it deliberately left out ("Not building").
+      Look for issues two prior review passes tend to rationalize or miss:
+      - Subtle logic bugs (off-by-one, boundary conditions, null/undefined)
+      - Race conditions, idempotency gaps in async code or DB writes
+      - Performance: N+1 queries, unbounded loops, large in-memory payloads
+      - Security: injection, XSS, missing auth checks, PII in logs, secrets
+      - API design: inconsistent error shapes, leaky abstractions, breaking
+        changes that are not called out
+      - Test honesty: tests pin real invariants, not happy paths only
+      - Upstream guardrail compliance: `CLAUDE.md` / `AGENTS.md` is auto-loaded
+        into your context. Verify the upstream agents respected its rules — no
+        `--no-verify`, no migrations executed, no scope-violating commands, no
+        lockfile churn unrelated to the change.
 
-      ## What to fix vs flag
+      For each genuine in-scope issue you find, FIX IT directly:
+      1. Edit the relevant file(s) — in whichever repo folder the issue lives.
+      2. Run the project's scoped verify chain — see `CLAUDE.md` / `AGENTS.md`
+         for the commands; use the narrowest scope that covers the change.
+      3. Commit with a conventional-commit message and push from that repo's
+         folder to its PR branch.
 
-      Classify every finding as one of:
+      Universal rules: do NOT skip commit hooks, do NOT use `--no-verify`, do
+      NOT execute database / schema migrations (`prisma migrate`,
+      `sqlx migrate run`, etc.) — edit the schema + SQL only and flag the
+      migration for the human in your output.
 
-      - **Concrete fixable bug** (off-by-one, null/undefined, missing
-        try/catch, broken test, dead branch, etc.): FIX IT.
-        - Edit the file(s)
-        - Run the project's scoped verify chain — see `CLAUDE.md` /
-          `AGENTS.md` for the commands. Use the narrowest scope that
-          covers the change.
-        - Commit with a conventional-commit message and push.
-        - Universal AI-agent rules: do NOT skip commit hooks, do NOT
-          use `--no-verify`, do NOT execute database / schema migrations
-          (`prisma migrate`, `sqlx migrate run`, etc.) — edit the
-          schema + SQL only, flag the migration for the human. Follow
-          additional project-specific prohibitions in `CLAUDE.md` /
-          `AGENTS.md`.
+      If a finding is fixable but you are not confident your fix is correct, or
+      it is a judgment call (scope ambiguity, architectural risk), do NOT touch
+      the code — flag it in your output for the human instead.
 
-      - **Judgment-call concern** (scope ambiguity, architectural risk,
-        "is X the right approach"): do NOT touch the code. Surface it
-        in the summary comment for the human.
+      Do NOT post PR comments. Do NOT use `gh pr review`. Do NOT set PR labels.
+      Push commits — that is the entire output. If you genuinely find nothing,
+      push nothing.
 
-      If a finding is fixable but you're not confident your fix is
-      correct, prefer flagging over fixing.
-
-      ## Verdict rubric (used in the comment + label)
-
-      - **APPROVE** — code is mergeable as-is, optionally after the fixes
-        you just pushed. No judgment-call concerns remain.
-      - **REQUEST_CHANGES** — concrete, fixable issue you chose NOT to
-        fix (e.g. ambiguous, broader scope) — surfaced for human.
-      - **NEEDS_DISCUSSION** — architectural concern, scope ambiguity,
-        or risk that needs human judgment, not a fix.
-
-      ## What to look at (checklist)
-
-      - **Scope discipline**: does the PR match the plan + original ask?
-        Earlier reviewers may have *added* scope the plan deliberately cut —
-        flag that as drift, don't reward it. If a deliberate cut looks wrong
-        for the task, raise it as NEEDS_DISCUSSION rather than implementing it.
-      - **Architectural risk**: coupling, leaky abstractions, contracts
-        that are hard to evolve.
-      - **Operational risk**: migrations, destructive operations, env-var
-        surface, anything that needs a human deploy step.
-      - **Test honesty**: tests pin real invariants, not happy paths only.
-      - **Upstream guardrail compliance**: `CLAUDE.md` / `AGENTS.md`
-        is auto-loaded into your context. Verify the upstream agents
-        respected its rules — no `--no-verify`, no migrations
-        executed, no scope-violating commands, no lockfile churn
-        unrelated to the change. Any violation → REQUEST_CHANGES.
-
-      ## Output: sized PR comment + PR label
-
-      Pick a comment shape based on the verdict:
-
-      ### If APPROVE — terse comment (one paragraph)
-
-      ```
-      ## Sonnet 4.6 sign-off — APPROVE ✅
-
-      <one short paragraph: what the PR does + your read on quality>
-
-      <if you pushed fixes this phase, list commit short-shas + one line each>
-      <if you pushed nothing this phase, say "No additional fixes needed.">
-
-      🤖 Final sign-off by Claude Sonnet 4.6
-      ```
-
-      ### If REQUEST_CHANGES or NEEDS_DISCUSSION — full structured comment
-
-      ```
-      ## Sonnet 4.6 sign-off — <REQUEST_CHANGES | NEEDS_DISCUSSION>
-
-      ### What I fixed this phase
-      <list of commit short-shas + one line each, or "Nothing pushed.">
-
-      ### Open items the human should look at
-      <bulleted list. For REQUEST_CHANGES: concrete file:line items.
-       For NEEDS_DISCUSSION: questions to decide.>
-
-      ### Risk
-      <migrations / destructive ops / env-var changes / etc. State
-       what the human needs to do before/after merge. Skip if none.>
-
-      🤖 Final sign-off by Claude Sonnet 4.6
-      ```
-
-      ## Posting steps
-
-      The verdict covers the whole change. Post the **same** comment + label to
-      **every** PR in `.pr-list` (so each repo's PR carries the sign-off), each
-      from its own folder:
-
-      1. Post the comment:
-         `gh pr comment <number> --body "<comment body>"`
-
-      2. Set a PR label matching the verdict:
-         - APPROVE → `harness-approved`
-         - REQUEST_CHANGES → `harness-request-changes`
-         - NEEDS_DISCUSSION → `harness-needs-discussion`
-
-         Apply with:
-         `gh pr edit <number> --add-label "harness-approved"`
-
-      For a multi-repo change, loop `.pr-list`: `cd "$folder"` then post the
-      comment + add the label using that entry's PR number. (Fixes you push go
-      to whichever repo folder the issue lives in.)
-
-         If the label doesn't exist yet, create it first:
-         `gh label create harness-approved --color "0E8A16" --description "Sonnet sign-off approved" 2>/dev/null || true`
-         Use color `0E8A16` (green) for approved, `D73A4A` (red) for
-         request-changes, `FBCA04` (yellow) for needs-discussion.
-
-      3. Output: <promise>SONNET-SIGNOFF-DONE</promise>
+      When done, output: <promise>SONNET-REVIEW-DONE</promise>
 
   - id: final-verify-loop
     category: validation
-    depends_on: [sonnet-final-review]
+    depends_on: [sonnet-review-fix]
     loop:
       provider: pi
       model: kimi-code/kimi-for-coding
@@ -792,10 +715,10 @@ nodes:
     prompt: |
       Post a short "workflow complete" PR comment that reflects what
       ACTUALLY happened in this run. Don't suggest running review
-      agents — three review passes (kimi self-review loop, gpt-review-fix, sonnet)
-      already ran in this same workflow. Sonnet's verdict comment and
-      the PR label are the authoritative signal for the human; your
-      summary is a thin status line, not a second review.
+      agents — three review-and-fix passes (kimi self-review loop, gpt-review-fix,
+      sonnet-review-fix) already ran in this same workflow and pushed their fixes
+      as commits. This comment is the run's single human-facing overview: a thin
+      status line with the commit breakdown, not a second review.
 
       ## Read first
 
@@ -803,9 +726,9 @@ nodes:
       (`{folder, number, url, base, head}`); usually one, several for a
       multi-repo change. For each, from its `folder`:
 
-      1. `gh pr view --json number,title,headRefName,labels,additions,deletions`.
+      1. `gh pr view --json number,title,headRefName,additions,deletions`.
       2. `git log --oneline origin/<base>..HEAD` (that entry's `base`) — every
-         commit that landed, including gpt-review-fix and sonnet-final-review.
+         commit that landed, including the gpt-review-fix and sonnet-review-fix passes.
       3. Count commits by phase using the conventional-commit prefixes
          (feat / fix / chore / etc.) and any phase markers in the bodies.
 
@@ -819,22 +742,19 @@ nodes:
       ```
       ## Workflow complete — `idea-to-pr`
 
-      **Sonnet verdict**: <harness-approved | harness-request-changes | harness-needs-discussion>
-        (see Sonnet 4.6 sign-off comment above for details)
-
       **Diff**: +<additions> / -<deletions>
 
       **Commit breakdown**:
       - Implementation + kimi self-review: <N> commits
       - gpt-review-fix pass: <N> commits (or "none — nothing to fix")
-      - Sonnet fix-pass: <N> commits (or "none — nothing to fix")
+      - sonnet-review-fix pass: <N> commits (or "none — nothing to fix")
       ```
 
       Rules:
       - One short comment. No "review agents have not yet run" wording —
         they ran. No "next steps" suggestion blocks.
       - No deviations table, no validation table, no follow-up issue
-        suggestions. Sonnet's comment covers those if needed.
+        suggestions.
       - If commit counts can't be cleanly inferred from prefixes, just
         say "X commits total" rather than guessing per-phase.
 
