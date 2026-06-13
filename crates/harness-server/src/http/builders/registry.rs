@@ -1,4 +1,3 @@
-use dashmap::DashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -12,8 +11,6 @@ use crate::server::HarnessServer;
 /// Outputs of the registry initialization phase.
 pub(crate) struct RegistryBundle {
     pub thread_db: Option<crate::thread_db::ThreadDb>,
-    pub plan_db: Option<crate::plan_db::PlanDb>,
-    pub plan_cache: Arc<DashMap<String, harness_exec::plan::ExecPlan>>,
     pub issue_workflow_store: Option<Arc<harness_workflow::issue_lifecycle::IssueWorkflowStore>>,
     pub project_workflow_store:
         Option<Arc<harness_workflow::project_lifecycle::ProjectWorkflowStore>>,
@@ -27,7 +24,6 @@ pub(crate) struct RegistryBundle {
 fn failed_registry_startup_results(error: &str) -> Vec<StoreStartupResult> {
     vec![
         StoreStartupResult::critical("thread_db").failed(error),
-        StoreStartupResult::critical("plan_db").failed(error),
         StoreStartupResult::optional("issue_workflow_store").failed(error),
         StoreStartupResult::optional("project_workflow_store").failed(error),
         StoreStartupResult::optional("workflow_runtime_store").failed(error),
@@ -37,14 +33,9 @@ fn failed_registry_startup_results(error: &str) -> Vec<StoreStartupResult> {
     ]
 }
 
-fn failed_registry_bundle(
-    plan_cache: Arc<DashMap<String, harness_exec::plan::ExecPlan>>,
-    error: &str,
-) -> RegistryBundle {
+fn failed_registry_bundle(error: &str) -> RegistryBundle {
     RegistryBundle {
         thread_db: None,
-        plan_db: None,
-        plan_cache,
         issue_workflow_store: None,
         project_workflow_store: None,
         workflow_runtime_store: None,
@@ -71,20 +62,19 @@ pub(crate) async fn build_registry(
         harness_core::config::workflow::load_workflow_config(project_root).unwrap_or_default();
     let workflow_ns = workflow_config.storage.schema_namespace;
     let mut startup_results = Vec::new();
-    let plan_cache: Arc<DashMap<String, harness_exec::plan::ExecPlan>> = Arc::new(DashMap::new());
 
     let database_url = match harness_core::db::resolve_database_url(configured_database_url) {
         Ok(database_url) => database_url,
         Err(error) => {
             let error = error.to_string();
-            return Ok(failed_registry_bundle(plan_cache, &error));
+            return Ok(failed_registry_bundle(&error));
         }
     };
     let setup_pool = match harness_core::db::pg_open_pool(&database_url).await {
         Ok(pool) => pool,
         Err(error) => {
             let error = error.to_string();
-            return Ok(failed_registry_bundle(plan_cache, &error));
+            return Ok(failed_registry_bundle(&error));
         }
     };
 
@@ -135,54 +125,6 @@ pub(crate) async fn build_registry(
                     .push(StoreStartupResult::critical("thread_db").failed(error.to_string()));
                 tracing::warn!("thread cache: failed to load threads on startup: {error}");
             }
-        }
-    }
-
-    // ── Plan DB + cache ───────────────────────────────────────────────────────
-    let plans_db_path = harness_core::config::dirs::default_db_path(data_dir, "plans");
-    let plan_context =
-        harness_core::db::PgStoreContext::from_path(&plans_db_path, Some(&database_url))?;
-    let plan_db = match super::forced_startup_error("plan_db") {
-        Some(error) => {
-            startup_results.push(StoreStartupResult::critical("plan_db").failed(error));
-            None
-        }
-        None => match crate::plan_db::PlanDb::open_with_context(&plan_context, &setup_pool).await {
-            Ok(plan_db) => {
-                startup_results.push(StoreStartupResult::critical("plan_db"));
-                Some(plan_db)
-            }
-            Err(error) => {
-                startup_results
-                    .push(StoreStartupResult::critical("plan_db").failed(error.to_string()));
-                None
-            }
-        },
-    };
-
-    let plans_md_dir = data_dir.join("plans");
-    if let Some(plan_db) = plan_db.as_ref() {
-        match plan_db.migrate_from_markdown_dir(&plans_md_dir).await {
-            Ok(0) => {}
-            Ok(n) => tracing::debug!(
-                count = n,
-                "plan migration: imported {} plan(s) from markdown",
-                n
-            ),
-            Err(e) => tracing::warn!("plan migration: failed: {e}"),
-        }
-
-        match plan_db.list().await {
-            Ok(plans) => {
-                let count = plans.len();
-                for plan in plans {
-                    plan_cache.insert(plan.id.as_str().to_string(), plan);
-                }
-                if count > 0 {
-                    tracing::debug!(count, "plan cache: loaded {} plan(s) from db", count);
-                }
-            }
-            Err(e) => tracing::warn!("plan cache: failed to load plans on startup: {e}"),
         }
     }
 
@@ -583,8 +525,6 @@ pub(crate) async fn build_registry(
 
     Ok(RegistryBundle {
         thread_db,
-        plan_db,
-        plan_cache,
         issue_workflow_store,
         project_workflow_store,
         workflow_runtime_store,
@@ -643,36 +583,6 @@ mod tests {
             .canonicalize()
             .unwrap_or_else(|_| dir.path().to_path_buf());
         assert_eq!(projects[0].id, canonical.to_string_lossy().as_ref());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn plan_cache_hydrated_from_db() -> anyhow::Result<()> {
-        if !crate::test_helpers::db_tests_enabled().await {
-            return Ok(());
-        }
-        let dir = tempfile::tempdir().expect("tempdir");
-        let (server, tasks) = make_test_server_and_tasks(dir.path()).await;
-
-        // Pre-insert a plan directly into the DB before calling build_registry.
-        let plan_db = crate::plan_db::PlanDb::open(&harness_core::config::dirs::default_db_path(
-            dir.path(),
-            "plans",
-        ))
-        .await
-        .expect("open plan db");
-        let plan = harness_exec::plan::ExecPlan::from_spec("# test-plan-id", dir.path())
-            .expect("build plan");
-        plan_db.upsert(&plan).await.expect("upsert plan");
-        let plan_id = plan.id.as_str().to_string();
-
-        let bundle = build_registry(&server, dir.path(), dir.path(), &tasks)
-            .await
-            .expect("build_registry");
-        assert!(
-            bundle.plan_cache.contains_key(&plan_id),
-            "plan should be hydrated into cache"
-        );
         Ok(())
     }
 

@@ -56,30 +56,6 @@ fn bridge_agent_event(
     }
 }
 
-pub(crate) async fn run_turn_lifecycle(
-    server: Arc<crate::server::HarnessServer>,
-    thread_db: Option<crate::thread_db::ThreadDb>,
-    notify_tx: Option<crate::notify::NotifySender>,
-    notification_tx: tokio::sync::broadcast::Sender<RpcNotification>,
-    thread_id: harness_core::types::ThreadId,
-    turn_id: TurnId,
-    prompt: String,
-    agent_name: String,
-) {
-    run_turn_lifecycle_with_options(
-        server,
-        thread_db,
-        notify_tx,
-        notification_tx,
-        thread_id,
-        turn_id,
-        prompt,
-        agent_name,
-        TurnLifecycleOptions::default(),
-    )
-    .await;
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TurnLifecycleOptions {
     pub model: Option<String>,

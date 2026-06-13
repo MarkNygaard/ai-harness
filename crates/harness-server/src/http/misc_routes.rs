@@ -5,14 +5,13 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use harness_protocol::methods::RpcRequest;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path as StdPath, PathBuf};
 use std::sync::Arc;
 
 use super::{state::AppState, task_routes};
-use crate::{router, task_runner};
+use crate::task_runner;
 use harness_workflow::runtime::{
     RuntimeEvent, RuntimeJob, WorkflowCommand, WorkflowCommandRecord, WorkflowDecisionRecord,
     WorkflowEvent, WorkflowInstance,
@@ -700,16 +699,6 @@ mod runtime_tree_tests {
         assert_eq!(summary.activity_outcomes["accepted"], 1);
         assert_eq!(summary.activity_outcomes["repaired_structured_output"], 1);
         assert_eq!(summary.jobs_without_activity_envelope, 1);
-    }
-}
-
-pub(crate) async fn handle_rpc(
-    State(state): State<Arc<AppState>>,
-    Json(req): Json<RpcRequest>,
-) -> Response {
-    match router::handle_request(&state, req).await {
-        Some(resp) => (StatusCode::OK, Json(resp)).into_response(),
-        None => StatusCode::NO_CONTENT.into_response(),
     }
 }
 

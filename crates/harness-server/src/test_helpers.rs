@@ -264,8 +264,6 @@ async fn make_state_inner(
                 .unwrap_or_else(|_| project_root.to_path_buf()),
             tasks,
             thread_db: Some(thread_db),
-            plan_db: None,
-            plan_cache: std::sync::Arc::new(dashmap::DashMap::new()),
             issue_workflow_store: None,
             project_workflow_store: None,
             workflow_runtime_store: None,

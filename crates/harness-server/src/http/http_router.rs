@@ -10,7 +10,7 @@ use super::{
     auth, billing_routes, categories_routes, credentials_routes, geo_routes,
     get_issue_workflow_by_issue, get_issue_workflow_by_pr, get_project_workflow_by_project,
     get_task, get_task_artifacts, get_task_prompts, get_task_proof, get_workflow_runtime_tree,
-    github_webhook, handle_rpc, health_check, ingest_signal, intake_status, linear_routes,
+    github_webhook, health_check, ingest_signal, intake_status, linear_routes,
     linear_source_routes, list_tasks, mcp_routes, password_reset, project_authoring_routes,
     project_queue_stats, runs_routes, state::AppState, stream_task_sse, task_mutation_routes,
     task_routes, workflows_routes,
@@ -71,8 +71,6 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/favicon.ico", get(crate::dashboard::favicon))
         .route("/health", get(health_check))
-        .route("/rpc", post(handle_rpc))
-        .route("/ws", get(crate::websocket::ws_handler))
         .route("/tasks", post(task_routes::create_task))
         .route("/tasks", get(list_tasks))
         .route("/tasks/batch", post(task_routes::create_tasks_batch))

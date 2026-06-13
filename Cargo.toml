@@ -7,7 +7,6 @@ members = [
     "crates/harness-agents",
     "crates/harness-sandbox",
     "crates/harness-rules",
-    "crates/harness-exec",
     "crates/harness-observe",
     "crates/harness-cli",
     "crates/harness-workflow",
@@ -32,7 +31,6 @@ harness-server = { path = "crates/harness-server", version = "0.1.0" }
 harness-agents = { path = "crates/harness-agents", version = "0.1.0" }
 harness-sandbox = { path = "crates/harness-sandbox", version = "0.1.0" }
 harness-rules = { path = "crates/harness-rules", version = "0.1.0" }
-harness-exec = { path = "crates/harness-exec", version = "0.1.0" }
 harness-observe = { path = "crates/harness-observe", version = "0.1.0" }
 harness-workflow = { path = "crates/harness-workflow", version = "0.1.0" }
 harness-dag = { path = "crates/harness-dag", version = "0.1.0" }
