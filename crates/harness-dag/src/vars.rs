@@ -219,6 +219,15 @@ pub fn substitute(template: &str, ctx: &VarContext) -> Result<String, DagError> 
             if VarContext::is_recognized(name) {
                 match ctx.lookup(name) {
                     Some(value) => out.push_str(value),
+                    // Positional args (`$1`..`$9`) only exist for command-triggered
+                    // runs. When a run carries no positional args at all, a bare
+                    // `$1` is shell syntax (e.g. a function's positional parameter
+                    // inside a `bash` node), not a harness variable — pass it
+                    // through verbatim. Command runs (positional present) still fail
+                    // loud on an out-of-range arg, and named harness vars always do.
+                    None if is_positional(name) && ctx.positional.is_empty() => {
+                        out.push_str(m.as_str())
+                    }
                     None => return Err(DagError::MissingVariable(name.to_string())),
                 }
             } else {
@@ -308,6 +317,29 @@ mod tests {
         );
         // A recognized-but-unset harness var is still a hard error.
         assert!(substitute("$BASE_BRANCH", &VarContext::new()).is_err());
+    }
+
+    #[test]
+    fn positional_args_substitute_for_command_runs() {
+        let ctx = VarContext::new().with_positional(["alpha".to_string(), "beta".to_string()]);
+        assert_eq!(substitute("$1 and $2", &ctx).unwrap(), "alpha and beta");
+        assert_eq!(substitute("${1}/${2}", &ctx).unwrap(), "alpha/beta");
+        // An out-of-range positional in a command run is still a hard error —
+        // the run carries args, so a missing one is a genuine authoring mistake.
+        assert!(substitute("$3", &ctx).is_err());
+    }
+
+    #[test]
+    fn bare_positional_passes_through_when_no_args() {
+        // A run with no positional args (e.g. idea-to-pr triggered from an issue,
+        // not a command) must treat `$1` as shell syntax — e.g. a `bash` node's
+        // `install_in() { cd "$1"; }`. It passes through verbatim, not an error.
+        let ctx = VarContext::new();
+        assert_eq!(
+            substitute("install_in() { cd \"$1\" || exit 1; }", &ctx).unwrap(),
+            "install_in() { cd \"$1\" || exit 1; }"
+        );
+        assert_eq!(substitute("$1 ${2}", &ctx).unwrap(), "$1 ${2}");
     }
 
     #[test]
