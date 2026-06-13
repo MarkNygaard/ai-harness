@@ -347,11 +347,11 @@ Write to `$ARTIFACTS_DIR/pr-ready.md`:
 ## Next Step
 
 Continue to PR review workflow:
-1. `archon-pr-review-scope`
-2. `archon-sync-pr-with-main`
+1. `pr-review-scope`
+2. `sync-pr-with-main`
 3. Review agents (parallel)
-4. `archon-synthesize-review`
-5. `archon-implement-review-fixes`
+4. `synthesize-review`
+5. `implement-review-fixes`
 ```
 
 **PHASE_4_CHECKPOINT:**

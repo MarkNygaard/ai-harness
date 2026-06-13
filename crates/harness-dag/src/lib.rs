@@ -3,8 +3,8 @@
 //! The workflow DAG model, YAML loader, topological scheduler, and
 //! template-variable substitution for the Harness orchestration layer.
 //!
-//! The format is Archon-inspired (see `docs/PLAN.md` §6) but typed and
-//! validated in Rust. This crate is execution-agnostic: it turns YAML into a
+//! The format is a concise pipeline YAML, typed and validated in Rust. This
+//! crate is execution-agnostic: it turns YAML into a
 //! validated [`Workflow`], computes execution [`layers`](graph::topological_layers),
 //! and renders templates ([`vars::substitute`]). Running the nodes (agent
 //! adapters, worktrees, persistence) lives in the executor crates.

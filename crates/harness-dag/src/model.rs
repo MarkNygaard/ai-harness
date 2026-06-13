@@ -6,9 +6,9 @@
 //! command, an inline script, a convergence loop, a human approval gate, or a
 //! cancel.
 //!
-//! The format is intentionally close to Archon's YAML so existing workflows
-//! port with minimal edits, but it is typed and validated in Rust. Parsing and
-//! validation live in [`crate::parse`]; this module is the data model only.
+//! The format is a deliberately concise pipeline YAML, typed and validated in
+//! Rust. Parsing and validation live in [`crate::parse`]; this module is the
+//! data model only.
 
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +62,7 @@ pub struct LoopConfig {
     /// Hard cap on iterations.
     pub max_iterations: u32,
     /// Provider for the loop body, overriding the node/workflow provider when set.
-    /// Archon-style workflows declare provider/model *inside* the `loop:` block.
+    /// Some workflows declare provider/model *inside* the `loop:` block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     /// Model for the loop body, overriding the node/workflow model when set.
@@ -94,9 +94,8 @@ pub struct ApprovalConfig {
     pub on_reject: Option<String>,
 }
 
-/// Provider-agnostic per-node tool hooks (Archon-shaped). Translated by the
-/// runner into Claude Code settings.json hooks, the omp hook extension, or
-/// Cursor project hooks.
+/// Provider-agnostic per-node tool hooks. Translated by the runner into Claude
+/// Code settings.json hooks, the omp hook extension, or Cursor project hooks.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct NodeHooks {
     /// Fired before a tool runs; a `deny` decision blocks the call.

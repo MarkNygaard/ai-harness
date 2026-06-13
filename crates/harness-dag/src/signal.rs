@@ -1,8 +1,8 @@
 //! Loop completion-signal detection.
 //!
 //! A [`crate::model::LoopConfig`] converges when the agent emits its `until`
-//! signal. Following Archon's semantics, a signal counts as emitted when it
-//! appears in any of three forms (checked in order):
+//! signal. A signal counts as emitted when it appears in any of three forms
+//! (checked in order):
 //!
 //! 1. **Tag-wrapped:** `<promise>SIGNAL</promise>` — any matching open/close
 //!    tag pair, case-insensitive (the recommended, unambiguous form).

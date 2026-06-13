@@ -33,7 +33,7 @@ Prepare everything needed for plan implementation:
 3. Write a comprehensive context artifact for subsequent steps
 
 **This step does NOT implement anything** - it only sets up the environment.
-**This step does NOT create a PR** - that happens in `archon-finalize-pr` after implementation.
+**This step does NOT create a PR** - that happens in `finalize-pr` after implementation.
 
 ---
 
@@ -47,7 +47,7 @@ Prepare everything needed for plan implementation:
 2. **If plan already in workflow artifacts**: Use `$ARTIFACTS_DIR/plan.md`
 
 ```bash
-# Check if plan was created by archon-create-plan in this workflow
+# Check if plan was created by create-plan in this workflow
 if [ -f "$ARTIFACTS_DIR/plan.md" ]; then
   PLAN_PATH="$ARTIFACTS_DIR/plan.md"
   echo "Using plan from workflow: $PLAN_PATH"
@@ -270,10 +270,10 @@ bun run build
 
 ## Next Steps
 
-1. `archon-confirm-plan` - Verify patterns still exist
-2. `archon-implement-tasks` - Execute the plan
-3. `archon-validate` - Run full validation
-4. `archon-finalize-pr` - Create PR and mark ready
+1. `confirm-plan` - Verify patterns still exist
+2. `implement-tasks` - Execute the plan
+3. `validate` - Run full validation
+4. `finalize-pr` - Create PR and mark ready
 ```
 
 **PHASE_3_CHECKPOINT:**
@@ -317,7 +317,7 @@ Context written to: `$ARTIFACTS_DIR/plan-context.md`
 
 ### Next Step
 
-Proceed to `archon-confirm-plan` to verify the plan's research is still valid.
+Proceed to `confirm-plan` to verify the plan's research is still valid.
 ```
 
 ---

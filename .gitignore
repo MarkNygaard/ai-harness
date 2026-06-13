@@ -29,3 +29,6 @@ sdk/typescript/bun.lock
 omp.jsonl
 *.jsonl
 .vite/
+
+# internal planning notes (kept local, never pushed)
+/TASK.md

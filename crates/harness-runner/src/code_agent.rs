@@ -12,7 +12,7 @@
 //! `session: None` and ignores any incoming session — every prompt is a fresh
 //! agent invocation. Conversational continuity across `shared` nodes therefore
 //! does not work through this path yet. Closing it requires extending the agent
-//! trait (or using a session-aware adapter); tracked in `docs/PHASES.md`.
+//! trait (or using a session-aware adapter).
 
 use std::sync::Arc;
 
