@@ -276,6 +276,23 @@ export function PropertiesDrawer({
             </SelectItem>
           ))}
         </SelectField>
+        <SelectField
+          label="Effort"
+          value={node.effort ?? DEFAULT_SENTINEL}
+          onValueChange={(v) =>
+            set({
+              effort:
+                v === DEFAULT_SENTINEL ? undefined : (v as EditorNode["effort"]),
+            })
+          }
+        >
+          <SelectItem value={DEFAULT_SENTINEL}>(agent default)</SelectItem>
+          {EFFORT_LEVELS.map((e) => (
+            <SelectItem key={e} value={e}>
+              {e}
+            </SelectItem>
+          ))}
+        </SelectField>
         <div className="grid grid-cols-2 gap-2">
           <SelectField
             label="Context"
@@ -414,6 +431,9 @@ function Field({
 /** Sentinels for nullable selects — Base UI Select needs a concrete item value. */
 const DEFAULT_SENTINEL = "__default__";
 const NONE_SENTINEL = "__none__";
+
+/** Reasoning-effort levels (claude/codex), low → max. */
+const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /** A labelled shadcn Select (replaces the native `<select>` for a styled popup).
  *  Not wrapped in a `<label>` — the trigger is a button. */

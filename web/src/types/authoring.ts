@@ -83,6 +83,9 @@ export type TriggerRule =
   | "none_failed_min_one_success"
   | "all_done";
 export type ScriptRuntime = "bun" | "uv";
+/** Reasoning-effort override for AI bodies, forwarded as `--effort` to
+ * claude/codex CLIs. Higher effort suits high-leverage steps like planning. */
+export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Loop body config (mirrors `LoopConfig`, editor-relevant fields). */
 export interface EditorLoop {
@@ -110,6 +113,8 @@ export interface EditorNode {
   depends_on?: string[];
   provider?: string;
   model?: string;
+  /** Reasoning-effort override (claude/codex only); undefined → agent default. */
+  effort?: EffortLevel;
   context?: ContextMode;
   trigger_rule?: TriggerRule;
   timeout?: number;
