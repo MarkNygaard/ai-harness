@@ -31,7 +31,21 @@ interface NavItem {
   /** Active when the path equals href, or (for prefixes) starts with `match`. */
   match?: string;
 }
-const SYSTEM: NavItem[] = [
+// Everything you author or configure — the building blocks you define and the
+// system settings — kept out of Operations (which is run-observation only).
+const MANAGE: NavItem[] = [
+  {
+    href: "/projects",
+    label: "Projects",
+    icon: IconFolderCog,
+    match: "/projects",
+  },
+  {
+    href: "/editor",
+    label: "Workflows",
+    icon: IconBinaryTree2,
+    match: "/editor",
+  },
   {
     href: "/credentials",
     label: "Credentials",
@@ -73,18 +87,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           } as NavItem,
         ]
       : []),
-    {
-      href: "/projects",
-      label: "Projects",
-      icon: IconFolderCog,
-      match: "/projects",
-    },
-    {
-      href: "/editor",
-      label: "Workflows",
-      icon: IconBinaryTree2,
-      match: "/editor",
-    },
   ];
 
   const group = (label: string, items: NavItem[]) => (
@@ -125,7 +127,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         {group("Operations", operations)}
-        {group("System", SYSTEM)}
+        {group("Manage", MANAGE)}
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>
