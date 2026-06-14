@@ -822,17 +822,20 @@ async fn run_loop<R: NodeRunner>(
                 session = out.session;
                 if !out.success {
                     return NodeRunResult {
-                        run: loop_run(
-                            node,
-                            provider,
-                            model,
-                            NodeStatus::Failed,
-                            last_text,
+                        run: NodeRun {
+                            id: node.id.clone(),
+                            status: NodeStatus::Failed,
+                            provider: provider.map(str::to_string),
+                            model: model.map(str::to_string),
+                            output: last_text,
                             usage,
                             iterations,
-                            false,
-                            Some("loop iteration failed".to_string()),
-                        ),
+                            converged: Some(false),
+                            note: Some("loop iteration failed".to_string()),
+                            artifact_content: None,
+                            started_at: None,
+                            ended_at: None,
+                        },
                         session: None,
                         cancel: None,
                     };
@@ -905,47 +908,22 @@ async fn run_loop<R: NodeRunner>(
         ))
     };
     NodeRunResult {
-        run: loop_run(
-            node,
-            provider,
-            model,
-            NodeStatus::Success,
-            last_text,
+        run: NodeRun {
+            id: node.id.clone(),
+            status: NodeStatus::Success,
+            provider: provider.map(str::to_string),
+            model: model.map(str::to_string),
+            output: last_text,
             usage,
             iterations,
-            converged,
+            converged: Some(converged),
             note,
-        ),
+            artifact_content: None,
+            started_at: None,
+            ended_at: None,
+        },
         session,
         cancel: None,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn loop_run(
-    node: &Node,
-    provider: Option<&str>,
-    model: Option<&str>,
-    status: NodeStatus,
-    output: String,
-    usage: Usage,
-    iterations: u32,
-    converged: bool,
-    note: Option<String>,
-) -> NodeRun {
-    NodeRun {
-        id: node.id.clone(),
-        status,
-        provider: provider.map(str::to_string),
-        model: model.map(str::to_string),
-        output,
-        usage,
-        iterations,
-        converged: Some(converged),
-        note,
-        artifact_content: None,
-        started_at: None,
-        ended_at: None,
     }
 }
 

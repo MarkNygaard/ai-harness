@@ -238,31 +238,9 @@ impl WorkflowRuntimeStore {
     }
 
     pub async fn upsert_instance(&self, instance: &WorkflowInstance) -> anyhow::Result<()> {
-        let data = to_jsonb_string(instance)?;
-        sqlx::query(
-            "INSERT INTO workflow_instances
-                (id, definition_id, state, subject_type, subject_key, parent_workflow_id, data, version)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
-             ON CONFLICT (id) DO UPDATE SET
-                definition_id = EXCLUDED.definition_id,
-                state = EXCLUDED.state,
-                subject_type = EXCLUDED.subject_type,
-                subject_key = EXCLUDED.subject_key,
-                parent_workflow_id = EXCLUDED.parent_workflow_id,
-                data = EXCLUDED.data,
-                version = EXCLUDED.version,
-                updated_at = CURRENT_TIMESTAMP",
-        )
-        .bind(&instance.id)
-        .bind(&instance.definition_id)
-        .bind(&instance.state)
-        .bind(&instance.subject.subject_type)
-        .bind(&instance.subject.subject_key)
-        .bind(&instance.parent_workflow_id)
-        .bind(&data)
-        .bind(instance.version as i64)
-        .execute(&self.pool)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        upsert_instance_tx(&mut tx, instance).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -764,11 +742,11 @@ impl WorkflowRuntimeStore {
         .bind(workflow_ids)
         .fetch_all(&self.pool)
         .await?;
-        let mut by_workflow = BTreeMap::new();
+        let mut by_workflow: BTreeMap<String, Vec<WorkflowEvent>> = BTreeMap::new();
         for (workflow_id, data) in rows {
             by_workflow
                 .entry(workflow_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(serde_json::from_str(&data)?);
         }
         Ok(by_workflow)
@@ -828,11 +806,11 @@ impl WorkflowRuntimeStore {
         .bind(workflow_ids)
         .fetch_all(&self.pool)
         .await?;
-        let mut by_workflow = BTreeMap::new();
+        let mut by_workflow: BTreeMap<String, Vec<WorkflowDecisionRecord>> = BTreeMap::new();
         for (workflow_id, data) in rows {
             by_workflow
                 .entry(workflow_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(serde_json::from_str(&data)?);
         }
         Ok(by_workflow)
@@ -922,12 +900,12 @@ impl WorkflowRuntimeStore {
         .bind(workflow_ids)
         .fetch_all(&self.pool)
         .await?;
-        let mut by_workflow = BTreeMap::new();
+        let mut by_workflow: BTreeMap<String, Vec<WorkflowCommandRecord>> = BTreeMap::new();
         for row in rows {
             let record = workflow_command_record_from_row(row)?;
             by_workflow
                 .entry(record.workflow_id.clone())
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(record);
         }
         Ok(by_workflow)
@@ -1348,11 +1326,11 @@ impl WorkflowRuntimeStore {
         .bind(runtime_job_ids)
         .fetch_all(&self.pool)
         .await?;
-        let mut by_job = BTreeMap::new();
+        let mut by_job: BTreeMap<String, Vec<RuntimeEvent>> = BTreeMap::new();
         for (runtime_job_id, data) in rows {
             by_job
                 .entry(runtime_job_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(serde_json::from_str(&data)?);
         }
         Ok(by_job)
@@ -1771,11 +1749,11 @@ impl WorkflowRuntimeStore {
         .bind(command_ids)
         .fetch_all(&self.pool)
         .await?;
-        let mut by_command = BTreeMap::new();
+        let mut by_command: BTreeMap<String, Vec<RuntimeJob>> = BTreeMap::new();
         for (command_id, data) in rows {
             by_command
                 .entry(command_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(serde_json::from_str(&data)?);
         }
         Ok(by_command)
@@ -1943,11 +1921,11 @@ impl WorkflowRuntimeStore {
         .bind(per_command_limit)
         .fetch_all(&self.pool)
         .await?;
-        let mut by_command = BTreeMap::new();
+        let mut by_command: BTreeMap<String, Vec<RuntimeJob>> = BTreeMap::new();
         for (command_id, data) in rows {
             by_command
                 .entry(command_id)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .push(serde_json::from_str(&data)?);
         }
         Ok(by_command)
