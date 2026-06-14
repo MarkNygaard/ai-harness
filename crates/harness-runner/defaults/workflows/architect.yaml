@@ -299,48 +299,76 @@ nodes:
     category: validation
     depends_on: [validate, fix-failures]
     trigger_rule: none_failed_min_one_success
-    provider: pi
-    # Model-diverse from the Kimi implementer — a different bias profile is the
-    # whole point of this guard. gpt-5.x via omp on the ChatGPT subscription;
-    # the id MUST be namespace-qualified or the pi provider mis-prefixes it.
-    model: openai-codex/gpt-5.5
-    context: fresh
-    prompt: |
-      You are a model-diverse reviewer guarding the ONE invariant of this
-      sweep: every change must be **strictly behavior-preserving**. The
-      simplifications were made by a different model — your job is to catch any
-      that quietly changed semantics.
+    loop:
+      # Model-diverse from the Kimi implementer — a different bias profile is the
+      # whole point of this guard. gpt-5.x via omp on the ChatGPT subscription;
+      # the id MUST be namespace-qualified or the pi provider mis-prefixes it.
+      provider: pi
+      model: openai-codex/gpt-5.5
+      # A loop (not a plain node) so a transient empty/failed reviewer turn gets
+      # retried instead of silently waving the diff through. The
+      # `require-behavior-review` gate below then fails the run loudly if the
+      # signal never appears across the retries.
+      max_iterations: 2
+      until: BEHAVIOR-REVIEW-DONE
+      prompt: |
+        You are a model-diverse reviewer guarding the ONE invariant of this
+        sweep: every change must be **strictly behavior-preserving**. The
+        simplifications were made by a different model — your job is to catch any
+        that quietly changed semantics.
 
-      ## Read the change set
-      - `git diff origin/$BASE_BRANCH...HEAD` — the full simplification diff.
-      - `git log --oneline origin/$BASE_BRANCH..HEAD` — one commit per change.
-      If the diff is empty, there is nothing to review — emit the promise and stop.
+        ## Read the change set
+        - `git diff origin/$BASE_BRANCH...HEAD` — the full simplification diff.
+        - `git log --oneline origin/$BASE_BRANCH..HEAD` — one commit per change.
+        An empty diff is a valid outcome (a no-op sweep) — say so and emit the
+        signal.
 
-      ## For each commit, ask: does it change OBSERVABLE behavior?
-      Hunt for the semantic drift a "simplification" most often sneaks in:
-      - changed control flow, short-circuiting, or operator precedence
-      - changed error handling (swallowed errors, removed early returns, `?`-drops)
-      - changed iteration order, off-by-one, boundary/empty-input handling
-      - changed defaults, public visibility, trait impls, or serialization shape
-      - dropped/renamed public items, outputs, log lines, or feature flags
-      - removed code that had a side effect
+        ## For each commit, ask: does it change OBSERVABLE behavior?
+        Hunt for the semantic drift a "simplification" most often sneaks in:
+        - changed control flow, short-circuiting, or operator precedence
+        - changed error handling (swallowed errors, removed early returns, `?`-drops)
+        - changed iteration order, off-by-one, boundary/empty-input handling
+        - changed defaults, public visibility, trait impls, or serialization shape
+        - dropped/renamed public items, outputs, log lines, or feature flags
+        - removed code that had a side effect
 
-      ## Fix or revert (when in doubt, revert)
-      - Genuinely behavior-preserving → leave it.
-      - Changes behavior, or you are not certain it doesn't → **revert that
-        change**. This is a behavior-preserving sweep; reverting a questionable
-        simplification is always the correct call.
-      - After any revert/fix, re-run the scoped verify chain for the touched
-        crates/packages (commands in `CLAUDE.md` / `AGENTS.md`). Commit
-        reverts/fixes with a conventional-commit message. Do NOT push
-        (finalize-pr pushes), do NOT use `--no-verify`, do NOT run migrations.
+        ## Fix or revert (when in doubt, revert)
+        - Genuinely behavior-preserving → leave it.
+        - Changes behavior, or you are not certain it doesn't → **revert that
+          change**. This is a behavior-preserving sweep; reverting a questionable
+          simplification is always the correct call.
+        - After any revert/fix, re-run the scoped verify chain for the touched
+          crates/packages (commands in `CLAUDE.md` / `AGENTS.md`). Commit
+          reverts/fixes with a conventional-commit message. Do NOT push
+          (finalize-pr pushes), do NOT use `--no-verify`, do NOT run migrations.
 
-      Output a one-line verdict (e.g. "kept 4, reverted 1") and:
-      <promise>BEHAVIOR-REVIEW-DONE</promise>
+        ## Signal
+        Output a one-line verdict (e.g. "kept 4, reverted 1") and emit
+        `<promise>BEHAVIOR-REVIEW-DONE</promise>` ONLY once you have actually read
+        and judged the diff. NEVER emit it without reviewing — if you couldn't
+        read the diff, end without the signal so the run fails rather than ships.
+
+  # Fail the run loudly if behavior-review produced no completion signal (e.g.
+  # the reviewer model returned nothing). A non-converged loop is recorded as
+  # success, so without this gate an un-run review would wave the diff through.
+  - id: require-behavior-review
+    category: validation
+    depends_on: [behavior-review]
+    bash: |
+      set -uo pipefail
+      cat > "$ARTIFACTS_DIR/.behavior-review.out" <<'HARNESS_BR_EOF'
+      $behavior-review.output
+      HARNESS_BR_EOF
+      if grep -q 'BEHAVIOR-REVIEW-DONE' "$ARTIFACTS_DIR/.behavior-review.out"; then
+        echo "behavior-review completed"
+      else
+        echo "behavior-review did not complete (no BEHAVIOR-REVIEW-DONE signal after retries) — failing the run rather than opening a PR with unreviewed changes" >&2
+        exit 1
+      fi
 
   - id: check-changes
     category: delivery
-    depends_on: [behavior-review]
+    depends_on: [require-behavior-review]
     bash: |
       set -uo pipefail
       # After simplify + behavior-review (which may have reverted everything),
