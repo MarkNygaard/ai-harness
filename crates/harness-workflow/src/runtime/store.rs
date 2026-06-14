@@ -238,31 +238,9 @@ impl WorkflowRuntimeStore {
     }
 
     pub async fn upsert_instance(&self, instance: &WorkflowInstance) -> anyhow::Result<()> {
-        let data = to_jsonb_string(instance)?;
-        sqlx::query(
-            "INSERT INTO workflow_instances
-                (id, definition_id, state, subject_type, subject_key, parent_workflow_id, data, version)
-             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
-             ON CONFLICT (id) DO UPDATE SET
-                definition_id = EXCLUDED.definition_id,
-                state = EXCLUDED.state,
-                subject_type = EXCLUDED.subject_type,
-                subject_key = EXCLUDED.subject_key,
-                parent_workflow_id = EXCLUDED.parent_workflow_id,
-                data = EXCLUDED.data,
-                version = EXCLUDED.version,
-                updated_at = CURRENT_TIMESTAMP",
-        )
-        .bind(&instance.id)
-        .bind(&instance.definition_id)
-        .bind(&instance.state)
-        .bind(&instance.subject.subject_type)
-        .bind(&instance.subject.subject_key)
-        .bind(&instance.parent_workflow_id)
-        .bind(&data)
-        .bind(instance.version as i64)
-        .execute(&self.pool)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        upsert_instance_tx(&mut tx, instance).await?;
+        tx.commit().await?;
         Ok(())
     }
 
