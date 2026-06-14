@@ -111,9 +111,9 @@ pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
         }
     }
     // Cursor has no usage API for individual plans, so we self-track: this
-    // month's Cursor (composer-lane) spend at list rates vs the subscription
-    // price entered in the UI. Shown only when a Cursor credential is added AND
-    // that price is configured (the fn checks both).
+    // month's Cursor (composer-lane) spend at list rates vs the monthly figure
+    // entered in the UI (subscription cap or usage-based dollar pool). Shown only
+    // when a Cursor credential is added AND a positive monthly figure is set.
     if let Some(sub) = fetch_cursor_usage(state).await {
         subscriptions.push(sub);
     }
@@ -179,12 +179,12 @@ fn next_month_start_utc(now: DateTime<Utc>) -> DateTime<Utc> {
         .unwrap_or(now)
 }
 
-/// Cursor usage card. Cursor exposes no usage API for individual (Pro) plans,
-/// so we self-track: sum this calendar month's Cursor (`composer`-lane) token
-/// spend at list rates — the same pricing path the billing calibrator uses —
-/// and show it against the subscription price configured for the `composer`
-/// lane (the "$20" entered on the Credentials page). Returns `None` (no card)
-/// until that subscription price is set.
+/// Cursor usage card. Cursor exposes no usage API for individual plans, so we
+/// self-track: sum this calendar month's Cursor (`composer`-lane) token spend at
+/// list rates — the same pricing path the billing calibrator uses — and show it
+/// against the monthly figure configured for the `composer` lane on the
+/// Credentials page (a subscription's monthly cap OR a usage-based dollar pool;
+/// both work). Returns `None` (no card) until that monthly figure is set.
 async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
     // Only when a Cursor credential has been added (an api_key is stored).
     let store = state.cred_store().await.ok()?;
@@ -206,7 +206,10 @@ async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
             .ok()?
             .into_iter()
             .find(|p| p.lane == "composer")
-            .filter(|p| p.billing_mode == "subscription" && p.monthly_price_usd > 0.0)
+            // Render for EITHER billing mode: a subscription's monthly cap or a
+            // usage-based dollar pool both give a positive monthly figure to show
+            // accrued spend against. We just need a non-zero denominator.
+            .filter(|p| p.monthly_price_usd > 0.0)
             .map(|p| p.monthly_price_usd)?,
         Err(_) => return None,
     };
@@ -215,9 +218,9 @@ async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
     let sums = match state.store().await {
         Ok(store) => match store.token_sums_by_model_since(month_start_utc(now)).await {
             Ok(s) => s,
-            Err(e) => return Some(unavailable("cursor", "Cursor (Pro)", e.to_string())),
+            Err(e) => return Some(unavailable("cursor", "Cursor", e.to_string())),
         },
-        Err(e) => return Some(unavailable("cursor", "Cursor (Pro)", e)),
+        Err(e) => return Some(unavailable("cursor", "Cursor", e)),
     };
     let spend_usd: f64 = sums
         .iter()
@@ -234,7 +237,7 @@ async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
 
     Some(SubscriptionUsage {
         cli: "cursor",
-        label: "Cursor (Pro)",
+        label: "Cursor",
         available: true,
         error: None,
         windows: vec![UsageWindow {
