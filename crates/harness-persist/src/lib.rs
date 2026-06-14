@@ -763,11 +763,13 @@ impl RunStore {
         since: DateTime<Utc>,
     ) -> Result<Vec<ModelTokenSum>, PersistError> {
         let rows = sqlx::query_as::<_, ModelTokenSum>(
+            // SUM() over a BIGINT column yields NUMERIC in Postgres; cast back
+            // to BIGINT so it decodes into the i64 fields of ModelTokenSum.
             "SELECT model,
-                    COALESCE(SUM(input_tokens), 0)  AS input_tokens,
-                    COALESCE(SUM(output_tokens), 0) AS output_tokens,
-                    COALESCE(SUM(cache_read), 0)    AS cache_read,
-                    COALESCE(SUM(cache_write), 0)   AS cache_write
+                    COALESCE(SUM(input_tokens), 0)::BIGINT  AS input_tokens,
+                    COALESCE(SUM(output_tokens), 0)::BIGINT AS output_tokens,
+                    COALESCE(SUM(cache_read), 0)::BIGINT    AS cache_read,
+                    COALESCE(SUM(cache_write), 0)::BIGINT   AS cache_write
              FROM harness_run_nodes
              WHERE model IS NOT NULL AND ended_at >= $1
              GROUP BY model",
