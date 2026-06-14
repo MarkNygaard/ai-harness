@@ -2,13 +2,17 @@ name: architect
 description: |
   A behavior-preserving codebase-health sweep.
 
-  Flow: measure Rust metrics, read-only architectural assessment (Claude
-  Sonnet), a tightly-scoped plan (Claude Opus, ≤5–7 files, KISS/YAGNI/
-  Rule-of-Three), hook-enforced simplification with per-edit verification
-  (Pi/Kimi), full validate, fix loop, then PR.
+  Flow: measure code-health metrics (stack-aware — Rust and/or web),
+  read-only architectural assessment (Claude Sonnet), a tightly-scoped plan
+  (Claude Opus at max effort, ≤5–7 files, KISS/YAGNI/Rule-of-Three),
+  hook-enforced simplification with per-edit verification (Pi/Kimi), full
+  validate + fix loop, a model-diverse behavior-preservation review (GPT) that
+  reverts any change that drifted semantics, then PR — skipped entirely if the
+  sweep found nothing to change.
 
   Output: a PR against the project's base branch with independently
-  revertable conventional-commits and a short summary comment.
+  revertable conventional-commits and a short summary comment (or no PR at all
+  when there's nothing to simplify).
 
   Project-specific rules — verify chain, conventional-commit scope
   vocabulary, agent prohibitions — live in the project's `CLAUDE.md` /
@@ -30,41 +34,67 @@ nodes:
       echo "# Codebase Metrics" > "$REPORT"
       echo "" >> "$REPORT"
 
-      echo "## Largest .rs files" >> "$REPORT"
-      find crates -name '*.rs' -not -path '*/target/*' | xargs wc -l | sort -rn | head -26 >> "$REPORT"
+      # Detect which stacks are present so the sweep works beyond a single
+      # language. A monorepo may have both.
+      HAS_RUST=0
+      HAS_WEB=0
+      if [ -f Cargo.toml ] || ls crates/*/Cargo.toml >/dev/null 2>&1; then HAS_RUST=1; fi
+      if [ -f package.json ] || [ -d web ] \
+        || ls apps/*/package.json packages/*/package.json >/dev/null 2>&1; then HAS_WEB=1; fi
+      echo "## Detected stacks" >> "$REPORT"
+      echo "rust=$HAS_RUST web=$HAS_WEB" >> "$REPORT"
       echo "" >> "$REPORT"
 
-      echo "## #[allow(...)] count + top offending files" >> "$REPORT"
-      grep -rEn '#\[allow\(' crates --include='*.rs' >> "$REPORT" || true
+      # ── Generic (any stack) ──────────────────────────────────────────────
+      echo "## TODO/FIXME/XXX/HACK (count, excl. node_modules/target)" >> "$REPORT"
+      grep -rEn 'TODO|FIXME|XXX|HACK' \
+        --include='*.rs' --include='*.ts' --include='*.tsx' --include='*.js' --include='*.jsx' \
+        --include='*.go' --include='*.py' . 2>/dev/null \
+        | grep -vE 'node_modules|/target/' | wc -l >> "$REPORT"
       echo "" >> "$REPORT"
 
-      echo "## unsafe blocks (count)" >> "$REPORT"
-      grep -rEn '\bunsafe\b' crates --include='*.rs' | wc -l >> "$REPORT"
-      echo "" >> "$REPORT"
+      if [ "$HAS_RUST" = 1 ]; then
+        echo "## [Rust] Largest .rs files" >> "$REPORT"
+        find crates -name '*.rs' -not -path '*/target/*' | xargs wc -l 2>/dev/null | sort -rn | head -20 >> "$REPORT"
+        echo "" >> "$REPORT"
 
-      echo "## TODO/FIXME/XXX/HACK (count)" >> "$REPORT"
-      grep -rEn 'TODO|FIXME|XXX|HACK' crates --include='*.rs' | wc -l >> "$REPORT"
-      echo "" >> "$REPORT"
+        echo "## [Rust] #[allow(...)] occurrences (top offenders)" >> "$REPORT"
+        grep -rEn '#\[allow\(' crates --include='*.rs' 2>/dev/null | head -40 >> "$REPORT" || true
+        echo "" >> "$REPORT"
 
-      echo "## Functions over 80 lines (heuristic)" >> "$REPORT"
-      find crates -name '*.rs' -not -path '*/target/*' -exec awk '
-        BEGIN { depth=0; start=0 }
-        FNR == 1 { depth=0; start=0 }
-        /^\s*((pub|pub\([^)]+\))\s+)?(async\s+)?(unsafe\s+)?fn\s/ { file=FILENAME; start=NR }
-        /^{/ { if (start) depth++ }
-        /^}/ { if (start) depth--; if (depth==0) { len=NR-start+1; if (len>80) print file":"start": "len" lines"; start=0 } }
-      ' {} + >> "$REPORT" 2>/dev/null || true
-      echo "" >> "$REPORT"
+        echo "## [Rust] unsafe blocks (count)" >> "$REPORT"
+        grep -rEn '\bunsafe\b' crates --include='*.rs' 2>/dev/null | wc -l >> "$REPORT"
+        echo "" >> "$REPORT"
 
-      echo "## Clippy warning count" >> "$REPORT"
-      (cargo clippy --workspace --all-targets 2>&1 | grep -cE '^warning' || echo "0") >> "$REPORT"
-      echo "" >> "$REPORT"
+        echo "## [Rust] Clippy warning count" >> "$REPORT"
+        (cargo clippy --workspace --all-targets 2>&1 | grep -cE '^warning' || echo "0") >> "$REPORT"
+        echo "" >> "$REPORT"
+      fi
 
-      echo "## Dead code (best-effort)" >> "$REPORT"
-      if command -v cargo-udeps >/dev/null 2>&1; then
-        cargo +nightly udeps --workspace 2>/dev/null >> "$REPORT" || echo "udeps scan failed — skipping" >> "$REPORT"
-      else
-        echo "udeps unavailable — skipping" >> "$REPORT"
+      if [ "$HAS_WEB" = 1 ]; then
+        echo "## [Web] Largest .ts/.tsx files (excl. node_modules, .d.ts)" >> "$REPORT"
+        find . -path '*/node_modules' -prune -o \
+          \( -name '*.ts' -o -name '*.tsx' \) ! -name '*.d.ts' -print 2>/dev/null \
+          | xargs wc -l 2>/dev/null | sort -rn | head -20 >> "$REPORT"
+        echo "" >> "$REPORT"
+
+        echo "## [Web] eslint-disable / @ts-ignore / @ts-expect-error (count)" >> "$REPORT"
+        grep -rEn 'eslint-disable|@ts-ignore|@ts-expect-error' \
+          --include='*.ts' --include='*.tsx' . 2>/dev/null | grep -v node_modules | wc -l >> "$REPORT"
+        echo "" >> "$REPORT"
+
+        echo "## [Web] explicit \`any\` (count)" >> "$REPORT"
+        grep -rEn ': any\b|<any>|as any\b' \
+          --include='*.ts' --include='*.tsx' . 2>/dev/null | grep -v node_modules | wc -l >> "$REPORT"
+        echo "" >> "$REPORT"
+      fi
+
+      if [ "$HAS_RUST" = 0 ] && [ "$HAS_WEB" = 0 ]; then
+        echo "## (No Rust or web stack detected — generic largest-files only)" >> "$REPORT"
+        find . -path '*/node_modules' -prune -o -type f \
+          \( -name '*.go' -o -name '*.py' -o -name '*.rb' -o -name '*.java' -o -name '*.kt' \) -print 2>/dev/null \
+          | xargs wc -l 2>/dev/null | sort -rn | head -20 >> "$REPORT"
+        echo "" >> "$REPORT"
       fi
 
       cat "$REPORT"
@@ -114,6 +144,9 @@ nodes:
     category: planning
     provider: claude
     model: opus
+    # The plan decides which cleanups happen — the highest-leverage step. Run it
+    # at max reasoning effort (claude/codex only; ignored by other providers).
+    effort: max
     context: fresh
     depends_on: [analyze]
     artifact: cleanup-plan.md
@@ -123,8 +156,6 @@ nodes:
           decision: deny
           reason: "Read-only node: no code edits, no shell, no run-spawning. Read/Grep/Glob to analyze; Write ONLY your artifact file."
       post_tool_use:
-        - matcher: "Read"
-          additional_context: "Assess against: single-responsibility, cognitive load, value of each abstraction, and dependency direction (do deps point inward toward stable cores?). Note KISS/YAGNI/Rule-of-Three violations."
         - matcher: "Write"
           additional_context: "Write ONLY cleanup-plan.md under $ARTIFACTS_DIR. Do not write or overwrite any source file."
     prompt: |
@@ -264,11 +295,74 @@ nodes:
         pass with nothing left to fix. If still red on the final iteration,
         end WITHOUT the signal — the run fails, which is correct.
 
+  - id: behavior-review
+    category: validation
+    depends_on: [validate, fix-failures]
+    trigger_rule: none_failed_min_one_success
+    provider: pi
+    # Model-diverse from the Kimi implementer — a different bias profile is the
+    # whole point of this guard. gpt-5.x via omp on the ChatGPT subscription;
+    # the id MUST be namespace-qualified or the pi provider mis-prefixes it.
+    model: openai-codex/gpt-5.5
+    context: fresh
+    prompt: |
+      You are a model-diverse reviewer guarding the ONE invariant of this
+      sweep: every change must be **strictly behavior-preserving**. The
+      simplifications were made by a different model — your job is to catch any
+      that quietly changed semantics.
+
+      ## Read the change set
+      - `git diff origin/$BASE_BRANCH...HEAD` — the full simplification diff.
+      - `git log --oneline origin/$BASE_BRANCH..HEAD` — one commit per change.
+      If the diff is empty, there is nothing to review — emit the promise and stop.
+
+      ## For each commit, ask: does it change OBSERVABLE behavior?
+      Hunt for the semantic drift a "simplification" most often sneaks in:
+      - changed control flow, short-circuiting, or operator precedence
+      - changed error handling (swallowed errors, removed early returns, `?`-drops)
+      - changed iteration order, off-by-one, boundary/empty-input handling
+      - changed defaults, public visibility, trait impls, or serialization shape
+      - dropped/renamed public items, outputs, log lines, or feature flags
+      - removed code that had a side effect
+
+      ## Fix or revert (when in doubt, revert)
+      - Genuinely behavior-preserving → leave it.
+      - Changes behavior, or you are not certain it doesn't → **revert that
+        change**. This is a behavior-preserving sweep; reverting a questionable
+        simplification is always the correct call.
+      - After any revert/fix, re-run the scoped verify chain for the touched
+        crates/packages (commands in `CLAUDE.md` / `AGENTS.md`). Commit
+        reverts/fixes with a conventional-commit message. Do NOT push
+        (finalize-pr pushes), do NOT use `--no-verify`, do NOT run migrations.
+
+      Output a one-line verdict (e.g. "kept 4, reverted 1") and:
+      <promise>BEHAVIOR-REVIEW-DONE</promise>
+
+  - id: check-changes
+    category: delivery
+    depends_on: [behavior-review]
+    bash: |
+      set -uo pipefail
+      # After simplify + behavior-review (which may have reverted everything),
+      # decide whether there is anything left to ship. A no-op sweep must NOT
+      # open an empty PR.
+      if git diff --quiet "origin/$BASE_BRANCH"...HEAD; then
+        echo '{"has_changes": false}'
+      else
+        echo '{"has_changes": true}'
+      fi
+
+  - id: no-op
+    category: delivery
+    depends_on: [check-changes]
+    when: "$check-changes.output.has_changes != 'true'"
+    cancel: "Architect sweep found nothing safe to simplify — no PR opened."
+
   - id: finalize-pr
     category: delivery
     command: finalize-pr
-    depends_on: [validate, fix-failures]
-    trigger_rule: none_failed_min_one_success
+    depends_on: [check-changes]
+    when: "$check-changes.output.has_changes == 'true'"
     provider: pi
     model: kimi-code/kimi-for-coding
     context: fresh
@@ -369,9 +463,12 @@ nodes:
     model: haiku
     context: fresh
     depends_on: [verify-pr-title]
-    trigger_rule: all_done
     prompt: |
       Post one short PR comment summarizing the architect sweep.
+
+      If `gh pr view --json number` finds no open PR for this branch (a no-op
+      sweep opened none), do nothing and emit the promise — there is nothing to
+      comment on.
 
       ## Read first
 
