@@ -1499,9 +1499,30 @@ async fn execute_run_task(
     let persist_project = Some(project.clone());
     let persist_owner = state.instance_id.clone();
     let persist_ab = ab;
+    // Map node id → declared artifact path so the forwarder can read each
+    // artifact the moment its node finishes (the worktree still exists) and
+    // surface it in the UI mid-run, instead of only in the final snapshot.
+    let node_artifacts: HashMap<String, String> = workflow
+        .nodes
+        .iter()
+        .filter_map(|n| n.artifact.as_ref().map(|a| (n.id.clone(), a.clone())))
+        .collect();
+    let forwarder_artifacts = artifacts.clone();
     let forwarder = tokio::spawn(async move {
         let mut ordinals: HashMap<String, i32> = HashMap::new();
-        while let Some(ev) = rx.next().await {
+        while let Some(mut ev) = rx.next().await {
+            // Read a node's declared artifact as soon as it finishes (the
+            // worktree is still live) so both the persisted row and the SSE
+            // broadcast carry its content while the run is still in progress.
+            if let RunEvent::NodeFinished { node } = &mut ev {
+                if node.status == harness_dag::NodeStatus::Success
+                    && node.artifact_content.is_none()
+                {
+                    if let Some(rel) = node_artifacts.get(&node.id) {
+                        node.artifact_content = read_declared_artifact(&forwarder_artifacts, rel);
+                    }
+                }
+            }
             if let Ok(store) = persist_state.store().await {
                 match &ev {
                     RunEvent::RunStarted {
