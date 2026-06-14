@@ -1519,8 +1519,7 @@ async fn execute_run_task(
                     && node.artifact_content.is_none()
                 {
                     if let Some(rel) = node_artifacts.get(&node.id) {
-                        node.artifact_content =
-                            read_declared_artifact(&forwarder_artifacts, rel);
+                        node.artifact_content = read_declared_artifact(&forwarder_artifacts, rel);
                     }
                 }
             }
