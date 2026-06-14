@@ -3,23 +3,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-// Items re-exported into test scope via `use super::*` in tests.rs.
-#[cfg(test)]
-use crate::task_runner;
-#[cfg(test)]
-use axum::{
-    extract::DefaultBodyLimit,
-    http::StatusCode,
-    routing::{get, post},
-    Router,
-};
-#[cfg(test)]
-use std::sync::atomic::{AtomicBool, AtomicU64};
-
 pub(crate) mod auth;
-pub(crate) mod background;
 pub(crate) mod billing_routes;
-pub(crate) mod builders;
 pub(crate) mod categories_routes;
 pub(crate) mod codex_routes;
 pub(crate) mod credentials_routes;
@@ -36,108 +21,21 @@ pub(crate) mod project_authoring_routes;
 pub(crate) mod projects_routes;
 pub(crate) mod rate_limit;
 pub(crate) mod runs_routes;
-pub(crate) mod sse_routes;
 pub(crate) mod state;
-pub(crate) mod task_mutation_routes;
-pub(crate) mod task_query_routes;
-pub(crate) mod task_routes;
-pub(crate) mod task_submission_routes;
 pub(crate) mod usage_routes;
 pub(crate) mod workflows_routes;
 
 #[cfg(test)]
-mod reviewer_resolution_tests;
-#[cfg(test)]
 mod shutdown_test;
-#[cfg(test)]
-mod startup_tests;
-#[cfg(test)]
-mod test_fixtures;
-#[cfg(test)]
-mod tests;
 #[cfg(test)]
 mod tests_password_reset;
 
 // Re-export all public symbols so callers using `crate::http::*` paths continue to work.
 pub use init::build_app_state;
-pub(crate) use init::build_completion_callback;
-pub use state::{
-    AppState, ConcurrencyServices, CoreServices, EngineServices, IntakeServices,
-    NotificationServices, ObservabilityServices,
-};
+pub use state::{AppState, CoreServices, NotificationServices, ObservabilityServices};
 
-// Handler re-exports — moved to focused submodules, kept accessible via `crate::http::`.
-pub(crate) use misc_routes::{
-    get_issue_workflow_by_issue, get_issue_workflow_by_pr, get_project_workflow_by_project,
-    get_workflow_runtime_tree, github_webhook, health_check, ingest_signal, intake_status,
-    password_reset, project_queue_stats,
-};
-pub(crate) use sse_routes::stream_task_sse;
-pub(crate) use task_query_routes::get_task_proof;
-pub(crate) use task_submission_routes::{
-    get_task, get_task_artifacts, get_task_prompts, list_tasks,
-};
-
-/// Resolve the reviewer agent for independent agent review.
-///
-/// 1. If `config.reviewer_agent` is set, use it.
-/// 2. Otherwise, auto-select the first registered agent that isn't the implementor.
-/// 3. If none found, return None (agent review will be skipped).
-pub(crate) fn resolve_reviewer(
-    registry: &harness_agents::registry::AgentRegistry,
-    config: &harness_core::config::agents::AgentReviewConfig,
-    implementor_name: &str,
-) -> (
-    Option<Arc<dyn harness_core::agent::CodeAgent>>,
-    harness_core::config::agents::AgentReviewConfig,
-) {
-    if !config.enabled {
-        return (None, config.clone());
-    }
-
-    // Explicit reviewer
-    if !config.reviewer_agent.is_empty() {
-        if let Some(agent) = registry.get(&config.reviewer_agent) {
-            return (Some(agent), config.clone());
-        }
-        tracing::warn!(
-            "agents.review.reviewer_agent '{}' not registered, skipping agent review",
-            config.reviewer_agent
-        );
-        return (None, config.clone());
-    }
-
-    // Auto-select: first agent != implementor
-    for name in registry.list() {
-        if name != implementor_name {
-            if let Some(agent) = registry.get(name) {
-                return (Some(agent), config.clone());
-            }
-        }
-    }
-
-    (None, config.clone())
-}
-
-/// Extract the PR number from a GitHub PR URL.
-///
-/// Handles:
-/// - `.../pull/42`
-/// - `.../pull/42/files`
-/// - `.../pull/42#discussion_r...`
-pub(crate) fn parse_pr_num_from_url(url: &str) -> Option<u64> {
-    // Strip fragment first, then query string
-    let url = url.split('#').next().unwrap_or(url);
-    let url = url.split('?').next().unwrap_or(url);
-    // Walk path segments looking for "pull", then parse the segment that follows
-    let mut parts = url.split('/');
-    while let Some(seg) = parts.next() {
-        if seg == "pull" {
-            return parts.next()?.parse::<u64>().ok();
-        }
-    }
-    None
-}
+// Handler re-exports kept accessible via `crate::http::`.
+pub(crate) use misc_routes::{health_check, password_reset};
 
 pub async fn serve(server: Arc<HarnessServer>, addr: SocketAddr) -> anyhow::Result<()> {
     tracing::info!("harness: HTTP server listening on {addr}");
@@ -147,110 +45,10 @@ pub async fn serve(server: Arc<HarnessServer>, addr: SocketAddr) -> anyhow::Resu
     let state = Arc::new(build_app_state(server.clone()).await?);
 
     // Startup summary — one clean line instead of scattered logs.
-    {
-        let guard_count = state.engines.rules.read().await.guards().len();
-        let task_count = state.core.tasks.list_all().len();
-        tracing::info!(
-            project = %state.core.project_root.display(),
-            guards = guard_count,
-            pending_tasks = task_count,
-            "harness: ready"
-        );
-    }
-
-    // Spawn background watcher for AwaitingDeps tasks.
-    background::spawn_awaiting_deps_watcher(&state);
-
-    // Run one reconciliation tick against GitHub before any recovery so that
-    // recovery decisions are made on fresh GitHub truth.
-    {
-        let max_calls = state
-            .core
-            .server
-            .config
-            .reconciliation
-            .max_gh_calls_per_minute;
-        crate::reconciliation::run_once_with_runtime_token(
-            &state.core.tasks,
-            state.core.workflow_runtime_store.as_deref(),
-            state.core.issue_workflow_store.as_deref(),
-            max_calls,
-            false,
-            state.core.server.config.server.github_token.as_deref(),
-        )
-        .await;
-    }
-
-    // Re-dispatch tasks that were recovered to pending after server restart.
-    // These had PRs when the server crashed and need their review loop re-started.
-    background::spawn_pr_recovery(&state);
-
-    // Re-dispatch recovered review/planner tasks that have restart-safe input bundles.
-    background::spawn_system_task_recovery(&state);
-
-    // Re-dispatch tasks recovered from plan/triage checkpoints but without a PR.
-    background::spawn_checkpoint_recovery(&state).await;
-
-    // Re-dispatch leftover pending tasks that crashed before their first checkpoint.
-    background::spawn_orphan_pending_recovery(&state).await;
-
-    // Periodically sweep runtime issue workflows with attached PRs and emit
-    // workflow command outbox rows.
-    background::spawn_runtime_pr_feedback_sweeper(&state);
-
-    // Periodically ask repo backlog workflows to scan GitHub through runtime
-    // jobs so GitHub intake becomes workflow-owned when the runtime is enabled.
-    background::spawn_runtime_repo_backlog_poller(&state);
-
-    // Defensive recovery loop: reset repo_backlog workflows that have been
-    // sitting in non-candidate middle states (scanning / planning_batch /
-    // dispatching / reconciling) for longer than 30 minutes back to `idle`,
-    // so the poller above can re-claim them. Without this, a single dropped
-    // reducer transition (claude empty output, server restart mid-dispatch,
-    // wire-format drift) leaves a repo's intake stuck for hours.
-    crate::stale_workflow_recovery::spawn_stale_workflow_recovery(&state);
-
-    // Convert workflow command outbox rows into runtime jobs when the workflow
-    // policy keeps the dispatcher enabled.
-    background::spawn_runtime_command_dispatcher(&state);
-
-    // Execute pending workflow runtime jobs through registered agent runtimes
-    // when the workflow policy keeps the worker enabled.
-    background::spawn_runtime_job_workers(&state);
-
-    let initial_grade = {
-        let events = state
-            .observability
-            .events
-            .query(&harness_core::types::EventFilters::default())
-            .await
-            .unwrap_or_default();
-        // Use violations from the most recent scan (identified by the latest rule_scan session_id)
-        // rather than all historical rule_check events, to avoid permanently depressing the grade.
-        let violation_count = events
-            .iter()
-            .rev()
-            .find(|e| e.hook == "rule_scan")
-            .map(|scan| {
-                events
-                    .iter()
-                    .filter(|e| e.hook == "rule_check" && e.session_id == scan.session_id)
-                    .count()
-            })
-            .unwrap_or(0);
-        harness_observe::quality::QualityGrader::grade(&events, violation_count).grade
-    };
-    crate::scheduler::Scheduler::from_grade(initial_grade).start(state.clone());
-    // Pass the pre-built GitHub pollers from AppState to the orchestrator so
-    // both share the same Arc instances and on_task_complete operates on the
-    // live poller's dispatched map.
-    let github_sources = state.intake.github_pollers.clone();
-    crate::intake::build_orchestrator(
-        &state.core.server.config.intake,
-        state.intake.feishu_intake.clone(),
-        github_sources,
-    )
-    .start(state.clone());
+    tracing::info!(
+        project = %state.core.project_root.display(),
+        "harness: ready"
+    );
 
     let app = http_router::build_router(state.clone());
 

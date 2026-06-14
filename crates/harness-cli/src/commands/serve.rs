@@ -190,7 +190,6 @@ pub async fn run(
         &serve_config.server.project_root,
     );
 
-    let thread_manager = harness_server::thread_manager::ThreadManager::new();
     let mut agent_registry =
         harness_agents::registry::AgentRegistry::new(&serve_config.agents.default_agent);
     agent_registry
@@ -249,11 +248,8 @@ pub async fn run(
             ),
         );
     }
-    let mut server = harness_server::server::HarnessServer::new(
-        serve_config.clone(),
-        thread_manager,
-        agent_registry,
-    );
+    let mut server =
+        harness_server::server::HarnessServer::new(serve_config.clone(), agent_registry);
     server.runtime_logs = runtime_logs;
     server.startup_projects = parsed_projects;
     server.startup_default_project = startup_default_project;

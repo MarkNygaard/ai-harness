@@ -1,4 +1,3 @@
-use crate::thread_manager::ThreadManager;
 use harness_agents::registry::AgentRegistry;
 use harness_core::config::{HarnessConfig, ProjectEntry};
 use std::net::SocketAddr;
@@ -67,7 +66,6 @@ impl RuntimeLogMetadata {
 
 pub struct HarnessServer {
     pub config: HarnessConfig,
-    pub thread_manager: ThreadManager,
     pub agent_registry: Arc<AgentRegistry>,
     pub runtime_logs: RuntimeLogMetadata,
     /// Projects to register in the project registry at startup.
@@ -77,16 +75,11 @@ pub struct HarnessServer {
 }
 
 impl HarnessServer {
-    pub fn new(
-        mut config: HarnessConfig,
-        thread_manager: ThreadManager,
-        agent_registry: AgentRegistry,
-    ) -> Self {
+    pub fn new(mut config: HarnessConfig, agent_registry: AgentRegistry) -> Self {
         config.apply_derived_defaults();
         let retention_days = config.observe.log_retention_days;
         Self {
             config,
-            thread_manager,
             agent_registry: Arc::new(agent_registry),
             runtime_logs: RuntimeLogMetadata::disabled(retention_days),
             startup_projects: Vec::new(),

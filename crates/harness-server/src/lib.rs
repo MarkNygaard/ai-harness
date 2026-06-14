@@ -19,60 +19,24 @@ pub mod complexity_router;
 pub mod contract_validator;
 pub mod dashboard;
 pub mod db;
-pub mod event_replay;
 pub(crate) mod github_auth;
 pub mod handlers;
 pub mod hook_enforcer;
 pub mod http;
 /// Credential detection for the authoring catalog (shared with `harness-cli`).
 pub use http::credentials_routes::connected_clis;
-pub mod intake;
 pub mod memory_monitor;
 pub mod notify;
 pub mod overview;
-pub mod parallel_dispatch;
-pub mod periodic_retry;
-pub mod periodic_reviewer;
 pub mod post_validator;
 pub mod project_registry;
 pub mod q_value_store;
-pub mod reconciliation;
 pub mod redact;
 pub mod review_store;
 pub mod rule_enforcer;
-pub mod runtime_hosts;
-pub mod runtime_hosts_state;
-pub mod runtime_project_cache;
-pub mod runtime_project_cache_state;
-pub mod runtime_state_store;
-pub mod scheduler;
 pub mod server;
-pub mod services;
-pub mod stale_workflow_recovery;
-pub mod task_db;
-pub mod task_executor;
-pub(crate) mod workflow_runtime_plan_issue;
-pub(crate) mod workflow_runtime_policy;
-pub(crate) mod workflow_runtime_pr_feedback;
-pub(crate) mod workflow_runtime_repo_backlog;
-pub(crate) mod workflow_runtime_submission;
-pub(crate) mod workflow_runtime_worker;
 pub use harness_workflow::task_queue;
-pub mod task_runner;
-pub mod thread_db;
-pub mod thread_manager;
 pub mod trusted_proxy;
-pub mod webhook;
-pub mod workspace;
 
 #[doc(hidden)]
 pub mod test_helpers;
-
-#[cfg(test)]
-mod runtime_hosts_tests;
-
-#[cfg(test)]
-mod runtime_state_store_tests;
-
-#[cfg(test)]
-mod thread_manager_tests;
