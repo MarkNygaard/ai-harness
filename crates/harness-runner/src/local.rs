@@ -6,7 +6,7 @@
 //! as prompts, and `prompt`/loop bodies dispatched to a [`PromptAgent`].
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -390,21 +390,12 @@ fn validate_command_name(name: &str) -> Result<(), RunnerError> {
     Ok(())
 }
 
-/// Visible to tests only: confirm a path stays within `root` (defensive helper
-/// for future workspace-escape checks).
-#[allow(dead_code)]
-fn is_within(root: &Path, path: &Path) -> bool {
-    match (root.canonicalize(), path.canonicalize()) {
-        (Ok(r), Ok(p)) => p.starts_with(r),
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
 
     use harness_dag::{ContextMode, VarContext};
+    use std::path::Path;
     use tempfile::TempDir;
 
     use super::*;
