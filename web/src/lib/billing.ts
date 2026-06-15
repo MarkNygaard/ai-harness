@@ -98,7 +98,7 @@ export const KNOWN_LANES: LaneMeta[] = [
   {
     lane: "claude",
     label: "Claude (Max)",
-    hint: "Anthropic subscription. The usage gauge is scope-blocked, so estimated value stays manual. Enter the price in USD (€105 ≈ $113).",
+    hint: "Anthropic subscription. The usage gauge reads the live 5-hour and weekly windows, but the estimated value stays manual. Enter the price in USD (€105 ≈ $113).",
     defaultMode: "subscription",
     calibrated: false,
   },
