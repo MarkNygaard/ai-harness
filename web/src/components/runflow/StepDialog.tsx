@@ -39,7 +39,7 @@ export function StepDialog({
   const now = Date.now();
   return (
     <Dialog open={!!view} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden sm:max-w-2xl">
+      <DialogContent className="flex max-h-[85vh] flex-col gap-0 overflow-hidden sm:max-w-3xl">
         {view && (
           <>
             <DialogHeader className="shrink-0 pb-2">
