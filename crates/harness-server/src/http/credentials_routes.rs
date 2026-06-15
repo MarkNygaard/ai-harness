@@ -30,6 +30,19 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
 }
 
+/// Whether a provider's dashboard usage card is enabled (default: shown). Stored
+/// as a non-secret `show_usage_card` field in the credential blob; absent — or
+/// any value other than `"false"` — means shown.
+pub(crate) async fn usage_card_visible(store: &CredentialStore, provider: &str) -> bool {
+    store
+        .get(provider)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|f| f.get("show_usage_card").map(|v| v != "false"))
+        .unwrap_or(true)
+}
+
 /// `GET /api/credentials` — list providers + whether each is configured.
 /// Never returns secret values.
 pub async fn list_credentials(Extension(state): Extension<Arc<RunsState>>) -> Response {
@@ -51,12 +64,14 @@ pub async fn list_credentials(Extension(state): Extension<Arc<RunsState>>) -> Re
         .map(|p| ProviderCredential {
             provider: p.to_string(),
             configured: configured.iter().any(|c| c == p),
+            show_usage_card: true,
         })
         .collect();
     for c in out.iter_mut() {
         if !c.configured {
             c.configured = provider_native_present(&c.provider).await;
         }
+        c.show_usage_card = usage_card_visible(&store, &c.provider).await;
     }
     Json(out).into_response()
 }
@@ -140,7 +155,12 @@ pub async fn set_credential(
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
     match store.set(&provider, &req.fields).await {
-        Ok(()) => Json(serde_json::json!({ "saved": true, "provider": provider })).into_response(),
+        Ok(()) => {
+            // A usage-card visibility toggle takes effect on the next dashboard
+            // poll rather than after the ~3-min usage cache expires.
+            super::usage_routes::invalidate_cache().await;
+            Json(serde_json::json!({ "saved": true, "provider": provider })).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -156,6 +176,7 @@ pub async fn delete_credential(
     };
     match store.delete(&provider).await {
         Ok(()) => {
+            super::usage_routes::invalidate_cache().await;
             Json(serde_json::json!({ "deleted": true, "provider": provider })).into_response()
         }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -187,6 +208,8 @@ pub async fn list_project_credentials(
         .map(|p| ProviderCredential {
             provider: p.to_string(),
             configured: configured.iter().any(|c| c == p),
+            // Per-project providers (linear/github) have no usage card.
+            show_usage_card: true,
         })
         .collect();
     Json(out).into_response()

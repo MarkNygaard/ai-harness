@@ -41,9 +41,14 @@ CREATE TABLE IF NOT EXISTS harness_project_credentials (
 
 /// A provider's stored credential, as returned to the API (never the secrets).
 #[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProviderCredential {
     pub provider: String,
     pub configured: bool,
+    /// Whether this provider's dashboard usage card is shown (default true).
+    /// A non-secret per-credential preference; only meaningful for providers
+    /// that have a usage card (claude, codex, pi/kimi, cursor).
+    pub show_usage_card: bool,
 }
 
 /// AES-256-GCM-encrypted credential store over Postgres.

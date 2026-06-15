@@ -73,6 +73,13 @@ pub(crate) struct UsageResponse {
 static CACHE: LazyLock<Mutex<Option<(Instant, UsageResponse)>>> =
     LazyLock::new(|| Mutex::new(None));
 
+/// Drop the cached usage report so the next `GET /api/usage` rebuilds from
+/// scratch. Called when a credential changes (e.g. a usage-card visibility
+/// toggle) so the dashboard reflects it on the next poll, not after the TTL.
+pub(crate) async fn invalidate_cache() {
+    *CACHE.lock().await = None;
+}
+
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -94,15 +101,27 @@ pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
     }
 
     let creds = super::credentials_routes::connected_clis().await;
+    // Per-credential opt-out: each card can be hidden from the dashboard via the
+    // `show_usage_card` field on its credential (default: shown). Hidden cards
+    // are skipped before fetching, so e.g. hiding Claude also stops its probe.
+    let (show_claude, show_codex, show_kimi, show_cursor) = match state.cred_store().await {
+        Ok(s) => (
+            super::credentials_routes::usage_card_visible(&s, "claude").await,
+            super::credentials_routes::usage_card_visible(&s, "codex").await,
+            super::credentials_routes::usage_card_visible(&s, "pi").await,
+            super::credentials_routes::usage_card_visible(&s, "cursor").await,
+        ),
+        Err(_) => (true, true, true, true),
+    };
     let mut subscriptions = Vec::new();
 
-    if creds.claude {
+    if creds.claude && show_claude {
         subscriptions.push(fetch_claude_usage(state).await);
     }
     // ChatGPT/Codex and Kimi both come from one omp broker call.
-    if creds.codex || creds.kimi {
+    if (creds.codex && show_codex) || (creds.kimi && show_kimi) {
         let broker = fetch_broker_reports().await;
-        if creds.codex {
+        if creds.codex && show_codex {
             subscriptions.push(broker_subscription(
                 "codex",
                 "ChatGPT (Codex)",
@@ -110,7 +129,7 @@ pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
                 &broker,
             ));
         }
-        if creds.kimi {
+        if creds.kimi && show_kimi {
             subscriptions.push(broker_subscription(
                 "kimi",
                 "Kimi-for-Coding",
@@ -123,8 +142,10 @@ pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
     // this month's Cursor (composer-lane) spend at list rates as a notional
     // dollar figure (its dashboard percentage isn't readable). Shown whenever a
     // Cursor credential is added.
-    if let Some(sub) = fetch_cursor_usage(state).await {
-        subscriptions.push(sub);
+    if show_cursor {
+        if let Some(sub) = fetch_cursor_usage(state).await {
+            subscriptions.push(sub);
+        }
     }
 
     let resp = UsageResponse { subscriptions };

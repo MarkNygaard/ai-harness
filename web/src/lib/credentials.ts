@@ -9,6 +9,8 @@ import { apiJson } from "./api";
 export interface ProviderCredential {
   provider: string;
   configured: boolean;
+  /** Whether this provider's dashboard usage card is shown (default true). */
+  showUsageCard?: boolean;
 }
 
 export function useCredentials() {
@@ -32,7 +34,11 @@ export function useSetCredential() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ fields }),
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["credentials"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["credentials"] });
+      // A usage-card visibility toggle lives on the credential — refetch usage.
+      qc.invalidateQueries({ queryKey: ["usage"] });
+    },
   });
 }
 
@@ -169,6 +175,9 @@ export function useDeleteCredential() {
       apiJson(`/api/credentials/${encodeURIComponent(provider)}`, {
         method: "DELETE",
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["credentials"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["credentials"] });
+      qc.invalidateQueries({ queryKey: ["usage"] });
+    },
   });
 }

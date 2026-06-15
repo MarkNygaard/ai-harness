@@ -96,6 +96,9 @@ const PROVIDERS: {
   },
 ];
 
+/** Provider IDs that have a dashboard usage card (and so a show/hide toggle). */
+const USAGE_CARD_PROVIDERS = new Set(["claude", "codex", "pi", "cursor"]);
+
 export function CredentialsPage() {
   const creds = useCredentials();
   const configured = new Map(
@@ -130,6 +133,9 @@ export function CredentialsPage() {
             label={p.label}
             help={p.help}
             configured={configured.get(p.id) ?? false}
+            usageCardProvider={
+              USAGE_CARD_PROVIDERS.has(p.id) ? p.id : undefined
+            }
           >
             <ProviderCard
               provider={p}
@@ -141,6 +147,7 @@ export function CredentialsPage() {
           label="Kimi-for-Coding"
           help="Connect your Kimi subscription for `provider: pi` nodes."
           configured={configured.get("pi") ?? false}
+          usageCardProvider="pi"
         >
           <KimiConnectCard configured={configured.get("pi") ?? false} />
         </ProviderSummary>
@@ -148,6 +155,7 @@ export function CredentialsPage() {
           label="ChatGPT (Codex)"
           help="Connect your ChatGPT/Codex subscription for gpt-5.5 review steps."
           configured={configured.get("codex") ?? false}
+          usageCardProvider="codex"
         >
           <CodexConnectCard configured={configured.get("codex") ?? false} />
         </ProviderSummary>
@@ -161,15 +169,47 @@ export function CredentialsPage() {
  * with the full settings (credential fields / connect flow + subscription cost).
  * Keeps the page scannable — details live behind "Configure"/"Connect".
  */
+/**
+ * A non-secret per-credential toggle: show or hide this provider's usage card on
+ * the dashboard. Saves immediately (its own mutation, separate from the secret
+ * form / connect flow) and the value reflects what's stored.
+ */
+function UsageCardToggle({ provider }: { provider: string }) {
+  const creds = useCredentials();
+  const save = useSetCredential();
+  const shown =
+    creds.data?.find((c) => c.provider === provider)?.showUsageCard ?? true;
+  return (
+    <label className="flex items-center gap-2 border-t pt-4 text-sm">
+      <input
+        type="checkbox"
+        className="size-4"
+        checked={shown}
+        disabled={save.isPending}
+        onChange={(e) =>
+          save.mutate({
+            provider,
+            fields: { show_usage_card: e.target.checked ? "true" : "false" },
+          })
+        }
+      />
+      <span>Show usage card on dashboard</span>
+    </label>
+  );
+}
+
 function ProviderSummary({
   label,
   help,
   configured,
+  usageCardProvider,
   children,
 }: {
   label: string;
   help?: string;
   configured: boolean;
+  /** When set, render a "show usage card" toggle for this provider id. */
+  usageCardProvider?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -201,6 +241,9 @@ function ProviderSummary({
               {help && <DialogDescription>{help}</DialogDescription>}
             </DialogHeader>
             {children}
+            {usageCardProvider && (
+              <UsageCardToggle provider={usageCardProvider} />
+            )}
           </DialogContent>
         </Dialog>
       </CardContent>
