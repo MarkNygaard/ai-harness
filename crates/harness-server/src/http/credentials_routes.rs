@@ -71,7 +71,7 @@ pub async fn list_credentials(Extension(state): Extension<Arc<RunsState>>) -> Re
         if !c.configured {
             c.configured = provider_native_present(&c.provider).await;
         }
-        c.show_usage_card = usage_card_visible(&store, &c.provider).await;
+        c.show_usage_card = usage_card_visible(store, &c.provider).await;
     }
     Json(out).into_response()
 }

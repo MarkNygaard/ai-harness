@@ -106,10 +106,10 @@ pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
     // are skipped before fetching, so e.g. hiding Claude also stops its probe.
     let (show_claude, show_codex, show_kimi, show_cursor) = match state.cred_store().await {
         Ok(s) => (
-            super::credentials_routes::usage_card_visible(&s, "claude").await,
-            super::credentials_routes::usage_card_visible(&s, "codex").await,
-            super::credentials_routes::usage_card_visible(&s, "pi").await,
-            super::credentials_routes::usage_card_visible(&s, "cursor").await,
+            super::credentials_routes::usage_card_visible(s, "claude").await,
+            super::credentials_routes::usage_card_visible(s, "codex").await,
+            super::credentials_routes::usage_card_visible(s, "pi").await,
+            super::credentials_routes::usage_card_visible(s, "cursor").await,
         ),
         Err(_) => (true, true, true, true),
     };
