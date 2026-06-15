@@ -250,9 +250,13 @@ async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
 
 // ── Claude (first-party Claude Code usage) ───────────────────────────────────
 
-/// Claude Code's subscription usage endpoint (undocumented — the one the CLI
-/// itself calls). Returns per-window `{ utilization, resets_at }`.
-const CLAUDE_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+/// Claude subscription usage. The dedicated `oauth/usage` endpoint needs a
+/// `user:profile` scope that subscription tokens never carry (so it 403s/429s);
+/// instead we make the same trivial `/v1/messages` call the CLI does — which the
+/// token's `user:inference` scope *does* permit — and read usage off the
+/// `anthropic-ratelimit-unified-*` response headers. Costs one 1-token Haiku
+/// request per cache refresh (≈ every 3 min). Approach borrowed from Clawdmeter.
+const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
 
 async fn fetch_claude_usage(state: &RunsState) -> SubscriptionUsage {
     const CLI: &str = "claude";
@@ -263,52 +267,58 @@ async fn fetch_claude_usage(state: &RunsState) -> SubscriptionUsage {
 
     let client = reqwest::Client::new();
     let resp = client
-        .get(CLAUDE_USAGE_URL)
+        .post(CLAUDE_MESSAGES_URL)
         .header("Authorization", format!("Bearer {token}"))
+        .header("anthropic-version", "2023-06-01")
+        // The OAuth subscription token path is gated behind this beta flag and
+        // the Claude Code CLI User-Agent.
         .header("anthropic-beta", "oauth-2025-04-20")
-        // The CLI User-Agent is required or the endpoint hard rate-limits.
-        .header("User-Agent", "claude-code/1.0.0")
+        .header("User-Agent", "claude-code/2.1.5")
+        .json(&serde_json::json!({
+            "model": "claude-haiku-4-5-20251001",
+            "max_tokens": 1,
+            "messages": [{ "role": "user", "content": "hi" }],
+        }))
         .send()
         .await;
     let resp = match resp {
         Ok(r) if r.status().is_success() => r,
-        // Claude Code subscription tokens are scoped `user:inference`; the usage
-        // endpoint requires `user:profile`, which they never carry — a permanent
-        // limitation, not a transient error, so say so plainly.
-        Ok(r) if r.status().as_u16() == 403 => {
-            return unavailable(
-                CLI,
-                LABEL,
-                "not available — Claude Code subscription tokens lack the user:profile scope the usage API needs",
-            );
-        }
         Ok(r) => return unavailable(CLI, LABEL, format!("Claude usage HTTP {}", r.status())),
         Err(e) => return unavailable(CLI, LABEL, format!("Claude usage request failed: {e}")),
     };
-    let body: serde_json::Value = match resp.json().await {
-        Ok(v) => v,
-        Err(e) => return unavailable(CLI, LABEL, format!("Claude usage parse failed: {e}")),
+
+    // Usage rides on the unified rate-limit headers: utilization is a 0..1
+    // fraction of the window consumed; reset is a unix timestamp (seconds).
+    let headers = resp.headers();
+    let util = |name: &str| -> Option<f64> { headers.get(name)?.to_str().ok()?.parse().ok() };
+    let reset_rfc3339 = |name: &str| -> Option<String> {
+        let secs: i64 = headers.get(name)?.to_str().ok()?.parse().ok()?;
+        chrono::DateTime::from_timestamp(secs, 0).map(|dt| dt.to_rfc3339())
     };
 
-    // Surface the rolling 5-hour and the weekly window; ignore the per-model and
-    // extra-usage entries to keep the card focused.
     let mut windows = Vec::new();
-    for (key, label) in [("five_hour", "5-hour"), ("seven_day", "Weekly")] {
-        if let Some(w) = body.get(key) {
-            let used_pct = w.get("utilization").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let resets_at = w
-                .get("resets_at")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+    for (util_hdr, reset_hdr, label) in [
+        (
+            "anthropic-ratelimit-unified-5h-utilization",
+            "anthropic-ratelimit-unified-5h-reset",
+            "5-hour",
+        ),
+        (
+            "anthropic-ratelimit-unified-7d-utilization",
+            "anthropic-ratelimit-unified-7d-reset",
+            "Weekly",
+        ),
+    ] {
+        if let Some(frac) = util(util_hdr) {
             windows.push(UsageWindow {
                 label: label.to_string(),
-                used_pct,
-                resets_at,
+                used_pct: frac * 100.0,
+                resets_at: reset_rfc3339(reset_hdr),
             });
         }
     }
     if windows.is_empty() {
-        return unavailable(CLI, LABEL, "Claude usage response had no windows");
+        return unavailable(CLI, LABEL, "Claude usage rate-limit headers missing");
     }
     SubscriptionUsage {
         cli: CLI,
