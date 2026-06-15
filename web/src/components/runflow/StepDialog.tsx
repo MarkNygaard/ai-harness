@@ -42,7 +42,7 @@ export function StepDialog({
       <DialogContent className="max-h-[85vh] gap-0 overflow-hidden sm:max-w-2xl">
         {view && (
           <>
-            <DialogHeader>
+            <DialogHeader className="shrink-0 pb-2">
               <DialogTitle className="flex items-center gap-2">
                 <span className="truncate font-mono">{view.id}</span>
                 <Badge variant={STATUS_VARIANT[view.status] ?? "default"}>
@@ -54,53 +54,58 @@ export function StepDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 border-y py-3 text-xs sm:grid-cols-3">
-              <Meta label="CLI" value={view.provider ?? "—"} />
-              <Meta label="Model" value={view.model ?? "—"} />
-              <Meta
-                label="Duration"
-                value={formatDuration(
-                  elapsedMs(view.started_at, view.ended_at, now),
-                )}
-              />
-              <Meta label="Iterations" value={String(view.iterations)} />
-              <Meta
-                label="Input tokens"
-                value={formatTokens(view.usage.input)}
-              />
-              <Meta
-                label="Output tokens"
-                value={formatTokens(view.usage.output)}
-              />
-              {view.usage.cache_read != null && (
+            {/* One scroll region under the fixed title: the whole body scrolls
+                together, so a large artifact never gets trapped in a short
+                inner box on small screens. */}
+            <div className="min-h-0 flex-1 overflow-auto">
+              <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 border-y py-3 text-xs sm:grid-cols-3">
+                <Meta label="CLI" value={view.provider ?? "—"} />
+                <Meta label="Model" value={view.model ?? "—"} />
                 <Meta
-                  label="Cache read"
-                  value={formatTokens(view.usage.cache_read)}
+                  label="Duration"
+                  value={formatDuration(
+                    elapsedMs(view.started_at, view.ended_at, now),
+                  )}
                 />
+                <Meta label="Iterations" value={String(view.iterations)} />
+                <Meta
+                  label="Input tokens"
+                  value={formatTokens(view.usage.input)}
+                />
+                <Meta
+                  label="Output tokens"
+                  value={formatTokens(view.usage.output)}
+                />
+                {view.usage.cache_read != null && (
+                  <Meta
+                    label="Cache read"
+                    value={formatTokens(view.usage.cache_read)}
+                  />
+                )}
+                <Meta
+                  label="Total tokens"
+                  value={formatTokens(totalTokens(view.usage))}
+                />
+              </dl>
+
+              {view.note && (
+                <p className="border-b py-2 text-xs text-muted-foreground">
+                  {view.note}
+                </p>
               )}
-              <Meta
-                label="Total tokens"
-                value={formatTokens(totalTokens(view.usage))}
-              />
-            </dl>
 
-            {view.note && (
-              <p className="border-b py-2 text-xs text-muted-foreground">
-                {view.note}
-              </p>
-            )}
-
-            <div className="min-h-0 flex-1 overflow-auto pt-3">
-              <div className="mb-1 text-xs font-medium text-muted-foreground">
-                Output
+              <div className="pt-3">
+                <div className="mb-1 text-xs font-medium text-muted-foreground">
+                  Output
+                </div>
+                <OutputView text={view.output} />
+                {view.artifact && (
+                  <ArtifactView
+                    name={view.artifact}
+                    content={view.artifact_content}
+                  />
+                )}
               </div>
-              <OutputView text={view.output} />
-              {view.artifact && (
-                <ArtifactView
-                  name={view.artifact}
-                  content={view.artifact_content}
-                />
-              )}
             </div>
           </>
         )}
@@ -140,11 +145,11 @@ function ArtifactView({
           No artifact produced for this step.
         </p>
       ) : isMarkdown ? (
-        <div className="max-h-[50vh] overflow-auto rounded-md bg-muted p-3">
+        <div className="rounded-md bg-muted p-3">
           <Markdown>{content}</Markdown>
         </div>
       ) : (
-        <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
+        <pre className="whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
           {content}
         </pre>
       )}
@@ -169,13 +174,13 @@ function OutputView({ text }: { text: string | null }) {
   const json = asPrettyJson(text);
   if (json !== null) {
     return (
-      <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
+      <pre className="whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
         {json}
       </pre>
     );
   }
   return (
-    <div className="max-h-[50vh] overflow-auto rounded-md bg-muted p-3">
+    <div className="rounded-md bg-muted p-3">
       <Markdown>{text}</Markdown>
     </div>
   );
