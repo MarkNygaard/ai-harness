@@ -10,10 +10,18 @@ import { apiJson } from "./api";
 
 export interface UsageWindow {
   label: string;
-  /** Percent of the window consumed (0–100). */
+  /** Percent of the window consumed (0–100). Ignored when `amount` is set. */
   usedPct: number;
   /** Absolute reset time (RFC3339), when known. */
   resetsAt: string | null;
+  /**
+   * Preformatted absolute figure (e.g. "$1.86") shown instead of a percent bar,
+   * where a percentage would mislead (Cursor — quota isn't readable, so we show
+   * a notional cost estimate).
+   */
+  amount?: string | null;
+  /** Short qualifier under the amount (e.g. "notional · API list rates"). */
+  caption?: string | null;
 }
 
 export interface SubscriptionUsage {
