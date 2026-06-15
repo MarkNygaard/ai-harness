@@ -36,12 +36,21 @@ const CACHE_TTL: Duration = Duration::from_secs(180);
 #[derive(Clone, Serialize)]
 struct UsageWindow {
     label: String,
-    /// Percent of the window consumed (0–100).
+    /// Percent of the window consumed (0–100). Ignored by the UI when `amount`
+    /// is set (an absolute figure is shown instead of a percent bar).
     #[serde(rename = "usedPct")]
     used_pct: f64,
     /// Absolute reset time (RFC3339), when known.
     #[serde(rename = "resetsAt")]
     resets_at: Option<String>,
+    /// Preformatted absolute figure (e.g. `"$1.86"`) shown in place of the
+    /// percent bar — used where a percentage would be misleading (Cursor, whose
+    /// real quota we can't read, so we only have a notional cost estimate).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    amount: Option<String>,
+    /// Short qualifier under the amount (e.g. `"notional · API list rates"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    caption: Option<String>,
 }
 
 /// One subscription card.
@@ -110,10 +119,10 @@ pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
             ));
         }
     }
-    // Cursor has no usage API for individual plans, so we self-track: this
-    // month's Cursor (composer-lane) spend at list rates vs the monthly figure
-    // entered in the UI (subscription cap or usage-based dollar pool). Shown only
-    // when a Cursor credential is added AND a positive monthly figure is set.
+    // Cursor has no usage API for individual plans, so we self-track and show
+    // this month's Cursor (composer-lane) spend at list rates as a notional
+    // dollar figure (its dashboard percentage isn't readable). Shown whenever a
+    // Cursor credential is added.
     if let Some(sub) = fetch_cursor_usage(state).await {
         subscriptions.push(sub);
     }
@@ -179,12 +188,13 @@ fn next_month_start_utc(now: DateTime<Utc>) -> DateTime<Utc> {
         .unwrap_or(now)
 }
 
-/// Cursor usage card. Cursor exposes no usage API for individual plans, so we
-/// self-track: sum this calendar month's Cursor (`composer`-lane) token spend at
-/// list rates — the same pricing path the billing calibrator uses — and show it
-/// against the monthly figure configured for the `composer` lane on the
-/// Credentials page (a subscription's monthly cap OR a usage-based dollar pool;
-/// both work). Returns `None` (no card) until that monthly figure is set.
+/// Cursor usage card. Cursor exposes no usage API for individual plans, and its
+/// dashboard percentage is measured against an undisclosed Auto+Composer
+/// allowance at discounted rates — neither of which we can read. So we can't
+/// mirror that percentage; we self-track instead, summing this calendar month's
+/// Cursor (`composer`-lane) token spend at API **list rates** and showing it as
+/// a notional dollar figure (NOT a percent — a `% of $20` would misrepresent
+/// both the denominator and the rate). Shown whenever a Cursor credential exists.
 async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
     // Only when a Cursor credential has been added (an api_key is stored).
     let store = state.cred_store().await.ok()?;
@@ -198,21 +208,6 @@ async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
     if !has_cursor_cred {
         return None;
     }
-
-    let monthly_price = match state.billing_store().await {
-        Ok(store) => store
-            .list()
-            .await
-            .ok()?
-            .into_iter()
-            .find(|p| p.lane == "composer")
-            // Render for EITHER billing mode: a subscription's monthly cap or a
-            // usage-based dollar pool both give a positive monthly figure to show
-            // accrued spend against. We just need a non-zero denominator.
-            .filter(|p| p.monthly_price_usd > 0.0)
-            .map(|p| p.monthly_price_usd)?,
-        Err(_) => return None,
-    };
 
     let now = Utc::now();
     let sums = match state.store().await {
@@ -242,8 +237,10 @@ async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
         error: None,
         windows: vec![UsageWindow {
             label: "This month".to_string(),
-            used_pct: spend_usd / monthly_price * 100.0,
+            used_pct: 0.0, // ignored — `amount` is set, so no bar is shown
             resets_at: Some(next_month_start_utc(now).to_rfc3339()),
+            amount: Some(format!("${spend_usd:.2}")),
+            caption: Some("notional · API list rates".to_string()),
         }],
     })
 }
@@ -314,6 +311,8 @@ async fn fetch_claude_usage(state: &RunsState) -> SubscriptionUsage {
                 label: label.to_string(),
                 used_pct: frac * 100.0,
                 resets_at: reset_rfc3339(reset_hdr),
+                amount: None,
+                caption: None,
             });
         }
     }
@@ -525,6 +524,8 @@ fn broker_subscription(
                 label,
                 used_pct,
                 resets_at,
+                amount: None,
+                caption: None,
             });
         }
     }

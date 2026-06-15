@@ -37,12 +37,24 @@ function WindowRow({ w }: { w: UsageWindow }) {
           {resetsLabel(w.resetsAt)}
         </span>
       </div>
-      <div className="flex items-center gap-2">
-        <span className="w-9 shrink-0 text-sm font-semibold tabular-nums">
-          {Math.round(w.usedPct)}%
-        </span>
-        <UsageBar pct={w.usedPct} />
-      </div>
+      {w.amount != null ? (
+        // No readable quota — show the absolute figure, not a percent bar.
+        <div className="flex items-baseline gap-2">
+          <span className="text-sm font-semibold tabular-nums">{w.amount}</span>
+          {w.caption && (
+            <span className="text-[11px] text-muted-foreground">
+              {w.caption}
+            </span>
+          )}
+        </div>
+      ) : (
+        <div className="flex items-center gap-2">
+          <span className="w-9 shrink-0 text-sm font-semibold tabular-nums">
+            {Math.round(w.usedPct)}%
+          </span>
+          <UsageBar pct={w.usedPct} />
+        </div>
+      )}
     </div>
   );
 }
