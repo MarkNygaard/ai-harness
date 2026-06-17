@@ -54,6 +54,55 @@ under Kubernetes *or* plain Docker.
   `docker compose`. The image bundles the agent runtimes (`bun`, `mise`, `omp` +
   the `pi-web-access` plugin) and listens on `:8080`.
 
+## Skills
+
+ai-harness ships **distributable Agent Skills** (Anthropic's `SKILL.md` format)
+so an AI assistant working in *any* repo can drive the harness — turn a task
+into a reviewed PR — without leaving that project. They live in
+[`skills/`](skills/).
+
+Install the `ai-harness` skill with the open
+[`skills` CLI](https://github.com/vercel-labs/skills):
+
+```bash
+# Into the current project (.claude/skills/):
+npx skills add MarkNygaard/ai-harness --skill ai-harness
+# …or globally, for every project on your machine:
+npx skills add MarkNygaard/ai-harness --skill ai-harness -g -a claude-code -y
+```
+
+See [`skills/README.md`](skills/README.md) for manual install and the full list.
+
+### Connecting the MCP endpoint
+
+The skill drives the harness over its **MCP-over-HTTP** endpoint. Point your
+agent at your deployment by adding it to the project's `.mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "harness": {
+      "type": "http",
+      "url": "https://<your-harness-host>/mcp"
+    }
+  }
+}
+```
+
+If the server runs with `HARNESS_API_TOKEN` set, send it as a bearer header:
+
+```json
+{
+  "mcpServers": {
+    "harness": {
+      "type": "http",
+      "url": "https://<your-harness-host>/mcp",
+      "headers": { "Authorization": "Bearer <HARNESS_API_TOKEN>" }
+    }
+  }
+}
+```
+
 ## Documentation
 
 - **[AGENTS.md](AGENTS.md)** — the canonical guide for humans and agents:
