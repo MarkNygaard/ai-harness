@@ -65,11 +65,15 @@ Install the `ai-harness` skill with the open
 [`skills` CLI](https://github.com/vercel-labs/skills):
 
 ```bash
-# Into the current project (.claude/skills/):
-npx skills add MarkNygaard/ai-harness --skill ai-harness
+# Into the current project's .claude/skills/:
+npx skills add MarkNygaard/ai-harness --skill ai-harness -a claude-code
 # …or globally, for every project on your machine:
 npx skills add MarkNygaard/ai-harness --skill ai-harness -g -a claude-code -y
 ```
+
+`-a claude-code` is what lands it in `.claude/skills/`. Without it the CLI
+targets the shared `.agents/skills/` directory — which Codex, Cursor, and others
+read, but **Claude Code does not** (it only reads `.claude/skills/`).
 
 See [`skills/README.md`](skills/README.md) for manual install and the full list.
 

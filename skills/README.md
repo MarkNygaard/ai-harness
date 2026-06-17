@@ -17,8 +17,8 @@ These live at the repo's top-level `skills/`, so the open
 [`skills` CLI](https://github.com/vercel-labs/skills) discovers them by name:
 
 ```bash
-# Into the current project (.claude/skills/), Claude Code:
-npx skills add MarkNygaard/ai-harness --skill ai-harness
+# Into the current project's .claude/skills/ (Claude Code):
+npx skills add MarkNygaard/ai-harness --skill ai-harness -a claude-code
 
 # Globally (every project on your machine), non-interactive:
 npx skills add MarkNygaard/ai-harness --skill ai-harness -g -a claude-code -y
@@ -27,8 +27,11 @@ npx skills add MarkNygaard/ai-harness --skill ai-harness -g -a claude-code -y
 npx skills add MarkNygaard/ai-harness --list
 ```
 
-`-g` installs to `~/.claude/skills/` (all projects); omit it for the current
-project only. `-a` selects the agent (`claude-code`, `cursor`, …).
+`-a claude-code` targets Claude Code's `.claude/skills/`. **Without `-a`** the
+CLI installs to the shared `.agents/skills/` directory — which Codex, Cursor,
+Zed, and others read, but **Claude Code does not** (it only reads
+`.claude/skills/`), so pass `-a claude-code` for Claude Code. `-g` installs
+globally to `~/.claude/skills/`; omit it for the current project only.
 
 ## Install by hand
 
