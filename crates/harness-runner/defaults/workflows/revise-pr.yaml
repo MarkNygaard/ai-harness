@@ -193,6 +193,16 @@ nodes:
       Prefer minimal, surgical changes that fit existing patterns. Honor
       CLAUDE.md / AGENTS.md.
 
+      ## When a fix has a real fork, optimize for the outcome
+      When addressing a feedback item admits more than one approach — a quick
+      patch that compromises versus a more involved fix that's clearly better —
+      ALWAYS choose the one with the best end result: the most correct, robust,
+      and maintainable, even when it's the larger change. Implementation effort,
+      speed, and token cost are NOT factors. This is about HOW to resolve an
+      in-scope item, not licence to widen scope beyond the feedback (the "Out of
+      scope" list still holds); if the better fix is materially larger, call out
+      the trade-off in the plan.
+
       After writing plan.md, output a one-line summary and:
       <promise>PLAN-DONE</promise>
 
