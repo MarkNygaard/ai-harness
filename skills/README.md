@@ -14,24 +14,38 @@ work with ai-harness from **another** project. Each subfolder is one skill.
 ## Install with `npx skills` (recommended)
 
 These live at the repo's top-level `skills/`, so the open
-[`skills` CLI](https://github.com/vercel-labs/skills) discovers them by name:
+[`skills` CLI](https://github.com/vercel-labs/skills) discovers them by name.
+Run it interactively and it detects your installed agents and asks which to
+install to:
 
 ```bash
-# Into the current project's .claude/skills/ (Claude Code):
-npx skills add MarkNygaard/ai-harness --skill ai-harness -a claude-code
-
-# Globally (every project on your machine), non-interactive:
-npx skills add MarkNygaard/ai-harness --skill ai-harness -g -a claude-code -y
-
-# See everything this repo offers:
-npx skills add MarkNygaard/ai-harness --list
+npx skills add MarkNygaard/ai-harness --skill ai-harness
 ```
 
-`-a claude-code` targets Claude Code's `.claude/skills/`. **Without `-a`** the
-CLI installs to the shared `.agents/skills/` directory — which Codex, Cursor,
-Zed, and others read, but **Claude Code does not** (it only reads
-`.claude/skills/`), so pass `-a claude-code` for Claude Code. `-g` installs
-globally to `~/.claude/skills/`; omit it for the current project only.
+### Claude Code
+
+Claude Code reads **only** `.claude/skills/`, so target it explicitly:
+
+```bash
+# This project (.claude/skills/):
+npx skills add MarkNygaard/ai-harness --skill ai-harness -a claude-code
+# Globally (~/.claude/skills/), non-interactive:
+npx skills add MarkNygaard/ai-harness --skill ai-harness -g -a claude-code -y
+```
+
+### Any other agent
+
+Codex, Cursor, OpenCode, Zed, Gemini CLI, GitHub Copilot, and most others read
+the shared `.agents/skills/` directory. Pass the agent's id to `-a`:
+
+```bash
+npx skills add MarkNygaard/ai-harness --skill ai-harness -a codex
+# …or -a cursor, -a opencode, -a zed, -a gemini-cli, …
+```
+
+`-g` installs globally instead of into the current project; `-y` skips the
+prompts. See everything this repo offers with
+`npx skills add MarkNygaard/ai-harness --list`.
 
 ## Install by hand
 
