@@ -3,9 +3,9 @@
 A Rust-native orchestration layer for AI coding agents. It turns a task — typed
 in a UI, sent over MCP, or pulled from a Linear column — into a run of a
 user-authored **workflow DAG**, drives coding agents (Claude Code, Codex,
-Pi/Kimi) through it in an isolated git worktree, and opens a pull request at the
-end. The control plane is a single binary backed by Postgres, and runs anywhere
-a container does (Kubernetes or plain Docker).
+Pi/Kimi, Cursor) through it in an isolated git worktree, and opens a pull
+request at the end. The control plane is a single binary backed by Postgres, and
+runs anywhere a container does (Kubernetes or plain Docker).
 
 ## What it does
 
@@ -13,11 +13,14 @@ a container does (Kubernetes or plain Docker).
   implement → validate → PR → review loops) in YAML or the visual editor. Nodes
   run different agents/models, with `when:` gating, `$node.output` wiring, and
   loop/until constructs.
-- **Bundled workflows.** `idea-to-pr` (a task → a reviewed pull request) and
-  `merge-pr` (resolve conflicts + merge a ready PR) ship in the box, ready to
-  run or fork into a project's `.harness/workflows/`.
-- **Multiple agents in one pipeline.** Claude Code, Codex, and Pi/Kimi (`omp`)
-  nodes, each picking its own model.
+- **Bundled workflows.** Several ship in the box, ready to run or fork into a
+  project's `.harness/workflows/`: `idea-to-pr` (a task → a reviewed PR),
+  `revise-pr` (address review feedback on an open PR), `merge-pr` (resolve
+  conflicts + merge a ready PR), `architect` (behavior-preserving codebase
+  health sweep), `geo-audit` (audit a site for AI-search readiness), and
+  `judge-ab` (score an A/B model comparison).
+- **Multiple agents in one pipeline.** Claude Code, Codex, Pi/Kimi (`omp`), and
+  Cursor (`cursor-agent`) nodes, each picking its own model.
 - **Three ways to trigger a run:**
   - the **web UI**;
   - an **MCP-over-HTTP** endpoint — `run_trigger` / `run_list` / `run_status`
@@ -44,7 +47,7 @@ server's container — there is no per-run Kubernetes Job — so the same image 
 under Kubernetes *or* plain Docker.
 
 - **Local dev:** `./start-server.sh` brings up Postgres (via the dev
-  `docker-compose.yml`) and runs the server. See [AGENTS.md](AGENTS.md) for the
+  `docker-compose.yml`) and runs the server. See [CLAUDE.md](CLAUDE.md) for the
   build/verify commands.
 - **Container:** run the published image
   (`ghcr.io/marknygaard/ai-harness`) with `HARNESS_DATABASE_URL`,
@@ -116,9 +119,9 @@ If the server runs with `HARNESS_API_TOKEN` set, send it as a bearer header:
 
 ## Documentation
 
-- **[AGENTS.md](AGENTS.md)** — the canonical guide for humans and agents:
+- **[CLAUDE.md](CLAUDE.md)** — the canonical guide for humans and agents:
   build/verify commands, architecture glossary, server-operation & worktree
-  rules, and the PR workflow. **Start here.**
+  rules, and the PR workflow. **Start here.** (`AGENTS.md` just points here.)
 - [docs/authoring-workflows.md](docs/authoring-workflows.md) — authoring
   workflow DAGs (node types, `when:` / `$node.output` / `output_format`,
   `trigger_rule`, and good practices).
@@ -128,3 +131,6 @@ If the server runs with `HARNESS_API_TOKEN` set, send it as a bearer header:
 Originally seeded from [majiayu000/harness](https://github.com/majiayu000/harness)
 (MIT); substantial portions of its runtime are still used. See
 [LICENSE](LICENSE).
+
+Workflow design draws inspiration from
+[Archon](https://github.com/coleam00/archon).
