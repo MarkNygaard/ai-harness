@@ -48,16 +48,11 @@ const PROVIDERS: {
   {
     id: "claude",
     label: "Claude (subscription)",
-    help: "Uses your Claude subscription via the official CLI. Provide a long-lived token from `claude setup-token`, or paste the contents of ~/.claude/.credentials.json from a machine where you've run `claude login`.",
+    help: "Uses your Claude subscription via the official CLI. Paste the contents of ~/.claude/.credentials.json from a machine where you've run `claude login`.",
     fields: [
       {
-        key: "oauth_token",
-        label: "OAuth token (from `claude setup-token`)",
-        help: "Sets CLAUDE_CODE_OAUTH_TOKEN for the claude CLI.",
-      },
-      {
         key: "credentials_json",
-        label: "…or ~/.claude/.credentials.json (full JSON)",
+        label: "~/.claude/.credentials.json (full JSON)",
         multiline: true,
         help: "Written to ~/.claude/.credentials.json (carries a refresh token, so it self-renews).",
       },
