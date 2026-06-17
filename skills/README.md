@@ -5,7 +5,7 @@ work with ai-harness from **another** project. Each subfolder is one skill.
 
 | Skill | What it does |
 |---|---|
-| [`ai-harness/`](ai-harness/SKILL.md) | Trigger + monitor ai-harness runs on the cluster over MCP (turn a task into a reviewed PR from any repo). |
+| [`ai-harness/`](ai-harness/SKILL.md) | Drive ai-harness over MCP from any repo: trigger + monitor runs (turn a task into a reviewed PR), and author custom workflows ([authoring-workflows.md](ai-harness/authoring-workflows.md)). |
 
 > This folder is for **other** repos. It's distinct from
 > [`/.claude/skills/`](../.claude/skills/) — the skills this repo's *own* Claude

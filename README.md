@@ -56,10 +56,10 @@ under Kubernetes *or* plain Docker.
 
 ## Skills
 
-ai-harness ships **distributable Agent Skills** (Anthropic's `SKILL.md` format)
-so an AI assistant working in *any* repo can drive the harness — turn a task
-into a reviewed PR — without leaving that project. They live in
-[`skills/`](skills/).
+ai-harness ships a **distributable Agent Skill** (Anthropic's `SKILL.md` format)
+so an AI assistant working in *any* repo can drive the harness — trigger a task
+into a reviewed PR, and author custom workflows over MCP — without leaving that
+project. It lives in [`skills/`](skills/).
 
 Install the `ai-harness` skill with the open
 [`skills` CLI](https://github.com/vercel-labs/skills). Run it and it asks which
