@@ -62,18 +62,26 @@ into a reviewed PR — without leaving that project. They live in
 [`skills/`](skills/).
 
 Install the `ai-harness` skill with the open
-[`skills` CLI](https://github.com/vercel-labs/skills):
+[`skills` CLI](https://github.com/vercel-labs/skills). Run it interactively and
+it detects your installed agents and asks which to install to:
 
 ```bash
-# Into the current project's .claude/skills/:
-npx skills add MarkNygaard/ai-harness --skill ai-harness -a claude-code
-# …or globally, for every project on your machine:
-npx skills add MarkNygaard/ai-harness --skill ai-harness -g -a claude-code -y
+npx skills add MarkNygaard/ai-harness --skill ai-harness
 ```
 
-`-a claude-code` is what lands it in `.claude/skills/`. Without it the CLI
-targets the shared `.agents/skills/` directory — which Codex, Cursor, and others
-read, but **Claude Code does not** (it only reads `.claude/skills/`).
+Or target an agent non-interactively (add `-g` for a global, all-projects
+install):
+
+```bash
+# Claude Code → .claude/skills/
+npx skills add MarkNygaard/ai-harness --skill ai-harness -a claude-code
+
+# Any other agent (Codex, Cursor, OpenCode, Zed, Gemini CLI, …) → shared .agents/skills/
+npx skills add MarkNygaard/ai-harness --skill ai-harness -a codex   # or -a cursor, -a opencode, …
+```
+
+Claude Code reads **only** `.claude/skills/` (so it needs `-a claude-code`);
+most other agents share `.agents/skills/`.
 
 See [`skills/README.md`](skills/README.md) for manual install and the full list.
 
