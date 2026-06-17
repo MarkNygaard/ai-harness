@@ -5,9 +5,11 @@ description: >-
   a reviewed PR without leaving this project. Use when the user wants to "send
   this to ai-harness / the harness", "trigger idea-to-pr", "run a GEO audit on
   the cluster", "kick off a harness run", "check a harness run's status", or
-  A/B-compare two models on the same task. Covers connecting the harness
-  MCP-over-HTTP endpoint and the run_trigger / run_trigger_pair / run_status /
-  run_list / workflow_list tools. NOT for authoring workflow YAML.
+  A/B-compare two models on the same task. Also covers **authoring custom
+  workflows** over MCP (the workflow_* tools — see authoring-workflows.md) when
+  the user wants to "create/edit a harness workflow", "add a node", or "branch a
+  workflow". Covers connecting the harness MCP-over-HTTP endpoint and the
+  run_trigger / run_trigger_pair / run_status / run_list / workflow_* tools.
 ---
 
 # Drive ai-harness from this project (over MCP)
@@ -20,9 +22,11 @@ pull request**. Other bundled workflows include `geo-audit` (audit a project's
 live site for AI-search readiness) and `merge-pr` / `revise-pr`. You interact
 with it purely through its MCP tools: trigger a run, then poll its status.
 
-This skill is for **running** the harness from another repo. Authoring the
-workflow YAML itself is a separate concern (the harness repo's own
-`harness-workflows` skill + `docs/authoring-workflows.md`).
+This skill covers two things: **running** the harness (trigger + monitor, below)
+and **authoring** your own workflows over MCP. If the user wants to *build or
+edit a workflow* rather than run one, read **[authoring-workflows.md](authoring-workflows.md)**
+(bundled alongside this file) — the `workflow_*` tools, the node model, `when:` /
+`trigger_rule` / `output_format`, and a worked build.
 
 ## Step 0 — Is the harness MCP connected?
 
