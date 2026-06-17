@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { IconPlus, IconTrash, IconVariable } from "@tabler/icons-react";
+import { IconBraces, IconPlus, IconTrash } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -127,7 +127,7 @@ export function ProjectEnvDialog({ project }: { project: string }) {
           <Button variant="ghost" size="sm" title="Environment variables" />
         }
       >
-        <IconVariable className="size-3.5" /> Env
+        <IconBraces className="size-3.5" /> Env
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
