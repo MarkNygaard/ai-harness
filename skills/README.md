@@ -15,36 +15,35 @@ work with ai-harness from **another** project. Each subfolder is one skill.
 
 These live at the repo's top-level `skills/`, so the open
 [`skills` CLI](https://github.com/vercel-labs/skills) discovers them by name.
-Run it interactively and it detects your installed agents and asks which to
-install to:
+Run it and it asks which agent(s) to install to and whether to install for the
+current project or globally:
 
 ```bash
 npx skills add MarkNygaard/ai-harness --skill ai-harness
 ```
 
+Name an agent with `-a` to skip the agent prompt (it still asks project vs.
+global):
+
 ### Claude Code
 
-Claude Code reads **only** `.claude/skills/`, so target it explicitly:
+Claude Code reads **only** `.claude/skills/`:
 
 ```bash
-# This project (.claude/skills/):
 npx skills add MarkNygaard/ai-harness --skill ai-harness -a claude-code
-# Globally (~/.claude/skills/), non-interactive:
-npx skills add MarkNygaard/ai-harness --skill ai-harness -g -a claude-code -y
 ```
 
 ### Any other agent
 
 Codex, Cursor, OpenCode, Zed, Gemini CLI, GitHub Copilot, and most others read
-the shared `.agents/skills/` directory. Pass the agent's id to `-a`:
+the shared `.agents/skills/` directory:
 
 ```bash
 npx skills add MarkNygaard/ai-harness --skill ai-harness -a codex
 # …or -a cursor, -a opencode, -a zed, -a gemini-cli, …
 ```
 
-`-g` installs globally instead of into the current project; `-y` skips the
-prompts. See everything this repo offers with
+See everything this repo offers with
 `npx skills add MarkNygaard/ai-harness --list`.
 
 ## Install by hand
