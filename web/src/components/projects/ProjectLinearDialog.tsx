@@ -10,7 +10,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { useProjectWorkflows } from "@/lib/authoring";
+import { useWorkflowList } from "@/lib/authoring";
 import { useProjectCredentials } from "@/lib/credentials";
 import {
   useDeleteLinearSource,
@@ -98,8 +98,9 @@ export function ProjectLinearDialog({ project }: { project: string }) {
         <DialogHeader>
           <DialogTitle className="font-mono text-base">{project}</DialogTitle>
           <DialogDescription>
-            Linear trigger bindings for this project. Each binding watches a team
-            and fires a workflow for matching issues. One binding per workflow.
+            Linear trigger bindings for this project. Each binding watches a
+            team and fires a workflow for matching issues. One binding per
+            workflow.
           </DialogDescription>
         </DialogHeader>
         <DialogBody project={project} />
@@ -111,7 +112,7 @@ export function ProjectLinearDialog({ project }: { project: string }) {
 function DialogBody({ project }: { project: string }) {
   const discovery = useLinearDiscovery(project);
   const sources = useLinearSources(project);
-  const workflows = useProjectWorkflows(project);
+  const workflows = useWorkflowList();
   const del = useDeleteLinearSource(project);
 
   // `null` = closed, "" = new binding, otherwise the workflow being edited.
@@ -192,7 +193,8 @@ function DialogBody({ project }: { project: string }) {
                   </Badge>
                 </div>
                 <span className="truncate text-[11px] text-muted-foreground">
-                  {s.team_name} · {resolveStateName(s.team_id, s.source_state_id)}
+                  {s.team_name} ·{" "}
+                  {resolveStateName(s.team_id, s.source_state_id)}
                 </span>
               </div>
               <Button
@@ -256,7 +258,9 @@ function BindingForm({
 }) {
   const save = useSaveLinearSource(project);
 
-  const [workflowName, setWorkflowName] = useState(fixedWorkflow ? workflow : "");
+  const [workflowName, setWorkflowName] = useState(
+    fixedWorkflow ? workflow : "",
+  );
   const [teamId, setTeamId] = useState(source?.team_id ?? "");
   const [sourceStateId, setSourceStateId] = useState(
     source?.source_state_id ?? "",
@@ -268,7 +272,9 @@ function BindingForm({
   const [reviewStateId, setReviewStateId] = useState(
     source?.review_state_id ?? "",
   );
-  const [readyStateId, setReadyStateId] = useState(source?.ready_state_id ?? "");
+  const [readyStateId, setReadyStateId] = useState(
+    source?.ready_state_id ?? "",
+  );
   const [baseBranch, setBaseBranch] = useState(source?.base_branch ?? "");
   const [pollIntervalSecs, setPollIntervalSecs] = useState(
     source?.poll_interval_secs ?? 60,
@@ -437,10 +443,7 @@ function BindingForm({
             value={pollIntervalSecs}
             onChange={(e) =>
               setPollIntervalSecs(
-                Math.min(
-                  86400,
-                  Math.max(1, parseInt(e.target.value, 10) || 1),
-                ),
+                Math.min(86400, Math.max(1, parseInt(e.target.value, 10) || 1)),
               )
             }
           />

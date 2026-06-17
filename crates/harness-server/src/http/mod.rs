@@ -17,7 +17,6 @@ pub(crate) mod linear_routes;
 pub(crate) mod linear_source_routes;
 pub(crate) mod mcp_routes;
 pub(crate) mod misc_routes;
-pub(crate) mod project_authoring_routes;
 pub(crate) mod projects_routes;
 pub(crate) mod rate_limit;
 pub(crate) mod runs_routes;

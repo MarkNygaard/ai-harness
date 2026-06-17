@@ -1,12 +1,17 @@
-//! Workflow **authoring** API for the visual editor (and, later, the MCP
-//! server) — thin HTTP over [`harness_runner::authoring`], the shared core. All
-//! handlers operate on the project's `.harness/workflows` + the bundled defaults.
+//! Workflow **authoring** API (visual editor + MCP) — thin HTTP over
+//! [`harness_runner::authoring`], the shared core. Workflows are **global**: all
+//! handlers operate on the cluster's `.harness/workflows` + the bundled defaults
+//! (there is no per-project workflow storage).
 //!
 //! - `GET  /api/authoring/catalog`          — building blocks (kinds, providers, commands)
-//! - `GET  /api/authoring/workflows`        — list (bundled + project)
+//! - `GET  /api/authoring/workflows`        — list (bundled + custom)
 //! - `GET  /api/authoring/workflows/{name}` — a workflow's editable source
 //! - `POST /api/authoring/validate`         — `{yaml}` → structural validation
 //! - `POST /api/authoring/workflows`        — `{name, yaml}` → validate + save
+//! - `POST /api/authoring/create`           — `{name, …}` → new empty workflow
+//! - `POST /api/authoring/set-node`         — `{name, node}` → add/replace a node
+//! - `POST /api/authoring/remove-node`      — `{name, id}` → delete a node
+//! - `POST /api/authoring/connect`          — `{name, from, to}` → add an edge
 
 use std::sync::Arc;
 
@@ -15,6 +20,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use harness_runner::authoring;
+use serde::Deserialize;
 
 use super::state::AppState;
 
@@ -71,4 +77,92 @@ pub async fn delete_workflow(
         Ok(reset) => Json(serde_json::json!({ "reset": reset, "name": name })).into_response(),
         Err(e) => err(StatusCode::BAD_REQUEST, e),
     }
+}
+
+/// Echo the resulting workflow's node summaries after a mutation so the client
+/// sees the new DAG state (the build→validate→fix loop).
+fn mutation_result(root: &std::path::Path, name: &str, r: Result<(), String>) -> Response {
+    match r {
+        Ok(()) => match authoring::get_workflow(root, name) {
+            Ok(src) => Json(authoring::validate_workflow(&src.yaml)).into_response(),
+            Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        },
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct CreateBody {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// `POST /api/authoring/create` — new empty workflow.
+pub async fn create_workflow(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<CreateBody>,
+) -> Response {
+    let root = &state.core.project_root;
+    let r = authoring::create_workflow(
+        root,
+        &req.name,
+        req.description.as_deref(),
+        req.provider.as_deref(),
+        req.model.as_deref(),
+    );
+    mutation_result(root, &req.name, r)
+}
+
+#[derive(Deserialize)]
+pub struct SetNodeBody {
+    pub name: String,
+    pub node: serde_json::Value,
+}
+
+/// `POST /api/authoring/set-node` — add or replace a node by id.
+pub async fn set_node(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<SetNodeBody>,
+) -> Response {
+    let root = &state.core.project_root;
+    let r = authoring::set_node(root, &req.name, req.node);
+    mutation_result(root, &req.name, r)
+}
+
+#[derive(Deserialize)]
+pub struct RemoveNodeBody {
+    pub name: String,
+    pub id: String,
+}
+
+/// `POST /api/authoring/remove-node` — delete a node and strip it from dependents.
+pub async fn remove_node(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<RemoveNodeBody>,
+) -> Response {
+    let root = &state.core.project_root;
+    let r = authoring::remove_node(root, &req.name, &req.id);
+    mutation_result(root, &req.name, r)
+}
+
+#[derive(Deserialize)]
+pub struct ConnectBody {
+    pub name: String,
+    pub from: String,
+    pub to: String,
+}
+
+/// `POST /api/authoring/connect` — add a dependency edge (`to` depends on `from`).
+pub async fn connect_nodes(
+    State(state): State<Arc<AppState>>,
+    Json(req): Json<ConnectBody>,
+) -> Response {
+    let root = &state.core.project_root;
+    let r = authoring::connect_nodes(root, &req.name, &req.from, &req.to);
+    mutation_result(root, &req.name, r)
 }

@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use super::{
     auth, billing_routes, categories_routes, credentials_routes, geo_routes, health_check,
-    linear_routes, linear_source_routes, mcp_routes, password_reset, project_authoring_routes,
-    runs_routes, state::AppState, workflows_routes,
+    linear_routes, linear_source_routes, mcp_routes, password_reset, runs_routes, state::AppState,
+    workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -143,39 +143,18 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/authoring/validate",
             post(workflows_routes::validate_workflow),
         )
-        // ── Project-scoped authoring (per registered project; remote MCP) ───
         .route(
-            "/api/projects/{project}/authoring/catalog",
-            get(project_authoring_routes::get_catalog),
+            "/api/authoring/create",
+            post(workflows_routes::create_workflow),
+        )
+        .route("/api/authoring/set-node", post(workflows_routes::set_node))
+        .route(
+            "/api/authoring/remove-node",
+            post(workflows_routes::remove_node),
         )
         .route(
-            "/api/projects/{project}/authoring/workflows",
-            get(project_authoring_routes::list_workflows)
-                .post(project_authoring_routes::save_workflow),
-        )
-        .route(
-            "/api/projects/{project}/authoring/workflows/{name}",
-            get(project_authoring_routes::get_workflow),
-        )
-        .route(
-            "/api/projects/{project}/authoring/validate",
-            post(project_authoring_routes::validate_workflow),
-        )
-        .route(
-            "/api/projects/{project}/authoring/create",
-            post(project_authoring_routes::create_workflow),
-        )
-        .route(
-            "/api/projects/{project}/authoring/set-node",
-            post(project_authoring_routes::set_node),
-        )
-        .route(
-            "/api/projects/{project}/authoring/remove-node",
-            post(project_authoring_routes::remove_node),
-        )
-        .route(
-            "/api/projects/{project}/authoring/connect",
-            post(project_authoring_routes::connect_nodes),
+            "/api/authoring/connect",
+            post(workflows_routes::connect_nodes),
         )
         // ── Linear trigger binding (per project+workflow; persist only) ─────
         .route(

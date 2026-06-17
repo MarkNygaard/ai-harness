@@ -1,10 +1,11 @@
 //! Built-in default workflows and commands, compiled into the binary so a fresh
 //! project gets the standard pipeline without copying any files.
 //!
-//! Resolution order is **project-first**: a project's
-//! `.harness/workflows/<name>.yaml` or `.harness/commands/<name>.md` shadows the
-//! bundled default of the same name (see [`resolve_workflow_source`] and
-//! [`crate::LocalRunner`]'s command resolution).
+//! Resolution is **custom-first**: a global custom workflow
+//! `.harness/workflows/<name>.yaml` (authored via the editor/MCP) or a
+//! `.harness/commands/<name>.md` shadows the bundled default of the same name
+//! (see [`resolve_workflow_source`] and [`crate::LocalRunner`]'s command
+//! resolution). Workflows are global — there is no per-project storage.
 
 use std::path::Path;
 
@@ -81,10 +82,11 @@ pub fn default_command_names() -> Vec<&'static str> {
 }
 
 /// Resolve a workflow reference (a filesystem path **or** a bare name) to its
-/// YAML source, project-first.
+/// YAML source, custom-first.
 ///
 /// 1. An existing file path is read directly.
-/// 2. Otherwise the name resolves to `<project_root>/.harness/workflows/<name>.yaml`.
+/// 2. Otherwise the name resolves to a global custom workflow at
+///    `<root>/.harness/workflows/<name>.yaml`.
 /// 3. Otherwise a bundled [`default_workflow`].
 /// 4. Otherwise an error listing what's available.
 ///
@@ -106,7 +108,7 @@ pub fn resolve_workflow_source(
         return Ok((yaml, trimmed.to_string()));
     }
 
-    // 2. Project-local workflow by name.
+    // 2. Global custom workflow by name.
     let project_file = project_root
         .join(".harness")
         .join("workflows")
@@ -124,7 +126,7 @@ pub fn resolve_workflow_source(
 
     // 4. Not found.
     Err(format!(
-        "workflow `{trimmed}` not found (not a file, no project .harness/workflows/{trimmed}.yaml, \
+        "workflow `{trimmed}` not found (not a file, no custom .harness/workflows/{trimmed}.yaml, \
          and not a bundled default; bundled: {:?})",
         list_default_workflows()
     ))

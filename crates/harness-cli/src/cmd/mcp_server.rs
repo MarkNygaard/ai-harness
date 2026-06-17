@@ -75,9 +75,10 @@ struct SessionState {
     turns: Vec<SessionTurn>,
 }
 
-/// HTTP client for a cluster's **per-project** authoring API — the remote MCP
-/// mode. Enabled by `HARNESS_REMOTE_URL` (+ `HARNESS_TOKEN`) so an MCP client's
+/// HTTP client for a cluster's **global** authoring API — the remote MCP mode.
+/// Enabled by `HARNESS_REMOTE_URL` (+ `HARNESS_TOKEN`) so an MCP client's
 /// `.mcp.json` `env` block points the workflow tools at the hosted harness.
+/// Workflows are global on the cluster — no project is involved.
 struct RemoteAuthoring {
     client: reqwest::Client,
     base: String,
@@ -121,24 +122,19 @@ impl RemoteAuthoring {
         }
     }
 
-    async fn get(&self, project: &str, path: &str) -> Result<Value, String> {
-        let url = format!("{}/api/projects/{project}/authoring/{path}", self.base);
+    async fn get(&self, path: &str) -> Result<Value, String> {
+        let url = format!("{}/api/authoring/{path}", self.base);
         self.send(self.client.get(url)).await
     }
 
-    async fn post(&self, project: &str, path: &str, body: Value) -> Result<Value, String> {
-        let url = format!("{}/api/projects/{project}/authoring/{path}", self.base);
+    async fn post(&self, path: &str, body: Value) -> Result<Value, String> {
+        let url = format!("{}/api/authoring/{path}", self.base);
         self.send(self.client.post(url).json(&body)).await
     }
 }
 
-/// Route a `workflow_*` tool call to the remote cluster API. `project` is a
-/// required argument in remote mode. Returns a tool result.
+/// Route a `workflow_*` tool call to the remote cluster's global authoring API.
 async fn remote_workflow_tool(remote: &RemoteAuthoring, name: &str, args: &Value) -> Value {
-    let project = match args.get("project").and_then(Value::as_str) {
-        Some(p) if !p.is_empty() => p,
-        _ => return tool_error_result("`project` is required (remote authoring mode)"),
-    };
     let s = |k: &str| {
         args.get(k)
             .and_then(Value::as_str)
@@ -146,25 +142,13 @@ async fn remote_workflow_tool(remote: &RemoteAuthoring, name: &str, args: &Value
             .to_string()
     };
     let result = match name {
-        "workflow_catalog" => remote.get(project, "catalog").await,
-        "workflow_list" => remote.get(project, "workflows").await,
-        "workflow_get" => {
-            remote
-                .get(project, &format!("workflows/{}", s("name")))
-                .await
-        }
-        "workflow_validate" => {
-            remote
-                .post(project, "validate", json!({ "yaml": s("yaml") }))
-                .await
-        }
+        "workflow_catalog" => remote.get("catalog").await,
+        "workflow_list" => remote.get("workflows").await,
+        "workflow_get" => remote.get(&format!("workflows/{}", s("name"))).await,
+        "workflow_validate" => remote.post("validate", json!({ "yaml": s("yaml") })).await,
         "workflow_save" => {
             remote
-                .post(
-                    project,
-                    "workflows",
-                    json!({ "name": s("name"), "yaml": s("yaml") }),
-                )
+                .post("workflows", json!({ "name": s("name"), "yaml": s("yaml") }))
                 .await
         }
         "workflow_create" => {
@@ -175,31 +159,22 @@ async fn remote_workflow_tool(remote: &RemoteAuthoring, name: &str, args: &Value
                     body.insert(k.into(), v.clone());
                 }
             }
-            remote.post(project, "create", Value::Object(body)).await
+            remote.post("create", Value::Object(body)).await
         }
         "workflow_set_node" => {
             let node = args.get("node").cloned().unwrap_or(Value::Null);
             remote
-                .post(
-                    project,
-                    "set-node",
-                    json!({ "name": s("name"), "node": node }),
-                )
+                .post("set-node", json!({ "name": s("name"), "node": node }))
                 .await
         }
         "workflow_remove_node" => {
             remote
-                .post(
-                    project,
-                    "remove-node",
-                    json!({ "name": s("name"), "id": s("id") }),
-                )
+                .post("remove-node", json!({ "name": s("name"), "id": s("id") }))
                 .await
         }
         "workflow_connect" => {
             remote
                 .post(
-                    project,
                     "connect",
                     json!({ "name": s("name"), "from": s("from"), "to": s("to") }),
                 )
@@ -218,7 +193,7 @@ struct McpServer {
     sessions: Arc<RwLock<HashMap<String, SessionState>>>,
     executor: Arc<dyn PromptExecutor>,
     /// When set, the `workflow_*` tools author against a remote cluster's
-    /// per-project API instead of the local filesystem.
+    /// global authoring API instead of the local filesystem.
     remote: Option<RemoteAuthoring>,
 }
 
@@ -305,9 +280,7 @@ impl McpServer {
                 }
             }
             "ping" => jsonrpc_success_response(id, json!({})),
-            "tools/list" => {
-                jsonrpc_success_response(id, json!({ "tools": mcp_tools(self.remote.is_some()) }))
-            }
+            "tools/list" => jsonrpc_success_response(id, json!({ "tools": mcp_tools() })),
             "tools/call" => {
                 let call_params: ToolCallParams = match serde_json::from_value(params) {
                     Ok(value) => value,
@@ -784,44 +757,11 @@ struct WorkflowConnectArgs {
     project_root: Option<PathBuf>,
 }
 
-/// Tool definitions. In `remote` mode the `workflow_*` tools gain a required
-/// `project` argument (they target a registered cluster project).
-fn mcp_tools(remote: bool) -> Vec<Value> {
-    let mut tools = mcp_tools_base();
-    if remote {
-        for t in tools.iter_mut() {
-            let is_workflow = t
-                .get("name")
-                .and_then(Value::as_str)
-                .is_some_and(|n| n.starts_with("workflow_"));
-            if !is_workflow {
-                continue;
-            }
-            if let Some(props) = t
-                .pointer_mut("/inputSchema/properties")
-                .and_then(Value::as_object_mut)
-            {
-                props.insert(
-                    "project".into(),
-                    json!({ "type": "string", "description": "Registered project on the cluster." }),
-                );
-            }
-            match t
-                .pointer_mut("/inputSchema/required")
-                .and_then(Value::as_array_mut)
-            {
-                Some(req) => req.insert(0, json!("project")),
-                None => {
-                    if let Some(schema) =
-                        t.pointer_mut("/inputSchema").and_then(Value::as_object_mut)
-                    {
-                        schema.insert("required".into(), json!(["project"]));
-                    }
-                }
-            }
-        }
-    }
-    tools
+/// Tool definitions. In remote mode the `workflow_*` tools target the cluster's
+/// **global** authoring API — workflows are global, so there is no `project`
+/// argument (same schema as local mode).
+fn mcp_tools() -> Vec<Value> {
+    mcp_tools_base()
 }
 
 fn mcp_tools_base() -> Vec<Value> {
@@ -1478,9 +1418,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn remote_mode_workflow_tools_require_project() {
+    async fn remote_mode_workflow_tools_are_global() {
         let server = remote_server();
-        // tools/list: workflow tools gain a required `project`; others don't.
+        // Workflows are global — remote-mode workflow tools take no `project`.
         let resp = server
             .handle_request(make_request(1, "tools/list", json!({})))
             .await
@@ -1491,28 +1431,9 @@ mod tests {
             .find(|t| t["name"] == "workflow_create")
             .unwrap();
         let required = create["inputSchema"]["required"].as_array().unwrap();
-        assert!(required.iter().any(|v| v == "project"), "project required");
-        let harness = tools.iter().find(|t| t["name"] == "harness").unwrap();
-        let hreq = harness["inputSchema"]["required"].as_array().unwrap();
         assert!(
-            !hreq.iter().any(|v| v == "project"),
-            "non-workflow unchanged"
+            !required.iter().any(|v| v == "project"),
+            "workflows are global; no project argument"
         );
-
-        // A workflow call without `project` errors before any HTTP request.
-        let resp = server
-            .handle_request(make_request(
-                2,
-                "tools/call",
-                json!({ "name": "workflow_list", "arguments": {} }),
-            ))
-            .await
-            .unwrap();
-        let r = extract_result(resp);
-        assert_eq!(r["isError"], Value::Bool(true));
-        assert!(r["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("project"));
     }
 }

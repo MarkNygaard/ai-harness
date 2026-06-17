@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/select";
 import { NO_PROJECT } from "@/lib/dashboard";
 import { useProjects } from "@/lib/projects";
-import { useProjectWorkflows, useWorkflowList } from "@/lib/authoring";
+import { useWorkflowList } from "@/lib/authoring";
 import type { RunStatus, RunSummary } from "@/types/run";
 
 const STATUS_VARIANT: Record<
@@ -180,12 +180,8 @@ function NewRunForm() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
 
-  // Available workflows for the picker: project-scoped when a project is
-  // selected (its local workflows + bundled defaults), else the global list.
-  const globalWorkflows = useWorkflowList();
-  const projectWorkflows = useProjectWorkflows(project || null);
-  const workflows =
-    (project ? projectWorkflows.data : globalWorkflows.data) ?? [];
+  // Available workflows for the picker — global (bundled defaults + custom).
+  const workflows = useWorkflowList().data ?? [];
 
   // Selecting a project pre-fills its default workflow (if it declares one).
   function onProjectChange(name: string) {

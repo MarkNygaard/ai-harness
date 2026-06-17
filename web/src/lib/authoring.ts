@@ -28,18 +28,6 @@ export function useWorkflowList() {
   });
 }
 
-export function useProjectWorkflows(project: string | null) {
-  return useQuery<WorkflowSummary[], Error>({
-    queryKey: ["authoring", "workflows", project],
-    enabled: !!project,
-    queryFn: ({ signal }) =>
-      apiJson<WorkflowSummary[]>(
-        `/api/projects/${encodeURIComponent(project!)}/authoring/workflows`,
-        { signal },
-      ),
-  });
-}
-
 export function useWorkflowSource(name: string | null) {
   return useQuery<WorkflowSource, Error>({
     queryKey: ["authoring", "workflow", name],

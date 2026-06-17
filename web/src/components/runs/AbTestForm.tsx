@@ -12,11 +12,7 @@ import {
 } from "@/components/ui/select";
 import { useCreateRunPair, useWorkflowModels } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
-import {
-  useCatalog,
-  useProjectWorkflows,
-  useWorkflowList,
-} from "@/lib/authoring";
+import { useCatalog, useWorkflowList } from "@/lib/authoring";
 import type { ModelRef } from "@/types/run";
 
 const modelLabel = (m: ModelRef) => `${m.provider} / ${m.model}`;
@@ -39,11 +35,8 @@ export function AbTestForm() {
   const [challengerProvider, setChallengerProvider] = useState("");
   const [challengerModel, setChallengerModel] = useState("");
 
-  // Available workflows for the picker (project-scoped when one is selected).
-  const globalWorkflows = useWorkflowList();
-  const projectWorkflows = useProjectWorkflows(project || null);
-  const workflows =
-    (project ? projectWorkflows.data : globalWorkflows.data) ?? [];
+  // Available workflows for the picker — global (bundled defaults + custom).
+  const workflows = useWorkflowList().data ?? [];
 
   // The workflow's distinct provider+model pairs — the swap candidates.
   const models = useWorkflowModels(open && workflow ? workflow : null, project);
