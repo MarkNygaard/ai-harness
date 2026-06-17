@@ -62,15 +62,14 @@ into a reviewed PR — without leaving that project. They live in
 [`skills/`](skills/).
 
 Install the `ai-harness` skill with the open
-[`skills` CLI](https://github.com/vercel-labs/skills). Run it interactively and
-it detects your installed agents and asks which to install to:
+[`skills` CLI](https://github.com/vercel-labs/skills). Run it and it asks which
+agent(s) to install to and whether to install for the project or globally:
 
 ```bash
 npx skills add MarkNygaard/ai-harness --skill ai-harness
 ```
 
-Or target an agent non-interactively (add `-g` for a global, all-projects
-install):
+Name an agent with `-a` to skip the agent prompt:
 
 ```bash
 # Claude Code → .claude/skills/
