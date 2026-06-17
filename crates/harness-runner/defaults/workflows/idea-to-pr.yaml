@@ -128,6 +128,17 @@ nodes:
       new abstractions — but "minimal" means no needless scope, not skipping
       robustness the task implies. Honor CLAUDE.md / AGENTS.md.
 
+      ## When there's a real fork, optimize for the outcome
+      Some tasks hit a genuine decision point — a quick path that compromises
+      versus a more involved path that's clearly better. ALWAYS choose the path
+      with the best end result: the most correct, robust, and maintainable
+      design, even when it is the larger task. Implementation effort, speed, and
+      token cost are NOT factors in this choice — never pick the weaker approach
+      because the better one is more work. This governs HOW to build what's in
+      scope; it is not licence to expand scope (the "Not building" limits still
+      hold). If the better path is materially larger or riskier, still choose it,
+      but call out the trade-off in the plan so the human sees what was decided.
+
       After writing plan.md, output a one-line summary and:
       <promise>PLAN-DONE</promise>
 
