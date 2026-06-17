@@ -1,5 +1,5 @@
 ---
-name: harness-mcp
+name: ai-harness
 description: >-
   Trigger and monitor ai-harness runs on the cluster over MCP — turn a task into
   a reviewed PR without leaving this project. Use when the user wants to "send
