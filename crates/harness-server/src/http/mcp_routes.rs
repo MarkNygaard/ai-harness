@@ -579,7 +579,7 @@ mod tests {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
 
-        // run_trigger needs a project + the task spec; authoring tools need project.
+        // run_trigger needs a project + the task spec; authoring tools are global.
         let trigger = by_name("run_trigger").unwrap();
         let req = trigger["inputSchema"]["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "project"));
@@ -601,9 +601,13 @@ mod tests {
             );
         }
 
+        // Authoring tools are global — `workflow_catalog` takes no `project`.
         let catalog = by_name("workflow_catalog").unwrap();
-        let req = catalog["inputSchema"]["required"].as_array().unwrap();
-        assert!(req.iter().any(|v| v == "project"));
+        let has_project = catalog["inputSchema"]
+            .get("required")
+            .and_then(|v| v.as_array())
+            .is_some_and(|r| r.iter().any(|v| v == "project"));
+        assert!(!has_project, "authoring tools are global — no project arg");
     }
 
     #[test]
