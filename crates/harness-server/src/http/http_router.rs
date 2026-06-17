@@ -193,6 +193,13 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::put(credentials_routes::set_project_credential)
                 .delete(credentials_routes::delete_project_credential),
         )
+        // Per-project build environment variables (injected into runs + .env.local).
+        .route(
+            "/api/projects/{project}/env",
+            get(credentials_routes::list_project_env)
+                .put(credentials_routes::set_project_env)
+                .delete(credentials_routes::delete_project_env),
+        )
         // ── Connect Kimi (OAuth device flow, server-side) ───────────────────
         .route(
             "/api/credentials/kimi/connect/start",
