@@ -267,9 +267,10 @@ pub async fn delete_project_credential(
 
 // ── Per-project build environment variables ─────────────────────────────────
 //
-// Free-form KEY=VALUE pairs injected into a run's process env AND written to a
-// `.env.local` in the worktree, so build/codegen (Next.js, drizzle, …) can read
-// them. Encrypted at rest in the project credential store under provider `env`
+// Free-form KEY=VALUE pairs injected into a run's process environment, so
+// build/codegen (Next.js, drizzle, .NET, …) can read them — process env is the
+// universal delivery, so no per-stack dotenv file is written. Encrypted at rest
+// in the project credential store under provider `env`
 // (the whole map serialized as one JSON field, so a save replaces the set).
 // Unlike the other credentials these ARE returned to the editor (viewable +
 // editable), by deliberate choice — they're a project's own build config.

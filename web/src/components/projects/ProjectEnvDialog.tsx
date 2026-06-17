@@ -46,8 +46,8 @@ function parseDotenv(text: string): Row[] {
 /**
  * Per-project build environment variables. Add rows manually, or paste a whole
  * `.env` into a key field and it expands into rows instantly (Vercel-style).
- * Values are encrypted at rest, injected into the run's env, and written to a
- * `.env.local` in the worktree.
+ * Values are encrypted at rest and injected into the run's process environment
+ * (the universal delivery — .NET, Node, Next.js builds all read it).
  */
 export function ProjectEnvDialog({ project }: { project: string }) {
   const [open, setOpen] = useState(false);
@@ -134,9 +134,9 @@ export function ProjectEnvDialog({ project }: { project: string }) {
           <DialogTitle className="font-mono text-base">{project}</DialogTitle>
           <DialogDescription>
             Build-time environment variables for this project — injected into
-            each run's env and written to a <code>.env.local</code> in the
-            worktree. Add rows, or paste a whole <code>.env</code> into a key
-            field to fill them instantly.
+            each run's process environment (read by .NET, Node, Next.js builds,
+            …). Add rows, or paste a whole <code>.env</code> into a key field to
+            fill them instantly.
           </DialogDescription>
         </DialogHeader>
 
