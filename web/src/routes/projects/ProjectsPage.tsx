@@ -34,6 +34,7 @@ import {
   useSetProjectCacheCap,
 } from "@/lib/projects";
 import { ProjectLinearDialog } from "@/components/projects/ProjectLinearDialog";
+import { ProjectEnvDialog } from "@/components/projects/ProjectEnvDialog";
 import type { Project, ProjectRepo } from "@/types/project";
 
 /** Display metadata for each per-project credential provider. */
@@ -66,7 +67,7 @@ export function ProjectsPage() {
 
   return (
     <AppShell title="Projects">
-      <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
+      <div className="mx-auto flex max-w-4xl flex-col gap-5 p-6">
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold">
             <IconFolderCog className="size-5 text-accent-orange" /> Projects
@@ -169,6 +170,7 @@ function ProjectRow({ project }: { project: Project }) {
         </div>
         <ProjectLinearDialog project={project.name} />
         <ProjectCredentialsDialog project={project.name} />
+        <ProjectEnvDialog project={project.name} />
         <ProjectCacheDialog project={project} />
         <Button
           variant="ghost"

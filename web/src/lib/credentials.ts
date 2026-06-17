@@ -113,6 +113,43 @@ export function useDeleteProjectCredential(project: string | null) {
   });
 }
 
+// ---------------------------------------------------------------------------
+// Per-project build environment variables (`/api/projects/{project}/env`).
+//
+// Free-form KEY=VALUE pairs injected into a run's process env and written to a
+// `.env.local` in the worktree. Unlike the secret credentials above, values ARE
+// returned (the editor shows/edits them) — they're a project's build config.
+// ---------------------------------------------------------------------------
+
+export interface ProjectEnv {
+  vars: Record<string, string>;
+}
+
+export function useProjectEnv(project: string | null) {
+  return useQuery<ProjectEnv, Error>({
+    queryKey: ["project-env", project],
+    enabled: !!project,
+    queryFn: ({ signal }) =>
+      apiJson<ProjectEnv>(`/api/projects/${encodeURIComponent(project!)}/env`, {
+        signal,
+      }),
+  });
+}
+
+export function useSetProjectEnv(project: string | null) {
+  const qc = useQueryClient();
+  return useMutation<unknown, Error, Record<string, string>>({
+    mutationFn: (vars) =>
+      apiJson(`/api/projects/${encodeURIComponent(project!)}/env`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vars }),
+      }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["project-env", project] }),
+  });
+}
+
 /** Kimi-for-Coding OAuth device-login (server-driven). */
 export interface KimiConnectStart {
   user_code: string;

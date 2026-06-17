@@ -48,6 +48,29 @@ const ARTIFACT_MAX_BYTES: usize = 65_536;
 /// Read a node's declared artifact (relative to the run's artifacts dir),
 /// rejecting traversal/absolute paths and truncating on a char boundary.
 /// `None` when undeclared, escaping, or not produced (graceful).
+/// Project env keys we never let a project override — they'd break the
+/// toolchain (`PATH`/`HOME`) or the control plane (`HARNESS_*`).
+fn is_reserved_env_key(k: &str) -> bool {
+    k == "PATH" || k == "HOME" || k.to_ascii_uppercase().starts_with("HARNESS_")
+}
+
+/// Write a project's build env vars as a `.env.local` at the worktree root, so
+/// build tools that read a dotenv file pick them up. Values are double-quoted
+/// with backslash/quote/newline escaped.
+fn write_env_local(workspace: &Path, vars: &std::collections::BTreeMap<String, String>) {
+    let mut body = String::new();
+    for (k, v) in vars {
+        let esc = v
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"")
+            .replace('\n', "\\n");
+        body.push_str(&format!("{k}=\"{esc}\"\n"));
+    }
+    if let Err(e) = std::fs::write(workspace.join(".env.local"), body) {
+        tracing::warn!("failed to write .env.local: {e}");
+    }
+}
+
 fn read_declared_artifact(artifacts_dir: &Path, rel: &str) -> Option<String> {
     if rel.is_empty() {
         return None;
@@ -1439,6 +1462,23 @@ async fn execute_run_task(
         // accept the PR. Provenance stays in the per-node author name.
         if let Some(email) = state.github_author_email_for_project(&project).await {
             run_env.insert("HARNESS_GIT_AUTHOR_EMAIL".to_string(), email);
+        }
+        // Inject the project's build env vars: into the agent's process env
+        // (skipping reserved keys that would break the toolchain/control plane)
+        // and into a `.env.local` at the worktree root (for tools that read a
+        // dotenv file — Next.js auto-load, `node --env-file`).
+        if let Ok(store) = state.cred_store().await {
+            let env_vars = crate::http::credentials_routes::project_env_vars(store, &project).await;
+            if !env_vars.is_empty() {
+                write_env_local(&workspace, &env_vars);
+                for (k, v) in env_vars {
+                    if is_reserved_env_key(&k) {
+                        tracing::warn!(run_id = %run_id, "skipping reserved project env var `{k}`");
+                    } else {
+                        run_env.insert(k, v);
+                    }
+                }
+            }
         }
         // `provider: pi` → omp; `cursor` → cursor-agent; others → CodeAgent registry.
         let code = Arc::new(CodeAgentRunner::new(state.agent_registry.clone()));

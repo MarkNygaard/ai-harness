@@ -265,6 +265,99 @@ pub async fn delete_project_credential(
     }
 }
 
+// ── Per-project build environment variables ─────────────────────────────────
+//
+// Free-form KEY=VALUE pairs injected into a run's process env AND written to a
+// `.env.local` in the worktree, so build/codegen (Next.js, drizzle, …) can read
+// them. Encrypted at rest in the project credential store under provider `env`
+// (the whole map serialized as one JSON field, so a save replaces the set).
+// Unlike the other credentials these ARE returned to the editor (viewable +
+// editable), by deliberate choice — they're a project's own build config.
+
+/// Provider key under which a project's env map is stored.
+const ENV_PROVIDER: &str = "env";
+/// The single field holding the JSON-encoded env map (one field ⇒ save replaces).
+const ENV_FIELD: &str = "vars";
+
+#[derive(Deserialize)]
+pub struct ProjectEnvRequest {
+    pub vars: BTreeMap<String, String>,
+}
+
+/// A project's stored build env vars (decrypted) — empty map if none set.
+pub(crate) async fn project_env_vars(
+    store: &CredentialStore,
+    project: &str,
+) -> BTreeMap<String, String> {
+    store
+        .get_project(project, ENV_PROVIDER)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|f| f.get(ENV_FIELD).cloned())
+        .and_then(|j| serde_json::from_str(&j).ok())
+        .unwrap_or_default()
+}
+
+/// `GET /api/projects/{project}/env` — the project's env vars, values included.
+pub async fn list_project_env(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(project): AxumPath<String>,
+) -> Response {
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let vars = project_env_vars(store, &project).await;
+    Json(serde_json::json!({ "vars": vars })).into_response()
+}
+
+/// `PUT /api/projects/{project}/env` — replace the project's env vars wholesale.
+pub async fn set_project_env(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(project): AxumPath<String>,
+    Json(req): Json<ProjectEnvRequest>,
+) -> Response {
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    // An empty set clears the credential entirely.
+    if req.vars.is_empty() {
+        return match store.delete_project(&project, ENV_PROVIDER).await {
+            Ok(()) => Json(serde_json::json!({ "saved": true, "count": 0 })).into_response(),
+            Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        };
+    }
+    let json = match serde_json::to_string(&req.vars) {
+        Ok(j) => j,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    // One field only ⇒ set_project's field-merge replaces the whole map.
+    let fields = BTreeMap::from([(ENV_FIELD.to_string(), json)]);
+    match store.set_project(&project, ENV_PROVIDER, &fields).await {
+        Ok(()) => {
+            Json(serde_json::json!({ "saved": true, "count": req.vars.len() })).into_response()
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `DELETE /api/projects/{project}/env` — clear all of a project's env vars.
+pub async fn delete_project_env(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(project): AxumPath<String>,
+) -> Response {
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.delete_project(&project, ENV_PROVIDER).await {
+        Ok(()) => Json(serde_json::json!({ "deleted": true, "project": project })).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
