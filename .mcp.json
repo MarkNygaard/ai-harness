@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "harness": {
-      "type": "stdio",
-      "command": "cargo",
-      "args": ["run", "--quiet", "--bin", "harness", "--", "mcp-server"]
-    }
-  }
-}
