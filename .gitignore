@@ -32,3 +32,7 @@ omp.jsonl
 
 # internal planning notes (kept local, never pushed)
 /TASK.md
+
+# local MCP client config — carries a personal cluster URL/token; keep local.
+# See the root README "Skills → Connecting the MCP endpoint" for the format.
+.mcp.json
