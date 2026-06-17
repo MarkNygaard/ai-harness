@@ -13,9 +13,10 @@ gated PR) is the default; this is for building your **own** workflows or variant
 change is validated atomically.
 
 Custom workflows are **global**: saved to `.harness/workflows/<name>.yaml` on the
-cluster and runnable by every project. The authoring tools are **project-scoped**
-(every call takes a `project` the cluster has registered) — the project is the
-validation/context anchor, not where the workflow is confined.
+cluster and runnable by every project. The authoring tools take **no `project`
+argument** — there is one global set of workflows, not a per-project one. (The
+run tools — `run_trigger` etc. — still take a `project`, since a *run* operates
+on a specific registered repo.)
 
 ## The authoring loop
 
@@ -25,14 +26,14 @@ file:
 
 | Tool | Use |
 |---|---|
-| `workflow_catalog({project})` | Discover the legal node kinds, provider/model hints, available commands, and trigger rules **for this project**. Start here. |
-| `workflow_create({project, name, description?, provider?, model?})` | New empty workflow. Errors if one by that name exists. |
-| `workflow_set_node({project, name, node})` | Add or replace one node by `id` (JSON spec — see below). Re-validates the whole DAG. |
-| `workflow_connect({project, name, from, to})` | Add an edge: `to` now depends on `from`. Catches unknown ids and cycles. |
-| `workflow_remove_node({project, name, id})` | Delete a node and strip it from every dependent's `depends_on`. |
-| `workflow_validate({project, yaml})` | Parse + check candidate YAML without saving. |
+| `workflow_catalog()` | Discover the legal node kinds, provider/model hints, available commands, and trigger rules. Start here. |
+| `workflow_create({name, description?, provider?, model?})` | New empty workflow. Errors if one by that name exists. |
+| `workflow_set_node({name, node})` | Add or replace one node by `id` (JSON spec — see below). Re-validates the whole DAG. |
+| `workflow_connect({name, from, to})` | Add an edge: `to` now depends on `from`. Catches unknown ids and cycles. |
+| `workflow_remove_node({name, id})` | Delete a node and strip it from every dependent's `depends_on`. |
+| `workflow_validate({yaml})` | Parse + check candidate YAML without saving. |
 | `workflow_get` / `workflow_list` | Read a workflow's YAML / list what's available (bundled + custom). |
-| `workflow_save({project, name, yaml})` | Validate then save raw YAML in one shot (escape hatch if you'd rather assemble YAML yourself). |
+| `workflow_save({name, yaml})` | Validate then save raw YAML in one shot (escape hatch if you'd rather assemble YAML yourself). |
 
 **Typical build:** `workflow_catalog` → `workflow_create` → one
 `workflow_set_node` per step (each returns the node summaries — your
@@ -236,36 +237,37 @@ node a downstream `when:` reads, and on verdict/gate nodes.
 ## A worked build (MCP calls)
 
 ```jsonc
-// 1. See what's legal in this project.
-mcp__harness__workflow_catalog({ project: "ticket0" })
+// 1. See what's legal (node kinds, providers, commands).
+mcp__harness__workflow_catalog({})
 
 // 2. New empty workflow.
 mcp__harness__workflow_create({
-  project: "ticket0", name: "triage-fix",
+  name: "triage-fix",
   description: "Classify an issue, then fix bugs or plan features, then open a PR.",
   provider: "pi", model: "kimi-code/kimi-for-coding"
 })
 
 // 3. One node per step (each call re-validates the DAG).
-mcp__harness__workflow_set_node({ project: "ticket0", name: "triage-fix", node: {
+mcp__harness__workflow_set_node({ name: "triage-fix", node: {
   id: "classify", prompt: "Classify $ARGUMENTS as BUG or FEATURE.", model: "haiku",
   output_format: { type: "object", properties: { type: { type: "string", enum: ["BUG","FEATURE"] } }, required: ["type"] }
 }})
-mcp__harness__workflow_set_node({ project: "ticket0", name: "triage-fix", node: {
+mcp__harness__workflow_set_node({ name: "triage-fix", node: {
   id: "fix", depends_on: ["classify"], when: "$classify.output.type == 'BUG'", command: "fix-bug"
 }})
-mcp__harness__workflow_set_node({ project: "ticket0", name: "triage-fix", node: {
+mcp__harness__workflow_set_node({ name: "triage-fix", node: {
   id: "plan", depends_on: ["classify"], when: "$classify.output.type == 'FEATURE'", command: "plan-feature"
 }})
-mcp__harness__workflow_set_node({ project: "ticket0", name: "triage-fix", node: {
+mcp__harness__workflow_set_node({ name: "triage-fix", node: {
   id: "ship", depends_on: ["fix","plan"], trigger_rule: "none_failed_min_one_success", command: "open-pr"
 }})
 
 // 4. (Each set_node already validated + saved. Read it back to confirm.)
-mcp__harness__workflow_get({ project: "ticket0", name: "triage-fix" })
+mcp__harness__workflow_get({ name: "triage-fix" })
 ```
 
-Then run it (see the main `SKILL.md`):
+Then run it — the **run** tools take a `project` (the workflow is global, but a
+run targets a registered repo), see the main `SKILL.md`:
 `run_trigger({ project: "ticket0", workflow: "triage-fix", description: "<task>" })`.
 
 ## Good practices

@@ -416,23 +416,13 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_catalog",
-            "description": "List the building blocks for authoring a workflow in this project: node kinds, provider/model hints, commands, trigger rules.",
-            "inputSchema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": { "project": project },
-                "required": ["project"],
-            }
+            "description": "List the building blocks for authoring a workflow: node kinds, provider/model hints, commands, trigger rules. Workflows are global.",
+            "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} }
         }),
         json!({
             "name": "workflow_list",
-            "description": "List workflows available to the project (bundled defaults + project .harness/workflows; project shadows bundled).",
-            "inputSchema": {
-                "type": "object",
-                "additionalProperties": false,
-                "properties": { "project": project },
-                "required": ["project"],
-            }
+            "description": "List workflows available (bundled defaults + global custom workflows; custom shadows bundled).",
+            "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} }
         }),
         json!({
             "name": "workflow_get",
@@ -440,8 +430,8 @@ fn mcp_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": { "project": project, "name": { "type": "string" } },
-                "required": ["project", "name"],
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"],
             }
         }),
         json!({
@@ -450,18 +440,18 @@ fn mcp_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": { "project": project, "yaml": { "type": "string" } },
-                "required": ["project", "yaml"],
+                "properties": { "yaml": { "type": "string" } },
+                "required": ["yaml"],
             }
         }),
         json!({
             "name": "workflow_save",
-            "description": "Validate then save a workflow to .harness/workflows/<name>.yaml. Custom workflows are global (apply to every project).",
+            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project).",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": { "project": project, "name": { "type": "string" }, "yaml": { "type": "string" } },
-                "required": ["project", "name", "yaml"],
+                "properties": { "name": { "type": "string" }, "yaml": { "type": "string" } },
+                "required": ["name", "yaml"],
             }
         }),
         json!({
@@ -481,13 +471,12 @@ fn mcp_tools() -> Vec<Value> {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "project": project,
                     "name": { "type": "string" },
                     "description": { "type": "string" },
                     "provider": { "type": "string", "description": "Default provider (claude/codex/pi)." },
                     "model": { "type": "string" }
                 },
-                "required": ["project", "name"],
+                "required": ["name"],
             }
         }),
         json!({
@@ -497,7 +486,6 @@ fn mcp_tools() -> Vec<Value> {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "project": project,
                     "name": { "type": "string" },
                     "node": {
                         "type": "object",
@@ -505,7 +493,7 @@ fn mcp_tools() -> Vec<Value> {
                         "required": ["id"]
                     }
                 },
-                "required": ["project", "name", "node"],
+                "required": ["name", "node"],
             }
         }),
         json!({
@@ -514,8 +502,8 @@ fn mcp_tools() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": { "project": project, "name": { "type": "string" }, "id": { "type": "string" } },
-                "required": ["project", "name", "id"],
+                "properties": { "name": { "type": "string" }, "id": { "type": "string" } },
+                "required": ["name", "id"],
             }
         }),
         json!({
@@ -525,12 +513,11 @@ fn mcp_tools() -> Vec<Value> {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "project": project,
                     "name": { "type": "string" },
                     "from": { "type": "string", "description": "Upstream node id (runs first)." },
                     "to": { "type": "string", "description": "Downstream node id (gains the dependency)." }
                 },
-                "required": ["project", "name", "from", "to"],
+                "required": ["name", "from", "to"],
             }
         }),
     ]
@@ -592,7 +579,7 @@ mod tests {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
 
-        // run_trigger needs a project + the task spec; authoring tools need project.
+        // run_trigger needs a project + the task spec; authoring tools are global.
         let trigger = by_name("run_trigger").unwrap();
         let req = trigger["inputSchema"]["required"].as_array().unwrap();
         assert!(req.iter().any(|v| v == "project"));
@@ -614,9 +601,13 @@ mod tests {
             );
         }
 
+        // Authoring tools are global — `workflow_catalog` takes no `project`.
         let catalog = by_name("workflow_catalog").unwrap();
-        let req = catalog["inputSchema"]["required"].as_array().unwrap();
-        assert!(req.iter().any(|v| v == "project"));
+        let has_project = catalog["inputSchema"]
+            .get("required")
+            .and_then(|v| v.as_array())
+            .is_some_and(|r| r.iter().any(|v| v == "project"));
+        assert!(!has_project, "authoring tools are global — no project arg");
     }
 
     #[test]

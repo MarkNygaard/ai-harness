@@ -6,10 +6,12 @@ a workflow correct once it meets a real repo. It is accurate to the current
 engine (`crates/harness-dag`) — where a feature is partial, it says so.
 
 Bundled workflows live in `crates/harness-runner/defaults/workflows/*.yaml`;
-project workflows live in `.harness/workflows/*.yaml` (a project file shadows a
-bundled default of the same name). Validate any candidate with
-`harness_dag::parse_workflow` (the visual editor and MCP authoring server both
-go through `harness-runner`'s `validate_workflow`).
+custom workflows are **global** — they live in the server's
+`.harness/workflows/*.yaml` (authored via the editor/MCP) and a custom file
+shadows a bundled default of the same name. There is no per-project workflow
+storage. Validate any candidate with `harness_dag::parse_workflow` (the visual
+editor and MCP authoring server both go through `harness-runner`'s
+`validate_workflow`).
 
 ## Two ways to author
 
@@ -33,8 +35,9 @@ loop) → `workflow_connect` for any extra edges. You never write YAML, and ever
 step is checked.
 
 **Authoring (and running) against the hosted cluster.** There are two transports
-to the same cluster; both make every tool project-scoped (a required `project`
-argument) against a *registered cluster project*.
+to the same cluster. Workflows are **global**, so the `workflow_*` authoring
+tools take no `project` argument; only the **run** tools take a `project` (a run
+operates on a *registered cluster project*).
 
 **(a) Hosted HTTP endpoint — no local binary (preferred).** The server exposes a
 single `POST /mcp` (JSON-RPC over HTTPS). Point your client straight at it; the
@@ -56,8 +59,8 @@ monitor a run (e.g. `idea-to-pr`) from the editor, not just author:
 
 **(b) Local stdio proxy.** Run `harness mcp-server` locally and set
 `HARNESS_REMOTE_URL` (+ `HARNESS_TOKEN`) in the client's `.mcp.json` `env`; the
-binary proxies the `workflow_*` tools to the cluster's
-`/api/projects/{project}/authoring/*` API. (Authoring only — no run control.)
+binary proxies the `workflow_*` tools to the cluster's global
+`/api/authoring/*` API. (Authoring only — no run control.)
 
 ```json
 {

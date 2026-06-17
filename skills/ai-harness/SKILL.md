@@ -58,8 +58,9 @@ Check whether `mcp__harness__*` tools are available (e.g. `mcp__harness__run_lis
 - `mcp__harness__run_list({ limit })` — recent runs (most recent first). Use it
   to see which **projects** exist and how prior runs look (there's no separate
   "list projects" call — read project names off recent runs, or ask the user).
-- `mcp__harness__workflow_list({ project })` — workflows available to a project
-  (bundled defaults + the project's own `.harness/workflows`).
+- `mcp__harness__workflow_list({})` — the workflows you can run (bundled
+  defaults + global custom workflows). Workflows are global, so this takes no
+  project.
 
 Confirm the exact **project name** before triggering — it must be a project the
 cluster has registered, not a local folder name.

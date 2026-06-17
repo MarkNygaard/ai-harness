@@ -1144,29 +1144,18 @@ pub async fn list_workflow_models(
     }
 }
 
-/// Resolve a workflow (project-first, same precedence as `start_run`) and return
-/// the distinct `(provider, model)` pairs it uses. Shared by `GET
+/// Resolve a workflow (global, same precedence as `start_run`) and return the
+/// distinct `(provider, model)` pairs it uses. Shared by `GET
 /// /api/runs/workflow-models` and the MCP `workflow_models` tool.
 pub(crate) fn resolve_workflow_models(
     state: &Arc<RunsState>,
     workflow: &str,
     project: Option<&str>,
 ) -> Result<Vec<ModelRef>, (StatusCode, String)> {
-    let project = project.map(str::trim).filter(|p| !p.is_empty());
-    let ships_per_project = project.is_some_and(|p| {
-        state
-            .projects_dir
-            .join(p)
-            .join(".harness")
-            .join("workflows")
-            .join(format!("{}.yaml", workflow.trim()))
-            .is_file()
-    });
-    let workflow_root = match (ships_per_project, project) {
-        (true, Some(p)) => state.projects_dir.join(p),
-        _ => state.project_root.clone(),
-    };
-    let (yaml, _label) = harness_runner::resolve_workflow_source(workflow, &workflow_root)
+    // Workflows are global; `project` is accepted for API compatibility but no
+    // longer affects resolution (there is no per-project workflow storage).
+    let _ = project;
+    let (yaml, _label) = harness_runner::resolve_workflow_source(workflow, &state.project_root)
         .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let workflow = parse_workflow(&yaml)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid workflow: {e}")))?;
@@ -1226,24 +1215,12 @@ pub(crate) async fn start_run(
         .map(str::to_string)
         .unwrap_or(project_row.base_branch);
 
-    // Resolve `workflow`: a workflow shipped in the project's own checkout wins,
-    // else the global custom workflows (where the editor authors them), else a
-    // bundled default. Custom workflows are global — they apply to every project.
-    let per_project_root = state.projects_dir.join(&project);
-    let name = workflow_name.trim();
-    let ships_per_project = !name.is_empty()
-        && per_project_root
-            .join(".harness")
-            .join("workflows")
-            .join(format!("{name}.yaml"))
-            .is_file();
-    let workflow_root = if ships_per_project {
-        per_project_root
-    } else {
-        state.project_root.clone()
-    };
-    let (yaml, _label) = harness_runner::resolve_workflow_source(&workflow_name, &workflow_root)
-        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    // Resolve `workflow`: a global custom workflow (where the editor/MCP author
+    // them, under the cluster's project_root) shadows a bundled default of the
+    // same name. Custom workflows are global — there is no per-project storage.
+    let (yaml, _label) =
+        harness_runner::resolve_workflow_source(&workflow_name, &state.project_root)
+            .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let mut workflow = parse_workflow(&yaml)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid workflow: {e}")))?;
 
