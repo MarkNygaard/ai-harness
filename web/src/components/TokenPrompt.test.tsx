@@ -6,12 +6,14 @@ import { TokenPrompt } from "./TokenPrompt";
 
 function renderWithClient(ui: React.ReactElement) {
   const client = new QueryClient();
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return render(
+    <QueryClientProvider client={client}>{ui}</QueryClientProvider>,
+  );
 }
 
 describe("<TokenPrompt>", () => {
   beforeEach(() => {
-    sessionStorage.clear();
+    localStorage.clear();
   });
 
   it("does not render initially", () => {
@@ -19,14 +21,16 @@ describe("<TokenPrompt>", () => {
     expect(container.querySelector('input[type="password"]')).toBeNull();
   });
 
-  it("opens on unauthorized event and saves token to sessionStorage", () => {
+  it("opens on unauthorized event and saves token to localStorage", () => {
     renderWithClient(<TokenPrompt />);
     act(() => {
       unauthorizedEvents.dispatchEvent(new Event("unauthorized"));
     });
-    const input = screen.getByPlaceholderText(/bearer token/i) as HTMLInputElement;
+    const input = screen.getByPlaceholderText(
+      /bearer token/i,
+    ) as HTMLInputElement;
     fireEvent.change(input, { target: { value: "secret" } });
     fireEvent.click(screen.getByText(/save/i));
-    expect(sessionStorage.getItem(TOKEN_KEY)).toBe("secret");
+    expect(localStorage.getItem(TOKEN_KEY)).toBe("secret");
   });
 });
