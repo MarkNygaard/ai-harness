@@ -5,7 +5,7 @@ describe("apiFetch", () => {
   const originalFetch = global.fetch;
 
   beforeEach(() => {
-    sessionStorage.clear();
+    localStorage.clear();
   });
 
   afterEach(() => {
@@ -14,7 +14,7 @@ describe("apiFetch", () => {
   });
 
   it("injects Authorization header when token is set", async () => {
-    sessionStorage.setItem(TOKEN_KEY, "abc123");
+    localStorage.setItem(TOKEN_KEY, "abc123");
     const mock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
     global.fetch = mock as unknown as typeof fetch;
 
@@ -40,7 +40,9 @@ describe("apiFetch", () => {
   it("dispatches unauthorized event on 401 and throws", async () => {
     global.fetch = vi
       .fn()
-      .mockResolvedValue(new Response("{}", { status: 401 })) as unknown as typeof fetch;
+      .mockResolvedValue(
+        new Response("{}", { status: 401 }),
+      ) as unknown as typeof fetch;
 
     const handler = vi.fn();
     unauthorizedEvents.addEventListener("unauthorized", handler);

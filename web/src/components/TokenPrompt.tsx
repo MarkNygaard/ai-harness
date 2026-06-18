@@ -11,7 +11,8 @@ export function TokenPrompt() {
   useEffect(() => {
     const onUnauthorized = () => setOpen(true);
     unauthorizedEvents.addEventListener("unauthorized", onUnauthorized);
-    return () => unauthorizedEvents.removeEventListener("unauthorized", onUnauthorized);
+    return () =>
+      unauthorizedEvents.removeEventListener("unauthorized", onUnauthorized);
   }, []);
 
   useEffect(() => {
@@ -24,7 +25,7 @@ export function TokenPrompt() {
     const v = value.trim();
     if (!v) return;
     try {
-      sessionStorage.setItem(TOKEN_KEY, v);
+      localStorage.setItem(TOKEN_KEY, v);
     } catch {
       // ignore
     }
@@ -49,7 +50,10 @@ export function TokenPrompt() {
           className="w-full p-2 border border-line-2 bg-bg text-ink font-mono box-border"
         />
         <div className="mt-4 flex gap-2 justify-end">
-          <button onClick={save} className="px-3.5 py-1.5 bg-rust text-white border-0 cursor-pointer font-mono">
+          <button
+            onClick={save}
+            className="px-3.5 py-1.5 bg-rust text-white border-0 cursor-pointer font-mono"
+          >
             Save
           </button>
         </div>

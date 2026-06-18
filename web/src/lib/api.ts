@@ -1,6 +1,6 @@
 /**
- * Key used to persist the bearer token across reloads (session-scoped).
- * Shared with the old dashboard.js so existing tabs don't lose auth.
+ * Key used to persist the bearer token. Stored in `localStorage` so it survives
+ * across browser sessions — you enter it once, not on every open.
  */
 export const TOKEN_KEY = "harness_token";
 
@@ -21,7 +21,7 @@ export class ApiError extends Error {
 }
 
 function authHeaders(): Record<string, string> {
-  const tok = (globalThis.sessionStorage?.getItem?.(TOKEN_KEY) ?? "").trim();
+  const tok = (globalThis.localStorage?.getItem?.(TOKEN_KEY) ?? "").trim();
   return tok ? { Authorization: `Bearer ${tok}` } : {};
 }
 
