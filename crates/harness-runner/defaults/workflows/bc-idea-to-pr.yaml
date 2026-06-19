@@ -154,7 +154,7 @@ nodes:
       Verify it compiles before you finish:
 
         export PATH="$PATH:$HOME/.dotnet/tools"
-        al compile /project:"$PWD" /packagecachepath:.alpackages /out:"$ARTIFACTS_DIR/app.app"
+        al compile /project:"$PWD" /packagecachepath:.alpackages /assemblyprobingpaths:.netpackages /out:"$ARTIFACTS_DIR/app.app"
 
       Fix every compile error until it builds clean. Do NOT edit `app.json`
       dependencies or the `.alpackages` symbols, do NOT publish to any server,
@@ -169,7 +169,11 @@ nodes:
     bash: |
       set -uo pipefail
       export PATH="$PATH:$HOME/.dotnet/tools"
-      al compile /project:"$PWD" /packagecachepath:.alpackages /out:"$ARTIFACTS_DIR/app.app"
+      # /assemblyprobingpaths:.netpackages so committed .NET add-in DLLs (e.g.
+      # ForNav) resolve — the CLI doesn't read .vscode/settings.json.
+      probing=""
+      [ -d .netpackages ] && probing="/assemblyprobingpaths:.netpackages"
+      al compile /project:"$PWD" /packagecachepath:.alpackages $probing /out:"$ARTIFACTS_DIR/app.app"
       echo "AL compile succeeded -> $ARTIFACTS_DIR/app.app"
 
   - id: finalize-pr
