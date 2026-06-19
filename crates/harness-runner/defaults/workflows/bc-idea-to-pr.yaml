@@ -1,20 +1,29 @@
 name: bc-idea-to-pr
 description: |
-  Business Central (AL) task → reviewed pull request. Like idea-to-pr, but for
-  AL / BC OnPrem repos: provisions the cross-platform AL compiler, downloads
-  dependency + Microsoft symbols from the BC dev endpoint (read-only), and uses
-  `al compile` as the build gate. It NEVER publishes to a server — no database
-  is touched, so it can't conflict with developers' environments; deploying the
-  resulting PR stays a human/deploy-pipeline step.
+  Business Central (AL) task -> reviewed pull request, end-to-end — the
+  idea-to-pr pipeline adapted for AL / BC OnPrem repos.
+
+  Flow: Claude plans (read-only Sonnet explore -> Opus create-plan), Kimi
+  implements + simplifies, the cross-platform AL compiler is the build gate
+  (`al compile` — symbols downloaded read-only from the BC dev endpoint), then
+  a Kimi self-review loop, a gpt-5.x model-diverse review, and a Claude Sonnet
+  review — each fixing issues — and a final compile-until-clean gate.
+
+  It NEVER publishes to a server: only read-only symbol download + local
+  compilation, so no database is touched and it can't conflict with developers'
+  environments. Deploying the PR stays a human / deploy-pipeline step.
 
   Project requirements:
   - Toolchain: `dotnet`.
   - Env vars (Projects -> Env): BC_USER and BC_PASSWORD (a Windows service
-    account used for read-only symbol download). Optional BC_DEV_URL overrides
-    the dev endpoint; otherwise it's derived from .vscode/launch.json.
+    account, used only for read-only symbol download). Optional BC_DEV_URL
+    overrides the dev endpoint; otherwise it's derived from .vscode/launch.json.
   - app.json and .vscode/launch.json committed.
-provider: claude
-model: sonnet
+
+  NOT for: standalone reviews, publishing/deploying, or plans without code.
+
+provider: pi
+model: kimi-code/kimi-for-coding
 
 nodes:
   - id: explore
@@ -25,8 +34,8 @@ nodes:
     context: fresh
     prompt: |
       You are exploring a Microsoft Dynamics 365 Business Central extension
-      written in AL. Map the part of the codebase this task touches — do NOT
-      edit anything.
+      written in AL. Read the task and gather the context a planner needs — do
+      NOT propose a solution and do NOT edit anything.
 
       ## Task
       $ARGUMENTS
@@ -38,7 +47,9 @@ nodes:
         under `TableExtensions/` — confirm the actual layout, don't assume).
       - Conventions to mirror: object naming + the publisher suffix (e.g.
         `_DIAS`), ID numbering, and how similar objects/extensions are structured.
+        Quote short snippets with `file:line`.
       - Dependency objects the change builds on (the ISV apps in `app.json`).
+      - Constraints from `CLAUDE.md` / `AGENTS.md`.
       - Risks: schema changes (new table fields/keys), breaking event
         subscribers, anything that would need an upgrade codeunit.
 
@@ -56,7 +67,8 @@ nodes:
     depends_on: [explore]
     prompt: |
       You are a planner for an AL / Business Central change. Turn the task +
-      exploration into a concrete, one-pass plan. PLAN ONLY — write no code.
+      exploration into a concrete, one-pass-implementable plan. PLAN ONLY —
+      write no code. A good plan leaves the implementer nothing to re-decide.
 
       ## Task
       $ARGUMENTS
@@ -71,16 +83,25 @@ nodes:
         `Source/` it lives in.
       - **Patterns to mirror**: the conventions from the exploration.
       - **Step-by-step tasks**: ordered; each names the file and the concrete edit.
-      - **Schema / upgrade impact**: new table fields/keys and whether an upgrade
-        codeunit or data migration is needed — flag it, don't silently change
-        schema.
+      - **Robustness & edge cases**: the failure modes this must handle.
+      - **Schema / upgrade impact**: new table fields/keys, and whether an upgrade
+        codeunit or data migration is needed — decide it HERE; never silently
+        change schema.
       - **Testing / build**: the change must pass `al compile`.
-      - **Acceptance criteria** and **Not building (scope limits)**.
+      - **Acceptance criteria** and **Not building (scope limits)** — one line of
+        why each cut is safe; FLAG genuinely-uncertain cuts for the human.
 
-      When there's a real fork, choose the most correct, robust, maintainable
-      design even if it's the larger task — implementation effort is not a factor.
+      ## When there's a real fork, optimize for the outcome
+      Some tasks hit a genuine decision point — a quick path that compromises
+      versus a more involved path that's clearly better. ALWAYS choose the path
+      with the best end result: the most correct, robust, and maintainable
+      design, even when it's the larger task. Implementation effort, speed, and
+      token cost are NOT factors. This governs HOW to build what's in scope; it
+      is not licence to expand scope. If the better path is materially larger,
+      call out the trade-off in the plan.
 
-      Output a one-line summary and: <promise>PLAN-DONE</promise>
+      After writing plan.md, output a one-line summary and:
+      <promise>PLAN-DONE</promise>
 
   - id: setup-bc
     category: setup
@@ -146,6 +167,7 @@ nodes:
     category: implementation
     provider: pi
     model: kimi-code/kimi-for-coding
+    context: fresh
     depends_on: [setup-bc]
     prompt: |
       Implement the plan in `$ARTIFACTS_DIR/plan.md`, editing AL under `Source/`.
@@ -158,125 +180,300 @@ nodes:
 
       Fix every compile error until it builds clean. Do NOT edit `app.json`
       dependencies or the `.alpackages` symbols, do NOT publish to any server,
-      and do NOT commit or push (a later step opens the PR).
+      and do NOT commit or push (a later step opens the PR). Honor
+      `CLAUDE.md` / `AGENTS.md`.
+
+  - id: pi-simplify
+    category: implementation
+    depends_on: [implement]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    prompt: |
+      Simplify ONLY the AL this change touched — clarity, redundancy, naming,
+      dead code — while preserving behaviour exactly.
+
+      ## Scope (do not exceed)
+      `git diff --name-only origin/$BASE_BRANCH...HEAD` — those files, and only
+      those, are in scope. If it lists nothing, skip (a no-op is fine).
+
+      ## Look for
+      Unnecessary complexity, duplicated logic, unused variables, unclear object
+      / variable names, obvious comments. Match the surrounding module's style
+      and the publisher naming convention. Never drop a feature or change behaviour.
+
+      ## Verify before committing (non-negotiable)
+        export PATH="$PATH:$HOME/.dotnet/tools"
+        al compile /project:"$PWD" /packagecachepath:.alpackages /assemblyprobingpaths:.netpackages /out:"$ARTIFACTS_DIR/app.app"
+      If it fails, fix or revert until it builds. Then, if `git status --porcelain`
+      shows changes, commit ONE conventional commit `chore: simplify implementation`.
+      Do NOT push (finalize-pr pushes), do NOT use --no-verify, do NOT publish.
+
+      Output a one-line summary (or "no changes") and: <promise>SIMPLIFY-DONE</promise>
 
   - id: compile
     category: validation
-    depends_on: [implement]
+    depends_on: [pi-simplify]
     timeout: 600000
-    # Build gate: a non-zero `al compile` fails the run, so no PR is opened for
-    # AL that doesn't build. Output goes to the artifacts dir, never the repo.
+    # Build gate. Emits {passed, summary} as JSON on stdout (exit 0 either way)
+    # so downstream nodes gate on `$compile.output.passed`; the full compiler
+    # output goes to the artifacts dir and stderr.
     bash: |
       set -uo pipefail
       export PATH="$PATH:$HOME/.dotnet/tools"
-      # /assemblyprobingpaths:.netpackages so committed .NET add-in DLLs (e.g.
-      # ForNav) resolve — the CLI doesn't read .vscode/settings.json.
       probing=""
       [ -d .netpackages ] && probing="/assemblyprobingpaths:.netpackages"
-      al compile /project:"$PWD" /packagecachepath:.alpackages $probing /out:"$ARTIFACTS_DIR/app.app"
-      echo "AL compile succeeded -> $ARTIFACTS_DIR/app.app"
+      log="$ARTIFACTS_DIR/al-compile.log"
+      # stdout must be PURE JSON so `$compile.output.passed` parses; the full
+      # compiler output stays in the artifacts log, and a tail rides in `summary`.
+      if al compile /project:"$PWD" /packagecachepath:.alpackages $probing /out:"$ARTIFACTS_DIR/app.app" >"$log" 2>&1; then
+        echo '{"passed":true,"summary":"al compile clean"}'
+      else
+        summary=$(tail -n 25 "$log" | jq -Rs .)
+        echo "{\"passed\":false,\"summary\":$summary}"
+      fi
+
+  # Fail the run loudly if the build didn't pass — never open a PR on AL that
+  # doesn't compile. (Skipped when compile passed.)
+  - id: abort-on-invalid
+    category: validation
+    depends_on: [compile]
+    when: "$compile.output.passed != 'true'"
+    cancel: "al compile failed — refusing to open a PR. $compile.output.summary"
 
   - id: finalize-pr
     category: delivery
-    depends_on: [compile]
     command: finalize-pr
+    depends_on: [compile]
+    when: "$compile.output.passed == 'true'"
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
 
-  # Model-diverse review of the AL diff — different bias profiles than the Kimi
-  # implementer. Each reviews-AND-fixes (no sign-off comment) and re-builds; the
-  # compile nodes after them are the deterministic gate that the fixes still build.
+  - id: verify-pr-base
+    category: delivery
+    depends_on: [finalize-pr]
+    bash: |
+      set -uo pipefail
+      # Verify the PR targets its intended base; re-target if drifted.
+      check_pr_base() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          actual=$(gh pr view --json baseRefName -q '.baseRefName')
+          num=$(gh pr view --json number -q '.number')
+          if [ "$actual" != "$2" ]; then
+            echo "Base mismatch on PR #$num ($1): expected=$2 actual=$actual — re-targeting" >&2
+            gh pr edit "$num" --base "$2"
+          else
+            echo "PR #$num ($1) base verified: $2"
+          fi )
+      }
+      LIST="$ARTIFACTS_DIR/.pr-list"
+      if [ -s "$LIST" ]; then
+        while read -r entry; do
+          folder=$(echo "$entry" | jq -r '.folder')
+          base=$(echo "$entry" | jq -r '.base')
+          check_pr_base "$folder" "$base"
+        done < <(jq -c '.[]' "$LIST")
+      else
+        check_pr_base "." "$BASE_BRANCH"
+      fi
+
+  - id: verify-pr-title
+    category: delivery
+    depends_on: [verify-pr-base]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    prompt: |
+      Verify the PR title follows conventional-commits. If it doesn't, rewrite
+      it via `gh pr edit`.
+
+      ## Which PR
+      `cat $ARTIFACTS_DIR/.pr-list` lists the PR(s) opened, JSON
+      `{folder, number, url, base, head}` (single-repo = one entry, folder ".").
+      Apply to each: `cd` into its `folder` first.
+
+      ## Task
+      $ARGUMENTS
+
+      ## Linear-sourced tasks
+      If the task references a Linear issue id (it'll say "Linear issue ABC-123 —
+      …"), the title MUST end with that id in parentheses — e.g.
+      `feat(amazon): add order sync (ABC-123)` — so Linear links the PR. Keep the
+      conventional-commits prefix. Do NOT use close keywords ("Fixes"/"Closes").
+      If not from Linear, add no suffix.
+
+      ## Format
+          ^(feat|fix|chore|ci|docs|refactor|perf|test)(\([^)]+\))?!?: <description>
+      - `<description>`: short, lower-case imperative.
+      - Scope (optional): use a feature/module name from `Source/` (e.g. `amazon`,
+        `production`) — pick up the convention from `git log --oneline
+        origin/$BASE_BRANCH..HEAD~50` or the directory the change touches.
+
+      ## Steps
+      1. `gh pr view --json number,title`.
+      2. If it already matches AND the type fits AND (for Linear) carries the
+         ` (ABC-123)` suffix → output `TITLE OK: <title>` and emit
+         <promise>PR-TITLE-OK</promise>.
+      3. Otherwise infer type+scope from `git diff origin/$BASE_BRANCH...HEAD --stat`,
+         rewrite via `gh pr edit <number> --title "<new title>"`, output the new
+         title and emit <promise>PR-TITLE-OK</promise>.
+
+      Title only — do NOT touch the body, labels, or base.
+
+  - id: pi-review-fix-loop
+    category: validation
+    depends_on: [verify-pr-title]
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      max_iterations: 5
+      until: PI_REVIEW_CLEAN
+      prompt: |
+        Self-review-and-fix pass on the AL PR you just implemented (up to 5
+        passes — check the commit history for earlier ones; stop early when
+        there's nothing substantive left).
+
+        ## Read the change
+        `cat $ARTIFACTS_DIR/.pr-list` (single-repo = one entry, folder "."); for
+        it: `cd "$folder"`, `gh pr view`, `git diff origin/$BASE_BRANCH...HEAD`.
+        Read `$ARTIFACTS_DIR/plan.md` — fixing deviations from the plan is in
+        scope; adding things it deliberately cut is not. `pi-simplify` already did
+        clarity/dead-code — don't redo that.
+
+        ## Review (AL / Business Central)
+        - **Correctness**: logic errors, boundary conditions, missing edge cases
+          vs. the task + plan.
+        - **BC patterns**: prefer event subscribers over modifying base objects;
+          correct TableExtension/PageExtension/Enum usage; permission sets updated
+          for new objects; correct use of `TestField`/`FieldError`/error handling.
+        - **Schema / upgrade safety**: new table fields/keys handled; an upgrade
+          codeunit where data migration is needed; no breaking changes to existing
+          field types/IDs or to keys other extensions depend on.
+        - **Conventions**: the publisher object-name suffix and the app's ID range.
+        - **No** leftover debugging (`Message`/`Dialog`), hardcoded environment
+          specifics, or commented-out code.
+
+        ## Disposition
+        Fix each issue in `Source/`, then verify it builds:
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          al compile /project:"$PWD" /packagecachepath:.alpackages /assemblyprobingpaths:.netpackages /out:"$ARTIFACTS_DIR/app.app"
+        Commit a conventional-commit and push to the PR branch. Do NOT post PR
+        comments, do NOT use `gh pr review`, do NOT `--no-verify`, do NOT publish.
+
+        If you fixed anything this iteration, end your turn (another iteration
+        runs). If the PR is genuinely clean, emit: <promise>PI_REVIEW_CLEAN</promise>
+
   - id: gpt-review-fix
     category: validation
-    depends_on: [finalize-pr]
+    depends_on: [pi-review-fix-loop]
     provider: pi
+    # gpt-5.x via omp on the ChatGPT subscription; id MUST be namespace-qualified.
     model: openai-codex/gpt-5.5
     context: fresh
     prompt: |
-      Review-and-fix pass on the AL pull request this run just opened. Find and
-      fix real problems — do not rubber-stamp, and do NOT post an approval or
-      sign-off comment.
+      Model-diverse review of an AL PR already implemented + self-reviewed. Find
+      what the upstream agent missed, and FIX it.
 
-      ## Read the change
-      - `cat $ARTIFACTS_DIR/.pr-list` — the PR(s) opened (single-repo = one entry,
-        folder "."). For each: `cd "$folder"`, then
-        `git diff origin/$BASE_BRANCH...HEAD`.
-      - `$ARTIFACTS_DIR/plan.md` — what it was built against. Fixing deviations
-        from the plan is in scope; adding things the plan deliberately cut is not.
+      Read `$ARTIFACTS_DIR/plan.md` (scope contract — its "Not building" was cut
+      on purpose; flag a wrong cut for the human, don't silently re-add it).
+      `cat $ARTIFACTS_DIR/.pr-list`; for the PR: `cd "$folder"`, `gh pr view`,
+      `git diff origin/$BASE_BRANCH...HEAD`. Prior commits show what's addressed.
 
-      ## Check (Business Central / AL correctness)
-      - Implements the task + plan correctly; edge cases handled.
-      - BC patterns: prefer event subscribers over modifying base objects; correct
-        TableExtension/PageExtension usage; permission sets updated for new objects.
-      - Schema / upgrade safety: new table fields/keys handled; an upgrade codeunit
-        where data migration is needed; no breaking changes to existing field
-        types or object IDs.
-      - Conventions: the publisher object-name suffix and the app's ID range.
-      - No leftover debugging or hardcoded environment specifics.
+      Look for what a single model rationalizes or misses, with a BC lens:
+      - Logic bugs, boundary/null handling, wrong filters/`SetRange`/`SetFilter`.
+      - Event/integration correctness: subscriber signatures, `IsHandled`
+        patterns, posting/transaction integrity, `Commit` misuse.
+      - Schema/upgrade safety; permission sets; breaking changes not called out.
+      - Performance: unbounded `FindSet` loops, per-row DB calls, missing keys.
 
-      ## Fix
-      Fix what you find in `Source/`, then verify it still builds:
+      For each genuine in-scope issue, fix it, then verify it builds:
         export PATH="$PATH:$HOME/.dotnet/tools"
         al compile /project:"$PWD" /packagecachepath:.alpackages /assemblyprobingpaths:.netpackages /out:"$ARTIFACTS_DIR/app.app"
-      Commit + push to the PR branch (do NOT open a new PR, do NOT use --no-verify).
-      Output a one-line verdict and: <promise>GPT-REVIEW-DONE</promise>
-
-  - id: recompile-after-gpt
-    category: validation
-    depends_on: [gpt-review-fix]
-    timeout: 600000
-    bash: |
-      set -uo pipefail
-      export PATH="$PATH:$HOME/.dotnet/tools"
-      probing=""
-      [ -d .netpackages ] && probing="/assemblyprobingpaths:.netpackages"
-      al compile /project:"$PWD" /packagecachepath:.alpackages $probing /out:"$ARTIFACTS_DIR/app.app"
-      echo "AL compile clean after gpt-review-fix"
+      Commit a conventional-commit and push to the PR branch. Do NOT post PR
+      comments, use `gh pr review`, `--no-verify`, or publish. If you find nothing,
+      push nothing. When done: <promise>GPT-REVIEW-DONE</promise>
 
   - id: sonnet-review-fix
     category: validation
-    depends_on: [recompile-after-gpt]
+    depends_on: [gpt-review-fix]
     provider: claude
     model: sonnet
     context: fresh
     prompt: |
-      Second, model-diverse review-and-fix pass on the same AL PR. A previous
-      (gpt) pass already ran — read its commits and don't re-flag what it fixed.
-      Find and fix anything still wrong; do NOT post an approval/sign-off comment.
+      Third, model-diverse review-and-fix pass on the AL PR (planned,
+      implemented, kimi-self-reviewed, gpt-reviewed). You bring a different bias
+      profile — catch what they rationalized, and FIX what's concretely fixable.
 
-      ## Read the change
-      - `cat $ARTIFACTS_DIR/.pr-list`; for each entry `cd "$folder"` then
-        `git diff origin/$BASE_BRANCH...HEAD`. Read `$ARTIFACTS_DIR/plan.md`.
+      Read `$ARTIFACTS_DIR/plan.md` (scope contract — flag wrong cuts, don't
+      re-add silently). `cat $ARTIFACTS_DIR/.pr-list`; for the PR: `cd "$folder"`,
+      `gh pr view`, `git diff origin/$BASE_BRANCH...HEAD`,
+      `git log --oneline origin/$BASE_BRANCH..HEAD` (what's already fixed).
 
-      ## Check (same AL/BC lens)
-      Correctness vs. task + plan; BC patterns (events over base-object edits,
-      extension usage, permission sets); schema/upgrade safety (fields/keys,
-      upgrade codeunit, no breaking type/ID changes); naming suffix + ID range.
+      AL / BC review lens: correctness + boundary conditions; event/posting
+      integrity and `IsHandled`/`Commit` use; schema & upgrade safety; permission
+      sets; performance (record loops, missing keys); breaking changes; and
+      `CLAUDE.md` / `AGENTS.md` compliance (no `--no-verify`, no publish, no
+      schema migrations executed).
 
-      ## Fix
-      Fix in `Source/`, verify it builds:
+      For each genuine in-scope issue, fix it and verify it builds:
         export PATH="$PATH:$HOME/.dotnet/tools"
         al compile /project:"$PWD" /packagecachepath:.alpackages /assemblyprobingpaths:.netpackages /out:"$ARTIFACTS_DIR/app.app"
-      Commit + push to the PR branch. Output a one-line verdict and:
-      <promise>SONNET-REVIEW-DONE</promise>
+      Commit a conventional-commit and push. If a fix is a judgment call or you're
+      unsure it's correct, FLAG it for the human instead of editing. Do NOT post
+      PR comments, use `gh pr review`, `--no-verify`, or publish. If you find
+      nothing, push nothing. When done: <promise>SONNET-REVIEW-DONE</promise>
 
-  - id: final-compile
+  - id: final-verify-loop
     category: validation
     depends_on: [sonnet-review-fix]
-    timeout: 600000
-    # Final build gate after all review fixes — the PR must compile clean.
-    bash: |
-      set -uo pipefail
-      export PATH="$PATH:$HOME/.dotnet/tools"
-      probing=""
-      [ -d .netpackages ] && probing="/assemblyprobingpaths:.netpackages"
-      al compile /project:"$PWD" /packagecachepath:.alpackages $probing /out:"$ARTIFACTS_DIR/app.app"
-      echo "AL compile clean (final)"
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      max_iterations: 3
+      until: FINAL_VERIFY_CLEAN
+      prompt: |
+        Final build gate — the last node that can touch code. Review fixes landed
+        AFTER the earlier compile gate, so the branch HEAD may no longer build.
+        Re-verify the FINAL state:
+
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          al compile /project:"$PWD" /packagecachepath:.alpackages /assemblyprobingpaths:.netpackages /out:"$ARTIFACTS_DIR/app.app"
+
+        - If it builds clean and you pushed nothing this iteration, emit:
+          <promise>FINAL_VERIFY_CLEAN</promise>
+        - If it fails: fix the root cause in `Source/` (never disable a check, use
+          `--no-verify`, or publish), commit a conventional-commit, push to the PR
+          branch, and end your turn WITHOUT the signal — the loop re-verifies.
+        - If it still fails on the final iteration, do NOT emit the signal and
+          summarize what's red — the run fails (a human must look), which is correct.
 
   - id: workflow-summary
     category: delivery
+    depends_on: [final-verify-loop]
     provider: pi
     model: kimi-code/kimi-for-coding
-    depends_on: [final-compile]
+    context: fresh
     prompt: |
-      Summarize the change as a single short paragraph: the AL objects
-      added/changed, the review passes, and that it passed `al compile`. This is
-      the run's summary.
+      Post one short "workflow complete" PR comment reflecting what actually
+      happened — three review-and-fix passes (kimi self-review loop, gpt, sonnet)
+      already ran and pushed fixes; this is the single human-facing overview, not
+      another review.
+
+      `cat $ARTIFACTS_DIR/.pr-list`; for the PR, from its folder:
+      `gh pr view --json number,title,headRefName,additions,deletions` and
+      `git log --oneline origin/$BASE_BRANCH..HEAD`. Then
+      `gh pr comment <number> --body "..."`:
+
+      ```
+      ## Workflow complete — `bc-idea-to-pr`
+
+      **Diff**: +<additions> / -<deletions> · **Build**: `al compile` clean
+
+      **Commit breakdown**:
+      - Implementation + kimi self-review: <N> commits
+      - gpt-review-fix: <N> commits (or "none")
+      - sonnet-review-fix: <N> commits (or "none")
+      ```
+
+      One short comment, no next-steps blocks. Output: <promise>WORKFLOW-SUMMARY-DONE</promise>
