@@ -144,8 +144,8 @@ nodes:
 
   - id: implement
     category: implementation
-    provider: claude
-    model: sonnet
+    provider: pi
+    model: kimi-code/kimi-for-coding
     depends_on: [setup-bc]
     prompt: |
       Implement the plan in `$ARTIFACTS_DIR/plan.md`, editing AL under `Source/`.
@@ -181,11 +181,102 @@ nodes:
     depends_on: [compile]
     command: finalize-pr
 
+  # Model-diverse review of the AL diff — different bias profiles than the Kimi
+  # implementer. Each reviews-AND-fixes (no sign-off comment) and re-builds; the
+  # compile nodes after them are the deterministic gate that the fixes still build.
+  - id: gpt-review-fix
+    category: validation
+    depends_on: [finalize-pr]
+    provider: pi
+    model: openai-codex/gpt-5.5
+    context: fresh
+    prompt: |
+      Review-and-fix pass on the AL pull request this run just opened. Find and
+      fix real problems — do not rubber-stamp, and do NOT post an approval or
+      sign-off comment.
+
+      ## Read the change
+      - `cat $ARTIFACTS_DIR/.pr-list` — the PR(s) opened (single-repo = one entry,
+        folder "."). For each: `cd "$folder"`, then
+        `git diff origin/$BASE_BRANCH...HEAD`.
+      - `$ARTIFACTS_DIR/plan.md` — what it was built against. Fixing deviations
+        from the plan is in scope; adding things the plan deliberately cut is not.
+
+      ## Check (Business Central / AL correctness)
+      - Implements the task + plan correctly; edge cases handled.
+      - BC patterns: prefer event subscribers over modifying base objects; correct
+        TableExtension/PageExtension usage; permission sets updated for new objects.
+      - Schema / upgrade safety: new table fields/keys handled; an upgrade codeunit
+        where data migration is needed; no breaking changes to existing field
+        types or object IDs.
+      - Conventions: the publisher object-name suffix and the app's ID range.
+      - No leftover debugging or hardcoded environment specifics.
+
+      ## Fix
+      Fix what you find in `Source/`, then verify it still builds:
+        export PATH="$PATH:$HOME/.dotnet/tools"
+        al compile /project:"$PWD" /packagecachepath:.alpackages /assemblyprobingpaths:.netpackages /out:"$ARTIFACTS_DIR/app.app"
+      Commit + push to the PR branch (do NOT open a new PR, do NOT use --no-verify).
+      Output a one-line verdict and: <promise>GPT-REVIEW-DONE</promise>
+
+  - id: recompile-after-gpt
+    category: validation
+    depends_on: [gpt-review-fix]
+    timeout: 600000
+    bash: |
+      set -uo pipefail
+      export PATH="$PATH:$HOME/.dotnet/tools"
+      probing=""
+      [ -d .netpackages ] && probing="/assemblyprobingpaths:.netpackages"
+      al compile /project:"$PWD" /packagecachepath:.alpackages $probing /out:"$ARTIFACTS_DIR/app.app"
+      echo "AL compile clean after gpt-review-fix"
+
+  - id: sonnet-review-fix
+    category: validation
+    depends_on: [recompile-after-gpt]
+    provider: claude
+    model: sonnet
+    context: fresh
+    prompt: |
+      Second, model-diverse review-and-fix pass on the same AL PR. A previous
+      (gpt) pass already ran — read its commits and don't re-flag what it fixed.
+      Find and fix anything still wrong; do NOT post an approval/sign-off comment.
+
+      ## Read the change
+      - `cat $ARTIFACTS_DIR/.pr-list`; for each entry `cd "$folder"` then
+        `git diff origin/$BASE_BRANCH...HEAD`. Read `$ARTIFACTS_DIR/plan.md`.
+
+      ## Check (same AL/BC lens)
+      Correctness vs. task + plan; BC patterns (events over base-object edits,
+      extension usage, permission sets); schema/upgrade safety (fields/keys,
+      upgrade codeunit, no breaking type/ID changes); naming suffix + ID range.
+
+      ## Fix
+      Fix in `Source/`, verify it builds:
+        export PATH="$PATH:$HOME/.dotnet/tools"
+        al compile /project:"$PWD" /packagecachepath:.alpackages /assemblyprobingpaths:.netpackages /out:"$ARTIFACTS_DIR/app.app"
+      Commit + push to the PR branch. Output a one-line verdict and:
+      <promise>SONNET-REVIEW-DONE</promise>
+
+  - id: final-compile
+    category: validation
+    depends_on: [sonnet-review-fix]
+    timeout: 600000
+    # Final build gate after all review fixes — the PR must compile clean.
+    bash: |
+      set -uo pipefail
+      export PATH="$PATH:$HOME/.dotnet/tools"
+      probing=""
+      [ -d .netpackages ] && probing="/assemblyprobingpaths:.netpackages"
+      al compile /project:"$PWD" /packagecachepath:.alpackages $probing /out:"$ARTIFACTS_DIR/app.app"
+      echo "AL compile clean (final)"
+
   - id: workflow-summary
     category: delivery
     provider: pi
     model: kimi-code/kimi-for-coding
-    depends_on: [finalize-pr]
+    depends_on: [final-compile]
     prompt: |
       Summarize the change as a single short paragraph: the AL objects
-      added/changed and that it passed `al compile`. This is the run's summary.
+      added/changed, the review passes, and that it passed `al compile`. This is
+      the run's summary.
