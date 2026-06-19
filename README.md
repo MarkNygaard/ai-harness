@@ -17,8 +17,9 @@ runs anywhere a container does (Kubernetes or plain Docker).
   project's `.harness/workflows/`: `idea-to-pr` (a task → a reviewed PR),
   `revise-pr` (address review feedback on an open PR), `merge-pr` (resolve
   conflicts + merge a ready PR), `architect` (behavior-preserving codebase
-  health sweep), `geo-audit` (audit a site for AI-search readiness), and
-  `judge-ab` (score an A/B model comparison).
+  health sweep), `geo-audit` (audit a site for AI-search readiness),
+  `judge-ab` (score an A/B model comparison), and `bc-idea-to-pr` (the
+  idea-to-pr flow for Business Central / AL repos — `al compile` build gate).
 - **Multiple agents in one pipeline.** Claude Code, Codex, Pi/Kimi (`omp`), and
   Cursor (`cursor-agent`) nodes, each picking its own model.
 - **Three ways to trigger a run:**

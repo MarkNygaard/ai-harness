@@ -1,0 +1,187 @@
+name: bc-idea-to-pr
+description: |
+  Business Central (AL) task → reviewed pull request. Like idea-to-pr, but for
+  AL / BC OnPrem repos: provisions the cross-platform AL compiler, downloads
+  dependency + Microsoft symbols from the BC dev endpoint (read-only), and uses
+  `al compile` as the build gate. It NEVER publishes to a server — no database
+  is touched, so it can't conflict with developers' environments; deploying the
+  resulting PR stays a human/deploy-pipeline step.
+
+  Project requirements:
+  - Toolchain: `dotnet`.
+  - Env vars (Projects -> Env): BC_USER and BC_PASSWORD (a Windows service
+    account used for read-only symbol download). Optional BC_DEV_URL overrides
+    the dev endpoint; otherwise it's derived from .vscode/launch.json.
+  - app.json and .vscode/launch.json committed.
+provider: claude
+model: sonnet
+
+nodes:
+  - id: explore
+    category: planning
+    artifact: exploration.md
+    provider: claude
+    model: sonnet
+    context: fresh
+    prompt: |
+      You are exploring a Microsoft Dynamics 365 Business Central extension
+      written in AL. Map the part of the codebase this task touches — do NOT
+      edit anything.
+
+      ## Task
+      $ARGUMENTS
+
+      ## Gather (facts only)
+      - `app.json`: the object ID range, dependencies, runtime/application version.
+      - Where the relevant objects live under `Source/` (the repo groups by
+        feature; e.g. page extensions under `PageExtensions/`, table extensions
+        under `TableExtensions/` — confirm the actual layout, don't assume).
+      - Conventions to mirror: object naming + the publisher suffix (e.g.
+        `_DIAS`), ID numbering, and how similar objects/extensions are structured.
+      - Dependency objects the change builds on (the ISV apps in `app.json`).
+      - Risks: schema changes (new table fields/keys), breaking event
+        subscribers, anything that would need an upgrade codeunit.
+
+      Write your findings to `$ARTIFACTS_DIR/exploration.md` (300–800 words).
+      Output a one-line confirmation and: <promise>EXPLORE-DONE</promise>
+
+  - id: create-plan
+    category: planning
+    artifact: plan.md
+    provider: claude
+    model: opus
+    # The plan sets the ceiling on the result — run it at max reasoning effort.
+    effort: max
+    context: fresh
+    depends_on: [explore]
+    prompt: |
+      You are a planner for an AL / Business Central change. Turn the task +
+      exploration into a concrete, one-pass plan. PLAN ONLY — write no code.
+
+      ## Task
+      $ARGUMENTS
+
+      ## Exploration
+      Read `$ARTIFACTS_DIR/exploration.md`. Trust it; don't re-explore.
+
+      ## Write the plan to `$ARTIFACTS_DIR/plan.md`
+      - **Summary**: what's built and the approach.
+      - **Objects to add/change**: each AL object — type, name (with the
+        publisher suffix), and ID from the app's range — plus the file under
+        `Source/` it lives in.
+      - **Patterns to mirror**: the conventions from the exploration.
+      - **Step-by-step tasks**: ordered; each names the file and the concrete edit.
+      - **Schema / upgrade impact**: new table fields/keys and whether an upgrade
+        codeunit or data migration is needed — flag it, don't silently change
+        schema.
+      - **Testing / build**: the change must pass `al compile`.
+      - **Acceptance criteria** and **Not building (scope limits)**.
+
+      When there's a real fork, choose the most correct, robust, maintainable
+      design even if it's the larger task — implementation effort is not a factor.
+
+      Output a one-line summary and: <promise>PLAN-DONE</promise>
+
+  - id: setup-bc
+    category: setup
+    depends_on: [create-plan]
+    timeout: 900000
+    bash: |
+      set -uo pipefail
+      : "${BC_USER:?set BC_USER in the project's Env (Projects -> Env)}"
+      : "${BC_PASSWORD:?set BC_PASSWORD in the project's Env}"
+      export PATH="$PATH:$HOME/.dotnet/tools"
+
+      # 1. Cross-platform AL compiler (the `al` CLI).
+      if ! command -v al >/dev/null 2>&1; then
+        echo "installing AL Development Tools…"
+        dotnet tool install --global Microsoft.Dynamics.BusinessCentral.Development.Tools --prerelease \
+          || dotnet tool update --global Microsoft.Dynamics.BusinessCentral.Development.Tools --prerelease \
+          || { echo "could not install the AL compiler — is the 'dotnet' toolchain set on this project?"; exit 1; }
+      fi
+      al version || { echo "AL compiler unavailable on PATH"; exit 1; }
+
+      # 2. Resolve the OnPrem dev endpoint: BC_DEV_URL override, else derive it
+      #    from the committed .vscode/launch.json (read-only — symbols only).
+      dev_url="${BC_DEV_URL:-}"
+      if [ -z "$dev_url" ]; then
+        lj=".vscode/launch.json"
+        [ -f "$lj" ] || { echo "no BC_DEV_URL and no $lj to derive it from"; exit 1; }
+        server=$(grep -oE '"server"[[:space:]]*:[[:space:]]*"[^"]*"' "$lj" | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/')
+        inst=$(grep -oE '"serverInstance"[[:space:]]*:[[:space:]]*"[^"]*"' "$lj" | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)".*/\1/')
+        port=$(grep -oE '"port"[[:space:]]*:[[:space:]]*[0-9]+' "$lj" | head -1 | grep -oE '[0-9]+$')
+        host=$(printf '%s' "$server" | sed -E 's#^[a-zA-Z]+://##; s#[:/].*$##')
+        dev_url="http://${host}:${port:-7049}/${inst}/dev"
+      fi
+      echo "BC dev endpoint (symbols, read-only): $dev_url"
+
+      # 3. Download symbols (dependency + Microsoft base) into .alpackages.
+      mkdir -p .alpackages
+      dl() { # publisher  appName  appId
+        if curl -fsS --ntlm -u "$BC_USER:$BC_PASSWORD" -G "$dev_url/packages" \
+             --data-urlencode "publisher=$1" --data-urlencode "appName=$2" \
+             --data-urlencode "appId=$3" --data-urlencode "tenant=default" \
+             -o ".alpackages/${2// /_}.app"; then
+          echo "  v $2"
+        else
+          echo "  x symbol download failed: $2 (from $dev_url)" >&2
+          return 1
+        fi
+      }
+      # Microsoft base symbols (well-known app ids; server returns its version).
+      dl "Microsoft" "System Application" "63ca2fa4-4f03-4f2b-a480-172fef340d3f" || true
+      dl "Microsoft" "Base Application"   "437dbf0e-84ff-417a-965d-ed2bb9650972" || true
+      dl "Microsoft" "Application"        "c1335042-3002-4257-bf8a-75c898ccb1b8" || true
+      # Each dependency declared in app.json.
+      deps=$(jq -c '.dependencies[]?' app.json) || { echo "could not read app.json dependencies"; exit 1; }
+      printf '%s\n' "$deps" | while IFS= read -r d; do
+        [ -n "$d" ] || continue
+        dl "$(printf '%s' "$d" | jq -r .publisher)" \
+           "$(printf '%s' "$d" | jq -r .name)" \
+           "$(printf '%s' "$d" | jq -r .id)" || exit 1
+      done
+      echo "symbols in .alpackages:"; ls -1 .alpackages
+
+  - id: implement
+    category: implementation
+    provider: claude
+    model: sonnet
+    depends_on: [setup-bc]
+    prompt: |
+      Implement the plan in `$ARTIFACTS_DIR/plan.md`, editing AL under `Source/`.
+      Follow the project's object-naming and ID-range conventions exactly.
+
+      Verify it compiles before you finish:
+
+        export PATH="$PATH:$HOME/.dotnet/tools"
+        al compile /project:"$PWD" /packagecachepath:.alpackages /out:"$ARTIFACTS_DIR/app.app"
+
+      Fix every compile error until it builds clean. Do NOT edit `app.json`
+      dependencies or the `.alpackages` symbols, do NOT publish to any server,
+      and do NOT commit or push (a later step opens the PR).
+
+  - id: compile
+    category: validation
+    depends_on: [implement]
+    timeout: 600000
+    # Build gate: a non-zero `al compile` fails the run, so no PR is opened for
+    # AL that doesn't build. Output goes to the artifacts dir, never the repo.
+    bash: |
+      set -uo pipefail
+      export PATH="$PATH:$HOME/.dotnet/tools"
+      al compile /project:"$PWD" /packagecachepath:.alpackages /out:"$ARTIFACTS_DIR/app.app"
+      echo "AL compile succeeded -> $ARTIFACTS_DIR/app.app"
+
+  - id: finalize-pr
+    category: delivery
+    depends_on: [compile]
+    command: finalize-pr
+
+  - id: workflow-summary
+    category: delivery
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    depends_on: [finalize-pr]
+    prompt: |
+      Summarize the change as a single short paragraph: the AL objects
+      added/changed and that it passed `al compile`. This is the run's summary.

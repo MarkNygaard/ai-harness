@@ -38,6 +38,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "geo-audit",
         include_str!("../defaults/workflows/geo-audit.yaml"),
     ),
+    (
+        "bc-idea-to-pr",
+        include_str!("../defaults/workflows/bc-idea-to-pr.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.
