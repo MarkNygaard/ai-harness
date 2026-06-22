@@ -170,6 +170,25 @@ pub fn mise_shims_dir() -> Option<PathBuf> {
     )
 }
 
+/// The install directory of a mise-provisioned tool (`mise where <tool>`), e.g.
+/// `$HOME/.local/share/mise/installs/dotnet/10.0.301`. Used to set `DOTNET_ROOT`
+/// for the .NET runtime: a standalone .NET apphost (such as the `al` AL compiler
+/// installed via `dotnet tool install`) resolves the runtime from `DOTNET_ROOT`
+/// or the default `/usr/share/dotnet`, NOT from `PATH` — so a mise install, which
+/// lives in neither, is invisible to it unless `DOTNET_ROOT` points here. Returns
+/// `None` if the tool isn't provisioned or `mise` isn't on `PATH`.
+pub fn mise_tool_path(tool: &str) -> Option<PathBuf> {
+    let output = Command::new("mise").args(["where", tool]).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if path.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(path))
+}
+
 /// Inject a transient GitHub HTTPS credential helper that reads the token from
 /// the child env (`HARNESS_GIT_TOKEN`) — clears inherited helpers first.
 fn auth_args(cmd: &mut Command, token: Option<&str>) {
