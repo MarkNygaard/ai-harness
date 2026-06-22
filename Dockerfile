@@ -37,9 +37,13 @@ ENV DEBIAN_FRONTEND=noninteractive
 # `jq` is used by the multi-repo idea-to-pr bash nodes (install-deps,
 # verify-pr-base) to parse the `.pr-list` / `$HARNESS_REPOS` JSON — a plain
 # `bash:` node hard-fails without it (same rationale as `gh` below).
+# `libicu72` is the ICU runtime the .NET SDK needs for globalization — without
+# it, a mise-provisioned `dotnet` FailFasts on first invocation ("Couldn't find
+# a valid ICU package"), breaking the bc-idea-to-pr (Business Central / AL)
+# compile steps.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl git bash xz-utils unzip jq \
+        ca-certificates curl git bash xz-utils unzip jq libicu72 \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI. The idea-to-pr pipeline's finalize / verify-pr-base / verify-pr-title
