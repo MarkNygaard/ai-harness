@@ -120,7 +120,7 @@ nodes:
           || dotnet tool update --global Microsoft.Dynamics.BusinessCentral.Development.Tools --prerelease \
           || { echo "could not install the AL compiler — is the 'dotnet' toolchain set on this project?"; exit 1; }
       fi
-      al version || { echo "AL compiler unavailable on PATH"; exit 1; }
+      al --version || { echo "AL compiler unavailable on PATH"; exit 1; }
 
       # 2. Resolve the OnPrem dev endpoint: BC_DEV_URL override, else derive it
       #    from the committed .vscode/launch.json (read-only — symbols only).
