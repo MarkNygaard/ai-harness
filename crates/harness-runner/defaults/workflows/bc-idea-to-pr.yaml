@@ -136,8 +136,16 @@ nodes:
       fi
       echo "BC dev endpoint (symbols, read-only): $dev_url"
 
-      # 3. Download symbols (dependency + Microsoft base) into .alpackages.
+      # 3. Download symbols (Microsoft base + each dependency) into .alpackages.
+      #    Every package is required to compile, so ANY failed download is fatal:
+      #    a partial/empty .alpackages otherwise surfaces hundreds of lines later
+      #    as cryptic AL1022 "package not found" compile errors instead of here,
+      #    where the cause (unreachable endpoint / bad creds) is obvious.
+      #    `failed` is a counter, not a `return 1` + `|| exit`, because the deps
+      #    loop must run in THIS shell (process substitution, not a `… | while`
+      #    pipeline whose subshell can't propagate an exit or update the counter).
       mkdir -p .alpackages
+      failed=0
       dl() { # publisher  appName  appId
         if curl -fsS --ntlm -u "$BC_USER:$BC_PASSWORD" -G "$dev_url/packages" \
              --data-urlencode "publisher=$1" --data-urlencode "appName=$2" \
@@ -146,22 +154,28 @@ nodes:
           echo "  v $2"
         else
           echo "  x symbol download failed: $2 (from $dev_url)" >&2
-          return 1
+          failed=$((failed + 1))
         fi
       }
       # Microsoft base symbols (well-known app ids; server returns its version).
-      dl "Microsoft" "System Application" "63ca2fa4-4f03-4f2b-a480-172fef340d3f" || true
-      dl "Microsoft" "Base Application"   "437dbf0e-84ff-417a-965d-ed2bb9650972" || true
-      dl "Microsoft" "Application"        "c1335042-3002-4257-bf8a-75c898ccb1b8" || true
+      dl "Microsoft" "System Application" "63ca2fa4-4f03-4f2b-a480-172fef340d3f"
+      dl "Microsoft" "Base Application"   "437dbf0e-84ff-417a-965d-ed2bb9650972"
+      dl "Microsoft" "Application"        "c1335042-3002-4257-bf8a-75c898ccb1b8"
       # Each dependency declared in app.json.
       deps=$(jq -c '.dependencies[]?' app.json) || { echo "could not read app.json dependencies"; exit 1; }
-      printf '%s\n' "$deps" | while IFS= read -r d; do
+      while IFS= read -r d; do
         [ -n "$d" ] || continue
         dl "$(printf '%s' "$d" | jq -r .publisher)" \
            "$(printf '%s' "$d" | jq -r .name)" \
-           "$(printf '%s' "$d" | jq -r .id)" || exit 1
-      done
+           "$(printf '%s' "$d" | jq -r .id)"
+      done < <(printf '%s\n' "$deps")
       echo "symbols in .alpackages:"; ls -1 .alpackages
+      if [ "$failed" -ne 0 ]; then
+        echo "ERROR: $failed symbol package(s) failed to download from $dev_url —" \
+             "verify the dev endpoint is reachable from the container and that" \
+             "BC_USER/BC_PASSWORD are valid (NTLM may need DOMAIN\\user form)." >&2
+        exit 1
+      fi
 
   - id: implement
     category: implementation
