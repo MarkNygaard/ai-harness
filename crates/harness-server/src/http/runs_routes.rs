@@ -1423,6 +1423,21 @@ async fn execute_run_task(
                         run_env.insert("PATH".to_string(), path);
                     }
                 }
+                // A mise-provisioned .NET lives outside the default runtime search
+                // locations, so a standalone .NET apphost (e.g. the `al` AL
+                // compiler from `dotnet tool install`) can't find it via PATH —
+                // it needs DOTNET_ROOT. Point it at the mise install so every node
+                // (bash + agent) can run such tools. Only when dotnet is requested.
+                let wants_dotnet = toolchains
+                    .iter()
+                    .any(|t| t == "dotnet" || t.starts_with("dotnet@"));
+                if wants_dotnet && std::env::var_os("DOTNET_ROOT").is_none() {
+                    if let Some(root) = harness_runner::mise_tool_path("dotnet") {
+                        let root_s = root.display().to_string();
+                        std::env::set_var("DOTNET_ROOT", &root_s);
+                        run_env.insert("DOTNET_ROOT".to_string(), root_s);
+                    }
+                }
             }
             Ok(Err(e)) => {
                 tracing::warn!(run_id = %run_id, "toolchain provisioning failed: {e}")
