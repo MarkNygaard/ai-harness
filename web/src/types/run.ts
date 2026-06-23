@@ -241,4 +241,8 @@ export interface NodeView {
   /** Live-only latest activity line shown while the node is running (not
    * persisted; cleared when the node starts or finishes). */
   activity: string | null;
+  /** Live-only accumulated activity lines (sampled, deduped, capped) shown as
+   * a feed in the inspect dialog while the node runs. Not persisted; cleared
+   * when the node starts or finishes. */
+  activityLog: string[];
 }

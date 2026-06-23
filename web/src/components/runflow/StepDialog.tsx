@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -94,6 +95,10 @@ export function StepDialog({
                 </p>
               )}
 
+              {view.status === "running" && view.activityLog.length > 0 && (
+                <ActivityFeed lines={view.activityLog} />
+              )}
+
               <div className="pt-3">
                 <div className="mb-1 text-xs font-medium text-muted-foreground">
                   Output
@@ -111,6 +116,37 @@ export function StepDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Live feed of the agent's sampled activity lines while a step runs. Sampled
+ * and not persisted, so it shows current progress rather than a full transcript
+ * (the real result lands in Output when the step finishes). Auto-scrolls to the
+ * newest line as the agent works.
+ */
+function ActivityFeed({ lines }: { lines: string[] }) {
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [lines]);
+  return (
+    <div className="pt-3">
+      <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span className="size-1.5 animate-pulse rounded-full bg-current" />
+        Activity
+      </div>
+      <div className="max-h-48 overflow-auto rounded-md bg-muted p-3">
+        <ul className="flex flex-col gap-0.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+          {lines.map((line, i) => (
+            <li key={i} className="break-words">
+              {line}
+            </li>
+          ))}
+        </ul>
+        <div ref={endRef} />
+      </div>
+    </div>
   );
 }
 

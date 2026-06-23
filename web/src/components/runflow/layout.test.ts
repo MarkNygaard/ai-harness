@@ -2,7 +2,11 @@ import { describe, expect, it } from "vitest";
 import { layoutRun } from "./layout";
 import type { NodeView } from "@/types/run";
 
-function view(id: string, depends_on: string[], status: NodeView["status"] = "success"): NodeView {
+function view(
+  id: string,
+  depends_on: string[],
+  status: NodeView["status"] = "success",
+): NodeView {
   return {
     id,
     depends_on,
@@ -19,6 +23,7 @@ function view(id: string, depends_on: string[], status: NodeView["status"] = "su
     artifact: null,
     artifact_content: null,
     activity: null,
+    activityLog: [],
   };
 }
 

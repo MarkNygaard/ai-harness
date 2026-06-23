@@ -297,8 +297,12 @@ function seedNode(meta: NodeMeta): NodeView {
     artifact: meta.artifact ?? null,
     artifact_content: null,
     activity: null,
+    activityLog: [],
   };
 }
+
+/** Max activity lines kept per node in the live feed (oldest dropped). */
+const ACTIVITY_LOG_CAP = 200;
 
 /** Reduce one live [`RunEvent`] into the accumulated view. Pure (now injected). */
 export function liveReducer(state: LiveState, action: LiveAction): LiveState {
@@ -332,6 +336,7 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
             model: event.model,
             started_at: prev.started_at ?? now,
             activity: null,
+            activityLog: [],
           },
         },
       };
@@ -340,11 +345,18 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
       const prev =
         state.nodes[event.node_id] ??
         seedNode({ id: event.node_id, depends_on: [] });
+      // Append to the live feed, skipping a repeat of the last line (omp
+      // re-emits the same status line as it ticks) and capping the history.
+      const last = prev.activityLog[prev.activityLog.length - 1];
+      const activityLog =
+        event.activity === last
+          ? prev.activityLog
+          : [...prev.activityLog, event.activity].slice(-ACTIVITY_LOG_CAP);
       return {
         ...state,
         nodes: {
           ...state.nodes,
-          [event.node_id]: { ...prev, activity: event.activity },
+          [event.node_id]: { ...prev, activity: event.activity, activityLog },
         },
       };
     }
@@ -368,6 +380,7 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
             ended_at: n.ended_at ?? now,
             artifact_content: n.artifact_content ?? prev.artifact_content,
             activity: null,
+            activityLog: [],
           },
         },
       };
@@ -428,6 +441,7 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
       artifact_content: n?.artifact_content ?? null,
       // Live-only; persisted detail never carries activity.
       activity: null,
+      activityLog: [],
     };
   });
 }
@@ -521,9 +535,18 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
             : p
           : (p ?? l ?? seedNode({ id: nid, depends_on: [] }));
       const depends_on = p?.depends_on ?? chosen.depends_on;
-      return depends_on === chosen.depends_on
+      // `activity`/`activityLog` are live-only (the persisted row never carries
+      // them). Always take the live node's so a running node shows its progress
+      // even when the persisted row — also "running" — wins the status-rank tie.
+      const activity = l?.activity ?? chosen.activity ?? null;
+      const activityLog = l?.activityLog?.length
+        ? l.activityLog
+        : chosen.activityLog;
+      return depends_on === chosen.depends_on &&
+        activity === chosen.activity &&
+        activityLog === chosen.activityLog
         ? chosen
-        : { ...chosen, depends_on };
+        : { ...chosen, depends_on, activity, activityLog };
     });
 
     const status = liveTerminal ? state.status : (d?.status ?? state.status);
