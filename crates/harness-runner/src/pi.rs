@@ -557,11 +557,7 @@ fn activity_from_line(line: &str) -> Option<String> {
     }
     // Otherwise the last non-empty line of the assistant's text.
     let text = assistant_text(msg)?;
-    let last = text
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .next_back()?;
+    let last = text.lines().map(str::trim).rfind(|l| !l.is_empty())?;
     Some(truncate_activity(last))
 }
 
