@@ -23,6 +23,7 @@ function node(
     category: null,
     artifact: null,
     artifact_content: null,
+    activity: null,
   };
 }
 

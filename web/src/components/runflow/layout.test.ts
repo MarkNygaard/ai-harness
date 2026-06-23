@@ -18,6 +18,7 @@ function view(id: string, depends_on: string[], status: NodeView["status"] = "su
     category: null,
     artifact: null,
     artifact_content: null,
+    activity: null,
   };
 }
 

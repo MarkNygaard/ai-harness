@@ -39,7 +39,7 @@ pub use cond::eval_when;
 pub use error::DagError;
 pub use exec::{
     run_workflow, run_workflow_streaming, NodeBody, NodeMeta, NodeOutput, NodeRequest, NodeRun,
-    NodeRunner, NodeStatus, RunEvent, RunReport, RunStatus, RunnerError, Usage,
+    NodeRunner, NodeStatus, ProgressSink, RunEvent, RunReport, RunStatus, RunnerError, Usage,
 };
 pub use graph::topological_layers;
 pub use model::{

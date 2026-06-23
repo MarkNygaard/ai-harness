@@ -14,6 +14,7 @@
 //! agents, resolving `command` files, and reporting output + usage.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -92,6 +93,9 @@ pub struct NodeRequest<'a> {
     pub output_format: Option<&'a serde_json::Value>,
     /// Provider-agnostic tool hooks translated per provider at dispatch.
     pub hooks: Option<&'a crate::model::NodeHooks>,
+    /// Optional sink for live activity updates (AI bodies only; a streaming
+    /// runner reports the node's latest line here). `None` = no live progress.
+    pub progress: Option<ProgressSink>,
 }
 
 /// What a [`NodeRunner`] returns from one invocation.
@@ -108,6 +112,28 @@ pub struct NodeOutput {
 #[derive(Debug, thiserror::Error)]
 #[error("{0}")]
 pub struct RunnerError(pub String);
+
+/// A per-node sink the driver hands to a streaming runner so it can report the
+/// node's latest activity line *while it runs* (rendered on the running node in
+/// the graph). Cloning is cheap (an `Arc`); each call emits a live-only
+/// [`RunEvent::NodeProgress`]. `None` when the run isn't streaming events.
+#[derive(Clone)]
+pub struct ProgressSink(pub Arc<dyn Fn(String) + Send + Sync>);
+
+impl ProgressSink {
+    /// Report one activity line for the current node.
+    pub fn report(&self, activity: String) {
+        (self.0)(activity);
+    }
+}
+
+// `Arc<dyn Fn>` isn't `Debug`; provide one so `ProgressSink` can live on the
+// `Debug`-deriving request structs that carry it.
+impl std::fmt::Debug for ProgressSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ProgressSink(..)")
+    }
+}
 
 /// The seam between the DAG driver and the environment that executes node
 /// bodies. Implementations: a local subprocess/worktree executor, a Kubernetes
@@ -223,6 +249,10 @@ pub enum RunEvent {
     },
     /// A node reached a terminal state (success/failed/skipped/cancelled).
     NodeFinished { node: NodeRun },
+    /// Live-only: the running node's latest activity line (e.g. its most recent
+    /// assistant output line or tool action). Broadcast to the UI for the live
+    /// graph overlay but NOT persisted to the event log.
+    NodeProgress { node_id: String, activity: String },
     /// The run reached a terminal state.
     RunFinished { status: RunStatus },
 }
@@ -531,6 +561,19 @@ async fn execute_node<R: NodeRunner>(
     );
 
     let started = Utc::now();
+    // Live progress sink for streaming runners: each call emits a NodeProgress
+    // for this node over the event channel already threaded into the driver.
+    // `None` when the run isn't streaming events (e.g. the plain CLI path).
+    let progress = events.map(|tx| {
+        let tx = tx.clone();
+        let id = node.id.clone();
+        ProgressSink(Arc::new(move |activity| {
+            let _ = tx.unbounded_send(RunEvent::NodeProgress {
+                node_id: id.clone(),
+                activity,
+            });
+        }))
+    });
     let mut result = match &node.kind {
         NodeKind::Cancel(reason) => {
             // Substitute vars (e.g. `$upstream.output.summary`) in the reason.
@@ -575,6 +618,7 @@ async fn execute_node<R: NodeRunner>(
                 model,
                 vars,
                 incoming_session,
+                progress.clone(),
                 NodeBody::Prompt,
                 text,
             )
@@ -588,6 +632,7 @@ async fn execute_node<R: NodeRunner>(
                 model,
                 vars,
                 incoming_session,
+                progress.clone(),
                 NodeBody::Bash,
                 text,
             )
@@ -607,6 +652,7 @@ async fn execute_node<R: NodeRunner>(
                 model,
                 vars,
                 incoming_session,
+                progress.clone(),
                 move |t| NodeBody::Script {
                     script: t,
                     runtime,
@@ -625,6 +671,7 @@ async fn execute_node<R: NodeRunner>(
                 model,
                 vars,
                 incoming_session,
+                progress.clone(),
                 1,
                 NodeBody::Command(name.clone()),
             )
@@ -632,7 +679,17 @@ async fn execute_node<R: NodeRunner>(
         }
 
         NodeKind::Loop(cfg) => {
-            run_loop(runner, node, provider, model, vars, incoming_session, cfg).await
+            run_loop(
+                runner,
+                node,
+                provider,
+                model,
+                vars,
+                incoming_session,
+                progress.clone(),
+                cfg,
+            )
+            .await
         }
     };
     // Stamp execution timing once, here, for every body kind.
@@ -656,6 +713,7 @@ async fn run_single_body<R, F>(
     model: Option<&str>,
     vars: &VarContext,
     incoming_session: Option<String>,
+    progress: Option<ProgressSink>,
     make_body: F,
     raw_text: &str,
 ) -> NodeRunResult
@@ -680,6 +738,7 @@ where
         model,
         vars,
         incoming_session,
+        progress,
         1,
         make_body(rendered),
     )
@@ -695,6 +754,7 @@ async fn execute_body<R: NodeRunner>(
     model: Option<&str>,
     vars: &VarContext,
     incoming_session: Option<String>,
+    progress: Option<ProgressSink>,
     iteration: u32,
     body: NodeBody,
 ) -> NodeRunResult {
@@ -711,6 +771,7 @@ async fn execute_body<R: NodeRunner>(
         vars,
         output_format: node.output_format.as_ref(),
         hooks: node.hooks.as_ref(),
+        progress,
     };
     match runner.execute(req).await {
         Ok(out) => {
@@ -748,6 +809,7 @@ async fn execute_body<R: NodeRunner>(
 
 /// Drive a loop node: re-run its prompt until the `until` signal converges or
 /// `max_iterations` is reached.
+#[allow(clippy::too_many_arguments)]
 async fn run_loop<R: NodeRunner>(
     runner: &R,
     node: &Node,
@@ -755,6 +817,7 @@ async fn run_loop<R: NodeRunner>(
     model: Option<&str>,
     vars: &VarContext,
     incoming_session: Option<String>,
+    progress: Option<ProgressSink>,
     cfg: &crate::model::LoopConfig,
 ) -> NodeRunResult {
     if cfg.until.trim().is_empty() {
@@ -813,6 +876,7 @@ async fn run_loop<R: NodeRunner>(
             vars: &iter_vars,
             output_format: node.output_format.as_ref(),
             hooks: node.hooks.as_ref(),
+            progress: progress.clone(),
         };
 
         match runner.execute(req).await {
@@ -871,6 +935,7 @@ async fn run_loop<R: NodeRunner>(
                         vars: &iter_vars,
                         output_format: None,
                         hooks: None,
+                        progress: None,
                     };
                     match runner.execute(bash_req).await {
                         Ok(check) => {

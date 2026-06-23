@@ -125,6 +125,7 @@ export type RunEvent =
       model: string | null;
     }
   | { type: "node_finished"; node: NodeRun }
+  | { type: "node_progress"; node_id: string; activity: string }
   | { type: "run_finished"; status: RunStatus };
 
 export interface CreateRunRequest {
@@ -237,4 +238,7 @@ export interface NodeView {
   category: string | null;
   artifact: string | null;
   artifact_content: string | null;
+  /** Live-only latest activity line shown while the node is running (not
+   * persisted; cleared when the node starts or finishes). */
+  activity: string | null;
 }

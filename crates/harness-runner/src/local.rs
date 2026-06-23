@@ -257,6 +257,7 @@ impl LocalRunner {
                 iteration: req.iteration,
                 env_vars,
                 hooks: req.hooks.cloned(),
+                progress: req.progress.clone(),
             })
             .await
             .map_err(|e| RunnerError(e.to_string()))?;
@@ -460,6 +461,7 @@ mod tests {
             vars,
             output_format: None,
             hooks: None,
+            progress: None,
         }
     }
 

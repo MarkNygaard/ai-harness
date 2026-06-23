@@ -296,6 +296,7 @@ function seedNode(meta: NodeMeta): NodeView {
     category: meta.category ?? null,
     artifact: meta.artifact ?? null,
     artifact_content: null,
+    activity: null,
   };
 }
 
@@ -330,7 +331,20 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
             provider: event.provider,
             model: event.model,
             started_at: prev.started_at ?? now,
+            activity: null,
           },
+        },
+      };
+    }
+    case "node_progress": {
+      const prev =
+        state.nodes[event.node_id] ??
+        seedNode({ id: event.node_id, depends_on: [] });
+      return {
+        ...state,
+        nodes: {
+          ...state.nodes,
+          [event.node_id]: { ...prev, activity: event.activity },
         },
       };
     }
@@ -353,6 +367,7 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
             started_at: n.started_at ?? prev.started_at,
             ended_at: n.ended_at ?? now,
             artifact_content: n.artifact_content ?? prev.artifact_content,
+            activity: null,
           },
         },
       };
@@ -411,6 +426,8 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
       category,
       artifact: artifact ?? null,
       artifact_content: n?.artifact_content ?? null,
+      // Live-only; persisted detail never carries activity.
+      activity: null,
     };
   });
 }
