@@ -49,6 +49,11 @@ export function StepDialog({
                 <Badge variant={STATUS_VARIANT[view.status] ?? "default"}>
                   {statusLabel(view.status)}
                 </Badge>
+                {view.status === "running" && view.taskProgress && (
+                  <Badge variant="secondary" className="tabular-nums">
+                    task {view.taskProgress.done}/{view.taskProgress.total}
+                  </Badge>
+                )}
               </DialogTitle>
               <DialogDescription className="sr-only">
                 Step output and details

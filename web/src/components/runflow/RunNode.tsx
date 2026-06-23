@@ -32,7 +32,11 @@ export function RunNode({ data }: NodeProps) {
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
     >
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !border-0 !bg-border" />
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="!h-2 !w-2 !border-0 !bg-border"
+      />
       <div
         className={cn(
           "flex w-56 flex-col gap-1.5 rounded-lg border bg-card px-3 py-2 shadow-sm transition-shadow",
@@ -42,7 +46,10 @@ export function RunNode({ data }: NodeProps) {
       >
         <div className="flex items-center gap-1.5">
           {running ? (
-            <Loader2 className="h-3 w-3 shrink-0 animate-spin" style={{ color }} />
+            <Loader2
+              className="h-3 w-3 shrink-0 animate-spin"
+              style={{ color }}
+            />
           ) : (
             <span
               className="h-2 w-2 shrink-0 rounded-full"
@@ -50,22 +57,39 @@ export function RunNode({ data }: NodeProps) {
               aria-hidden
             />
           )}
-          <span className="truncate text-[13px] font-semibold text-card-foreground" title={view.id}>
+          <span
+            className="truncate text-[13px] font-semibold text-card-foreground"
+            title={view.id}
+          >
             {view.id}
           </span>
         </div>
 
         <div className="flex items-center justify-between gap-2 text-[11px] text-muted-foreground">
-          <span className="truncate" style={{ color }}>
-            {statusLabel(view.status)}
+          <span className="flex min-w-0 items-center gap-1.5 truncate">
+            <span className="truncate" style={{ color }}>
+              {statusLabel(view.status)}
+            </span>
+            {running && view.taskProgress && (
+              <span
+                className="shrink-0 rounded bg-muted px-1 font-medium tabular-nums text-card-foreground"
+                title={`Task ${view.taskProgress.done} of ${view.taskProgress.total}`}
+              >
+                {view.taskProgress.done}/{view.taskProgress.total}
+              </span>
+            )}
           </span>
-          {view.started_at && <span className="tabular-nums">{formatDuration(elapsed)}</span>}
+          {view.started_at && (
+            <span className="tabular-nums">{formatDuration(elapsed)}</span>
+          )}
         </div>
 
         <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
           <span className="flex min-w-0 items-center gap-1 truncate">
             {view.provider && <Cpu className="h-2.5 w-2.5 shrink-0" />}
-            <span className="truncate">{view.model ?? view.provider ?? "—"}</span>
+            <span className="truncate">
+              {view.model ?? view.provider ?? "—"}
+            </span>
           </span>
           {tokens > 0 && (
             <span className="shrink-0 whitespace-nowrap tabular-nums">
@@ -74,7 +98,11 @@ export function RunNode({ data }: NodeProps) {
           )}
         </div>
       </div>
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-border" />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="!h-2 !w-2 !border-0 !bg-border"
+      />
 
       {hover && <NodeHoverCard view={view} elapsed={elapsed} />}
     </div>

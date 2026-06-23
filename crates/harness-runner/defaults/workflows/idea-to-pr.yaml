@@ -107,9 +107,11 @@ nodes:
       - **Files to change**: bullet list, path + reason per file.
       - **Patterns to mirror**: the conventions from exploration this
         change must follow.
-      - **Step-by-step tasks**: ordered; each names the file(s) and the
-        concrete edit. Granular enough that an implementer follows them
-        without re-deciding the approach.
+      - **Step-by-step tasks**: a numbered list (`1.`, `2.`, …) — each names
+        the file(s) and the concrete edit. Granular enough that an implementer
+        follows them without re-deciding the approach. The numbering is the
+        contract the implementer reports progress against, so keep one concrete
+        edit per number.
       - **Robustness & edge cases**: the failure modes and edge cases this
         must handle — error paths, all relevant inputs/events (not just the
         obvious one), and any reliability assumption (e.g. how data/flags

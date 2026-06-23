@@ -245,4 +245,9 @@ export interface NodeView {
    * a feed in the inspect dialog while the node runs. Not persisted; cleared
    * when the node starts or finishes. */
   activityLog: string[];
+  /** Live-only task progress (e.g. 5 of 13) parsed from the implement agent's
+   * `📋 n/N` markers; sticky across activity updates so it persists between
+   * markers, cleared when the node starts or finishes. Null when the step
+   * reports no task count. */
+  taskProgress: { done: number; total: number } | null;
 }

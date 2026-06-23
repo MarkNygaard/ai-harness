@@ -298,11 +298,29 @@ function seedNode(meta: NodeMeta): NodeView {
     artifact_content: null,
     activity: null,
     activityLog: [],
+    taskProgress: null,
   };
 }
 
 /** Max activity lines kept per node in the live feed (oldest dropped). */
 const ACTIVITY_LOG_CAP = 200;
+
+/**
+ * Parse a `📋 n/N …` activity line (emitted by the implement agent's task
+ * markers, canonicalized server-side) into task progress, else null. The
+ * leading 📋 avoids false-matching other "n/m" text in normal activity.
+ */
+function parseTaskProgress(
+  activity: string | null,
+): { done: number; total: number } | null {
+  if (!activity) return null;
+  const m = /^📋\s*(\d+)\s*\/\s*(\d+)/.exec(activity);
+  if (!m) return null;
+  const done = Number(m[1]);
+  const total = Number(m[2]);
+  if (!total || done > total) return null;
+  return { done, total };
+}
 
 /** Reduce one live [`RunEvent`] into the accumulated view. Pure (now injected). */
 export function liveReducer(state: LiveState, action: LiveAction): LiveState {
@@ -337,6 +355,7 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
             started_at: prev.started_at ?? now,
             activity: null,
             activityLog: [],
+            taskProgress: null,
           },
         },
       };
@@ -352,11 +371,20 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
         event.activity === last
           ? prev.activityLog
           : [...prev.activityLog, event.activity].slice(-ACTIVITY_LOG_CAP);
+      // Task progress is sticky: only a fresh marker updates it, so the badge
+      // persists through the tool-call lines between markers.
+      const taskProgress =
+        parseTaskProgress(event.activity) ?? prev.taskProgress;
       return {
         ...state,
         nodes: {
           ...state.nodes,
-          [event.node_id]: { ...prev, activity: event.activity, activityLog },
+          [event.node_id]: {
+            ...prev,
+            activity: event.activity,
+            activityLog,
+            taskProgress,
+          },
         },
       };
     }
@@ -381,6 +409,7 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
             artifact_content: n.artifact_content ?? prev.artifact_content,
             activity: null,
             activityLog: [],
+            taskProgress: null,
           },
         },
       };
@@ -442,6 +471,7 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
       // Live-only; persisted detail never carries activity.
       activity: null,
       activityLog: [],
+      taskProgress: null,
     };
   });
 }
@@ -535,18 +565,21 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
             : p
           : (p ?? l ?? seedNode({ id: nid, depends_on: [] }));
       const depends_on = p?.depends_on ?? chosen.depends_on;
-      // `activity`/`activityLog` are live-only (the persisted row never carries
-      // them). Always take the live node's so a running node shows its progress
-      // even when the persisted row — also "running" — wins the status-rank tie.
+      // `activity`/`activityLog`/`taskProgress` are live-only (the persisted row
+      // never carries them). Always take the live node's so a running node shows
+      // its progress even when the persisted row — also "running" — wins the
+      // status-rank tie above.
       const activity = l?.activity ?? chosen.activity ?? null;
       const activityLog = l?.activityLog?.length
         ? l.activityLog
         : chosen.activityLog;
+      const taskProgress = l?.taskProgress ?? chosen.taskProgress ?? null;
       return depends_on === chosen.depends_on &&
         activity === chosen.activity &&
-        activityLog === chosen.activityLog
+        activityLog === chosen.activityLog &&
+        taskProgress === chosen.taskProgress
         ? chosen
-        : { ...chosen, depends_on, activity, activityLog };
+        : { ...chosen, depends_on, activity, activityLog, taskProgress };
     });
 
     const status = liveTerminal ? state.status : (d?.status ?? state.status);

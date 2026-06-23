@@ -150,6 +150,37 @@ describe("liveReducer", () => {
     expect(finished.nodes.a.activityLog).toEqual([]);
   });
 
+  it("parses a sticky task-progress badge from 📋 markers", () => {
+    const state = reduce([
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [] }],
+      },
+      { type: "node_started", node_id: "a", provider: "pi", model: "kimi" },
+      { type: "node_progress", node_id: "a", activity: "📋 3/13 wiring it" },
+      // A non-marker line keeps the badge (sticky) but updates the latest line.
+      { type: "node_progress", node_id: "a", activity: "⚙ bash" },
+      { type: "node_progress", node_id: "a", activity: "📋 4/13 next task" },
+    ]);
+    expect(state.nodes.a.taskProgress).toEqual({ done: 4, total: 13 });
+    expect(state.nodes.a.activity).toBe("📋 4/13 next task");
+
+    // Cleared when the node starts again (e.g. a fresh run reuses the id).
+    const restarted = liveReducer(state, {
+      type: "event",
+      event: {
+        type: "node_started",
+        node_id: "a",
+        provider: "pi",
+        model: "kimi",
+      },
+      now: NOW,
+    });
+    expect(restarted.nodes.a.taskProgress).toBeNull();
+  });
+
   it("records terminal run status", () => {
     const state = reduce([
       { type: "run_started", workflow: "d", total_nodes: 0, nodes: [] },

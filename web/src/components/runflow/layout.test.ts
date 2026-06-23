@@ -24,6 +24,7 @@ function view(
     artifact_content: null,
     activity: null,
     activityLog: [],
+    taskProgress: null,
   };
 }
 
