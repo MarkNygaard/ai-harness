@@ -156,6 +156,29 @@ pub async fn set_credential(
     };
     match store.set(&provider, &req.fields).await {
         Ok(()) => {
+            // Write-through on paste: a freshly pasted credential must take effect
+            // and REPLACE any stale on-disk file now — because `materialize` only
+            // seeds-if-missing (it won't clobber the CLI's self-refreshing file).
+            // This is the one authoritative point where the DB copy overwrites
+            // disk; thereafter the CLI owns and rotates the token in place.
+            let home = home_dir();
+            match provider.as_str() {
+                "claude" => {
+                    if let Some(json) = req.fields.get("credentials_json").filter(|v| !v.is_empty())
+                    {
+                        write_secret_file(home.join(".claude").join(".credentials.json"), json);
+                    }
+                }
+                "codex" => {
+                    if let Some(json) = req.fields.get("auth_json").filter(|v| !v.is_empty()) {
+                        write_secret_file(
+                            home.join(".codex").join("auth.json"),
+                            &strip_codex_auth_mode(json),
+                        );
+                    }
+                }
+                _ => {}
+            }
             // A usage-card visibility toggle takes effect on the next dashboard
             // poll rather than after the ~3-min usage cache expires.
             super::usage_routes::invalidate_cache().await;
@@ -408,18 +431,30 @@ pub async fn materialize(store: &CredentialStore) {
             std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", token);
         }
         if let Some(json) = claude.get("credentials_json").filter(|v| !v.is_empty()) {
-            write_secret_file(home.join(".claude").join(".credentials.json"), json);
+            // SEED ONLY IF MISSING — never clobber a file the CLI is already
+            // managing. Claude Code refreshes the access token on each run and
+            // **rotates** the (single-use) refresh token in place; overwriting it
+            // with the stale DB copy each run re-presents a consumed refresh token
+            // and 401s within a day. A fresh paste still takes effect because
+            // `set_credential` write-throughs to this file. (Mirrors the Kimi
+            // `reseed_agent_db_if_missing` pattern below.)
+            let path = home.join(".claude").join(".credentials.json");
+            if !file_non_empty(path.clone()) {
+                write_secret_file(path, json);
+            }
         }
     }
     if let Ok(Some(codex)) = store.get("codex").await {
         if let Some(json) = codex.get("auth_json").filter(|v| !v.is_empty()) {
-            // Defensive: older Connect Codex wrote an `auth_mode` field the codex
-            // CLI rejects ("unknown variant ChatGPT"). Strip it so credentials
-            // stored before the fix still work without a reconnect.
-            write_secret_file(
-                home.join(".codex").join("auth.json"),
-                &strip_codex_auth_mode(json),
-            );
+            // Seed-if-missing, same as claude above: the codex CLI also rotates
+            // its refresh token in `auth.json`, so clobbering it each run breaks
+            // auth. Defensive `strip_codex_auth_mode`: older Connect Codex wrote
+            // an `auth_mode` field the codex CLI rejects ("unknown variant
+            // ChatGPT") — strip it so pre-fix credentials still work.
+            let path = home.join(".codex").join("auth.json");
+            if !file_non_empty(path.clone()) {
+                write_secret_file(path, &strip_codex_auth_mode(json));
+            }
         }
     }
     if let Ok(Some(pi)) = store.get("pi").await {
