@@ -17,7 +17,7 @@
 //! The server materializes these from the credential store before a run; we
 //! don't manage them here.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -55,9 +55,17 @@ const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
 enum Attempt {
     /// The process closed stdout and exited; carries streamed stdout + stderr.
     Done {
+        /// Buffered stdout with the high-volume `message_update` deltas dropped
+        /// (see [`PiAgent::run_attempt`]).
         stdout: String,
         stderr: String,
         status: std::process::ExitStatus,
+        /// Count of each top-level event `type` seen (incl. dropped deltas), for
+        /// diagnosing "completed but empty" failures.
+        event_types: BTreeMap<String, u64>,
+        /// The most recent `message_update` line (verbatim), kept so the final
+        /// assistant text can be recovered if no `message_end`/`agent_end` lands.
+        last_update: Option<String>,
     },
     /// No output for the idle window — killed as stalled (retryable once).
     Stalled,
@@ -194,7 +202,9 @@ impl PromptAgent for PiAgent {
                     stdout,
                     stderr,
                     status,
-                } => break (stdout, stderr, status),
+                    event_types,
+                    last_update,
+                } => break (stdout, stderr, status, event_types, last_update),
                 Attempt::Stalled => {
                     if attempt == 0 {
                         attempt += 1;
@@ -211,8 +221,20 @@ impl PromptAgent for PiAgent {
                 }
             }
         };
-        let (stdout, stderr, status) = output;
-        let parsed = parse_omp_stream(&stdout);
+        let (stdout, stderr, status, event_types, last_update) = output;
+        let mut parsed = parse_omp_stream(&stdout);
+
+        // Fallback: some omp endings stream the final assistant message only as
+        // `message_update` deltas and exit without a terminal `message_end` /
+        // `agent_end`. Those deltas aren't buffered (too voluminous), so recover
+        // the text from the last streamed partial rather than discarding a run
+        // that actually completed. Only when nothing else was parsed, so a normal
+        // run is unaffected.
+        if parsed.text.is_empty() {
+            if let Some(text) = last_update.as_deref().and_then(parse_update_text) {
+                parsed.text = text;
+            }
+        }
 
         // A clean run is a zero exit with either the `agent_end` marker OR at
         // least an assistant message. We do NOT hard-require `agent_end`: omp's
@@ -230,8 +252,28 @@ impl PromptAgent for PiAgent {
                 .into_iter()
                 .rev()
                 .collect();
+            let events = event_types
+                .iter()
+                .map(|(k, v)| format!("{k}={v}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            // stdout is otherwise discarded on this path; log its tail + the
+            // event histogram so a "completed but empty" failure is diagnosable.
+            let stdout_tail: String = stdout
+                .chars()
+                .rev()
+                .take(800)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect();
+            tracing::warn!(
+                "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B); events: [{events}]; stdout tail: {stdout_tail}",
+                status.code(),
+                parsed.text.len()
+            );
             return Err(AgentError(format!(
-                "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B): {tail}",
+                "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B; events: [{events}]): {tail}",
                 status.code(),
                 parsed.text.len()
             )));
@@ -312,6 +354,10 @@ impl PiAgent {
         let mut last_emit: Option<Instant> = None;
         let mut pending: Option<String> = None;
         const ACTIVITY_THROTTLE: Duration = Duration::from_millis(750);
+        // Per-type event counts (incl. dropped deltas) + the latest streaming
+        // delta, for diagnostics and the empty-result fallback in `run`.
+        let mut event_types: BTreeMap<String, u64> = BTreeMap::new();
+        let mut last_update: Option<String> = None;
 
         // Optional wall-clock ceiling. When unset, this future is `pending` —
         // it never fires, so only the idle watchdog can stop the call.
@@ -328,8 +374,8 @@ impl PiAgent {
             tokio::select! {
                 read = lines.next_line() => match read {
                     Ok(Some(line)) => {
-                        acc.push_str(&line);
-                        acc.push('\n');
+                        // Live activity overlay: emit the node's latest line to
+                        // the progress sink (throttled; flushed after the loop).
                         if let Some(sink) = progress {
                             if let Some(activity) = activity_from_line(&line) {
                                 let due = last_emit
@@ -343,6 +389,24 @@ impl PiAgent {
                                     pending = Some(activity);
                                 }
                             }
+                        }
+                        // Count the event type, then buffer everything EXCEPT the
+                        // high-volume `message_update` deltas (each re-embeds the
+                        // full partial message + an ~8KB signature per token). The
+                        // parser only needs `message_end`/`agent_end`; keep just
+                        // the latest delta for the empty-result fallback in `run`.
+                        let is_update = {
+                            let ty = event_type(&line);
+                            if let Some(t) = ty {
+                                *event_types.entry(t.to_string()).or_insert(0) += 1;
+                            }
+                            ty == Some("message_update")
+                        };
+                        if is_update {
+                            last_update = Some(line);
+                        } else {
+                            acc.push_str(&line);
+                            acc.push('\n');
                         }
                     }
                     Ok(None) => break, // stdout closed → process is finishing
@@ -381,6 +445,8 @@ impl PiAgent {
             stdout: acc,
             stderr,
             status,
+            event_types,
+            last_update,
         })
     }
 }
@@ -573,6 +639,25 @@ fn truncate_activity(s: &str) -> String {
     format!("{truncated}…")
 }
 
+/// Cheap extraction of an omp event's top-level `type` WITHOUT fully parsing the
+/// line as JSON. The streaming `message_update` lines are large (each re-embeds
+/// the full partial message + an ~8KB signature), so JSON-parsing every one just
+/// to classify it is wasteful. Relies on omp emitting `type` as the first key:
+/// `{"type":"...",...}`. Returns `None` if the line isn't in that shape.
+fn event_type(line: &str) -> Option<&str> {
+    let rest = line.trim_start().strip_prefix("{\"type\":\"")?;
+    let end = rest.find('"')?;
+    Some(&rest[..end])
+}
+
+/// Recover assistant text from a `message_update` line's embedded partial
+/// `message` — the fallback when a run ends without a `message_end`/`agent_end`
+/// and the streamed deltas (the only carrier of the final text) weren't buffered.
+fn parse_update_text(line: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(line.trim()).ok()?;
+    assistant_text(v.get("message"))
+}
+
 /// Token usage from a telemetry `usage` object, tolerating camelCase or
 /// snake_case key spellings across omp versions.
 fn usage_from_value(u: &serde_json::Value) -> Usage {
@@ -613,6 +698,29 @@ fn usage_from_value(u: &serde_json::Value) -> Usage {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn event_type_extracts_leading_type_key() {
+        assert_eq!(
+            event_type(r#"{"type":"message_update","x":1}"#),
+            Some("message_update")
+        );
+        assert_eq!(event_type(r#"  {"type":"agent_end"}"#), Some("agent_end"));
+        // Not the omp shape (type not first / not JSON) → None, never panics.
+        assert_eq!(event_type(r#"{"id":"x","type":"session"}"#), None);
+        assert_eq!(event_type("not json"), None);
+        assert_eq!(event_type(r#"{"type":"#), None);
+    }
+
+    #[test]
+    fn parse_update_text_recovers_final_partial() {
+        // A message_update whose embedded partial carries assistant text.
+        let line = r#"{"type":"message_update","assistantMessageEvent":{},"message":{"role":"assistant","content":[{"type":"thinking","thinking":"…"},{"type":"text","text":"done."}]}}"#;
+        assert_eq!(parse_update_text(line).as_deref(), Some("done."));
+        // Thinking-only partial → no recoverable text.
+        let thinking = r#"{"type":"message_update","message":{"role":"assistant","content":[{"type":"thinking","thinking":"…"}]}}"#;
+        assert_eq!(parse_update_text(thinking), None);
+    }
 
     #[test]
     fn parses_session_text_and_usage() {
