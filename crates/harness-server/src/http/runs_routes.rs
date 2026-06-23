@@ -1587,6 +1587,9 @@ async fn execute_run_task(
                     RunEvent::RunFinished { status } => {
                         let _ = store.finish_run(&persist_run_id, *status).await;
                     }
+                    // Live-only: broadcast below for the graph overlay, but never
+                    // written to the event log (it's transient per-node activity).
+                    RunEvent::NodeProgress { .. } => {}
                 }
             }
             let _ = btx.send(ev);

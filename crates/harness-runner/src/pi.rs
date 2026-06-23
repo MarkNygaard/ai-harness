@@ -20,10 +20,10 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
-use harness_dag::Usage;
+use harness_dag::{ProgressSink, Usage};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
 use tokio::process::Command;
 
@@ -186,7 +186,10 @@ impl PromptAgent for PiAgent {
         // tests failed) is deterministic — never retried. Capped at 1 → no loop.
         let mut attempt = 0u32;
         let output = loop {
-            match self.run_attempt(&args, &req.cwd, &env_vars).await? {
+            match self
+                .run_attempt(&args, &req.cwd, &env_vars, req.progress.as_ref())
+                .await?
+            {
                 Attempt::Done {
                     stdout,
                     stderr,
@@ -254,6 +257,7 @@ impl PiAgent {
         args: &[String],
         cwd: &Path,
         env_vars: &HashMap<String, String>,
+        progress: Option<&ProgressSink>,
     ) -> Result<Attempt, AgentError> {
         let mut cmd = Command::new(&self.cli_path);
         cmd.args(args)
@@ -301,6 +305,13 @@ impl PiAgent {
         let stdout = child.stdout.take().expect("stdout piped");
         let mut lines = BufReader::new(stdout).lines();
         let mut acc = String::new();
+        // Live activity overlay: emit the node's latest line to the progress
+        // sink, throttled so the SSE/UI never floods. `pending` holds the most
+        // recent line seen since the last emit; it's flushed after the loop so
+        // the final activity is never dropped. No-op when `progress` is None.
+        let mut last_emit: Option<Instant> = None;
+        let mut pending: Option<String> = None;
+        const ACTIVITY_THROTTLE: Duration = Duration::from_millis(750);
 
         // Optional wall-clock ceiling. When unset, this future is `pending` —
         // it never fires, so only the idle watchdog can stop the call.
@@ -319,6 +330,20 @@ impl PiAgent {
                     Ok(Some(line)) => {
                         acc.push_str(&line);
                         acc.push('\n');
+                        if let Some(sink) = progress {
+                            if let Some(activity) = activity_from_line(&line) {
+                                let due = last_emit
+                                    .map(|t| t.elapsed() >= ACTIVITY_THROTTLE)
+                                    .unwrap_or(true);
+                                if due {
+                                    sink.report(activity);
+                                    last_emit = Some(Instant::now());
+                                    pending = None;
+                                } else {
+                                    pending = Some(activity);
+                                }
+                            }
+                        }
                     }
                     Ok(None) => break, // stdout closed → process is finishing
                     Err(e) => {
@@ -340,6 +365,11 @@ impl PiAgent {
                     return Ok(Attempt::Stalled);
                 }
             }
+        }
+
+        // Flush the final pending activity so the last line isn't lost to the throttle.
+        if let (Some(sink), Some(activity)) = (progress, pending.take()) {
+            sink.report(activity);
         }
 
         let status = child
@@ -506,6 +536,43 @@ fn assistant_text(msg: Option<&serde_json::Value>) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
+/// Extract a short "current activity" line from one omp stream event (one line
+/// of its newline-delimited JSON), for the live node-progress overlay. Prefers a
+/// tool action (`⚙ <tool>`), else the last non-empty line of assistant text.
+/// Returns `None` for events with nothing useful to show (non-JSON, telemetry,
+/// empty messages) so the caller emits nothing.
+fn activity_from_line(line: &str) -> Option<String> {
+    use serde_json::Value;
+    let v: Value = serde_json::from_str(line.trim()).ok()?;
+    let msg = v.get("message");
+    // A tool call: surface the tool name (e.g. "⚙ bash").
+    let content = msg.and_then(|m| m.get("content")).and_then(Value::as_array);
+    for part in content.into_iter().flatten() {
+        if part.get("type").and_then(Value::as_str) != Some("tool_use") {
+            continue;
+        }
+        if let Some(name) = part.get("name").and_then(Value::as_str) {
+            return Some(truncate_activity(&format!("⚙ {name}")));
+        }
+    }
+    // Otherwise the last non-empty line of the assistant's text.
+    let text = assistant_text(msg)?;
+    let last = text.lines().map(str::trim).rfind(|l| !l.is_empty())?;
+    Some(truncate_activity(last))
+}
+
+/// Trim and cap an activity string to a sensible single-line length, on a char
+/// boundary, appending an ellipsis when truncated.
+fn truncate_activity(s: &str) -> String {
+    const MAX: usize = 120;
+    let s = s.trim();
+    if s.chars().count() <= MAX {
+        return s.to_string();
+    }
+    let truncated: String = s.chars().take(MAX).collect();
+    format!("{truncated}…")
+}
+
 /// Token usage from a telemetry `usage` object, tolerating camelCase or
 /// snake_case key spellings across omp versions.
 fn usage_from_value(u: &serde_json::Value) -> Usage {
@@ -577,6 +644,34 @@ mod tests {
         assert!(parsed.saw_end);
         assert_eq!(parsed.usage.input, Some(5));
         assert_eq!(parsed.usage.cache_read, None);
+    }
+
+    #[test]
+    fn activity_from_line_extracts_text_tool_and_skips_noise() {
+        // Assistant text → last non-empty line.
+        let line = "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"first\\n\\nsecond line\"}]}}";
+        assert_eq!(activity_from_line(line).as_deref(), Some("second line"));
+
+        // Tool use → "⚙ <name>" (preferred over any text in the same message).
+        let tool = "{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"bash\",\"input\":{}}]}}";
+        assert_eq!(activity_from_line(tool).as_deref(), Some("⚙ bash"));
+
+        // Non-JSON / telemetry / empty → None.
+        assert_eq!(activity_from_line("not json"), None);
+        assert_eq!(
+            activity_from_line("{\"type\":\"agent_end\",\"telemetry\":{}}"),
+            None
+        );
+    }
+
+    #[test]
+    fn truncate_activity_caps_on_char_boundary() {
+        let short = "edit Source/Foo.al";
+        assert_eq!(truncate_activity(short), short);
+        let long = "x".repeat(200);
+        let out = truncate_activity(&long);
+        assert!(out.ends_with('…'));
+        assert_eq!(out.chars().count(), 121); // 120 + ellipsis
     }
 
     #[test]
@@ -726,7 +821,7 @@ mod tests {
         let args = vec!["-c".to_string(), "printf 'a\\n'; sleep 30".to_string()];
         let started = std::time::Instant::now();
         let out = agent
-            .run_attempt(&args, Path::new("."), &Default::default())
+            .run_attempt(&args, Path::new("."), &Default::default(), None)
             .await
             .unwrap();
         assert!(matches!(out, Attempt::Stalled));
@@ -748,7 +843,7 @@ mod tests {
                 .to_string(),
         ];
         let out = agent
-            .run_attempt(&args, Path::new("."), &Default::default())
+            .run_attempt(&args, Path::new("."), &Default::default(), None)
             .await
             .unwrap();
         match out {

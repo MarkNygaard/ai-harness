@@ -73,6 +73,15 @@ export function RunNode({ data }: NodeProps) {
             </span>
           )}
         </div>
+
+        {running && view.activity && (
+          <span
+            className="block truncate text-[10px] italic text-muted-foreground"
+            title={view.activity}
+          >
+            {view.activity}
+          </span>
+        )}
       </div>
       <Handle type="source" position={Position.Right} className="!h-2 !w-2 !border-0 !bg-border" />
 

@@ -32,6 +32,7 @@ function node(
     category,
     artifact: null,
     artifact_content: null,
+    activity: null,
   };
 }
 

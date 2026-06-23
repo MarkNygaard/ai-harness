@@ -58,6 +58,9 @@ pub struct PromptRequest {
     pub env_vars: HashMap<String, String>,
     /// Provider-agnostic tool hooks translated per provider at dispatch.
     pub hooks: Option<harness_dag::NodeHooks>,
+    /// Optional sink for live activity updates — a streaming agent reports the
+    /// node's latest line here (rendered on the running node). `None` = none.
+    pub progress: Option<harness_dag::ProgressSink>,
 }
 
 /// The result of an AI prompt invocation.
@@ -127,6 +130,7 @@ mod tests {
                 iteration: 1,
                 env_vars: Default::default(),
                 hooks: None,
+                progress: None,
             })
             .await
             .unwrap();

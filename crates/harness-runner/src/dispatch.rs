@@ -95,6 +95,7 @@ mod tests {
             iteration: 1,
             env_vars: Default::default(),
             hooks: None,
+            progress: None,
         }
     }
 
