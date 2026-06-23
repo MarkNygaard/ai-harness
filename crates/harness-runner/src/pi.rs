@@ -561,7 +561,7 @@ fn activity_from_line(line: &str) -> Option<String> {
         .lines()
         .map(str::trim)
         .filter(|l| !l.is_empty())
-        .last()?;
+        .next_back()?;
     Some(truncate_activity(last))
 }
 
