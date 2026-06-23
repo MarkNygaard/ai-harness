@@ -15,9 +15,12 @@ description: |
 
   Project requirements:
   - Toolchain: `dotnet`.
-  - Env vars (Projects -> Env): BC_USER and BC_PASSWORD (a Windows service
-    account, used only for read-only symbol download). Optional BC_DEV_URL
-    overrides the dev endpoint; otherwise it's derived from .vscode/launch.json.
+  - Env vars (Projects -> Env): BC_USER and BC_PASSWORD for read-only symbol
+    download. Optional BC_AUTH picks the auth scheme — `basic` (NavUserPassword;
+    the default, and the only scheme that works from a non-domain-joined
+    container), or `ntlm` / `negotiate` (Windows auth; the dev endpoint must
+    actually offer the chosen scheme). Optional BC_DEV_URL overrides the dev
+    endpoint; otherwise it's derived from .vscode/launch.json.
   - app.json and .vscode/launch.json committed.
 
   NOT for: standalone reviews, publishing/deploying, or plans without code.
@@ -136,6 +139,20 @@ nodes:
       fi
       echo "BC dev endpoint (symbols, read-only): $dev_url"
 
+      # Auth scheme for the dev endpoint (Projects -> Env: BC_AUTH). curl's
+      # --anyauth can't be used here: BC returns 401 with NO WWW-Authenticate
+      # challenge, so curl has nothing to negotiate from — the scheme must be
+      # explicit. Default `basic` (NavUserPassword): Windows/Kerberos endpoints
+      # can't authenticate from a non-domain-joined container anyway, so it's the
+      # realistic headless setup. `--basic`/`--ntlm` send credentials preemptively.
+      case "${BC_AUTH:-basic}" in
+        basic)     auth_opt=(--basic) ;;
+        ntlm)      auth_opt=(--ntlm) ;;
+        negotiate) auth_opt=(--negotiate) ;;
+        anyauth)   auth_opt=(--anyauth) ;;
+        *) echo "unknown BC_AUTH '${BC_AUTH}' (use basic|ntlm|negotiate|anyauth)" >&2; exit 1 ;;
+      esac
+
       # 3. Download symbols (Microsoft base + each dependency) into .alpackages.
       #    Every package is required to compile, so ANY failed download is fatal:
       #    a partial/empty .alpackages otherwise surfaces hundreds of lines later
@@ -147,7 +164,7 @@ nodes:
       mkdir -p .alpackages
       failed=0
       dl() { # publisher  appName  appId
-        if curl -fsS --ntlm -u "$BC_USER:$BC_PASSWORD" -G "$dev_url/packages" \
+        if curl -fsS "${auth_opt[@]}" -u "$BC_USER:$BC_PASSWORD" -G "$dev_url/packages" \
              --data-urlencode "publisher=$1" --data-urlencode "appName=$2" \
              --data-urlencode "appId=$3" --data-urlencode "tenant=default" \
              -o ".alpackages/${2// /_}.app"; then
@@ -173,7 +190,7 @@ nodes:
       if [ "$failed" -ne 0 ]; then
         echo "ERROR: $failed symbol package(s) failed to download from $dev_url —" \
              "verify the dev endpoint is reachable from the container and that" \
-             "BC_USER/BC_PASSWORD are valid (NTLM may need DOMAIN\\user form)." >&2
+             "BC_USER/BC_PASSWORD and BC_AUTH (basic|ntlm|negotiate) are correct." >&2
         exit 1
       fi
 
