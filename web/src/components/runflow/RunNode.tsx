@@ -70,12 +70,17 @@ export function RunNode({ data }: NodeProps) {
             <span className="truncate" style={{ color }}>
               {statusLabel(view.status)}
             </span>
-            {running && view.taskProgress && (
+            {running && view.liveProgress && (
               <span
                 className="shrink-0 rounded bg-muted px-1 font-medium tabular-nums text-card-foreground"
-                title={`Task ${view.taskProgress.done} of ${view.taskProgress.total}`}
+                title={
+                  view.liveProgress.kind === "loop"
+                    ? `Iteration ${view.liveProgress.done} of up to ${view.liveProgress.total} (stops early once clean)`
+                    : `Task ${view.liveProgress.done} of ${view.liveProgress.total}`
+                }
               >
-                {view.taskProgress.done}/{view.taskProgress.total}
+                {view.liveProgress.kind === "loop" ? "🔁" : "📋"}{" "}
+                {view.liveProgress.done}/{view.liveProgress.total}
               </span>
             )}
           </span>

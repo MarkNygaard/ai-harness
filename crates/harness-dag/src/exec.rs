@@ -846,6 +846,12 @@ async fn run_loop<R: NodeRunner>(
 
     for i in 1..=cfg.max_iterations {
         iterations = i;
+        // Surface the loop position live (e.g. "🔁 2/5") so the UI can render an
+        // iteration badge. `max_iterations` is a ceiling — the loop ends early
+        // once `until` fires — so the UI frames the total as a max, not a target.
+        if let Some(p) = &progress {
+            p.report(format!("🔁 {i}/{}", cfg.max_iterations));
+        }
         // Expose the previous iteration's output to the prompt.
         let iter_vars = vars.clone().set("LOOP_PREV_OUTPUT", last_text.clone());
         let rendered = match substitute(&cfg.prompt, &iter_vars) {

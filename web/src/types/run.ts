@@ -245,9 +245,11 @@ export interface NodeView {
    * a feed in the inspect dialog while the node runs. Not persisted; cleared
    * when the node starts or finishes. */
   activityLog: string[];
-  /** Live-only task progress (e.g. 5 of 13) parsed from the implement agent's
-   * `📋 n/N` markers; sticky across activity updates so it persists between
-   * markers, cleared when the node starts or finishes. Null when the step
-   * reports no task count. */
-  taskProgress: { done: number; total: number } | null;
+  /** Live-only progress while the node runs, parsed from progress markers and
+   * sticky across activity updates (so it persists between markers), cleared
+   * when the node starts or finishes. Two kinds: `task` — the implement step's
+   * `📋 n/N` plan-task counter; `loop` — a review/verify loop's `🔁 n/N`
+   * iteration counter, where `total` is the *max* (the loop stops early when it
+   * converges). Null when the step reports no progress. */
+  liveProgress: { done: number; total: number; kind: "task" | "loop" } | null;
 }

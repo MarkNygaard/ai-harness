@@ -477,6 +477,46 @@ nodes:
 }
 
 #[tokio::test]
+async fn loop_emits_iteration_progress() {
+    use futures::StreamExt as _;
+
+    let yaml = r#"
+name: looped
+nodes:
+  - id: review
+    loop:
+      prompt: "review pass"
+      until: REVIEW_CLEAN
+      max_iterations: 5
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new()
+        .respond("review", ok("still working"))
+        .respond("review", ok("done <promise>REVIEW_CLEAN</promise>"));
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    run_workflow_streaming(&wf, &runner, &empty_vars(), Some(&tx))
+        .await
+        .unwrap();
+    drop(tx);
+    let events: Vec<RunEvent> = rx.collect().await;
+
+    // Each iteration reports its position against the max (a ceiling, not a
+    // target — the loop converged on iteration 2, so there is no "3/5").
+    let progress: Vec<String> = events
+        .iter()
+        .filter_map(|e| match e {
+            RunEvent::NodeProgress { node_id, activity } if node_id == "review" => {
+                Some(activity.clone())
+            }
+            _ => None,
+        })
+        .collect();
+    assert!(progress.contains(&"🔁 1/5".to_string()));
+    assert!(progress.contains(&"🔁 2/5".to_string()));
+    assert!(!progress.contains(&"🔁 3/5".to_string()));
+}
+
+#[tokio::test]
 async fn passes_upstream_output_into_downstream_prompt() {
     let yaml = r#"
 name: passthrough

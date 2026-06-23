@@ -49,9 +49,19 @@ export function StepDialog({
                 <Badge variant={STATUS_VARIANT[view.status] ?? "default"}>
                   {statusLabel(view.status)}
                 </Badge>
-                {view.status === "running" && view.taskProgress && (
-                  <Badge variant="secondary" className="tabular-nums">
-                    task {view.taskProgress.done}/{view.taskProgress.total}
+                {view.status === "running" && view.liveProgress && (
+                  <Badge
+                    variant="secondary"
+                    className="tabular-nums"
+                    title={
+                      view.liveProgress.kind === "loop"
+                        ? "Loops up to this many times; stops early once the review is clean"
+                        : undefined
+                    }
+                  >
+                    {view.liveProgress.kind === "loop"
+                      ? `iteration ${view.liveProgress.done}/${view.liveProgress.total}`
+                      : `task ${view.liveProgress.done}/${view.liveProgress.total}`}
                   </Badge>
                 )}
               </DialogTitle>
@@ -73,7 +83,15 @@ export function StepDialog({
                     elapsedMs(view.started_at, view.ended_at, now),
                   )}
                 />
-                <Meta label="Iterations" value={String(view.iterations)} />
+                <Meta
+                  label="Iterations"
+                  value={
+                    view.status === "running" &&
+                    view.liveProgress?.kind === "loop"
+                      ? `${view.liveProgress.done} / ${view.liveProgress.total} max`
+                      : String(view.iterations)
+                  }
+                />
                 <Meta
                   label="Input tokens"
                   value={formatTokens(view.usage.input)}

@@ -150,7 +150,7 @@ describe("liveReducer", () => {
     expect(finished.nodes.a.activityLog).toEqual([]);
   });
 
-  it("parses a sticky task-progress badge from 📋 markers", () => {
+  it("parses a sticky live-progress badge from 📋 task and 🔁 loop markers", () => {
     const state = reduce([
       {
         type: "run_started",
@@ -164,8 +164,29 @@ describe("liveReducer", () => {
       { type: "node_progress", node_id: "a", activity: "⚙ bash" },
       { type: "node_progress", node_id: "a", activity: "📋 4/13 next task" },
     ]);
-    expect(state.nodes.a.taskProgress).toEqual({ done: 4, total: 13 });
+    expect(state.nodes.a.liveProgress).toEqual({
+      done: 4,
+      total: 13,
+      kind: "task",
+    });
     expect(state.nodes.a.activity).toBe("📋 4/13 next task");
+
+    // A loop marker is tagged kind:"loop" (total is a max, stops early).
+    const loop = reduce([
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "r", depends_on: [] }],
+      },
+      { type: "node_started", node_id: "r", provider: "pi", model: "kimi" },
+      { type: "node_progress", node_id: "r", activity: "🔁 2/5" },
+    ]);
+    expect(loop.nodes.r.liveProgress).toEqual({
+      done: 2,
+      total: 5,
+      kind: "loop",
+    });
 
     // Cleared when the node starts again (e.g. a fresh run reuses the id).
     const restarted = liveReducer(state, {
@@ -178,7 +199,7 @@ describe("liveReducer", () => {
       },
       now: NOW,
     });
-    expect(restarted.nodes.a.taskProgress).toBeNull();
+    expect(restarted.nodes.a.liveProgress).toBeNull();
   });
 
   it("records terminal run status", () => {
