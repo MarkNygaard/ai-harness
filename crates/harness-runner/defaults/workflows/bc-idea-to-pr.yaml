@@ -85,7 +85,9 @@ nodes:
         publisher suffix), and ID from the app's range — plus the file under
         `Source/` it lives in.
       - **Patterns to mirror**: the conventions from the exploration.
-      - **Step-by-step tasks**: ordered; each names the file and the concrete edit.
+      - **Step-by-step tasks**: a numbered list (`1.`, `2.`, …); each names the
+        file and the concrete edit. The numbering is the contract the implementer
+        reports progress against — one concrete edit per number.
       - **Robustness & edge cases**: the failure modes this must handle.
       - **Schema / upgrade impact**: new table fields/keys, and whether an upgrade
         codeunit or data migration is needed — decide it HERE; never silently
@@ -203,6 +205,11 @@ nodes:
     prompt: |
       Implement the plan in `$ARTIFACTS_DIR/plan.md`, editing AL under `Source/`.
       Follow the project's object-naming and ID-range conventions exactly.
+
+      Count the numbered tasks (`N`) in the plan's "Step-by-step tasks". At the
+      START of each task — on its own line, before any tool call for it — emit a
+      progress marker exactly as `[[TASK n/N]] <short description>` (`n` is the
+      1-based task, `N` the total). This drives the run's `5/13` progress badge.
 
       Verify it compiles before you finish:
 

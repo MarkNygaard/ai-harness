@@ -6,7 +6,8 @@ const NOW = "2026-01-01T00:00:10.000Z";
 
 function reduce(events: RunEvent[]) {
   let state = liveReducer(undefined as never, { type: "reset" });
-  for (const event of events) state = liveReducer(state, { type: "event", event, now: NOW });
+  for (const event of events)
+    state = liveReducer(state, { type: "event", event, now: NOW });
   return state;
 }
 
@@ -60,8 +61,18 @@ describe("liveReducer", () => {
 
   it("marks a node running then merges its finished record", () => {
     const state = reduce([
-      { type: "run_started", workflow: "demo", total_nodes: 1, nodes: [{ id: "a", depends_on: [] }] },
-      { type: "node_started", node_id: "a", provider: "claude", model: "sonnet" },
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [] }],
+      },
+      {
+        type: "node_started",
+        node_id: "a",
+        provider: "claude",
+        model: "sonnet",
+      },
       {
         type: "node_finished",
         node: {
@@ -70,7 +81,12 @@ describe("liveReducer", () => {
           provider: "claude",
           model: "sonnet",
           output: "ok",
-          usage: { input: 100, output: 20, cache_read: null, cache_write: null },
+          usage: {
+            input: 100,
+            output: 20,
+            cache_read: null,
+            cache_write: null,
+          },
           iterations: 1,
           converged: null,
           note: null,
@@ -85,6 +101,107 @@ describe("liveReducer", () => {
     expect(state.nodes.a.ended_at).toBe("2026-01-01T00:00:05.000Z");
   });
 
+  it("accumulates a deduped activity feed and clears it when the node finishes", () => {
+    const base: RunEvent[] = [
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [] }],
+      },
+      {
+        type: "node_started",
+        node_id: "a",
+        provider: "claude",
+        model: "sonnet",
+      },
+      { type: "node_progress", node_id: "a", activity: "reading files" },
+      { type: "node_progress", node_id: "a", activity: "reading files" },
+      { type: "node_progress", node_id: "a", activity: "2/11 tasks" },
+    ];
+    const running = reduce(base);
+    // Latest line drives the node glance; the feed keeps the distinct history.
+    expect(running.nodes.a.activity).toBe("2/11 tasks");
+    expect(running.nodes.a.activityLog).toEqual([
+      "reading files",
+      "2/11 tasks",
+    ]);
+
+    const finished = reduce([
+      ...base,
+      {
+        type: "node_finished",
+        node: {
+          id: "a",
+          status: "success",
+          provider: "claude",
+          model: "sonnet",
+          output: "ok",
+          usage: { input: 1, output: 1, cache_read: null, cache_write: null },
+          iterations: 1,
+          converged: null,
+          note: null,
+          started_at: "2026-01-01T00:00:00.000Z",
+          ended_at: "2026-01-01T00:00:05.000Z",
+        },
+      },
+    ]);
+    expect(finished.nodes.a.activity).toBeNull();
+    expect(finished.nodes.a.activityLog).toEqual([]);
+  });
+
+  it("parses a sticky live-progress badge from 📋 task and 🔁 loop markers", () => {
+    const state = reduce([
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [] }],
+      },
+      { type: "node_started", node_id: "a", provider: "pi", model: "kimi" },
+      { type: "node_progress", node_id: "a", activity: "📋 3/13 wiring it" },
+      // A non-marker line keeps the badge (sticky) but updates the latest line.
+      { type: "node_progress", node_id: "a", activity: "⚙ bash" },
+      { type: "node_progress", node_id: "a", activity: "📋 4/13 next task" },
+    ]);
+    expect(state.nodes.a.liveProgress).toEqual({
+      done: 4,
+      total: 13,
+      kind: "task",
+    });
+    expect(state.nodes.a.activity).toBe("📋 4/13 next task");
+
+    // A loop marker is tagged kind:"loop" (total is a max, stops early).
+    const loop = reduce([
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "r", depends_on: [] }],
+      },
+      { type: "node_started", node_id: "r", provider: "pi", model: "kimi" },
+      { type: "node_progress", node_id: "r", activity: "🔁 2/5" },
+    ]);
+    expect(loop.nodes.r.liveProgress).toEqual({
+      done: 2,
+      total: 5,
+      kind: "loop",
+    });
+
+    // Cleared when the node starts again (e.g. a fresh run reuses the id).
+    const restarted = liveReducer(state, {
+      type: "event",
+      event: {
+        type: "node_started",
+        node_id: "a",
+        provider: "pi",
+        model: "kimi",
+      },
+      now: NOW,
+    });
+    expect(restarted.nodes.a.liveProgress).toBeNull();
+  });
+
   it("records terminal run status", () => {
     const state = reduce([
       { type: "run_started", workflow: "d", total_nodes: 0, nodes: [] },
@@ -95,7 +212,12 @@ describe("liveReducer", () => {
 
   it("stamps started_at on node_started when the event has no timestamp", () => {
     const state = reduce([
-      { type: "run_started", workflow: "d", total_nodes: 1, nodes: [{ id: "a", depends_on: [] }] },
+      {
+        type: "run_started",
+        workflow: "d",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [] }],
+      },
       { type: "node_started", node_id: "a", provider: null, model: null },
     ]);
     expect(state.nodes.a.started_at).toBe(NOW);

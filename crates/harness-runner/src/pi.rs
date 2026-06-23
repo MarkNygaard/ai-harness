@@ -611,6 +611,12 @@ fn activity_from_line(line: &str) -> Option<String> {
     use serde_json::Value;
     let v: Value = serde_json::from_str(line.trim()).ok()?;
     let msg = v.get("message");
+    let text = assistant_text(msg);
+    // A task-progress marker wins over a tool name, so the "n/N" count surfaces
+    // for the live progress badge instead of being hidden behind "⚙ bash".
+    if let Some(marker) = text.as_deref().and_then(task_progress_activity) {
+        return Some(marker);
+    }
     // A tool call: surface the tool name (e.g. "⚙ bash").
     let content = msg.and_then(|m| m.get("content")).and_then(Value::as_array);
     for part in content.into_iter().flatten() {
@@ -622,9 +628,32 @@ fn activity_from_line(line: &str) -> Option<String> {
         }
     }
     // Otherwise the last non-empty line of the assistant's text.
-    let text = assistant_text(msg)?;
+    let text = text?;
     let last = text.lines().map(str::trim).rfind(|l| !l.is_empty())?;
     Some(truncate_activity(last))
+}
+
+/// Detect a `[[TASK n/N]] <desc>` progress marker (emitted by the implement
+/// agent at the start of each plan task) anywhere in `text`, and render it as a
+/// canonical `📋 n/N <desc>` line. The leading 📋 lets the UI parse the count
+/// without false-matching other "n/m" text. `None` when no well-formed marker.
+fn task_progress_activity(text: &str) -> Option<String> {
+    let start = text.find("[[TASK ")?;
+    let rest = &text[start + "[[TASK ".len()..];
+    let end = rest.find("]]")?;
+    let (n, m) = rest[..end].trim().split_once('/')?;
+    let (n, m) = (n.trim(), m.trim());
+    let is_num = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_digit());
+    if !is_num(n) || !is_num(m) {
+        return None;
+    }
+    let desc = rest[end + 2..].trim();
+    let out = if desc.is_empty() {
+        format!("📋 {n}/{m}")
+    } else {
+        format!("📋 {n}/{m} {desc}")
+    };
+    Some(truncate_activity(&out))
 }
 
 /// Trim and cap an activity string to a sensible single-line length, on a char
@@ -764,12 +793,36 @@ mod tests {
         let tool = "{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"tool_use\",\"name\":\"bash\",\"input\":{}}]}}";
         assert_eq!(activity_from_line(tool).as_deref(), Some("⚙ bash"));
 
+        // A task-progress marker wins even when a tool_use is in the same message.
+        let marked = "{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"[[TASK 5/13]] wiring the reducer\"},{\"type\":\"tool_use\",\"name\":\"bash\",\"input\":{}}]}}";
+        assert_eq!(
+            activity_from_line(marked).as_deref(),
+            Some("📋 5/13 wiring the reducer")
+        );
+
         // Non-JSON / telemetry / empty → None.
         assert_eq!(activity_from_line("not json"), None);
         assert_eq!(
             activity_from_line("{\"type\":\"agent_end\",\"telemetry\":{}}"),
             None
         );
+    }
+
+    #[test]
+    fn task_progress_marker_parsing() {
+        assert_eq!(
+            task_progress_activity("[[TASK 3/8]] do the thing").as_deref(),
+            Some("📋 3/8 do the thing")
+        );
+        // Marker with no description still yields the count.
+        assert_eq!(
+            task_progress_activity("blah [[TASK 1/2]]").as_deref(),
+            Some("📋 1/2")
+        );
+        // Malformed markers → None (so we fall back to normal activity).
+        assert_eq!(task_progress_activity("[[TASK 5]] nope"), None);
+        assert_eq!(task_progress_activity("[[TASK a/b]] nope"), None);
+        assert_eq!(task_progress_activity("no marker here 4/5 tests"), None);
     }
 
     #[test]

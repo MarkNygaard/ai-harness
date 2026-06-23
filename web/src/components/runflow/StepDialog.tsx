@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -48,6 +49,21 @@ export function StepDialog({
                 <Badge variant={STATUS_VARIANT[view.status] ?? "default"}>
                   {statusLabel(view.status)}
                 </Badge>
+                {view.status === "running" && view.liveProgress && (
+                  <Badge
+                    variant="secondary"
+                    className="tabular-nums"
+                    title={
+                      view.liveProgress.kind === "loop"
+                        ? "Loops up to this many times; stops early once the review is clean"
+                        : undefined
+                    }
+                  >
+                    {view.liveProgress.kind === "loop"
+                      ? `iteration ${view.liveProgress.done}/${view.liveProgress.total}`
+                      : `task ${view.liveProgress.done}/${view.liveProgress.total}`}
+                  </Badge>
+                )}
               </DialogTitle>
               <DialogDescription className="sr-only">
                 Step output and details
@@ -67,7 +83,15 @@ export function StepDialog({
                     elapsedMs(view.started_at, view.ended_at, now),
                   )}
                 />
-                <Meta label="Iterations" value={String(view.iterations)} />
+                <Meta
+                  label="Iterations"
+                  value={
+                    view.status === "running" &&
+                    view.liveProgress?.kind === "loop"
+                      ? `${view.liveProgress.done} / ${view.liveProgress.total} max`
+                      : String(view.iterations)
+                  }
+                />
                 <Meta
                   label="Input tokens"
                   value={formatTokens(view.usage.input)}
@@ -94,6 +118,10 @@ export function StepDialog({
                 </p>
               )}
 
+              {view.status === "running" && view.activityLog.length > 0 && (
+                <ActivityFeed lines={view.activityLog} />
+              )}
+
               <div className="pt-3">
                 <div className="mb-1 text-xs font-medium text-muted-foreground">
                   Output
@@ -111,6 +139,37 @@ export function StepDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * Live feed of the agent's sampled activity lines while a step runs. Sampled
+ * and not persisted, so it shows current progress rather than a full transcript
+ * (the real result lands in Output when the step finishes). Auto-scrolls to the
+ * newest line as the agent works.
+ */
+function ActivityFeed({ lines }: { lines: string[] }) {
+  const endRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ block: "end" });
+  }, [lines]);
+  return (
+    <div className="pt-3">
+      <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
+        <span className="size-1.5 animate-pulse rounded-full bg-current" />
+        Activity
+      </div>
+      <div className="max-h-48 overflow-auto rounded-md bg-muted p-3">
+        <ul className="flex flex-col gap-0.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
+          {lines.map((line, i) => (
+            <li key={i} className="break-words">
+              {line}
+            </li>
+          ))}
+        </ul>
+        <div ref={endRef} />
+      </div>
+    </div>
   );
 }
 

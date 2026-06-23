@@ -84,6 +84,19 @@ Store the runner for validation commands.
 
 ## Phase 2: EXECUTE - Implement Each Task
 
+**First, count the total number of tasks (`N`) in the plan's "Tasks" or
+"Step-by-Step Tasks" section.** At the START of each task — on its own line,
+before you run any tool for that task — emit a progress marker in exactly this
+form so the UI can show live progress:
+
+```
+[[TASK n/N]] <short description>
+```
+
+`n` is the 1-based task you're starting, `N` is the total. Example:
+`[[TASK 5/13]] add the taskProgress field to NodeView`. This single line drives
+the run's `5/13` progress badge — keep emitting one as you begin each task.
+
 **For each task in the plan's "Tasks" or "Step-by-Step Tasks" section:**
 
 ### 2.1 Read Task Context
@@ -122,11 +135,15 @@ Make the change as specified:
 
 ### 2.4 Track Progress
 
-Log each task as completed:
+Log each task as completed (and remember the `[[TASK n/N]]` start marker from
+the intro above):
 
 ```
+[[TASK 1/3]] CREATE src/features/x/models.ts
 Task 1: CREATE src/features/x/models.ts ✅
+[[TASK 2/3]] CREATE src/features/x/service.ts
 Task 2: CREATE src/features/x/service.ts ✅
+[[TASK 3/3]] UPDATE src/routes/index.ts
 Task 3: UPDATE src/routes/index.ts ✅
 ```
 

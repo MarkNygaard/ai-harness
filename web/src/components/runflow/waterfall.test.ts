@@ -33,6 +33,8 @@ function node(
     artifact: null,
     artifact_content: null,
     activity: null,
+    activityLog: [],
+    liveProgress: null,
   };
 }
 
