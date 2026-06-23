@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Extension, Path as AxumPath, Query};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -1848,9 +1848,25 @@ pub async fn stream_run(
         }
     });
 
-    Sse::new(stream)
+    let mut resp = Sse::new(stream)
         .keep_alive(KeepAlive::default())
-        .into_response()
+        .into_response();
+    // SSE must not be buffered by intermediaries, or the live feed/badges never
+    // flush until the run ends (events pile up at the proxy). nginx / nginx-ingress
+    // buffers proxied responses by default and honors `X-Accel-Buffering: no` to
+    // disable it per-response; `no-transform` stops Cloudflare (the work
+    // deployment) from compressing — and thus buffering — the stream, and
+    // `no-cache` keeps it fresh.
+    let headers = resp.headers_mut();
+    headers.insert(
+        HeaderName::from_static("x-accel-buffering"),
+        HeaderValue::from_static("no"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("no-cache, no-transform"),
+    );
+    resp
 }
 
 /// `POST /runs/{id}/cancel` — stop a running run: abort its in-flight task (if
