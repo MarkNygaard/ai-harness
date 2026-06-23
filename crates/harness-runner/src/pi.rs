@@ -557,7 +557,11 @@ fn activity_from_line(line: &str) -> Option<String> {
     }
     // Otherwise the last non-empty line of the assistant's text.
     let text = assistant_text(msg)?;
-    let last = text.lines().map(str::trim).filter(|l| !l.is_empty()).last()?;
+    let last = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .last()?;
     Some(truncate_activity(last))
 }
 
@@ -821,7 +825,7 @@ mod tests {
         let args = vec!["-c".to_string(), "printf 'a\\n'; sleep 30".to_string()];
         let started = std::time::Instant::now();
         let out = agent
-            .run_attempt(&args, Path::new("."), &Default::default())
+            .run_attempt(&args, Path::new("."), &Default::default(), None)
             .await
             .unwrap();
         assert!(matches!(out, Attempt::Stalled));
@@ -843,7 +847,7 @@ mod tests {
                 .to_string(),
         ];
         let out = agent
-            .run_attempt(&args, Path::new("."), &Default::default())
+            .run_attempt(&args, Path::new("."), &Default::default(), None)
             .await
             .unwrap();
         match out {
