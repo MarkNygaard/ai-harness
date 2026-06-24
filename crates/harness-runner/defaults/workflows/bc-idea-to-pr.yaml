@@ -196,6 +196,47 @@ nodes:
         exit 1
       fi
 
+      # 4. Resolve any STILL-missing packages the compiler reports — Microsoft
+      #    platform apps (e.g. `System`, `Business Foundation`) that aren't in
+      #    app.json and whose requirement shifts across BC server upgrades, plus
+      #    any transitive dep the fixed list above doesn't cover. Probe-compile,
+      #    download exactly what `AL1022` names (the dev endpoint resolves by
+      #    publisher+name — no appId), and retry until clean. This keeps the step
+      #    upgrade-proof instead of relying on a hardcoded Microsoft-app list.
+      probing=""
+      [ -d .netpackages ] && probing="/assemblyprobingpaths:.netpackages"
+      for _ in 1 2 3 4 5; do
+        out=$(al compile /project:"$PWD" /packagecachepath:.alpackages $probing \
+                /out:/tmp/_probe.app 2>&1 || true)
+        # AL1022 lines read: ...publisher 'X', name 'Y', and a version... not found
+        missing=$(printf '%s\n' "$out" \
+          | grep -oE "publisher '[^']*', name '[^']*'" | sort -u)
+        [ -z "$missing" ] && break
+        progressed=0
+        while IFS= read -r m; do
+          [ -n "$m" ] || continue
+          pub=$(printf '%s' "$m" | sed -E "s/^publisher '([^']*)', name '.*/\1/")
+          name=$(printf '%s' "$m" | sed -E "s/.*name '([^']*)'$/\1/")
+          if curl -fsS "${auth_opt[@]}" -u "$BC_USER:$BC_PASSWORD" -G "$dev_url/packages" \
+               --data-urlencode "publisher=$pub" --data-urlencode "appName=$name" \
+               --data-urlencode "tenant=default" \
+               -o ".alpackages/${name// /_}.app"; then
+            echo "  v $name (resolved from AL1022)"
+            progressed=1
+          else
+            echo "  x could not download $name (publisher $pub) from $dev_url" >&2
+          fi
+        done < <(printf '%s\n' "$missing")
+        if [ "$progressed" -eq 0 ]; then
+          echo "ERROR: the compiler still reports missing symbol packages that" \
+               "the dev endpoint did not return by publisher+name:" >&2
+          printf '%s\n' "$missing" >&2
+          exit 1
+        fi
+      done
+      rm -f /tmp/_probe.app
+      echo "symbols in .alpackages (after resolve):"; ls -1 .alpackages
+
   - id: implement
     category: implementation
     provider: pi
