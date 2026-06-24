@@ -199,6 +199,22 @@ pub async fn delete_credential(
     };
     match store.delete(&provider).await {
         Ok(()) => {
+            // Also remove the materialized on-disk file so "Clear" actually
+            // clears everywhere. The CLIs — and the usage probe + the "connected"
+            // badge (`provider_native_present`) — read these files directly, and
+            // `materialize` only seeds them when missing, so leaving the file
+            // makes Clear a no-op for auth (the stale credential keeps being
+            // used). Best-effort; absence is fine.
+            let home = home_dir();
+            match provider.as_str() {
+                "claude" => {
+                    let _ = std::fs::remove_file(home.join(".claude").join(".credentials.json"));
+                }
+                "codex" => {
+                    let _ = std::fs::remove_file(home.join(".codex").join("auth.json"));
+                }
+                _ => {}
+            }
             super::usage_routes::invalidate_cache().await;
             Json(serde_json::json!({ "deleted": true, "provider": provider })).into_response()
         }
