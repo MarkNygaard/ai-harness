@@ -72,26 +72,47 @@ nodes:
     when: "$resolve-pr.output.state == 'OPEN'"
     prompt: |
       PR #$resolve-pr.output.pr ("$resolve-pr.output.title") needs revisions.
-      Collect ALL actionable feedback from BOTH sources for this PR.
+      Collect the actionable feedback for this PR that is NEW since the last
+      completed revision — do NOT re-address feedback a previous run already
+      handled.
 
-      1. Review verdicts and top-level comments on GitHub:
+      ## 0. Find where the previous revision ended
+      When a revise-pr run completes, its summary posts a top-level comment
+      containing the hidden marker `<!-- harness:revise-pr:complete -->`. From the
+      `comments` array of `gh pr view $resolve-pr.output.pr --json comments`, find
+      the MOST RECENT comment (by createdAt) whose body contains that marker, and
+      note its createdAt as `last_complete_at`. If no such comment exists, this is
+      the first revision — treat ALL GitHub feedback as new (`last_complete_at` =
+      none).
+
+      ## 1. Collect GitHub feedback, then keep only what's NEW
+      a) Reviews + top-level comments:
          `gh pr view $resolve-pr.output.pr --json reviews,comments`
-      2. Inline code-review comments on GitHub:
+      b) Inline code-review comments:
          `gh api repos/{owner}/{repo}/pulls/$resolve-pr.output.pr/comments`
          (gh substitutes `{owner}` and `{repo}` from the current repository.)
-      3. Linear tester / reviewer comments (functionality feedback):
-         These are already in the task description below. Look for the section
-         "## Reviewer comments (Linear)" in $ARGUMENTS. If present, include
-         those comments in the digest.
 
-      Ignore any comments posted by the ai-harness bot / this workflow. For each
-      actionable item include:
+      Then EXCLUDE everything that isn't new/actionable:
+      - When `last_complete_at` is set, drop reviews with `submittedAt` ≤
+        `last_complete_at` and inline comments with `created_at` ≤
+        `last_complete_at` — the previous run already addressed those.
+      - Drop anything authored by the ai-harness bot / this workflow.
+      - Drop inline comments whose thread already has a bot reply (a comment with
+        `in_reply_to_id` pointing at it, authored by the bot) — already handled.
+
+      ## 2. Linear tester / reviewer comments (functionality feedback)
+      These are injected fresh for this trigger — look for the section
+      "## Reviewer comments (Linear)" in $ARGUMENTS. If present, include them
+      (they are already scoped to this run; no time filtering needed).
+
+      For each remaining actionable item include:
       - reviewer name
       - review state (COMMENTED, CHANGES_REQUESTED, APPROVED)
       - body text
       - for inline comments: `path:line`
 
-      Emit ONLY JSON.
+      Emit ONLY JSON. If nothing is new since `last_complete_at`, set
+      `has_feedback` to false.
     output_format:
       type: object
       properties:
@@ -578,13 +599,23 @@ nodes:
       If the output above contains `<promise>REVISION_DONE</promise>`, post a
       short comment via `gh pr comment $resolve-pr.output.pr --body "..."`
       summarizing the revisions pushed this pass and noting that the PR is
-      ready for re-review.
+      ready for re-review. The comment body MUST start with these two lines:
+
+          <!-- harness:revise-pr:complete -->
+          ✅ Revision complete
+
+      The first line is a hidden marker (invisible in rendered GitHub). A future
+      revise-pr run uses the timestamp of this comment to ignore feedback it has
+      already addressed and only act on NEWER comments — so this exact marker is
+      required on every completed revision. Put the summary after those lines.
 
       If the promise is NOT present, the loop hit its iteration cap without
       fully addressing every feedback item. In that case post a comment
       explaining that this pass made partial progress but did not fully
       converge, and that human follow-up is needed. Do NOT claim the PR is
-      ready for re-review.
+      ready for re-review, and do NOT include the `<!-- harness:revise-pr:complete -->`
+      marker (the revision isn't complete, so the next run must still see this
+      feedback).
 
       Read the commit history since the base branch to ground the summary:
       `git log --oneline origin/$resolve-pr.output.base..HEAD`
