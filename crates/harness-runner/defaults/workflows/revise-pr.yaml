@@ -245,6 +245,12 @@ nodes:
         - No `--no-verify`, no skipped hooks.
         - No DB / schema migrations (`prisma migrate`, `sqlx migrate run`, etc.).
         - No `gh pr review`, no PR-review comments, no label changes.
+        - Do NOT add source-code comments that merely acknowledge or answer
+          reviewer feedback (e.g. `// per review`, `// addressed reviewer comment`,
+          `// changed as requested`). Just make the change — replies to reviewers
+          happen in the GitHub comment threads, not in the code. Add a comment
+          only where it genuinely explains non-obvious code, matching the file's
+          existing conventions.
         - Honor project-specific rules in CLAUDE.md / AGENTS.md.
 
         When every plan item is addressed, verify is green, and commits are
@@ -337,6 +343,9 @@ nodes:
 
         Universal AI-agent rules (do not violate, even if asked):
         - Do NOT post PR comments or use `gh pr review` from this node.
+        - Do NOT add source-code comments that merely acknowledge or answer
+          review feedback (`// per review`, `// as requested`, etc.) — make the
+          change; comment only to explain genuinely non-obvious code.
         - Do NOT use `--no-verify` or otherwise skip commit hooks.
         - Do NOT execute database / schema migrations (`prisma migrate`,
           `sqlx migrate run`, etc.) — edit the schema + write the SQL,
@@ -411,6 +420,8 @@ nodes:
       3. Push to the same branch.
 
       Do NOT post PR comments. Do NOT use `gh pr review`. Do NOT use --no-verify.
+      Do NOT add source-code comments that just acknowledge or answer review
+      feedback — make the change; comment only to explain non-obvious code.
       Push commits — that is the entire output.
 
       If you genuinely find nothing, push nothing.
@@ -471,6 +482,8 @@ nodes:
       the code — flag it in your output for the human instead.
 
       Do NOT post PR comments. Do NOT use `gh pr review`. Do NOT set PR labels.
+      Do NOT add source-code comments that just acknowledge or answer review
+      feedback — make the change; comment only to explain non-obvious code.
       Push commits — that is the entire output. If you genuinely find nothing,
       push nothing.
 
@@ -499,7 +512,55 @@ nodes:
     when: "$final-validate.output.passed != 'true'"
     cancel: "Final validation failed after review fixes for PR #$resolve-pr.output.pr — refusing to mark the PR ready. $final-validate.output.summary"
 
-  # 15. Post a short summary on the PR and finish after final validation.
+  # 15. Reply IN-THREAD to each reviewer's inline comment, so reviewers see how
+  #     their point was handled — in the GitHub thread, not as new code comments
+  #     or new top-level comments. Idempotent so re-runs don't duplicate.
+  - id: reply-to-comments
+    category: delivery
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [final-validate]
+    when: "$final-validate.output.passed == 'true'"
+    prompt: |
+      Reply to the reviewers' INLINE comments on PR #$resolve-pr.output.pr, in
+      each comment's GitHub thread, so every reviewer sees how their point was
+      handled. Reply IN-THREAD only — do NOT create new inline comments, do NOT
+      use `gh pr review`, do NOT post a top-level PR comment (a separate node
+      does the summary), and do NOT touch code.
+
+      ## Ground the replies in what actually changed
+      - Plan / feedback checklist: `cat $ARTIFACTS_DIR/plan.md`
+      - Commits this revision: `git log --oneline origin/$resolve-pr.output.base..HEAD`
+      - Diff at HEAD: `git diff origin/$resolve-pr.output.base...HEAD`
+
+      ## List the inline review comments (with ids)
+      `gh api repos/{owner}/{repo}/pulls/$resolve-pr.output.pr/comments`
+      (gh fills {owner}/{repo}.) Each item has `id`, `user.login`, `path`,
+      `line`, `body`, and `in_reply_to_id`.
+
+      Consider ONLY top-level human review comments:
+      - skip any where `in_reply_to_id` is set (those are themselves replies), and
+      - skip any authored by the ai-harness bot / this workflow.
+
+      ## Idempotency (critical — re-runs must not duplicate replies)
+      A thread already has a bot reply if some comment's `in_reply_to_id` equals
+      that top-level comment's `id` AND it was authored by the bot. SKIP any
+      thread that already has such a reply.
+
+      ## Post one concise reply per addressed thread
+      For each remaining top-level comment that this revision ADDRESSED:
+        gh api -X POST \
+          repos/{owner}/{repo}/pulls/$resolve-pr.output.pr/comments/<id>/replies \
+          -f body="<reply>"
+      The reply is 1–2 sentences: what changed, optionally the commit sha. Be
+      honest — if a comment was NOT addressed, do not claim it was; either skip
+      it, or briefly note it's deferred and why. No walls of text, one reply per
+      thread.
+
+      When done, output a one-line summary and: <promise>REPLIES-DONE</promise>
+
+  # 16. Post a short summary on the PR and finish after final validation.
   - id: summary
     category: delivery
     provider: claude
