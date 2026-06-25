@@ -140,13 +140,17 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
         Ok(s) => s,
         Err(_) => return,
     };
-    // One-at-a-time: skip if this binding already has an active claim.
-    match claim_store.has_active(&b.project, &b.workflow).await {
-        Ok(true) => return,
-        Ok(false) => {}
+    // Concurrency gate: skip if this binding is already at its in-flight cap.
+    // `max_concurrent_runs` defaults to 1 (the original one-at-a-time behaviour);
+    // a binding can raise it to run several issues in parallel. The poller still
+    // claims at most one issue per tick, so it ramps up to the cap over ticks.
+    let cap = b.max_concurrent_runs.max(1) as i64;
+    match claim_store.count_active(&b.project, &b.workflow).await {
+        Ok(active) if active >= cap => return,
+        Ok(_) => {}
         Err(e) => {
             tracing::warn!(
-                "linear poller: has_active failed for {}/{}: {e}",
+                "linear poller: count_active failed for {}/{}: {e}",
                 b.project,
                 b.workflow
             );

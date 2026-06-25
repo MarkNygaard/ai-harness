@@ -58,6 +58,9 @@ pub struct PutSourceBody {
     pub base_branch: Option<String>,
     #[serde(default = "default_poll")]
     pub poll_interval_secs: i32,
+    /// How many runs this binding may have in flight at once (default 1).
+    #[serde(default = "default_max_concurrent_runs")]
+    pub max_concurrent_runs: i32,
     #[serde(default)]
     pub enabled: bool,
     /// When false (default) the poller dry-runs this binding; true = claim + fire.
@@ -67,6 +70,10 @@ pub struct PutSourceBody {
 
 fn default_poll() -> i32 {
     60
+}
+
+fn default_max_concurrent_runs() -> i32 {
+    1
 }
 
 /// `GET /api/projects/{project}/linear-source?workflow=` — return the binding or `null`.
@@ -255,6 +262,12 @@ pub async fn put_source(
             "`poll_interval_secs` must be between 1 and 86400",
         );
     }
+    if body.max_concurrent_runs < 1 || body.max_concurrent_runs > 20 {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "`max_concurrent_runs` must be between 1 and 20",
+        );
+    }
     // The source (pickup) status is exclusive: claiming an issue MOVES it out of
     // that column, so reusing it as a status-map target (in-progress/review/ready)
     // would mean the issue never leaves the pickup column — and a failed run
@@ -293,6 +306,7 @@ pub async fn put_source(
         ready_state_id: optional_trimmed_non_empty(body.ready_state_id),
         base_branch: optional_trimmed_non_empty(body.base_branch),
         poll_interval_secs: body.poll_interval_secs,
+        max_concurrent_runs: body.max_concurrent_runs,
         enabled: body.enabled,
         live: body.live,
     };

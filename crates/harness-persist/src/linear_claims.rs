@@ -1,7 +1,8 @@
 //! Linear claim linkage — records which run was fired for which Linear issue,
 //! so the live poller can:
-//!   - enforce **one claim at a time per binding** (don't fire a second run for
-//!     `(project, workflow)` while one is still active),
+//!   - enforce the **per-binding concurrency cap** (don't fire more than the
+//!     binding's `max_concurrent_runs` for `(project, workflow)` at once;
+//!     defaults to 1 — one at a time),
 //!   - drive **status transitions** as the run progresses (`phase`), and
 //!   - **roll back** the issue to its original state on failure.
 //!
@@ -90,14 +91,13 @@ impl LinearClaimStore {
         Ok(())
     }
 
-    /// Whether `(project, workflow)` has an active (non-`done`) claim — the
-    /// one-at-a-time gate.
-    pub async fn has_active(&self, project: &str, workflow: &str) -> Result<bool, PersistError> {
-        let row: (bool,) = sqlx::query_as(
-            "SELECT EXISTS(
-                SELECT 1 FROM harness_linear_claims
-                WHERE project = $1 AND workflow = $2 AND phase <> 'done'
-            )",
+    /// How many active (non-`done`) claims `(project, workflow)` currently has —
+    /// the concurrency gate. Compared against the binding's `max_concurrent_runs`
+    /// to decide whether the poller may claim another issue.
+    pub async fn count_active(&self, project: &str, workflow: &str) -> Result<i64, PersistError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM harness_linear_claims
+             WHERE project = $1 AND workflow = $2 AND phase <> 'done'",
         )
         .bind(project)
         .bind(workflow)
@@ -201,5 +201,39 @@ mod tests {
             store.attempts_for_issue(&issue, "merge-pr").await.unwrap(),
             0
         );
+    }
+
+    /// `count_active` counts non-`done` claims per `(project, workflow)` — the
+    /// number the poller compares against a binding's `max_concurrent_runs`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn count_active_tracks_in_flight_claims_per_binding() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = LinearClaimStore::connect(&url).await.expect("connect");
+        // Unique project so the count isn't polluted by other rows.
+        let project = format!("proj-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap());
+        let wf = "idea-to-pr";
+
+        assert_eq!(store.count_active(&project, wf).await.unwrap(), 0);
+
+        store
+            .record("ca-run-1", &project, wf, "iss-1", "P-1", "todo")
+            .await
+            .unwrap();
+        store
+            .record("ca-run-2", &project, wf, "iss-2", "P-2", "todo")
+            .await
+            .unwrap();
+        assert_eq!(store.count_active(&project, wf).await.unwrap(), 2);
+
+        // A `done` claim no longer counts against the cap.
+        store.set_phase("ca-run-1", "done").await.unwrap();
+        assert_eq!(store.count_active(&project, wf).await.unwrap(), 1);
+
+        // A different workflow on the same project is counted separately.
+        assert_eq!(store.count_active(&project, "merge-pr").await.unwrap(), 0);
     }
 }

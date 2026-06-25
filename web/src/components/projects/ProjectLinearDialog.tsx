@@ -279,6 +279,9 @@ function BindingForm({
   const [pollIntervalSecs, setPollIntervalSecs] = useState(
     source?.poll_interval_secs ?? 60,
   );
+  const [maxConcurrentRuns, setMaxConcurrentRuns] = useState(
+    source?.max_concurrent_runs ?? 1,
+  );
   const [enabled, setEnabled] = useState(source?.enabled ?? false);
   const [live, setLive] = useState(source?.live ?? false);
 
@@ -316,6 +319,7 @@ function BindingForm({
         ready_state_id: readyStateId.trim() || undefined,
         base_branch: baseBranch.trim() || undefined,
         poll_interval_secs: pollIntervalSecs,
+        max_concurrent_runs: maxConcurrentRuns,
         enabled,
         live,
       },
@@ -424,8 +428,8 @@ function BindingForm({
         />
       </div>
 
-      {/* Base branch & poll interval */}
-      <div className="grid grid-cols-2 gap-2">
+      {/* Base branch, poll interval & concurrency cap */}
+      <div className="grid grid-cols-3 gap-2">
         <Field label="Base branch">
           <input
             className={inputCls}
@@ -444,6 +448,20 @@ function BindingForm({
             onChange={(e) =>
               setPollIntervalSecs(
                 Math.min(86400, Math.max(1, parseInt(e.target.value, 10) || 1)),
+              )
+            }
+          />
+        </Field>
+        <Field label="Max simultaneous tasks">
+          <input
+            className={inputCls}
+            type="number"
+            min={1}
+            max={20}
+            value={maxConcurrentRuns}
+            onChange={(e) =>
+              setMaxConcurrentRuns(
+                Math.min(20, Math.max(1, parseInt(e.target.value, 10) || 1)),
               )
             }
           />
