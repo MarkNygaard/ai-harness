@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS harness_linear_sources (
     ready_state_id       text,
     base_branch          text,
     poll_interval_secs   integer NOT NULL DEFAULT 60,
+    max_concurrent_runs  integer NOT NULL DEFAULT 1,
     enabled              boolean NOT NULL DEFAULT false,
     live                 boolean NOT NULL DEFAULT false,
     created_at           timestamptz NOT NULL DEFAULT now(),
@@ -32,6 +33,12 @@ CREATE TABLE IF NOT EXISTS harness_linear_sources (
 /// Bring an existing table up to date (idempotent).
 const ALTER_LINEAR_SOURCES_LIVE: &str =
     "ALTER TABLE harness_linear_sources ADD COLUMN IF NOT EXISTS live boolean NOT NULL DEFAULT false";
+
+/// Per-binding concurrency cap: how many runs this binding may have in flight at
+/// once (claims with `phase <> 'done'`). Defaults to 1 — the original
+/// one-at-a-time behaviour.
+const ALTER_LINEAR_SOURCES_MAX_CONCURRENT: &str = "ALTER TABLE harness_linear_sources \
+    ADD COLUMN IF NOT EXISTS max_concurrent_runs integer NOT NULL DEFAULT 1";
 
 /// A persisted Linear trigger binding (matches `harness_linear_sources`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -47,6 +54,9 @@ pub struct LinearSource {
     pub ready_state_id: Option<String>,
     pub base_branch: Option<String>,
     pub poll_interval_secs: i32,
+    /// How many runs this binding may have active at once (claims with
+    /// `phase <> 'done'`). Defaults to 1 (the original one-at-a-time gate).
+    pub max_concurrent_runs: i32,
     pub enabled: bool,
     /// When false (default), the poller only *dry-runs* this binding (logs what
     /// it would do). Flip to true to actually claim issues + fire runs.
@@ -67,6 +77,7 @@ pub struct LinearSourceInput {
     pub ready_state_id: Option<String>,
     pub base_branch: Option<String>,
     pub poll_interval_secs: i32,
+    pub max_concurrent_runs: i32,
     pub enabled: bool,
     pub live: bool,
 }
@@ -92,6 +103,9 @@ impl LinearSourceStore {
         sqlx::query(ALTER_LINEAR_SOURCES_LIVE)
             .execute(&pool)
             .await?;
+        sqlx::query(ALTER_LINEAR_SOURCES_MAX_CONCURRENT)
+            .execute(&pool)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -104,7 +118,7 @@ impl LinearSourceStore {
         let row = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, label,
                     in_progress_state_id, review_state_id, ready_state_id, base_branch,
-                    poll_interval_secs, enabled, live, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, enabled, live, created_at, updated_at
              FROM harness_linear_sources
              WHERE project = $1 AND workflow = $2",
         )
@@ -120,7 +134,7 @@ impl LinearSourceStore {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, label,
                     in_progress_state_id, review_state_id, ready_state_id, base_branch,
-                    poll_interval_secs, enabled, live, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, enabled, live, created_at, updated_at
              FROM harness_linear_sources
              WHERE project = $1
              ORDER BY workflow",
@@ -136,7 +150,7 @@ impl LinearSourceStore {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, label,
                     in_progress_state_id, review_state_id, ready_state_id, base_branch,
-                    poll_interval_secs, enabled, live, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, enabled, live, created_at, updated_at
              FROM harness_linear_sources
              WHERE enabled = true
              ORDER BY project, workflow",
@@ -158,8 +172,9 @@ impl LinearSourceStore {
             "INSERT INTO harness_linear_sources (
                 project, workflow, team_id, team_name, source_state_id,
                 label, in_progress_state_id, review_state_id, ready_state_id,
-                base_branch, poll_interval_secs, enabled, live, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(), now())
+                base_branch, poll_interval_secs, max_concurrent_runs, enabled, live,
+                created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now(), now())
             ON CONFLICT (project, workflow) DO UPDATE SET
                 team_id              = excluded.team_id,
                 team_name            = excluded.team_name,
@@ -170,12 +185,13 @@ impl LinearSourceStore {
                 ready_state_id       = excluded.ready_state_id,
                 base_branch          = excluded.base_branch,
                 poll_interval_secs   = excluded.poll_interval_secs,
+                max_concurrent_runs  = excluded.max_concurrent_runs,
                 enabled              = excluded.enabled,
                 live                 = excluded.live,
                 updated_at           = now()
             RETURNING project, workflow, team_id, team_name, source_state_id, label,
                       in_progress_state_id, review_state_id, ready_state_id, base_branch,
-                      poll_interval_secs, enabled, live, created_at, updated_at",
+                      poll_interval_secs, max_concurrent_runs, enabled, live, created_at, updated_at",
         )
         .bind(project)
         .bind(workflow)
@@ -188,6 +204,7 @@ impl LinearSourceStore {
         .bind(input.ready_state_id.as_deref())
         .bind(input.base_branch.as_deref())
         .bind(input.poll_interval_secs)
+        .bind(input.max_concurrent_runs)
         .bind(input.enabled)
         .bind(input.live)
         .fetch_one(&self.pool)
@@ -239,6 +256,7 @@ mod tests {
             ready_state_id: None,
             base_branch: Some("main".into()),
             poll_interval_secs: 120,
+            max_concurrent_runs: 1,
             enabled: true,
             live: false,
         };
@@ -249,6 +267,7 @@ mod tests {
         assert_eq!(created.source_state_id, "state-1");
         assert_eq!(created.label, None);
         assert_eq!(created.poll_interval_secs, 120);
+        assert_eq!(created.max_concurrent_runs, 1);
         assert!(created.enabled);
         assert_eq!(created.base_branch, Some("main".into()));
 
@@ -272,6 +291,7 @@ mod tests {
             ready_state_id: Some("ready".into()),
             base_branch: None,
             poll_interval_secs: 30,
+            max_concurrent_runs: 3,
             enabled: false,
             live: true,
         };
@@ -279,6 +299,7 @@ mod tests {
         assert_eq!(updated.team_id, "team-2");
         assert!(updated.live, "live persists through upsert");
         assert_eq!(updated.label, Some("bug".into()));
+        assert_eq!(updated.max_concurrent_runs, 3, "concurrency cap persists");
         assert_eq!(updated.created_at, created.created_at);
         // list_by_project returns the binding.
         let list = store.list_by_project(project).await.unwrap();

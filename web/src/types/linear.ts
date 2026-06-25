@@ -40,6 +40,8 @@ export interface LinearSource {
   ready_state_id: string | null;
   base_branch: string | null;
   poll_interval_secs: number;
+  /** How many runs this binding may have in flight at once (default 1). */
+  max_concurrent_runs: number;
   enabled: boolean;
   live: boolean;
   created_at: string;
@@ -73,6 +75,7 @@ export interface LinearSourceInput {
   ready_state_id?: string;
   base_branch?: string;
   poll_interval_secs: number;
+  max_concurrent_runs: number;
   enabled: boolean;
   live: boolean;
 }
