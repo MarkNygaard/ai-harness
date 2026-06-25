@@ -337,8 +337,14 @@ nodes:
       # Verify the PR targets its intended base; re-target if drifted.
       check_pr_base() {
         ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
-          actual=$(gh pr view --json baseRefName -q '.baseRefName')
-          num=$(gh pr view --json number -q '.number')
+          # Multirepo roots and the "." fallback below aren't git repos —
+          # running gh/git there fails ("not a git repository"). Skip cleanly.
+          git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+            || { echo "[$1] not a git repo — skipping"; exit 0; }
+          info=$(gh pr view --json number,baseRefName 2>/dev/null) \
+            || { echo "[$1] no PR for current branch — skipping"; exit 0; }
+          num=$(echo "$info" | jq -r '.number')
+          actual=$(echo "$info" | jq -r '.baseRefName')
           if [ "$actual" != "$2" ]; then
             echo "Base mismatch on PR #$num ($1): expected=$2 actual=$actual — re-targeting" >&2
             gh pr edit "$num" --base "$2"
