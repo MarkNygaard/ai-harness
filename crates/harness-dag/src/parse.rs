@@ -52,6 +52,8 @@ struct RawNode {
     #[serde(default)]
     timeout: Option<u64>,
     #[serde(default)]
+    retries: u32,
+    #[serde(default)]
     output_format: Option<serde_json::Value>,
     #[serde(default)]
     hooks: Option<NodeHooks>,
@@ -102,6 +104,7 @@ impl RawNode {
             category,
             artifact,
             timeout,
+            retries,
             output_format,
             hooks,
         } = self;
@@ -173,6 +176,7 @@ impl RawNode {
                 category,
                 artifact,
                 timeout,
+                retries,
                 output_format,
                 hooks,
             },
@@ -194,6 +198,7 @@ struct NodeKindParts {
     category: Option<String>,
     artifact: Option<String>,
     timeout: Option<u64>,
+    retries: u32,
     output_format: Option<serde_json::Value>,
     hooks: Option<NodeHooks>,
 }
@@ -224,6 +229,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             category: parts.category,
             artifact: parts.artifact,
             timeout: parts.timeout,
+            retries: parts.retries,
             output_format: parts.output_format,
             hooks: parts.hooks,
             kind: parts.kind,
