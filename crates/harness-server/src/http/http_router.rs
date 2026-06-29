@@ -94,6 +94,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(runs_routes::get_run).delete(runs_routes::delete_run),
         )
         .route("/api/runs/{id}/cancel", post(runs_routes::cancel_run))
+        .route("/api/runs/{id}/rerun", post(runs_routes::rerun_run))
         .route("/api/runs/{id}/stream", get(runs_routes::stream_run))
         // ── GEO report per-finding triage state (built / issued / ignored) ───
         .route(

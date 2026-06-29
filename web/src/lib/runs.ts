@@ -190,6 +190,19 @@ export function useCancelRun() {
   });
 }
 
+/**
+ * `POST /api/runs/{id}/rerun` — start a fresh run of the same workflow + inputs
+ * as run `{id}`. Resolves to the new run's id (the original is untouched).
+ */
+export function useRerunRun() {
+  const qc = useQueryClient();
+  return useMutation<CreateRunResponse, Error, string>({
+    mutationFn: (id) =>
+      apiJson<CreateRunResponse>(`/api/runs/${id}/rerun`, { method: "POST" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["runs"] }),
+  });
+}
+
 /** `DELETE /api/runs/{id}` — remove a run from the list. */
 export function useDeleteRun() {
   const qc = useQueryClient();
@@ -277,8 +290,7 @@ interface LiveState {
 }
 
 type LiveAction =
-  | { type: "event"; event: RunEvent; now: string }
-  | { type: "reset" };
+  { type: "event"; event: RunEvent; now: string } | { type: "reset" };
 
 function seedNode(meta: NodeMeta): NodeView {
   return {
