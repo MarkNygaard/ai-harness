@@ -52,6 +52,9 @@ pub struct PutSourceBody {
     pub team_name: String,
     pub source_state_id: String,
     pub label: Option<String>,
+    /// Label applied on give-up (optional); while present it excludes the issue
+    /// from pickup. Removing it re-arms. `None`/empty disables the feature.
+    pub failed_label: Option<String>,
     pub in_progress_state_id: Option<String>,
     pub review_state_id: Option<String>,
     pub ready_state_id: Option<String>,
@@ -314,6 +317,7 @@ pub async fn put_source(
         team_name,
         source_state_id,
         label: optional_trimmed_non_empty(body.label),
+        failed_label: optional_trimmed_non_empty(body.failed_label),
         in_progress_state_id: optional_trimmed_non_empty(body.in_progress_state_id),
         review_state_id: optional_trimmed_non_empty(body.review_state_id),
         ready_state_id: optional_trimmed_non_empty(body.ready_state_id),

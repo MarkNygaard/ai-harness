@@ -29,6 +29,14 @@ use super::runs_routes::{start_run, CreateRunRequest, RunsState};
 /// `poll_interval_secs` has elapsed; status-sync runs every tick.
 const POLLER_TICK_SECS: u64 = 30;
 
+/// Runaway backstop for bindings with a failed-label configured: once an issue
+/// has been (re-)claimed this many times, stop claiming it even if the label is
+/// absent. The failed label is normally the pickup gate (and removing it re-arms
+/// the issue for one more try), so this only fires if labeling ever fails to
+/// apply — preventing an unlabeled issue from looping forever. Without a
+/// failed-label, the binding's `max_attempts` is the cap instead.
+const RUNAWAY_BACKSTOP: i64 = 10;
+
 /// Spawn the Linear poller. Best-effort; a no-op outside a Tokio runtime.
 pub(crate) fn spawn_poller(state: Arc<RunsState>) {
     if tokio::runtime::Handle::try_current().is_err() {
@@ -110,8 +118,18 @@ async fn dry_run_log(client: &LinearClient, b: &LinearSource) {
         .preview_issues(&b.team_id, &b.source_state_id, b.label.as_deref())
         .await
     {
-        Ok(issues) if issues.is_empty() => {}
         Ok(issues) => {
+            // Mirror the live path: failed-labeled issues are gated off.
+            let issues: Vec<Issue> = match b.failed_label.as_deref() {
+                Some(fl) => issues
+                    .into_iter()
+                    .filter(|i| !i.labels.iter().any(|l| l == fl))
+                    .collect(),
+                None => issues,
+            };
+            if issues.is_empty() {
+                return;
+            }
             let ids: Vec<&str> = issues.iter().map(|i| i.identifier.as_str()).collect();
             let pick = ids.first().copied().unwrap_or("?");
             tracing::info!(
@@ -126,6 +144,18 @@ async fn dry_run_log(client: &LinearClient, b: &LinearSource) {
             e.0
         ),
     }
+}
+
+/// Resolve a label *name* to its Linear id within `team_id` (case-insensitive),
+/// via discovery. `None` if discovery fails or the label isn't on the team.
+async fn resolve_label_id(client: &LinearClient, team_id: &str, name: &str) -> Option<String> {
+    let discovery = client.discover().await.ok()?;
+    discovery
+        .teams
+        .iter()
+        .find(|t| t.id == team_id)
+        .and_then(|t| t.labels.iter().find(|l| l.name.eq_ignore_ascii_case(name)))
+        .map(|l| l.id.clone())
 }
 
 /// Claim one eligible issue for a live binding and fire its workflow — one at a
@@ -168,17 +198,30 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
             return;
         }
     };
+    // Issues already carrying the binding's failed-label are gated off: they've
+    // been given up on, and stay excluded until a human removes the label.
+    let issues: Vec<Issue> = match b.failed_label.as_deref() {
+        Some(fl) => issues
+            .into_iter()
+            .filter(|i| !i.labels.iter().any(|l| l == fl))
+            .collect(),
+        None => issues,
+    };
     // Pick the first eligible issue that hasn't already exhausted its attempt
-    // budget. This is the hard loop-guard: a single binding never claims an issue
-    // more than `max_attempts` times (so even a misconfigured binding — e.g. In
-    // Progress == source — can't loop). The cap is per (issue, workflow), so an
-    // issue that legitimately moves through several bindings across pipeline
-    // stages (idea-to-pr → merge-pr) isn't exhausted by an earlier binding.
-    let max_attempts = b.max_attempts.max(1) as i64;
+    // cap (per (issue, workflow), so an issue that legitimately flows through
+    // several bindings across pipeline stages isn't exhausted by an earlier one).
+    // With a failed-label configured, that label is the real pickup gate (above)
+    // and removing it re-arms the issue, so here we only enforce a generous
+    // runaway backstop; without it, the per-binding `max_attempts` is the cap.
+    let cap = if b.failed_label.is_some() {
+        RUNAWAY_BACKSTOP
+    } else {
+        b.max_attempts.max(1) as i64
+    };
     let mut chosen = None;
     for issue in issues {
         match claim_store.attempts_for_issue(&issue.id, &b.workflow).await {
-            Ok(n) if n >= max_attempts => {
+            Ok(n) if n >= cap => {
                 tracing::debug!(
                     "linear poller: {}/{} — skipping {} (hit retry cap {})",
                     b.project,
@@ -416,22 +459,55 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                     .await
                     .unwrap_or(max_attempts);
                 if attempts >= max_attempts {
-                    // Fail-safe: stop the loop. Do NOT return it to the source
-                    // column (which would re-claim it forever). Leave it where the
-                    // run left it and flag it for a human.
-                    let _ = client
-                        .add_comment(
-                            &c.issue_id,
-                            &format!(
-                                "❌ ai-harness run `{}` failed ({}) — gave up after {} attempt(s). Not retrying; needs a human. Move it back to the source column to re-arm.",
-                                c.run_id, detail.run.status, attempts
-                            ),
+                    // Attempt budget spent. If the binding has a failed-label,
+                    // mark the issue failed and return it to the source column:
+                    // the label suppresses pickup (so it can't loop), and removing
+                    // it re-arms the issue for one more try. Without a failed-label,
+                    // fall back to a comment and leave the issue where it is.
+                    let failed_label = binding.as_ref().and_then(|b| b.failed_label.as_deref());
+                    let team_id = binding.as_ref().map(|b| b.team_id.as_str());
+                    let labelled = match (failed_label, team_id) {
+                        (Some(name), Some(team)) => {
+                            match resolve_label_id(&client, team, name).await {
+                                Some(id) if client.add_label(&c.issue_id, &id).await.is_ok() => {
+                                    // Return to source so removing the label re-arms it in place.
+                                    let _ = client
+                                        .set_issue_state(&c.issue_id, &c.original_state_id)
+                                        .await;
+                                    true
+                                }
+                                _ => {
+                                    tracing::warn!(
+                                        "linear poller: {} — could not apply failed-label `{}`; leaving unlabeled",
+                                        c.identifier,
+                                        name
+                                    );
+                                    false
+                                }
+                            }
+                        }
+                        _ => false,
+                    };
+                    let msg = if labelled {
+                        format!(
+                            "❌ ai-harness run `{}` failed ({}) after {} attempt(s) — labeled `{}` and returned to the source column. Remove the label (or hit Rerun) to re-arm.",
+                            c.run_id,
+                            detail.run.status,
+                            attempts,
+                            failed_label.unwrap_or("failed")
                         )
-                        .await;
+                    } else {
+                        format!(
+                            "❌ ai-harness run `{}` failed ({}) — gave up after {} attempt(s). Not retrying; needs a human. Move it back to the source column to re-arm.",
+                            c.run_id, detail.run.status, attempts
+                        )
+                    };
+                    let _ = client.add_comment(&c.issue_id, &msg).await;
                     tracing::warn!(
-                        "linear poller: {} — {} attempt(s) failed; giving up (no rollback)",
+                        "linear poller: {} — {} attempt(s) failed; giving up (labeled={})",
                         c.identifier,
-                        attempts
+                        attempts,
+                        labelled
                     );
                 } else {
                     // Roll back to the claimed-from state so it's retried.

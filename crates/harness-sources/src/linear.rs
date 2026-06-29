@@ -435,6 +435,17 @@ impl LinearClient {
         expect_mutation_success(&self.post(body).await?, "attachmentCreate")
     }
 
+    /// Add a single label to an issue (write) without disturbing its other
+    /// labels. `label_id` is the Linear internal id (resolve a name via
+    /// [`Self::discover`]).
+    pub async fn add_label(&self, issue_id: &str, label_id: &str) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!,$l:String!){ issueAddLabel(id:$id, labelId:$l){ success } }",
+            "variables": { "id": issue_id, "l": label_id },
+        });
+        expect_mutation_success(&self.post(body).await?, "issueAddLabel")
+    }
+
     /// Create an issue in `team_id` (write), with an optional initial workflow
     /// state and labels. `state_id` / `label_ids` are Linear internal ids
     /// (resolve label names via [`Self::discover`]). Returns the new issue.
