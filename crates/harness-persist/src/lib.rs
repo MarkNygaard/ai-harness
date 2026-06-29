@@ -597,6 +597,19 @@ impl RunStore {
         Ok(row.map(|r| r.0))
     }
 
+    /// IDs of every run currently in `running` status (cross-instance). The
+    /// orphan-worktree sweeper keeps these and reclaims all other worktree dirs:
+    /// the stale-lease reaper flips hard-killed runs to `cancelled` first, so a
+    /// run still `running` here is genuinely live (or about to be reaped) and its
+    /// worktree must not be deleted.
+    pub async fn running_run_ids(&self) -> Result<std::collections::HashSet<String>, PersistError> {
+        let rows: Vec<(String,)> =
+            sqlx::query_as("SELECT id FROM harness_workflow_runs WHERE status = 'running'")
+                .fetch_all(&self.pool)
+                .await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
     /// Count of runs for `project` currently in `running` status (cross-instance:
     /// reads persisted state, not just this process's live map).
     pub async fn count_active_runs(&self, project: &str) -> Result<i64, PersistError> {
@@ -1363,5 +1376,44 @@ mod tests {
             store.run_status(&run_id).await.unwrap().as_deref(),
             Some("cancelled")
         );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn running_run_ids_tracks_running_runs() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set to a test database");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let run_id = format!(
+            "test-running-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        let report = sample_report();
+        store
+            .start_run(
+                &run_id,
+                &report.workflow,
+                None,
+                None,
+                None,
+                2,
+                &report.graph,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // A freshly-started run is `running` → present (its worktree is protected).
+        assert!(store.running_run_ids().await.unwrap().contains(&run_id));
+
+        // Once cancelled it drops out → the sweeper may reclaim its worktree.
+        store
+            .reconcile_orphaned_runs(std::time::Duration::ZERO)
+            .await
+            .unwrap();
+        assert!(!store.running_run_ids().await.unwrap().contains(&run_id));
     }
 }
