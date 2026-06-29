@@ -35,6 +35,8 @@ export interface LinearSource {
   team_name: string;
   source_state_id: string;
   label: string | null;
+  /** Label applied on give-up; while present, excludes the issue from pickup. */
+  failed_label: string | null;
   in_progress_state_id: string | null;
   review_state_id: string | null;
   ready_state_id: string | null;
@@ -72,6 +74,7 @@ export interface LinearSourceInput {
   team_name: string;
   source_state_id: string;
   label?: string;
+  failed_label?: string;
   in_progress_state_id?: string;
   review_state_id?: string;
   ready_state_id?: string;

@@ -266,6 +266,7 @@ function BindingForm({
     source?.source_state_id ?? "",
   );
   const [label, setLabel] = useState(source?.label ?? "");
+  const [failedLabel, setFailedLabel] = useState(source?.failed_label ?? "");
   const [inProgressStateId, setInProgressStateId] = useState(
     source?.in_progress_state_id ?? "",
   );
@@ -315,6 +316,7 @@ function BindingForm({
         team_name: teamName,
         source_state_id: sourceStateId,
         label: label.trim() || undefined,
+        failed_label: failedLabel.trim() || undefined,
         in_progress_state_id: inProgressStateId.trim() || undefined,
         review_state_id: reviewStateId.trim() || undefined,
         ready_state_id: readyStateId.trim() || undefined,
@@ -403,6 +405,28 @@ function BindingForm({
             </option>
           ))}
         </select>
+      </Field>
+
+      {/* Failed label — applied when the binding gives up (optional). */}
+      <Field label="Failed label">
+        <select
+          className={inputCls}
+          value={failedLabel}
+          onChange={(e) => setFailedLabel(e.target.value)}
+          disabled={!teamId}
+        >
+          <option value="">(none — feature off)</option>
+          {labels.map((l) => (
+            <option key={l.id} value={l.name}>
+              {l.name}
+            </option>
+          ))}
+        </select>
+        <span className="text-[10px] text-muted-foreground">
+          Applied after the attempt budget is spent; while set, the issue is
+          skipped. Remove it (or hit Rerun) to re-arm for one more try. An issue
+          is hard-stopped after 10 total attempts.
+        </span>
       </Field>
 
       {/* Status map */}

@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS harness_linear_sources (
     team_name            text NOT NULL,
     source_state_id      text NOT NULL,
     label                text,
+    failed_label         text,
     in_progress_state_id text,
     review_state_id      text,
     ready_state_id       text,
@@ -47,6 +48,12 @@ const ALTER_LINEAR_SOURCES_MAX_CONCURRENT: &str = "ALTER TABLE harness_linear_so
 const ALTER_LINEAR_SOURCES_MAX_ATTEMPTS: &str = "ALTER TABLE harness_linear_sources \
     ADD COLUMN IF NOT EXISTS max_attempts integer NOT NULL DEFAULT 1";
 
+/// Optional label applied to an issue when the binding gives up on it (after the
+/// attempt budget is spent). While present it suppresses pickup; removing it
+/// re-arms the issue. `NULL` (default) disables the feature for the binding.
+const ALTER_LINEAR_SOURCES_FAILED_LABEL: &str =
+    "ALTER TABLE harness_linear_sources ADD COLUMN IF NOT EXISTS failed_label text";
+
 /// A persisted Linear trigger binding (matches `harness_linear_sources`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LinearSource {
@@ -56,6 +63,9 @@ pub struct LinearSource {
     pub team_name: String,
     pub source_state_id: String,
     pub label: Option<String>,
+    /// Label applied on give-up; while present, the issue is excluded from
+    /// pickup. `None` disables the failed-label lifecycle for this binding.
+    pub failed_label: Option<String>,
     pub in_progress_state_id: Option<String>,
     pub review_state_id: Option<String>,
     pub ready_state_id: Option<String>,
@@ -82,6 +92,7 @@ pub struct LinearSourceInput {
     pub team_name: String,
     pub source_state_id: String,
     pub label: Option<String>,
+    pub failed_label: Option<String>,
     pub in_progress_state_id: Option<String>,
     pub review_state_id: Option<String>,
     pub ready_state_id: Option<String>,
@@ -120,6 +131,9 @@ impl LinearSourceStore {
         sqlx::query(ALTER_LINEAR_SOURCES_MAX_ATTEMPTS)
             .execute(&pool)
             .await?;
+        sqlx::query(ALTER_LINEAR_SOURCES_FAILED_LABEL)
+            .execute(&pool)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -130,7 +144,7 @@ impl LinearSourceStore {
         workflow: &str,
     ) -> Result<Option<LinearSource>, PersistError> {
         let row = sqlx::query_as::<_, LinearSource>(
-            "SELECT project, workflow, team_id, team_name, source_state_id, label,
+            "SELECT project, workflow, team_id, team_name, source_state_id, label, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, base_branch,
                     poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
              FROM harness_linear_sources
@@ -146,7 +160,7 @@ impl LinearSourceStore {
     /// All bindings for a given project, ordered by workflow name.
     pub async fn list_by_project(&self, project: &str) -> Result<Vec<LinearSource>, PersistError> {
         let rows = sqlx::query_as::<_, LinearSource>(
-            "SELECT project, workflow, team_id, team_name, source_state_id, label,
+            "SELECT project, workflow, team_id, team_name, source_state_id, label, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, base_branch,
                     poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
              FROM harness_linear_sources
@@ -162,7 +176,7 @@ impl LinearSourceStore {
     /// All **enabled** bindings across every project — the poller's work-list.
     pub async fn list_enabled(&self) -> Result<Vec<LinearSource>, PersistError> {
         let rows = sqlx::query_as::<_, LinearSource>(
-            "SELECT project, workflow, team_id, team_name, source_state_id, label,
+            "SELECT project, workflow, team_id, team_name, source_state_id, label, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, base_branch,
                     poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
              FROM harness_linear_sources
@@ -185,15 +199,16 @@ impl LinearSourceStore {
         let row = sqlx::query_as::<_, LinearSource>(
             "INSERT INTO harness_linear_sources (
                 project, workflow, team_id, team_name, source_state_id,
-                label, in_progress_state_id, review_state_id, ready_state_id,
+                label, failed_label, in_progress_state_id, review_state_id, ready_state_id,
                 base_branch, poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live,
                 created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), now())
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now())
             ON CONFLICT (project, workflow) DO UPDATE SET
                 team_id              = excluded.team_id,
                 team_name            = excluded.team_name,
                 source_state_id      = excluded.source_state_id,
                 label                = excluded.label,
+                failed_label         = excluded.failed_label,
                 in_progress_state_id = excluded.in_progress_state_id,
                 review_state_id      = excluded.review_state_id,
                 ready_state_id       = excluded.ready_state_id,
@@ -204,7 +219,7 @@ impl LinearSourceStore {
                 enabled              = excluded.enabled,
                 live                 = excluded.live,
                 updated_at           = now()
-            RETURNING project, workflow, team_id, team_name, source_state_id, label,
+            RETURNING project, workflow, team_id, team_name, source_state_id, label, failed_label,
                       in_progress_state_id, review_state_id, ready_state_id, base_branch,
                       poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at",
         )
@@ -214,6 +229,7 @@ impl LinearSourceStore {
         .bind(&input.team_name)
         .bind(&input.source_state_id)
         .bind(input.label.as_deref())
+        .bind(input.failed_label.as_deref())
         .bind(input.in_progress_state_id.as_deref())
         .bind(input.review_state_id.as_deref())
         .bind(input.ready_state_id.as_deref())
@@ -267,6 +283,7 @@ mod tests {
             team_name: "Engineering".into(),
             source_state_id: "state-1".into(),
             label: None,
+            failed_label: None,
             in_progress_state_id: None,
             review_state_id: None,
             ready_state_id: None,
@@ -304,6 +321,7 @@ mod tests {
             team_name: "Design".into(),
             source_state_id: "state-2".into(),
             label: Some("bug".into()),
+            failed_label: Some("ai-failed".into()),
             in_progress_state_id: Some("inprog".into()),
             review_state_id: Some("review".into()),
             ready_state_id: Some("ready".into()),
@@ -318,6 +336,7 @@ mod tests {
         assert_eq!(updated.team_id, "team-2");
         assert!(updated.live, "live persists through upsert");
         assert_eq!(updated.label, Some("bug".into()));
+        assert_eq!(updated.failed_label, Some("ai-failed".into()));
         assert_eq!(updated.max_concurrent_runs, 3, "concurrency cap persists");
         assert_eq!(updated.max_attempts, 3, "attempt budget persists");
         assert_eq!(updated.created_at, created.created_at);
