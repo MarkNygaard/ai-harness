@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useNavigate } from "react-router-dom";
 import { ReactFlowProvider } from "@xyflow/react";
 import { Info } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
@@ -17,7 +17,7 @@ import { Markdown } from "@/components/Markdown";
 import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
 import { GeoReport } from "@/components/geo/GeoReport";
-import { useCancelRun, useRunView } from "@/lib/runs";
+import { useCancelRun, useRerunRun, useRunView } from "@/lib/runs";
 import { parseGeoVerdict } from "@/lib/geo";
 import type { RunStatus } from "@/types/run";
 const STATUS_VARIANT: Record<
@@ -35,8 +35,10 @@ type Panel = "graph" | "overview" | "geo";
 export function RunDetailPage() {
   const { id = null } = useParams();
   const run = useRunView(id);
+  const navigate = useNavigate();
   const [panel, setPanel] = useState<Panel>("graph");
   const cancel = useCancelRun();
+  const rerun = useRerunRun();
   // A geo-audit run carries a structured verdict in its `analyze` node.
   const geo = useMemo(() => parseGeoVerdict(run.nodes), [run.nodes]);
 
@@ -77,6 +79,21 @@ export function RunDetailPage() {
               onClick={() => cancel.mutate(id)}
             >
               {cancel.isPending ? "Stopping…" : "Stop"}
+            </Button>
+          )}
+          {!run.live && id && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={rerun.isPending}
+              title="Start a fresh run of this workflow with the same inputs"
+              onClick={() =>
+                rerun.mutate(id, {
+                  onSuccess: (res) => navigate(`/runs/${res.run_id}`),
+                })
+              }
+            >
+              {rerun.isPending ? "Starting…" : "Rerun"}
             </Button>
           )}
           <Sheet>

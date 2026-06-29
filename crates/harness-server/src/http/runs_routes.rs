@@ -1142,6 +1142,58 @@ pub async fn create_run(
     }
 }
 
+/// `POST /runs/{id}/rerun` — start a fresh run of the same workflow + inputs as
+/// run `{id}`. The original run is untouched; this returns a **new** run id.
+/// Inputs (workflow, title, description, project) are read from the stored run;
+/// `base_branch` is intentionally re-resolved from the project (as a fresh
+/// trigger would), so a rerun always targets the project's current base branch.
+/// Always a real run.
+pub async fn rerun_run(
+    Extension(state): Extension<Arc<RunsState>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> Response {
+    let store = match state.store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let detail = match store.get_run(&id).await {
+        Ok(Some(d)) => d,
+        Ok(None) => return err(StatusCode::NOT_FOUND, format!("run `{id}` not found")),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let Some(project) = detail
+        .run
+        .project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+    else {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("run `{id}` has no project — cannot rerun"),
+        );
+    };
+    let req = CreateRunRequest {
+        workflow: detail.run.workflow_name.clone(),
+        title: detail.run.title.clone(),
+        description: detail.run.description.clone().unwrap_or_default(),
+        args: String::new(),
+        real: true,
+        base_branch: None,
+        project: Some(project),
+        swap_from: None,
+        swap_to: None,
+        ab_pair_id: None,
+        ab_arm: None,
+        ab_label: None,
+    };
+    match start_run(&state, req).await {
+        Ok(run_id) => (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response(),
+        Err((status, msg)) => err(status, msg),
+    }
+}
+
 /// Trigger an A/B pair: two runs of the same task that differ only by which model
 /// the `swap_from` steps use. Arm A applies `swap_from → variant_a`, arm B applies
 /// `swap_from → variant_b`; both share an `ab_pair_id` so the comparison view can
