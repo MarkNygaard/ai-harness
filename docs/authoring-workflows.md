@@ -114,6 +114,7 @@ Every node has an `id` and exactly **one body** (`prompt` / `bash` / `command` /
 | `provider` / `model` | Override the workflow default (AI bodies only — `prompt`/`command`/`loop`). |
 | `context` | `shared` (default, inherit the prior sequential node's session) or `fresh` (new session). |
 | `timeout` | Milliseconds, for `bash`/`script` bodies. |
+| `retries` | Re-run **this node only** on failure, up to N times, before the run fails (default `0` = run once). Same worktree/session — for transient failures (tests, builds, flaky network). Do **not** set on side-effecting steps (e.g. a push/PR step), where a retry could double-act. Capped at 10. |
 | `output_format` | JSON schema the AI body's output should match (see [output_format](#output_format)). |
 
 ### Node bodies

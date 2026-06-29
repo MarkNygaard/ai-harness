@@ -600,3 +600,67 @@ nodes:
     let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
     assert_eq!(report.node("classify").unwrap().status, NodeStatus::Success);
 }
+
+#[tokio::test]
+async fn node_retries_until_success() {
+    // `retries: 2` → up to 3 attempts. The node fails twice then succeeds; the
+    // run completes and the node ends Success.
+    let yaml = r#"
+name: retry-success
+nodes:
+  - id: v
+    bash: "run tests"
+    retries: 2
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new()
+        .respond("v", fail("flaky 1"))
+        .respond("v", fail("flaky 2"))
+        .respond("v", ok("green"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.node("v").unwrap().status, NodeStatus::Success);
+    // Re-ran the same node three times (2 failures + 1 success).
+    assert_eq!(runner.calls_for("v").len(), 3);
+}
+
+#[tokio::test]
+async fn node_retries_exhausted_fails_run() {
+    // `retries: 1` → 2 attempts max; both fail, so the node (and run) fail and
+    // we stop at the cap rather than looping.
+    let yaml = r#"
+name: retry-exhausted
+nodes:
+  - id: v
+    bash: "run tests"
+    retries: 1
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new()
+        .respond("v", fail("nope 1"))
+        .respond("v", fail("nope 2"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    assert_eq!(report.status, RunStatus::Failed);
+    assert_eq!(report.node("v").unwrap().status, NodeStatus::Failed);
+    assert_eq!(runner.calls_for("v").len(), 2);
+}
+
+#[tokio::test]
+async fn node_without_retries_runs_once() {
+    // Default (`retries: 0`) preserves the original behaviour: one attempt.
+    let yaml = r#"
+name: no-retry
+nodes:
+  - id: v
+    bash: "run tests"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new().respond("v", fail("boom"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    assert_eq!(report.status, RunStatus::Failed);
+    assert_eq!(report.node("v").unwrap().status, NodeStatus::Failed);
+    assert_eq!(runner.calls_for("v").len(), 1);
+}

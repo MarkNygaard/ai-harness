@@ -574,7 +574,72 @@ async fn execute_node<R: NodeRunner>(
             });
         }))
     });
-    let mut result = match &node.kind {
+    // `retries` re-runs *this node only* on failure (same worktree/session),
+    // up to a hard ceiling. `retries: 0` (default) → a single attempt. A cancel
+    // signal is never retried (it's a deliberate stop, not a failure).
+    const MAX_NODE_RETRIES: u32 = 10;
+    let max_attempts = node.retries.min(MAX_NODE_RETRIES).saturating_add(1);
+    let mut attempt: u32 = 0;
+    let mut result = loop {
+        attempt += 1;
+        let r = dispatch_node_body(
+            runner,
+            node,
+            provider,
+            model,
+            vars,
+            incoming_session.clone(),
+            progress.clone(),
+        )
+        .await;
+        if r.run.status != NodeStatus::Failed || r.cancel.is_some() || attempt >= max_attempts {
+            break r;
+        }
+        emit(
+            events,
+            RunEvent::NodeProgress {
+                node_id: node.id.clone(),
+                activity: format!(
+                    "step failed — retrying (attempt {}/{})",
+                    attempt + 1,
+                    max_attempts
+                ),
+            },
+        );
+    };
+    if attempt > 1 && result.run.note.is_none() {
+        result.run.note = Some(if result.run.status == NodeStatus::Success {
+            format!("succeeded on attempt {attempt}/{max_attempts}")
+        } else {
+            format!("failed after {attempt} attempt(s)")
+        });
+    }
+    // Stamp execution timing once, here, for every body kind.
+    result.run.started_at = Some(started);
+    result.run.ended_at = Some(Utc::now());
+    emit(
+        events,
+        RunEvent::NodeFinished {
+            node: result.run.clone(),
+        },
+    );
+    result
+}
+
+/// Run a node's body exactly once: dispatch on its [`NodeKind`] and map the
+/// runner result into a [`NodeRunResult`]. [`execute_node`] wraps this in a
+/// retry loop for nodes with `retries > 0`.
+#[allow(clippy::too_many_arguments)]
+async fn dispatch_node_body<R: NodeRunner>(
+    runner: &R,
+    node: &Node,
+    provider: Option<&str>,
+    model: Option<&str>,
+    vars: &VarContext,
+    session: Option<String>,
+    progress: Option<ProgressSink>,
+) -> NodeRunResult {
+    match &node.kind {
         NodeKind::Cancel(reason) => {
             // Substitute vars (e.g. `$upstream.output.summary`) in the reason.
             let reason = substitute(reason, vars).unwrap_or_else(|_| reason.clone());
@@ -617,8 +682,8 @@ async fn execute_node<R: NodeRunner>(
                 provider,
                 model,
                 vars,
-                incoming_session,
-                progress.clone(),
+                session,
+                progress,
                 NodeBody::Prompt,
                 text,
             )
@@ -631,8 +696,8 @@ async fn execute_node<R: NodeRunner>(
                 provider,
                 model,
                 vars,
-                incoming_session,
-                progress.clone(),
+                session,
+                progress,
                 NodeBody::Bash,
                 text,
             )
@@ -651,8 +716,8 @@ async fn execute_node<R: NodeRunner>(
                 provider,
                 model,
                 vars,
-                incoming_session,
-                progress.clone(),
+                session,
+                progress,
                 move |t| NodeBody::Script {
                     script: t,
                     runtime,
@@ -670,8 +735,8 @@ async fn execute_node<R: NodeRunner>(
                 provider,
                 model,
                 vars,
-                incoming_session,
-                progress.clone(),
+                session,
+                progress,
                 1,
                 NodeBody::Command(name.clone()),
             )
@@ -679,29 +744,9 @@ async fn execute_node<R: NodeRunner>(
         }
 
         NodeKind::Loop(cfg) => {
-            run_loop(
-                runner,
-                node,
-                provider,
-                model,
-                vars,
-                incoming_session,
-                progress.clone(),
-                cfg,
-            )
-            .await
+            run_loop(runner, node, provider, model, vars, session, progress, cfg).await
         }
-    };
-    // Stamp execution timing once, here, for every body kind.
-    result.run.started_at = Some(started);
-    result.run.ended_at = Some(Utc::now());
-    emit(
-        events,
-        RunEvent::NodeFinished {
-            node: result.run.clone(),
-        },
-    );
-    result
+    }
 }
 
 /// Substitute a node's inline text, then run it once through the runner.

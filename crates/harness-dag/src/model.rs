@@ -12,6 +12,11 @@
 
 use serde::{Deserialize, Serialize};
 
+/// `#[serde(skip_serializing_if)]` predicate for `u32` fields that default to 0.
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
 /// Session-handling mode for an AI node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -206,6 +211,15 @@ pub struct Node {
     /// Timeout in milliseconds (for `bash`/`script` bodies).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
+    /// How many times to **re-run this single node** if it fails, before the
+    /// failure propagates and fails the run. `0` (default) = run once, no retry.
+    /// The retry re-executes only this node (in the same worktree/session),
+    /// not the whole workflow. Use it for steps that can fail transiently
+    /// (tests, builds, flaky network) — NOT for side-effecting steps like a
+    /// push/PR step, where a retry could double-act. Capped at a small ceiling
+    /// by the executor.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub retries: u32,
     /// Optional JSON schema the AI body's output should conform to. When set on a
     /// `prompt`/`command` node the runner instructs the agent to emit JSON
     /// matching it, so downstream `$node.output.field` access and `when:`
