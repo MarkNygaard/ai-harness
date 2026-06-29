@@ -27,8 +27,12 @@ nodes:
   - id: resolve-pr
     category: planning
     provider: claude
-    model: haiku
+    model: sonnet
     context: fresh
+    # Resolving the PR from free-text via a `gh` search is the gate for the whole
+    # flow (a miss cancels the run at `abort-no-pr`). Retry once so a transient
+    # lookup miss self-heals instead of failing the run.
+    retries: 1
     prompt: |
       Identify the GitHub pull request to revise from this input:
 
