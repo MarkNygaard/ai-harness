@@ -42,6 +42,8 @@ export interface LinearSource {
   poll_interval_secs: number;
   /** How many runs this binding may have in flight at once (default 1). */
   max_concurrent_runs: number;
+  /** How many times an issue is (re-)fired before the poller gives up (default 1). */
+  max_attempts: number;
   enabled: boolean;
   live: boolean;
   created_at: string;
@@ -76,6 +78,7 @@ export interface LinearSourceInput {
   base_branch?: string;
   poll_interval_secs: number;
   max_concurrent_runs: number;
+  max_attempts: number;
   enabled: boolean;
   live: boolean;
 }

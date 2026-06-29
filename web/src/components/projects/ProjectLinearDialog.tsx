@@ -282,6 +282,7 @@ function BindingForm({
   const [maxConcurrentRuns, setMaxConcurrentRuns] = useState(
     source?.max_concurrent_runs ?? 1,
   );
+  const [maxAttempts, setMaxAttempts] = useState(source?.max_attempts ?? 1);
   const [enabled, setEnabled] = useState(source?.enabled ?? false);
   const [live, setLive] = useState(source?.live ?? false);
 
@@ -320,6 +321,7 @@ function BindingForm({
         base_branch: baseBranch.trim() || undefined,
         poll_interval_secs: pollIntervalSecs,
         max_concurrent_runs: maxConcurrentRuns,
+        max_attempts: maxAttempts,
         enabled,
         live,
       },
@@ -467,6 +469,22 @@ function BindingForm({
           />
         </Field>
       </div>
+
+      {/* Attempt budget — whole-workflow retries before the poller gives up. */}
+      <Field label="Max attempts (retries before giving up)">
+        <input
+          className={inputCls}
+          type="number"
+          min={1}
+          max={10}
+          value={maxAttempts}
+          onChange={(e) =>
+            setMaxAttempts(
+              Math.min(10, Math.max(1, parseInt(e.target.value, 10) || 1)),
+            )
+          }
+        />
+      </Field>
 
       {/* Enabled toggle — on/off without deleting the binding. */}
       <label className="flex items-center gap-2 text-[13px]">
