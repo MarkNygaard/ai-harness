@@ -446,6 +446,17 @@ impl LinearClient {
         expect_mutation_success(&self.post(body).await?, "issueAddLabel")
     }
 
+    /// Remove a single label from an issue (write). `label_id` is the Linear
+    /// internal id (resolve a name via [`Self::discover`]). Used by the Rerun
+    /// button to clear a binding's failed-label when re-arming an issue.
+    pub async fn remove_label(&self, issue_id: &str, label_id: &str) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!,$l:String!){ issueRemoveLabel(id:$id, labelId:$l){ success } }",
+            "variables": { "id": issue_id, "l": label_id },
+        });
+        expect_mutation_success(&self.post(body).await?, "issueRemoveLabel")
+    }
+
     /// Create an issue in `team_id` (write), with an optional initial workflow
     /// state and labels. `state_id` / `label_ids` are Linear internal ids
     /// (resolve label names via [`Self::discover`]). Returns the new issue.

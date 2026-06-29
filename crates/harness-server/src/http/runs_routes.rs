@@ -1189,7 +1189,13 @@ pub async fn rerun_run(
         ab_label: None,
     };
     match start_run(&state, req).await {
-        Ok(run_id) => (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response(),
+        Ok(run_id) => {
+            // If the original run was Linear-triggered, re-arm its issue: clear
+            // the failed label + prior claims and link the issue to this new run
+            // so it stays in sync (best-effort — never fails the rerun).
+            super::linear_poller::rearm_linear_claim(&state, &id, &run_id).await;
+            (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response()
+        }
         Err((status, msg)) => err(status, msg),
     }
 }

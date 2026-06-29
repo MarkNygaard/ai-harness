@@ -148,7 +148,11 @@ async fn dry_run_log(client: &LinearClient, b: &LinearSource) {
 
 /// Resolve a label *name* to its Linear id within `team_id` (case-insensitive),
 /// via discovery. `None` if discovery fails or the label isn't on the team.
-async fn resolve_label_id(client: &LinearClient, team_id: &str, name: &str) -> Option<String> {
+pub(crate) async fn resolve_label_id(
+    client: &LinearClient,
+    team_id: &str,
+    name: &str,
+) -> Option<String> {
     let discovery = client.discover().await.ok()?;
     discovery
         .teams
@@ -156,6 +160,66 @@ async fn resolve_label_id(client: &LinearClient, team_id: &str, name: &str) -> O
         .find(|t| t.id == team_id)
         .and_then(|t| t.labels.iter().find(|l| l.name.eq_ignore_ascii_case(name)))
         .map(|l| l.id.clone())
+}
+
+/// Re-arm the Linear issue behind `original_run_id` for a Rerun, linking it to
+/// `new_run_id`. No-op if the original run wasn't Linear-triggered.
+///
+/// Unlike removing the failed label by hand (which grants one more try via the
+/// poller), this is a **full reset**: it clears the prior claims (resetting the
+/// attempt counter), removes the binding's failed-label, moves the issue to In
+/// Progress, and records a fresh claim for the new run — so the manually-fired
+/// rerun drives the issue's status just like a poller-claimed run, and the
+/// poller won't double-claim it (it's out of the source column and has an active
+/// claim). Best-effort: a Linear hiccup never fails the rerun itself.
+pub(crate) async fn rearm_linear_claim(
+    state: &Arc<RunsState>,
+    original_run_id: &str,
+    new_run_id: &str,
+) {
+    let Ok(claim_store) = state.linear_claim_store().await else {
+        return;
+    };
+    let claim = match claim_store.claim_for_run(original_run_id).await {
+        Ok(Some(c)) => c,
+        _ => return, // not a Linear-triggered run — nothing to re-arm
+    };
+    let binding = match state.linear_source_store().await {
+        Ok(s) => s.get(&claim.project, &claim.workflow).await.ok().flatten(),
+        Err(_) => None,
+    };
+    if let Some(api_key) = linear_key_for_project(state, &claim.project).await {
+        let client = LinearClient::new(api_key);
+        if let Some(b) = &binding {
+            // Clear the failed-label so the issue no longer reads as failed.
+            if let Some(name) = b.failed_label.as_deref() {
+                if let Some(id) = resolve_label_id(&client, &b.team_id, name).await {
+                    let _ = client.remove_label(&claim.issue_id, &id).await;
+                }
+            }
+            // Move it to In Progress so the poller won't re-claim it from source.
+            if let Some(ip) = b.in_progress_state_id.as_deref() {
+                let _ = client.set_issue_state(&claim.issue_id, ip).await;
+            }
+        }
+    }
+    // Reset the attempt counter, then link the new run so status-sync drives it.
+    let _ = claim_store
+        .clear_claims(&claim.issue_id, &claim.workflow)
+        .await;
+    if let Err(e) = claim_store
+        .record(
+            new_run_id,
+            &claim.project,
+            &claim.workflow,
+            &claim.issue_id,
+            &claim.identifier,
+            &claim.original_state_id,
+        )
+        .await
+    {
+        tracing::warn!("rerun: failed to re-link Linear claim for {new_run_id}: {e}");
+    }
 }
 
 /// Claim one eligible issue for a live binding and fire its workflow — one at a
