@@ -29,11 +29,6 @@ use super::runs_routes::{start_run, CreateRunRequest, RunsState};
 /// `poll_interval_secs` has elapsed; status-sync runs every tick.
 const POLLER_TICK_SECS: u64 = 30;
 
-/// Retry fail-safe: after this many failed attempts on the same issue, the
-/// poller stops returning it to the source column (which would re-claim it
-/// forever) and flags it for a human instead.
-const MAX_CLAIM_ATTEMPTS: i64 = 2;
-
 /// Spawn the Linear poller. Best-effort; a no-op outside a Tokio runtime.
 pub(crate) fn spawn_poller(state: Arc<RunsState>) {
     if tokio::runtime::Handle::try_current().is_err() {
@@ -173,16 +168,17 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
             return;
         }
     };
-    // Pick the first eligible issue that hasn't already exhausted its retries.
-    // This is the hard loop-guard: a single binding never claims an issue more
-    // than MAX_CLAIM_ATTEMPTS times (so even a misconfigured binding — e.g. In
+    // Pick the first eligible issue that hasn't already exhausted its attempt
+    // budget. This is the hard loop-guard: a single binding never claims an issue
+    // more than `max_attempts` times (so even a misconfigured binding — e.g. In
     // Progress == source — can't loop). The cap is per (issue, workflow), so an
     // issue that legitimately moves through several bindings across pipeline
     // stages (idea-to-pr → merge-pr) isn't exhausted by an earlier binding.
+    let max_attempts = b.max_attempts.max(1) as i64;
     let mut chosen = None;
     for issue in issues {
         match claim_store.attempts_for_issue(&issue.id, &b.workflow).await {
-            Ok(n) if n >= MAX_CLAIM_ATTEMPTS => {
+            Ok(n) if n >= max_attempts => {
                 tracing::debug!(
                     "linear poller: {}/{} — skipping {} (hit retry cap {})",
                     b.project,
@@ -406,13 +402,20 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                 tracing::info!("linear poller: {} — run completed → ready", c.identifier);
             }
             "failed" | "cancelled" => {
+                // The binding's attempt budget (default 1); fall back to 1 if the
+                // binding has gone away. On a lookup error, assume exhausted so we
+                // give up rather than risk a loop.
+                let max_attempts = binding
+                    .as_ref()
+                    .map(|b| b.max_attempts.max(1) as i64)
+                    .unwrap_or(1);
                 // How many times this issue has been attempted for this workflow
                 // (incl. this run).
                 let attempts = claim_store
                     .attempts_for_issue(&c.issue_id, &c.workflow)
                     .await
-                    .unwrap_or(MAX_CLAIM_ATTEMPTS);
-                if attempts >= MAX_CLAIM_ATTEMPTS {
+                    .unwrap_or(max_attempts);
+                if attempts >= max_attempts {
                     // Fail-safe: stop the loop. Do NOT return it to the source
                     // column (which would re-claim it forever). Leave it where the
                     // run left it and flag it for a human.
@@ -440,7 +443,7 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                             &c.issue_id,
                             &format!(
                                 "⚠️ ai-harness run `{}` did not complete ({}); returning for retry (attempt {}/{}).",
-                                c.run_id, detail.run.status, attempts, MAX_CLAIM_ATTEMPTS
+                                c.run_id, detail.run.status, attempts, max_attempts
                             ),
                         )
                         .await;
@@ -449,7 +452,7 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                         c.identifier,
                         detail.run.status,
                         attempts,
-                        MAX_CLAIM_ATTEMPTS
+                        max_attempts
                     );
                 }
                 let _ = claim_store.set_phase(&c.run_id, "done").await;

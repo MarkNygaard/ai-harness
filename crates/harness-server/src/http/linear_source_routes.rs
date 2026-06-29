@@ -61,6 +61,9 @@ pub struct PutSourceBody {
     /// How many runs this binding may have in flight at once (default 1).
     #[serde(default = "default_max_concurrent_runs")]
     pub max_concurrent_runs: i32,
+    /// How many times an issue is (re-)fired before the poller gives up (default 1).
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: i32,
     #[serde(default)]
     pub enabled: bool,
     /// When false (default) the poller dry-runs this binding; true = claim + fire.
@@ -73,6 +76,10 @@ fn default_poll() -> i32 {
 }
 
 fn default_max_concurrent_runs() -> i32 {
+    1
+}
+
+fn default_max_attempts() -> i32 {
     1
 }
 
@@ -268,6 +275,12 @@ pub async fn put_source(
             "`max_concurrent_runs` must be between 1 and 20",
         );
     }
+    if body.max_attempts < 1 || body.max_attempts > 10 {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "`max_attempts` must be between 1 and 10",
+        );
+    }
     // The source (pickup) status is exclusive: claiming an issue MOVES it out of
     // that column, so reusing it as a status-map target (in-progress/review/ready)
     // would mean the issue never leaves the pickup column — and a failed run
@@ -307,6 +320,7 @@ pub async fn put_source(
         base_branch: optional_trimmed_non_empty(body.base_branch),
         poll_interval_secs: body.poll_interval_secs,
         max_concurrent_runs: body.max_concurrent_runs,
+        max_attempts: body.max_attempts,
         enabled: body.enabled,
         live: body.live,
     };
