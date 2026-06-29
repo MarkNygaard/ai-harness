@@ -143,6 +143,34 @@ impl LinearClaimStore {
         Ok(row.0)
     }
 
+    /// The claim a given run was fired for, if any. `None` means the run wasn't
+    /// Linear-triggered (no claim linkage) — e.g. a manual or MCP run.
+    pub async fn claim_for_run(&self, run_id: &str) -> Result<Option<LinearClaim>, PersistError> {
+        let row = sqlx::query_as::<_, LinearClaim>(
+            "SELECT run_id, project, workflow, issue_id, identifier, original_state_id,
+                    phase, created_at
+             FROM harness_linear_claims
+             WHERE run_id = $1",
+        )
+        .bind(run_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Delete every claim for `(issue, workflow)` — resets the attempt counter so
+    /// the issue is fully re-armed (used by the Rerun button). Returns the number
+    /// of rows removed.
+    pub async fn clear_claims(&self, issue_id: &str, workflow: &str) -> Result<u64, PersistError> {
+        let res =
+            sqlx::query("DELETE FROM harness_linear_claims WHERE issue_id = $1 AND workflow = $2")
+                .bind(issue_id)
+                .bind(workflow)
+                .execute(&self.pool)
+                .await?;
+        Ok(res.rows_affected())
+    }
+
     /// Advance a claim's phase.
     pub async fn set_phase(&self, run_id: &str, phase: &str) -> Result<(), PersistError> {
         sqlx::query("UPDATE harness_linear_claims SET phase = $2 WHERE run_id = $1")
@@ -235,5 +263,41 @@ mod tests {
 
         // A different workflow on the same project is counted separately.
         assert_eq!(store.count_active(&project, "merge-pr").await.unwrap(), 0);
+    }
+
+    /// `claim_for_run` resolves a run's claim; `clear_claims` removes every claim
+    /// for `(issue, workflow)`, resetting the attempt counter — the Rerun reset.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn claim_for_run_and_clear_claims() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = LinearClaimStore::connect(&url).await.expect("connect");
+        let issue = format!(
+            "issue-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        store
+            .record("rr-1", "proj", "wf", &issue, "P-1", "todo")
+            .await
+            .unwrap();
+        store
+            .record("rr-2", "proj", "wf", &issue, "P-1", "todo")
+            .await
+            .unwrap();
+
+        // claim_for_run returns the linked claim; unknown run → None.
+        let c = store.claim_for_run("rr-1").await.unwrap().expect("claim");
+        assert_eq!(c.issue_id, issue);
+        assert_eq!(c.original_state_id, "todo");
+        assert!(store.claim_for_run("no-such-run").await.unwrap().is_none());
+
+        // clear_claims removes both rows → the counter resets to 0.
+        assert_eq!(store.attempts_for_issue(&issue, "wf").await.unwrap(), 2);
+        assert!(store.clear_claims(&issue, "wf").await.unwrap() >= 2);
+        assert_eq!(store.attempts_for_issue(&issue, "wf").await.unwrap(), 0);
+        assert!(store.claim_for_run("rr-1").await.unwrap().is_none());
     }
 }
