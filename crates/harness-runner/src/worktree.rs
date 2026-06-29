@@ -81,6 +81,15 @@ impl Drop for Worktree {
     }
 }
 
+/// Prune stale worktree bookkeeping from `repo`: `git worktree prune` drops the
+/// `.git/worktrees/<name>` admin entries for worktrees whose directories have
+/// already been deleted (e.g. removed out-of-band by the orphan sweeper after a
+/// hard process kill skipped the [`Worktree`] `Drop`). Best-effort.
+pub fn prune_worktrees(repo: &Path) -> Result<(), WorktreeError> {
+    run_git(repo, &["worktree", "prune"])?;
+    Ok(())
+}
+
 /// Clone `git_url` into `dest` (which must not already exist). When `token` is
 /// set, authenticates over HTTPS via a transient credential helper — the token
 /// is passed through the child environment and **never** written to the cloned

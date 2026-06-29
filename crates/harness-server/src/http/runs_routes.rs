@@ -546,6 +546,95 @@ pub(crate) fn spawn_reaper(state: Arc<RunsState>) {
     });
 }
 
+/// How often the orphan-worktree sweeper reclaims abandoned run worktrees.
+pub(crate) const WORKTREE_SWEEP_EVERY_SECS: u64 = 6 * 60 * 60;
+
+/// Reclaim run-worktree directories under `.worktrees/` whose run is no longer
+/// `running` in the DB. Normal completion (success/failure/cancel) removes a
+/// worktree via RAII ([`harness_runner::Worktree`]'s `Drop`); this is the
+/// backstop for hard process/pod kills that skip `Drop` and would otherwise
+/// leave checkouts on disk forever. Best-effort, and it never touches a dir
+/// whose run is still `running`, so a live run is safe even mid-sweep.
+pub(crate) async fn sweep_orphan_worktrees(state: &Arc<RunsState>) {
+    let worktrees_dir = state.projects_dir.join(".worktrees");
+    let Ok(entries) = std::fs::read_dir(&worktrees_dir) else {
+        return; // no worktrees dir yet — nothing to sweep
+    };
+    let live = match state.store().await {
+        Ok(store) => match store.running_run_ids().await {
+            Ok(ids) => ids,
+            Err(e) => {
+                tracing::warn!("worktree sweeper: running_run_ids failed: {e}");
+                return;
+            }
+        },
+        Err(_) => return,
+    };
+    let mut removed = 0u32;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if live.contains(name) {
+            continue; // a running run owns this worktree — leave it
+        }
+        match std::fs::remove_dir_all(&path) {
+            Ok(()) => {
+                removed += 1;
+                tracing::info!("worktree sweeper: reclaimed orphan worktree {name}");
+            }
+            Err(e) => {
+                tracing::warn!("worktree sweeper: failed to remove {}: {e}", path.display())
+            }
+        }
+    }
+    if removed == 0 {
+        return;
+    }
+    // Drop the now-dangling `.git/worktrees/<id>` admin entries from each project
+    // checkout (immediate non-dot subdirs of projects_dir that are git repos).
+    let projects_dir = state.projects_dir.clone();
+    let _ = tokio::task::spawn_blocking(move || {
+        let Ok(entries) = std::fs::read_dir(&projects_dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let p = entry.path();
+            let is_dot = p
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with('.'));
+            if is_dot || !p.join(".git").exists() {
+                continue;
+            }
+            let _ = harness_runner::prune_worktrees(&p);
+        }
+    })
+    .await;
+    tracing::info!("worktree sweeper: reclaimed {removed} orphan worktree(s)");
+}
+
+/// Spawn the periodic orphan-worktree sweeper (also runs one sweep at startup).
+/// No-op outside a Tokio runtime (e.g. a synchronous router-build test).
+pub(crate) fn spawn_worktree_sweeper(state: Arc<RunsState>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_secs(WORKTREE_SWEEP_EVERY_SECS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            sweep_orphan_worktrees(&state).await;
+        }
+    });
+}
+
 /// How often the cargo-cache sweeper checks the shared build cache.
 pub(crate) const CACHE_SWEEP_EVERY_SECS: u64 = 6 * 60 * 60;
 /// Don't evict artifacts modified within this window — protects an in-progress

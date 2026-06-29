@@ -38,7 +38,7 @@ pub use registry::build_agent_registry;
 pub use run::{execute_run, parse_sandbox, print_report, RunOptions};
 pub use worktree::{
     clone_repo, clone_run_branch, default_branch, fetch_repo, mise_shims_dir, mise_tool_path,
-    provision_toolchains, sanitize_branch_component, Worktree, WorktreeError,
+    provision_toolchains, prune_worktrees, sanitize_branch_component, Worktree, WorktreeError,
 };
 
 /// A request to run an AI prompt against a working directory.
