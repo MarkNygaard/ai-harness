@@ -13,6 +13,8 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiFetch, apiJson } from "./api";
 import type {
+  Activity,
+  ActivityPage,
   CreateRunPairRequest,
   CreateRunPairResponse,
   CreateRunRequest,
@@ -280,6 +282,88 @@ export function useRunStream(
   }, [id]);
 }
 
+/** How often to poll the durable activity log while a run is live (ms). */
+const ACTIVITY_POLL_MS = 1_500;
+
+/**
+ * Poll `GET /runs/{id}/activity` while `enabled`, replaying each new line as a
+ * synthetic `node_progress` event into `onEvent` so it flows through the same
+ * reducer as the live stream. This is the **durable** source of the progress
+ * overlay: unlike the SSE stream it reads from Postgres, so it shows activity
+ * regardless of when the page connected, across a refresh, or for a run another
+ * process owns. A per-run cursor (`after`) means each poll fetches only what's
+ * new; a long backlog is paged until drained.
+ */
+export function useRunActivity(
+  id: string | null,
+  enabled: boolean,
+  onEvents: (events: RunEvent[]) => void,
+): void {
+  const onEventsRef = useRef(onEvents);
+  useEffect(() => {
+    onEventsRef.current = onEvents;
+  });
+  // Highest activity id seen, so each poll fetches only newer lines. Reset when
+  // the run id changes (a new run starts its own log from 0).
+  const cursorRef = useRef(0);
+  useEffect(() => {
+    cursorRef.current = 0;
+  }, [id]);
+
+  useEffect(() => {
+    if (!id || !enabled) return;
+    const controller = new AbortController();
+    let inFlight = false;
+
+    const poll = async () => {
+      // Skip if a prior poll (e.g. draining a large backlog) is still running,
+      // so slow responses can't stack up.
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        // Drain the backlog: a page is capped server-side, so keep paging while
+        // a full page comes back (a just-opened, long-running step).
+        for (;;) {
+          const page = await apiJson<ActivityPage>(
+            `/api/runs/${id}/activity?after=${cursorRef.current}`,
+            { signal: controller.signal },
+          );
+          if (!page.events.length) break;
+          // One batched dispatch per page → one re-render, not one per line.
+          onEventsRef.current(
+            page.events.map((e) => ({
+              type: "node_progress",
+              node_id: e.node_id,
+              activity: {
+                kind: e.kind,
+                text: e.text,
+                detail: e.detail,
+                tool_id: e.tool_id,
+                is_error: e.is_error,
+                // Carry the row time so paired call/result cards can show elapsed.
+                ts: e.created_at,
+              },
+            })),
+          );
+          cursorRef.current = page.last;
+          if (page.events.length < 1000) break;
+        }
+      } catch {
+        // Transient (network / abort / 503) — just retry on the next tick.
+      } finally {
+        inFlight = false;
+      }
+    };
+
+    void poll(); // fetch immediately so activity shows without a tick's delay
+    const timer = setInterval(() => void poll(), ACTIVITY_POLL_MS);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [id, enabled]);
+}
+
 // ── Live accumulator ───────────────────────────────────────────────────────
 
 interface LiveState {
@@ -290,7 +374,9 @@ interface LiveState {
 }
 
 type LiveAction =
-  { type: "event"; event: RunEvent; now: string } | { type: "reset" };
+  | { type: "event"; event: RunEvent; now: string }
+  | { type: "events"; events: RunEvent[]; now: string }
+  | { type: "reset" };
 
 function seedNode(meta: NodeMeta): NodeView {
   return {
@@ -324,10 +410,11 @@ const ACTIVITY_LOG_CAP = 200;
  * false-matching other "n/m" text in normal activity.
  */
 function parseLiveProgress(
-  activity: string | null,
+  activity: Activity | null,
 ): { done: number; total: number; kind: "task" | "loop" } | null {
-  if (!activity) return null;
-  const m = /^(📋|🔁)\s*(\d+)\s*\/\s*(\d+)/.exec(activity);
+  // Markers ride on text activities; a tool/result line never carries one.
+  if (!activity || activity.kind !== "text") return null;
+  const m = /^(📋|🔁)\s*(\d+)\s*\/\s*(\d+)/.exec(activity.text);
   if (!m) return null;
   const kind = m[1] === "🔁" ? "loop" : "task";
   const done = Number(m[2]);
@@ -336,12 +423,43 @@ function parseLiveProgress(
   return { done, total, kind };
 }
 
-/** Reduce one live [`RunEvent`] into the accumulated view. Pure (now injected). */
+/** Two activities are "the same line" (for dedup) when kind, text, and detail
+ * match — so two distinct tool calls (same name, different command) aren't
+ * collapsed, but an omp re-emit of the identical line is. */
+function sameActivity(a: Activity | undefined, b: Activity): boolean {
+  return (
+    a !== undefined &&
+    a.kind === b.kind &&
+    a.text === b.text &&
+    (a.detail ?? null) === (b.detail ?? null)
+  );
+}
+
+/**
+ * Reduce live actions into the accumulated view. Pure (now injected). The
+ * `events` (plural) action folds a whole batch in one dispatch — used by the
+ * activity poll, which can replay a large backlog on load and would otherwise
+ * trigger one re-render per line.
+ */
 export function liveReducer(state: LiveState, action: LiveAction): LiveState {
   if (action.type === "reset") {
     return { workflow: null, status: "running", nodes: {}, order: [] };
   }
-  const { event, now } = action;
+  if (action.type === "events") {
+    return action.events.reduce(
+      (s, event) => reduceEvent(s, event, action.now),
+      state,
+    );
+  }
+  return reduceEvent(state, action.event, action.now);
+}
+
+/** Reduce one live [`RunEvent`] into the accumulated view. Pure (now injected). */
+function reduceEvent(
+  state: LiveState,
+  event: RunEvent,
+  now: string,
+): LiveState {
   switch (event.type) {
     case "run_started": {
       const nodes: Record<string, NodeView> = {};
@@ -381,10 +499,9 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
       // Append to the live feed, skipping a repeat of the last line (omp
       // re-emits the same status line as it ticks) and capping the history.
       const last = prev.activityLog[prev.activityLog.length - 1];
-      const activityLog =
-        event.activity === last
-          ? prev.activityLog
-          : [...prev.activityLog, event.activity].slice(-ACTIVITY_LOG_CAP);
+      const activityLog = sameActivity(last, event.activity)
+        ? prev.activityLog
+        : [...prev.activityLog, event.activity].slice(-ACTIVITY_LOG_CAP);
       // Progress is sticky: only a fresh marker updates it, so the badge
       // persists through the tool-call lines between markers.
       const liveProgress =
@@ -527,10 +644,18 @@ export function useRunView(id: string | null): RunView {
     dispatch({ type: "reset" });
     wasRunning.current = true;
   }, [id]);
-  const handleEvent = useCallback((event: RunEvent) => {
+  // SSE drives node start/finish + run status with low latency. Activity
+  // (`node_progress`) now comes from the durable poll below — which works even
+  // when the SSE subscription is missed (late connect / refresh / cross-process)
+  // — so drop it from the stream to avoid double-feeding the same lines.
+  const handleStreamEvent = useCallback((event: RunEvent) => {
+    if (event.type === "node_progress") return;
     dispatch({ type: "event", event, now: new Date().toISOString() });
   }, []);
-  useRunStream(id, handleEvent);
+  const handleActivity = useCallback((events: RunEvent[]) => {
+    dispatch({ type: "events", events, now: new Date().toISOString() });
+  }, []);
+  useRunStream(id, handleStreamEvent);
   // When the live stream reports the run is finished, invalidate the cached
   // detail so the UI picks up the final persisted state (including artifact
   // content captured after the workflow completes but before record_run).
@@ -545,15 +670,24 @@ export function useRunView(id: string | null): RunView {
   }, [state.status, id, qc]);
   // Keep polling the persisted detail until *either* the live stream or the
   // persisted row reports a terminal status (covers a refresh after finish).
-  return useRunViewMemo(state, id);
-}
-
-function useRunViewMemo(state: LiveState, id: string | null): RunView {
   const liveTerminal = state.status !== "running";
   const detail = useRunDetail(id, !liveTerminal);
+  // Poll the durable activity log while the run is live. Stop once *either*
+  // signal is terminal: the live stream saw `run_finished`, or — on a refresh
+  // where SSE never connected — the persisted row is already terminal.
+  const persistedTerminal = detail.data
+    ? detail.data.status !== "running"
+    : false;
+  useRunActivity(id, !(liveTerminal || persistedTerminal), handleActivity);
+  return useRunViewMemo(state, detail.data, liveTerminal);
+}
 
+function useRunViewMemo(
+  state: LiveState,
+  d: RunDetail | undefined,
+  liveTerminal: boolean,
+): RunView {
   return useMemo<RunView>(() => {
-    const d = detail.data;
     // Persisted view always carries the full topology (unstarted steps included).
     const persisted = d ? nodesFromDetail(d) : [];
     const persistedById = new Map(persisted.map((n) => [n.id, n]));
@@ -607,5 +741,5 @@ function useRunViewMemo(state: LiveState, id: string | null): RunView {
       project: d?.project ?? null,
       recordedAt: d?.recorded_at ?? null,
     };
-  }, [detail.data, state, liveTerminal]);
+  }, [d, state, liveTerminal]);
 }

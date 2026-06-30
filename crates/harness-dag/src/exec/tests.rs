@@ -506,7 +506,7 @@ nodes:
         .iter()
         .filter_map(|e| match e {
             RunEvent::NodeProgress { node_id, activity } if node_id == "review" => {
-                Some(activity.clone())
+                Some(activity.text.clone())
             }
             _ => None,
         })
