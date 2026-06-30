@@ -595,66 +595,96 @@ fn assistant_text(msg: Option<&serde_json::Value>) -> Option<String> {
     (!text.is_empty()).then_some(text)
 }
 
-/// Derive the structured live activities from one omp stream event (one line of
-/// its newline-delimited JSON), for the live activity feed. A single completed
-/// message can carry several: a line of assistant text (or a `📋 n/N` task
-/// marker), the tool calls it made (name + input summary), and any tool results
-/// it carries. Returns an empty vec for events with nothing to show (non-JSON,
-/// telemetry, empty messages).
+/// Derive the live activities from one omp stream event (one line of its
+/// newline-delimited JSON), for the activity feed. omp/kimi emits **discrete,
+/// top-level tool-execution events** — `tool_execution_start` (the call: name +
+/// args + intent) and `tool_execution_end` (the result), correlated by
+/// `toolCallId` — which is the reliable signal: tool calls otherwise stream only
+/// as `toolCall` blocks buried in high-volume `message_update` partials. A
+/// completed message contributes its assistant text (or a `📋 n/N` task marker).
+/// Returns an empty vec for events with nothing to show (thinking deltas,
+/// non-JSON, telemetry, empty messages).
 fn activities_from_line(line: &str) -> Vec<Activity> {
     use serde_json::Value;
     let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
         return Vec::new();
     };
-    let msg = v.get("message");
-    let mut out = Vec::new();
 
-    // Assistant prose: a task-progress marker wins as its own line (so the live
-    // `📋 n/N` badge still parses), else the last non-empty line as a text card.
-    if let Some(text) = assistant_text(msg) {
+    match v.get("type").and_then(Value::as_str) {
+        // A tool call started: surface the tool name + what it's doing, tagged
+        // with its id so the UI pairs it with the result (and times it).
+        Some("tool_execution_start") => {
+            let Some(name) = v.get("toolName").and_then(Value::as_str) else {
+                return Vec::new();
+            };
+            let id = v
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            return vec![Activity::tool(name, omp_tool_detail(&v), id)];
+        }
+        // A tool finished: surface a snippet of its output, paired by id.
+        Some("tool_execution_end") => {
+            let id = v
+                .get("toolCallId")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let is_error = v
+                .get("isError")
+                .and_then(Value::as_bool)
+                .or_else(|| v.get("result").and_then(|r| r.get("isError"))?.as_bool())
+                .unwrap_or(false);
+            return match omp_tool_result_snippet(&v) {
+                Some(snippet) => vec![Activity::tool_result(snippet, id, is_error)],
+                None => Vec::new(),
+            };
+        }
+        _ => {}
+    }
+
+    // Otherwise a completed message: surface the assistant's prose — a task
+    // marker wins (so the `📋 n/N` badge parses), else the last non-empty line.
+    let mut out = Vec::new();
+    if let Some(text) = assistant_text(v.get("message")) {
         if let Some(marker) = task_progress_activity(&text) {
             out.push(Activity::text(marker));
         } else if let Some(last) = text.lines().map(str::trim).rfind(|l| !l.is_empty()) {
             out.push(Activity::text(truncate_activity(last)));
         }
     }
+    out
+}
 
-    // Tool calls + results from the message's content parts. (Tool results ride
-    // on user-role messages, which `assistant_text` skips — so reading content
-    // directly here is what surfaces them.)
-    let parts = msg.and_then(|m| m.get("content")).and_then(Value::as_array);
-    for part in parts.into_iter().flatten() {
-        match part.get("type").and_then(Value::as_str) {
-            Some("tool_use") => {
-                if let Some(name) = part.get("name").and_then(Value::as_str) {
-                    // `id` is the call id the matching `tool_result` references.
-                    let id = part.get("id").and_then(Value::as_str).map(str::to_string);
-                    out.push(Activity::tool(
-                        name,
-                        tool_input_detail(part.get("input")),
-                        id,
-                    ));
-                }
-            }
-            Some("tool_result") => {
-                if let Some(snippet) = tool_result_snippet(part) {
-                    // `tool_use_id` points back at the call this answers;
-                    // `is_error` marks a failed tool.
-                    let id = part
-                        .get("tool_use_id")
-                        .and_then(Value::as_str)
-                        .map(str::to_string);
-                    let is_error = part
-                        .get("is_error")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false);
-                    out.push(Activity::tool_result(snippet, id, is_error));
-                }
-            }
-            _ => {}
+/// Detail line for a `tool_execution_start`: prefer the human-readable `intent`
+/// (e.g. "List current directory"), else a summary of the first useful `args`
+/// field (path/command/…).
+fn omp_tool_detail(v: &serde_json::Value) -> Option<String> {
+    if let Some(intent) = v.get("intent").and_then(|i| i.as_str()) {
+        if !intent.trim().is_empty() {
+            return Some(truncate_activity(intent));
         }
     }
-    out
+    tool_input_detail(v.get("args"))
+}
+
+/// First non-empty line of a `tool_execution_end` result
+/// (`result.content[].text`).
+fn omp_tool_result_snippet(v: &serde_json::Value) -> Option<String> {
+    use serde_json::Value;
+    let content = v.get("result")?.get("content")?.as_array()?;
+    let text = content
+        .iter()
+        .filter_map(|c| {
+            if c.get("type").and_then(Value::as_str) == Some("text") {
+                c.get("text").and_then(Value::as_str)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("");
+    let first = text.lines().map(str::trim).find(|l| !l.is_empty())?;
+    Some(truncate_activity(first))
 }
 
 /// A short summary of a tool's input for the activity card — the command, path,
@@ -685,31 +715,6 @@ pub(crate) fn tool_input_detail(input: Option<&serde_json::Value>) -> Option<Str
         return Some(truncate_activity(&input.to_string()));
     }
     None
-}
-
-/// A snippet of a `tool_result` part's output (its first non-empty line). The
-/// `content` may be a plain string or an array of `{type:"text", text}` parts.
-fn tool_result_snippet(part: &serde_json::Value) -> Option<String> {
-    use serde_json::Value;
-    let content = part.get("content")?;
-    let text = if let Some(s) = content.as_str() {
-        s.to_string()
-    } else {
-        content
-            .as_array()?
-            .iter()
-            .filter_map(|c| {
-                if c.get("type").and_then(Value::as_str) == Some("text") {
-                    c.get("text").and_then(Value::as_str)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join("")
-    };
-    let first = text.lines().map(str::trim).find(|l| !l.is_empty())?;
-    Some(truncate_activity(first))
 }
 
 /// Detect a `[[TASK n/N]] <desc>` progress marker (emitted by the implement
@@ -864,54 +869,58 @@ mod tests {
     }
 
     #[test]
-    fn activities_from_line_extracts_text_tools_results_and_skips_noise() {
+    fn activities_from_omp_tool_execution_and_message_events() {
         use harness_dag::ActivityKind;
 
-        // Assistant text → a single Text activity (last non-empty line).
-        let line = "{\"type\":\"message_end\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"first\\n\\nsecond line\"}]}}";
-        let acts = activities_from_line(line);
+        // tool_execution_start → a Tool activity: name + detail + id (for pairing).
+        // The human-readable `intent` is preferred for the detail.
+        let start = r#"{"type":"tool_execution_start","toolCallId":"tool_1","toolName":"read","args":{"path":"src/main.rs"},"intent":"Read the entrypoint"}"#;
+        let acts = activities_from_line(start);
         assert_eq!(acts.len(), 1);
-        assert_eq!(acts[0].kind, ActivityKind::Text);
-        assert_eq!(acts[0].text, "second line");
+        assert_eq!(acts[0].kind, ActivityKind::Tool);
+        assert_eq!(acts[0].text, "read");
+        assert_eq!(acts[0].detail.as_deref(), Some("Read the entrypoint"));
+        assert_eq!(acts[0].tool_id.as_deref(), Some("tool_1"));
 
-        // Text + tool_use → a Text card then a Tool card with input + call id.
-        let mixed = "{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"running it\"},{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"bash\",\"input\":{\"command\":\"cargo test\"}}]}}";
-        let acts = activities_from_line(mixed);
-        assert_eq!(acts.len(), 2);
-        assert_eq!(acts[0], Activity::text("running it"));
-        assert_eq!(acts[1].kind, ActivityKind::Tool);
-        assert_eq!(acts[1].text, "bash");
-        assert_eq!(acts[1].detail.as_deref(), Some("cargo test"));
-        assert_eq!(acts[1].tool_id.as_deref(), Some("toolu_1"));
+        // No `intent` → fall back to a summary of `args` (the path).
+        let no_intent = r#"{"type":"tool_execution_start","toolCallId":"t2","toolName":"read","args":{"path":"."}}"#;
+        assert_eq!(
+            activities_from_line(no_intent)[0].detail.as_deref(),
+            Some(".")
+        );
 
-        // A task-progress marker becomes the Text line (badge still parses).
-        let marked = "{\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"[[TASK 5/13]] wiring the reducer\"},{\"type\":\"tool_use\",\"name\":\"bash\",\"input\":{}}]}}";
-        let acts = activities_from_line(marked);
-        assert_eq!(acts[0], Activity::text("📋 5/13 wiring the reducer"));
-        assert_eq!(acts[1].text, "bash");
-        assert_eq!(acts[1].detail, None); // empty input → no detail
-        assert_eq!(acts[1].tool_id, None); // no id present → unpaired
-
-        // A tool_result (on a user-role message) → a ToolResult snippet (head
-        // line) carrying the id of the call it answers.
-        let result = "{\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_1\",\"content\":[{\"type\":\"text\",\"text\":\"test result: ok\\n2 passed\"}]}]}}";
-        let acts = activities_from_line(result);
+        // tool_execution_end → a ToolResult: first result line + same id (pairs).
+        let end = r#"{"type":"tool_execution_end","toolCallId":"tool_1","toolName":"read","result":{"content":[{"type":"text","text":"fn main() {}\nmore"}]}}"#;
+        let acts = activities_from_line(end);
         assert_eq!(acts.len(), 1);
         assert_eq!(acts[0].kind, ActivityKind::ToolResult);
-        assert_eq!(acts[0].detail.as_deref(), Some("test result: ok"));
-        assert_eq!(acts[0].tool_id.as_deref(), Some("toolu_1"));
+        assert_eq!(acts[0].detail.as_deref(), Some("fn main() {}"));
+        assert_eq!(acts[0].tool_id.as_deref(), Some("tool_1"));
         assert!(!acts[0].is_error);
 
-        // A failed tool_result carries is_error.
-        let errored = "{\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"toolu_2\",\"is_error\":true,\"content\":[{\"type\":\"text\",\"text\":\"command not found\"}]}]}}";
+        // A failed tool surfaces is_error (from either `isError` location).
+        let errored = r#"{"type":"tool_execution_end","toolCallId":"t3","toolName":"bash","isError":true,"result":{"content":[{"type":"text","text":"command not found"}]}}"#;
         let acts = activities_from_line(errored);
-        assert_eq!(acts.len(), 1);
         assert!(acts[0].is_error);
         assert_eq!(acts[0].detail.as_deref(), Some("command not found"));
 
-        // Non-JSON / telemetry / empty → nothing.
+        // A completed assistant message → its text; a task marker wins.
+        let marked = r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"[[TASK 2/5]] wiring it"}]}}"#;
+        assert_eq!(
+            activities_from_line(marked),
+            vec![Activity::text("📋 2/5 wiring it")]
+        );
+        let prose = r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"first\n\nsecond line"}]}}"#;
+        assert_eq!(
+            activities_from_line(prose),
+            vec![Activity::text("second line")]
+        );
+
+        // Noise → nothing (thinking deltas, telemetry, non-JSON, the giant
+        // `message_update` partials we no longer parse for activity).
+        assert!(activities_from_line(r#"{"type":"thinking_delta","delta":"…"}"#).is_empty());
+        assert!(activities_from_line(r#"{"type":"agent_end","telemetry":{}}"#).is_empty());
         assert!(activities_from_line("not json").is_empty());
-        assert!(activities_from_line("{\"type\":\"agent_end\",\"telemetry\":{}}").is_empty());
     }
 
     #[test]
