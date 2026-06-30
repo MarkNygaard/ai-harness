@@ -659,8 +659,9 @@ fn activities_from_line(line: &str) -> Vec<Activity> {
 
 /// A short summary of a tool's input for the activity card — the command, path,
 /// pattern, etc. Prefers a known single-field summary, else compact JSON.
-/// `None` when there's nothing useful to show.
-fn tool_input_detail(input: Option<&serde_json::Value>) -> Option<String> {
+/// `None` when there's nothing useful to show. Shared with the Claude streaming
+/// path ([`crate::code_agent`]).
+pub(crate) fn tool_input_detail(input: Option<&serde_json::Value>) -> Option<String> {
     use serde_json::Value;
     let input = input?;
     for key in [
@@ -735,8 +736,9 @@ fn task_progress_activity(text: &str) -> Option<String> {
 }
 
 /// Trim and cap an activity string to a sensible single-line length, on a char
-/// boundary, appending an ellipsis when truncated.
-fn truncate_activity(s: &str) -> String {
+/// boundary, appending an ellipsis when truncated. Shared with the Claude
+/// streaming path ([`crate::code_agent`]).
+pub(crate) fn truncate_activity(s: &str) -> String {
     const MAX: usize = 120;
     let s = s.trim();
     if s.chars().count() <= MAX {
