@@ -120,21 +120,32 @@ impl LinearClaimStore {
         Ok(rows)
     }
 
-    /// How many times this issue has been claimed **for `workflow`** (one row per
-    /// attempt) — the retry counter the poller uses to stop a perpetually-failing
-    /// issue from looping back into a binding's source column forever.
+    /// How many **failed/cancelled** attempts this issue has had **for
+    /// `workflow`** — the retry counter the poller compares against the binding's
+    /// attempt budget to stop a perpetually-failing issue from looping back into
+    /// the source column forever.
+    ///
+    /// Counts only claims whose linked run ended `failed` or `cancelled` (joined
+    /// via `run_id`): a **successful** run does not consume the budget, so an
+    /// issue that completes once can be picked up again for a legitimately new
+    /// round (e.g. `revise-pr` when a reviewer requests changes a second time).
+    /// In-flight runs (still `running`) and runs whose row is gone don't count.
     ///
     /// Scoped per `(issue, workflow)`, not per issue: the cap guards a *single*
     /// binding from looping, but must not exhaust an issue that legitimately
     /// flows through several bindings across pipeline stages (e.g. `idea-to-pr`
     /// claims it in `Todo`, then `merge-pr` claims it in `Ready for merge`).
-    pub async fn attempts_for_issue(
+    pub async fn failed_attempts_for_issue(
         &self,
         issue_id: &str,
         workflow: &str,
     ) -> Result<i64, PersistError> {
         let row: (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM harness_linear_claims WHERE issue_id = $1 AND workflow = $2",
+            "SELECT count(*)
+             FROM harness_linear_claims c
+             JOIN harness_workflow_runs r ON r.id = c.run_id
+             WHERE c.issue_id = $1 AND c.workflow = $2
+               AND r.status IN ('failed', 'cancelled')",
         )
         .bind(issue_id)
         .bind(workflow)
@@ -191,42 +202,69 @@ mod tests {
         crate::is_test_db(&url).then_some(url)
     }
 
-    /// The retry cap is per `(issue, workflow)`: claims for one binding's
-    /// workflow must not count against another's, so an issue can flow
-    /// `idea-to-pr → merge-pr` without an earlier binding exhausting it.
+    /// Insert a run row with a terminal `status` so a claim's
+    /// `failed_attempts_for_issue` JOIN can see whether its run failed.
+    async fn put_run(pool: &PgPool, run_id: &str, status: &str) {
+        sqlx::query(
+            "INSERT INTO harness_workflow_runs (id, workflow_name, status)
+             VALUES ($1, 'wf', $2)
+             ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status",
+        )
+        .bind(run_id)
+        .bind(status)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// The retry counter counts only **failed/cancelled** attempts (a success
+    /// doesn't burn the budget) and is scoped per `(issue, workflow)` so claims
+    /// for one binding's workflow don't count against another's — an issue can
+    /// flow `idea-to-pr → merge-pr` without an earlier binding exhausting it.
     #[tokio::test]
     #[serial_test::serial]
-    async fn attempts_are_scoped_per_workflow() {
+    async fn failed_attempts_scoped_per_workflow_and_exclude_success() {
         let Some(url) = db_url() else {
             eprintln!("skipping: HARNESS_DATABASE_URL not set");
             return;
         };
+        // Ensure the runs table exists for the JOIN.
+        crate::RunStore::connect(&url).await.expect("runs schema");
         let store = LinearClaimStore::connect(&url).await.expect("connect");
-        let issue = format!(
-            "issue-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        );
-
-        // Two idea-to-pr claims for this issue (e.g. one retry).
-        store
-            .record("run-a", "proj", "idea-to-pr", &issue, "PROJ-1", "todo")
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
             .await
-            .unwrap();
-        store
-            .record("run-b", "proj", "idea-to-pr", &issue, "PROJ-1", "todo")
-            .await
-            .unwrap();
+            .expect("pool");
+        let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let issue = format!("issue-{ts}");
+        let rid = |s: &str| format!("{s}-{ts}");
 
-        // idea-to-pr sees both; a different binding's workflow sees zero.
+        // Two failed/cancelled idea-to-pr attempts and one success for the issue.
+        put_run(&pool, &rid("f1"), "failed").await;
+        put_run(&pool, &rid("f2"), "cancelled").await;
+        put_run(&pool, &rid("ok"), "completed").await;
+        for run in [rid("f1"), rid("f2"), rid("ok")] {
+            store
+                .record(&run, "proj", "idea-to-pr", &issue, "PROJ-1", "todo")
+                .await
+                .unwrap();
+        }
+
+        // Only the failed/cancelled runs count; the success does NOT consume the
+        // budget. A different binding's workflow sees zero (scoping).
         assert_eq!(
             store
-                .attempts_for_issue(&issue, "idea-to-pr")
+                .failed_attempts_for_issue(&issue, "idea-to-pr")
                 .await
                 .unwrap(),
             2
         );
         assert_eq!(
-            store.attempts_for_issue(&issue, "merge-pr").await.unwrap(),
+            store
+                .failed_attempts_for_issue(&issue, "merge-pr")
+                .await
+                .unwrap(),
             0
         );
     }
@@ -274,30 +312,44 @@ mod tests {
             eprintln!("skipping: HARNESS_DATABASE_URL not set");
             return;
         };
+        crate::RunStore::connect(&url).await.expect("runs schema");
         let store = LinearClaimStore::connect(&url).await.expect("connect");
-        let issue = format!(
-            "issue-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        );
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("pool");
+        let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let issue = format!("issue-{ts}");
+        let (rr1, rr2) = (format!("rr-1-{ts}"), format!("rr-2-{ts}"));
+        // Both runs failed, so both count toward the budget.
+        put_run(&pool, &rr1, "failed").await;
+        put_run(&pool, &rr2, "failed").await;
         store
-            .record("rr-1", "proj", "wf", &issue, "P-1", "todo")
+            .record(&rr1, "proj", "wf", &issue, "P-1", "todo")
             .await
             .unwrap();
         store
-            .record("rr-2", "proj", "wf", &issue, "P-1", "todo")
+            .record(&rr2, "proj", "wf", &issue, "P-1", "todo")
             .await
             .unwrap();
 
         // claim_for_run returns the linked claim; unknown run → None.
-        let c = store.claim_for_run("rr-1").await.unwrap().expect("claim");
+        let c = store.claim_for_run(&rr1).await.unwrap().expect("claim");
         assert_eq!(c.issue_id, issue);
         assert_eq!(c.original_state_id, "todo");
         assert!(store.claim_for_run("no-such-run").await.unwrap().is_none());
 
-        // clear_claims removes both rows → the counter resets to 0.
-        assert_eq!(store.attempts_for_issue(&issue, "wf").await.unwrap(), 2);
+        // clear_claims removes both rows → the failed-attempt counter resets to 0.
+        assert_eq!(
+            store.failed_attempts_for_issue(&issue, "wf").await.unwrap(),
+            2
+        );
         assert!(store.clear_claims(&issue, "wf").await.unwrap() >= 2);
-        assert_eq!(store.attempts_for_issue(&issue, "wf").await.unwrap(), 0);
-        assert!(store.claim_for_run("rr-1").await.unwrap().is_none());
+        assert_eq!(
+            store.failed_attempts_for_issue(&issue, "wf").await.unwrap(),
+            0
+        );
+        assert!(store.claim_for_run(&rr1).await.unwrap().is_none());
     }
 }
