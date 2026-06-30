@@ -284,7 +284,10 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
     };
     let mut chosen = None;
     for issue in issues {
-        match claim_store.attempts_for_issue(&issue.id, &b.workflow).await {
+        match claim_store
+            .failed_attempts_for_issue(&issue.id, &b.workflow)
+            .await
+        {
             Ok(n) if n >= cap => {
                 tracing::debug!(
                     "linear poller: {}/{} — skipping {} (hit retry cap {})",
@@ -516,10 +519,11 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                     .as_ref()
                     .map(|b| b.max_attempts.max(1) as i64)
                     .unwrap_or(1);
-                // How many times this issue has been attempted for this workflow
-                // (incl. this run).
+                // How many failed/cancelled attempts this issue has had for this
+                // workflow (incl. this run, whose row already carries its
+                // terminal status). Successful prior runs don't count.
                 let attempts = claim_store
-                    .attempts_for_issue(&c.issue_id, &c.workflow)
+                    .failed_attempts_for_issue(&c.issue_id, &c.workflow)
                     .await
                     .unwrap_or(max_attempts);
                 if attempts >= max_attempts {
