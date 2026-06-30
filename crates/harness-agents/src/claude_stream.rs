@@ -120,6 +120,52 @@ fn apply_claude_stream_line(
         )
         | None => {}
     }
+
+    // Claude Code's `stream-json` nests tool calls inside `assistant` message
+    // content (`{"type":"assistant","message":{"content":[{"type":"tool_use",…}]}}`).
+    // The event parse above only extracts *text* from those lines, so the tool
+    // calls would never surface in the live activity feed. Pull each `tool_use`
+    // out here as a ToolCall item (the runner maps these to activity cards).
+    for item in claude_tool_use_items(line) {
+        emitted_items.push(StreamItem::ItemCompleted { item });
+    }
+}
+
+/// Extract each `tool_use` block from a Claude Code `assistant` stream line as an
+/// [`Item::ToolCall`] (name + input). Empty for non-assistant lines, non-JSON,
+/// or messages with no tool calls.
+fn claude_tool_use_items(line: &str) -> Vec<Item> {
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
+        return Vec::new();
+    };
+    if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+        return Vec::new();
+    }
+    let Some(content) = v
+        .get("message")
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_array())
+    else {
+        return Vec::new();
+    };
+    content
+        .iter()
+        .filter_map(|block| {
+            if block.get("type").and_then(|t| t.as_str()) != Some("tool_use") {
+                return None;
+            }
+            let name = block.get("name").and_then(|n| n.as_str())?.to_string();
+            let input = block
+                .get("input")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            Some(Item::ToolCall {
+                name,
+                input,
+                output: None,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn parse_claude_stream_output(stdout: &str) -> ParsedClaudeStreamOutput {
@@ -228,4 +274,55 @@ pub(crate) async fn stream_claude_code_output(
     }
 
     Ok(parsed)
+}
+
+#[cfg(test)]
+mod tool_use_tests {
+    use super::*;
+
+    #[test]
+    fn surfaces_nested_tool_use_from_assistant_line() {
+        // Real Claude Code stream-json nests tool_use inside an assistant message.
+        let line = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Reading the file"},{"type":"tool_use","id":"toolu_1","name":"Read","input":{"file_path":"src/main.rs"}}]}}"#;
+        let mut parsed = ParsedClaudeStreamOutput::default();
+        let mut emitted = Vec::new();
+        apply_claude_stream_line(line, &mut parsed, &mut emitted);
+
+        // The assistant text becomes a MessageDelta; the tool_use becomes a
+        // ToolCall item (which the runner maps to a live activity card).
+        let tool = emitted.iter().find_map(|it| match it {
+            StreamItem::ItemCompleted {
+                item: Item::ToolCall { name, input, .. },
+            } => Some((name.clone(), input.clone())),
+            _ => None,
+        });
+        let (name, input) = tool.expect("a ToolCall item was emitted");
+        assert_eq!(name, "Read");
+        assert_eq!(
+            input.get("file_path").and_then(|v| v.as_str()),
+            Some("src/main.rs")
+        );
+    }
+
+    #[test]
+    fn tool_only_assistant_line_still_emits_toolcall() {
+        // No text block → parse_stream_json_line returns None, but the tool call
+        // must still surface.
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}"#;
+        let mut parsed = ParsedClaudeStreamOutput::default();
+        let mut emitted = Vec::new();
+        apply_claude_stream_line(line, &mut parsed, &mut emitted);
+        assert!(emitted.iter().any(|it| matches!(
+            it,
+            StreamItem::ItemCompleted {
+                item: Item::ToolCall { .. }
+            }
+        )));
+    }
+
+    #[test]
+    fn text_only_assistant_line_has_no_tool_items() {
+        let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"just thinking"}]}}"#;
+        assert!(claude_tool_use_items(line).is_empty());
+    }
 }
