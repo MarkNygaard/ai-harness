@@ -18,10 +18,62 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use harness_agents::registry::AgentRegistry;
-use harness_core::agent::AgentRequest;
-use harness_dag::Usage;
+use harness_core::agent::{AgentRequest, StreamItem};
+use harness_core::types::{Item, TokenUsage};
+use harness_dag::{Activity, Usage};
 
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
+
+/// Map a [`CodeAgent`] token tally to the DAG's [`Usage`]. Claude reports most
+/// of its prompt as `cache_read`, so surface the cache breakdown (matching the
+/// omp path); `None` preserves the "unknown" vs "zero" distinction.
+fn map_usage(u: &TokenUsage) -> Usage {
+    Usage {
+        input: Some(u.input_tokens),
+        output: Some(u.output_tokens),
+        cache_read: (u.cache_read_tokens > 0).then_some(u.cache_read_tokens),
+        cache_write: (u.cache_creation_tokens > 0).then_some(u.cache_creation_tokens),
+    }
+}
+
+/// Map a streamed [`Item`] to a live [`Activity`] for the progress feed —
+/// surfacing what the agent is *doing* (tool calls, edits, reads). Returns
+/// `None` for items that aren't activity (assistant text is the output, not
+/// progress; user messages are echoes). Claude's `Item`s carry no tool-call id,
+/// so `tool_id` is `None` (the UI shows the cards unpaired).
+fn activity_from_item(item: &Item) -> Option<Activity> {
+    match item {
+        Item::ToolCall { name, input, .. } => Some(Activity::tool(
+            name.clone(),
+            crate::pi::tool_input_detail(Some(input)),
+            None,
+        )),
+        Item::ShellCommand { command, .. } => Some(Activity::tool(
+            "shell",
+            Some(crate::pi::truncate_activity(command)),
+            None,
+        )),
+        Item::FileEdit { path, .. } => Some(Activity::tool(
+            "edit",
+            Some(crate::pi::truncate_activity(&path.display().to_string())),
+            None,
+        )),
+        Item::FileRead { path, .. } => Some(Activity::tool(
+            "read",
+            Some(crate::pi::truncate_activity(&path.display().to_string())),
+            None,
+        )),
+        Item::ApprovalRequest { action, .. } => Some(Activity::text(format!("approval: {action}"))),
+        Item::Error { message, .. } => Some(Activity::tool_result(
+            crate::pi::truncate_activity(message),
+            None,
+            true,
+        )),
+        // Assistant text is the node's output (shown in the Output panel), not a
+        // progress line; user messages are prompt echoes.
+        Item::AgentReasoning { .. } | Item::UserMessage { .. } => None,
+    }
+}
 
 /// A [`PromptAgent`] that dispatches to registered [`CodeAgent`]s by provider.
 pub struct CodeAgentRunner {
@@ -78,6 +130,9 @@ impl PromptAgent for CodeAgentRunner {
             None
         };
 
+        // Take the progress sink before req fields are moved into the request.
+        let progress = req.progress.take();
+
         let agent_req = AgentRequest {
             prompt: req.prompt,
             project_root: req.cwd,
@@ -86,6 +141,54 @@ impl PromptAgent for CodeAgentRunner {
             env_vars: req.env_vars,
             ..AgentRequest::default()
         };
+
+        // Streaming path: when the run is live (a progress sink is present),
+        // stream the agent so its tool calls / edits surface as live activity —
+        // exactly like the omp path. The final output and token usage are
+        // recovered from the stream: the last `AgentReasoning` item carries the
+        // assembled output (the agent replaces the accumulated deltas with the
+        // canonical text on completion), and the `TokenUsage` item the totals.
+        // `_hooks_dir` (above) stays alive across this await.
+        if let Some(sink) = progress {
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<StreamItem>(256);
+            let drain = async {
+                let mut final_output: Option<String> = None;
+                let mut delta_acc = String::new();
+                let mut usage: Option<TokenUsage> = None;
+                while let Some(item) = rx.recv().await {
+                    match item {
+                        StreamItem::ItemCompleted { item } => match item {
+                            Item::AgentReasoning { content } => final_output = Some(content),
+                            other => {
+                                if let Some(act) = activity_from_item(&other) {
+                                    sink.report(act);
+                                }
+                            }
+                        },
+                        StreamItem::MessageDelta { text } => delta_acc.push_str(&text),
+                        StreamItem::TokenUsage { usage: u } => usage = Some(u),
+                        StreamItem::Error { message } => {
+                            sink.report(Activity::text(format!("⚠ {message}")))
+                        }
+                        _ => {}
+                    }
+                }
+                (final_output.unwrap_or(delta_acc), usage)
+            };
+            // Run the agent and the drain concurrently on this task; when
+            // `execute_stream` returns, `tx` drops, ending the drain loop.
+            let (stream_res, (output, usage)) =
+                tokio::join!(agent.execute_stream(agent_req, tx), drain);
+            stream_res.map_err(|e| AgentError(e.to_string()))?;
+            return Ok(PromptResult {
+                text: output,
+                session: None,
+                usage: usage.as_ref().map(map_usage).unwrap_or_default(),
+                // `execute_stream` returns `Err` on a non-zero CLI exit, so
+                // reaching here means the run succeeded.
+                success: true,
+            });
+        }
 
         let resp = agent
             .execute(agent_req)
@@ -96,18 +199,7 @@ impl PromptAgent for CodeAgentRunner {
             text: resp.output,
             // See the module-level note: no session resume through CodeAgent.
             session: None,
-            usage: Usage {
-                input: Some(resp.token_usage.input_tokens),
-                output: Some(resp.token_usage.output_tokens),
-                // Surface the cache breakdown (Claude reports most of its prompt
-                // as cache_read) so usage/cost match the omp path instead of
-                // showing only the tiny uncached input. `None` when there's no
-                // cache data, preserving the "unknown" vs "zero" distinction.
-                cache_read: (resp.token_usage.cache_read_tokens > 0)
-                    .then_some(resp.token_usage.cache_read_tokens),
-                cache_write: (resp.token_usage.cache_creation_tokens > 0)
-                    .then_some(resp.token_usage.cache_creation_tokens),
-            },
+            usage: map_usage(&resp.token_usage),
             // Treat a missing exit code (API adapter) as success; a non-zero
             // CLI exit is a failure.
             success: resp.exit_code.map(|c| c == 0).unwrap_or(true),
@@ -299,6 +391,110 @@ mod tests {
         assert!(out.success);
         // StubAgent doesn't record env, but the test succeeding with no error
         // confirms no settings file was materialized.
+    }
+
+    /// A CodeAgent that streams a representative item sequence: a partial text
+    /// delta, a tool call, the final assembled reasoning, and token usage.
+    struct StreamingStubAgent;
+
+    #[async_trait]
+    impl CodeAgent for StreamingStubAgent {
+        fn name(&self) -> &str {
+            "claude"
+        }
+        fn capabilities(&self) -> Vec<Capability> {
+            vec![]
+        }
+        async fn execute(&self, _req: AgentRequest) -> harness_core::error::Result<AgentResponse> {
+            // The streaming path must NOT call this; a marker output makes an
+            // accidental fallthrough fail the assertion loudly.
+            Ok(AgentResponse {
+                output: "BUFFERED-PATH-WRONGLY-TAKEN".into(),
+                stderr: String::new(),
+                items: vec![],
+                token_usage: TokenUsage::default(),
+                model: "claude".into(),
+                exit_code: Some(0),
+            })
+        }
+        async fn execute_stream(
+            &self,
+            _req: AgentRequest,
+            tx: tokio::sync::mpsc::Sender<StreamItem>,
+        ) -> harness_core::error::Result<()> {
+            use harness_core::types::Item;
+            let _ = tx
+                .send(StreamItem::MessageDelta {
+                    text: "partial ".into(),
+                })
+                .await;
+            let _ = tx
+                .send(StreamItem::ItemCompleted {
+                    item: Item::ToolCall {
+                        name: "bash".into(),
+                        input: serde_json::json!({ "command": "cargo test" }),
+                        output: None,
+                    },
+                })
+                .await;
+            let _ = tx
+                .send(StreamItem::ItemCompleted {
+                    item: Item::AgentReasoning {
+                        content: "final answer".into(),
+                    },
+                })
+                .await;
+            let _ = tx
+                .send(StreamItem::TokenUsage {
+                    usage: TokenUsage {
+                        input_tokens: 100,
+                        output_tokens: 20,
+                        total_tokens: 120,
+                        cache_read_tokens: 80,
+                        cache_creation_tokens: 5,
+                        cost_usd: 0.0,
+                    },
+                })
+                .await;
+            let _ = tx.send(StreamItem::Done).await;
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_path_reports_activity_and_recovers_output_and_usage() {
+        use harness_dag::{ActivityKind, ProgressSink};
+        use std::sync::Mutex;
+
+        let mut reg = AgentRegistry::new("claude");
+        reg.register("claude", Arc::new(StreamingStubAgent));
+        let runner = CodeAgentRunner::new(Arc::new(reg));
+
+        let recorded: Arc<Mutex<Vec<Activity>>> = Arc::new(Mutex::new(Vec::new()));
+        let rec = recorded.clone();
+        let mut req = request(Some("claude"));
+        req.progress = Some(ProgressSink(Arc::new(move |a| {
+            rec.lock().unwrap().push(a);
+        })));
+
+        let out = runner.run(req).await.unwrap();
+
+        // Output is the final AgentReasoning content (not the partial delta), and
+        // usage is recovered from the TokenUsage item with the cache breakdown.
+        assert_eq!(out.text, "final answer");
+        assert!(out.success);
+        assert_eq!(out.usage.input, Some(100));
+        assert_eq!(out.usage.output, Some(20));
+        assert_eq!(out.usage.cache_read, Some(80));
+        assert_eq!(out.usage.cache_write, Some(5));
+        assert_eq!(out.session, None);
+
+        // The tool call surfaced as a live activity; the final reasoning did not.
+        let acts = recorded.lock().unwrap();
+        assert_eq!(acts.len(), 1, "only the tool call is an activity");
+        assert_eq!(acts[0].kind, ActivityKind::Tool);
+        assert_eq!(acts[0].text, "bash");
+        assert_eq!(acts[0].detail.as_deref(), Some("cargo test"));
     }
 
     #[tokio::test]
