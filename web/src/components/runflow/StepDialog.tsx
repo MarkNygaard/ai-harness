@@ -8,7 +8,7 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Markdown } from "@/components/Markdown";
-import type { NodeView } from "@/types/run";
+import type { Activity, NodeView } from "@/types/run";
 import {
   elapsedMs,
   formatDuration,
@@ -143,16 +143,28 @@ export function StepDialog({
 }
 
 /**
- * Live feed of the agent's sampled activity lines while a step runs. Sampled
- * and not persisted, so it shows current progress rather than a full transcript
- * (the real result lands in Output when the step finishes). Auto-scrolls to the
- * newest line as the agent works.
+ * Live feed of the agent's activity while a step runs, rendered as typed cards
+ * (tool calls, their results, and assistant text) rather than a flat log. Shows
+ * current progress, not a full transcript — the real result lands in Output
+ * when the step finishes. Auto-scrolls to the newest line as the agent works.
  */
-function ActivityFeed({ lines }: { lines: string[] }) {
+function ActivityFeed({ lines }: { lines: Activity[] }) {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: "end" });
   }, [lines]);
+
+  // Pair tool calls with their results by tool_id: the call card shows its
+  // result inline (+ elapsed time), and a result that has a matching call isn't
+  // repeated as its own line. Orphan results (no matching call) still show.
+  const resultById = new Map<string, Activity>();
+  const callIds = new Set<string>();
+  for (const l of lines) {
+    if (l.tool_id == null) continue;
+    if (l.kind === "tool_result") resultById.set(l.tool_id, l);
+    else if (l.kind === "tool") callIds.add(l.tool_id);
+  }
+
   return (
     <div className="pt-3">
       <div className="mb-1 flex items-center gap-2 text-xs font-medium text-muted-foreground">
@@ -160,17 +172,92 @@ function ActivityFeed({ lines }: { lines: string[] }) {
         Activity
       </div>
       <div className="max-h-48 overflow-auto rounded-md bg-muted p-3">
-        <ul className="flex flex-col gap-0.5 font-mono text-[11px] leading-relaxed text-muted-foreground">
-          {lines.map((line, i) => (
-            <li key={i} className="break-words">
-              {line}
-            </li>
-          ))}
+        <ul className="flex flex-col gap-1 text-[11px] leading-relaxed">
+          {lines.map((line, i) => {
+            if (
+              line.kind === "tool_result" &&
+              line.tool_id != null &&
+              callIds.has(line.tool_id)
+            ) {
+              return null; // shown inline with its call
+            }
+            const result =
+              line.kind === "tool" && line.tool_id != null
+                ? resultById.get(line.tool_id)
+                : undefined;
+            return <ActivityRow key={i} line={line} result={result} />;
+          })}
         </ul>
         <div ref={endRef} />
       </div>
     </div>
   );
+}
+
+/** Elapsed label between a tool call and its result, or "" when not timeable. */
+function pairDuration(call: Activity, result: Activity): string {
+  if (!call.ts || !result.ts) return "";
+  const ms = Date.parse(result.ts) - Date.parse(call.ts);
+  return ms >= 0 ? ` ${formatDuration(ms)}` : "";
+}
+
+/**
+ * One activity line, styled by kind. A `tool` call shows its name + input and,
+ * when `result` is paired in, a ✓ + elapsed time and the result snippet below.
+ */
+function ActivityRow({ line, result }: { line: Activity; result?: Activity }) {
+  if (line.kind === "tool") {
+    return (
+      <li className="font-mono text-muted-foreground">
+        <div className="flex items-start gap-1.5 break-all">
+          <span aria-hidden>🔧</span>
+          <span className="break-words">
+            <span className="font-medium text-foreground">{line.text}</span>
+            {line.detail ? <span> {line.detail}</span> : null}
+          </span>
+          {result ? (
+            <span
+              className={`ml-auto whitespace-nowrap pl-2 ${
+                result.is_error
+                  ? "text-red-600 dark:text-red-400"
+                  : "text-emerald-600 dark:text-emerald-400"
+              }`}
+            >
+              {result.is_error ? "✗" : "✓"}
+              {pairDuration(line, result)}
+            </span>
+          ) : null}
+        </div>
+        {result?.detail ? (
+          <div
+            className={`flex items-start gap-1.5 break-all pl-[1.1rem] ${
+              result.is_error
+                ? "text-red-600/90 dark:text-red-400/90"
+                : "text-muted-foreground/80"
+            }`}
+          >
+            <span aria-hidden>↳</span>
+            <span className="break-words">{result.detail}</span>
+          </div>
+        ) : null}
+      </li>
+    );
+  }
+  if (line.kind === "tool_result") {
+    return (
+      <li
+        className={`flex items-start gap-1.5 break-all font-mono ${
+          line.is_error
+            ? "text-red-600/90 dark:text-red-400/90"
+            : "text-muted-foreground/80"
+        }`}
+      >
+        <span aria-hidden>{line.is_error ? "✗" : "↳"}</span>
+        <span className="break-words">{line.detail}</span>
+      </li>
+    );
+  }
+  return <li className="break-words text-muted-foreground">{line.text}</li>;
 }
 
 function Meta({ label, value }: { label: string; value: string }) {

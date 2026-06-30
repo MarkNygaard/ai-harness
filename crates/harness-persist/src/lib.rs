@@ -120,6 +120,26 @@ pub struct PersistedNode {
     pub artifact_content: Option<String>,
 }
 
+/// One persisted activity line (matches `harness_run_activity`). `id` is the
+/// cursor the UI pages through to fetch only lines newer than what it has.
+/// `kind` is one of `text` / `tool` / `tool_result`; `detail` carries a tool's
+/// input summary or a result snippet (`None` for plain text).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ActivityEvent {
+    pub id: i64,
+    pub node_id: String,
+    pub kind: String,
+    /// The primary line (assistant text, or a tool name). Selected as `text`
+    /// from the `activity` column so the JSON matches the live `Activity` shape.
+    pub text: String,
+    pub detail: Option<String>,
+    /// Tool-call correlation id (pairs a `tool` with its `tool_result`).
+    pub tool_id: Option<String>,
+    /// Whether a `tool_result` reported failure (✗ vs ✓ in the UI).
+    pub is_error: bool,
+    pub created_at: DateTime<Utc>,
+}
+
 /// A run plus its node rows, for the run-detail endpoint.
 #[derive(Debug, Clone, Serialize)]
 pub struct RunDetail {
@@ -197,6 +217,37 @@ CREATE TABLE IF NOT EXISTS harness_ab_pair_judge (
     created_at   timestamptz NOT NULL DEFAULT now()
 )";
 
+/// Per-node live "activity" lines (the throttled progress overlay an agent
+/// emits as it works). Unlike `harness_run_nodes` this is an append-only log —
+/// one row per emitted line — so a late-connecting, refreshed, or cross-process
+/// viewer can replay what happened instead of depending on a perfectly-timed
+/// live SSE subscription (which 404s the moment it's missed). `id` is a
+/// monotonic per-table cursor the UI pages through (`activity_since`). Rows
+/// cascade-delete with their run.
+const CREATE_ACTIVITY: &str = "
+CREATE TABLE IF NOT EXISTS harness_run_activity (
+    id          bigserial PRIMARY KEY,
+    run_id      text NOT NULL REFERENCES harness_workflow_runs(id) ON DELETE CASCADE,
+    node_id     text NOT NULL,
+    kind        text NOT NULL DEFAULT 'text',
+    activity    text NOT NULL,
+    detail      text,
+    tool_id     text,
+    is_error    boolean NOT NULL DEFAULT false,
+    created_at  timestamptz NOT NULL DEFAULT now()
+)";
+const INDEX_ACTIVITY_RUN_ID: &str =
+    "CREATE INDEX IF NOT EXISTS idx_harness_run_activity_run_id ON harness_run_activity(run_id, id)";
+/// Bring a Phase-1 activity table (text-only) up to the typed schema. Idempotent.
+const ALTER_ACTIVITY_KIND: &str =
+    "ALTER TABLE harness_run_activity ADD COLUMN IF NOT EXISTS kind text NOT NULL DEFAULT 'text'";
+const ALTER_ACTIVITY_DETAIL: &str =
+    "ALTER TABLE harness_run_activity ADD COLUMN IF NOT EXISTS detail text";
+const ALTER_ACTIVITY_TOOL_ID: &str =
+    "ALTER TABLE harness_run_activity ADD COLUMN IF NOT EXISTS tool_id text";
+const ALTER_ACTIVITY_IS_ERROR: &str =
+    "ALTER TABLE harness_run_activity ADD COLUMN IF NOT EXISTS is_error boolean NOT NULL DEFAULT false";
+
 const CREATE_NODES: &str = "
 CREATE TABLE IF NOT EXISTS harness_run_nodes (
     run_id        text NOT NULL REFERENCES harness_workflow_runs(id) ON DELETE CASCADE,
@@ -259,6 +310,20 @@ impl RunStore {
         sqlx::query(ALTER_RUNS_AB_LABEL).execute(&self.pool).await?;
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
         sqlx::query(ALTER_NODES_ARTIFACT)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(CREATE_ACTIVITY).execute(&self.pool).await?;
+        sqlx::query(ALTER_ACTIVITY_KIND).execute(&self.pool).await?;
+        sqlx::query(ALTER_ACTIVITY_DETAIL)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(ALTER_ACTIVITY_TOOL_ID)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(ALTER_ACTIVITY_IS_ERROR)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(INDEX_ACTIVITY_RUN_ID)
             .execute(&self.pool)
             .await?;
         sqlx::query(INDEX_RUNS_AB_PAIR).execute(&self.pool).await?;
@@ -491,6 +556,58 @@ impl RunStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Append one live activity for a node (the durable backing for the progress
+    /// feed): its `kind` (text / tool / tool_result), primary line, and optional
+    /// detail. Best-effort and append-only: a dropped write just loses one line.
+    /// Skips persisting if the run row is gone (the FK would reject it) — e.g. a
+    /// late event after a delete.
+    pub async fn record_activity(
+        &self,
+        run_id: &str,
+        node_id: &str,
+        activity: &harness_dag::Activity,
+    ) -> Result<(), PersistError> {
+        sqlx::query(
+            "INSERT INTO harness_run_activity (run_id, node_id, kind, activity, detail, tool_id, is_error)
+             SELECT $1, $2, $3, $4, $5, $6, $7
+             WHERE EXISTS (SELECT 1 FROM harness_workflow_runs WHERE id = $1)",
+        )
+        .bind(run_id)
+        .bind(node_id)
+        .bind(activity_kind_str(&activity.kind))
+        .bind(&activity.text)
+        .bind(activity.detail.as_deref())
+        .bind(activity.tool_id.as_deref())
+        .bind(activity.is_error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Activity lines for a run with `id > after`, oldest first, capped at
+    /// `limit`. The UI polls this with the highest `id` it has seen as `after`
+    /// (`0` for the first fetch) so each poll returns only what's new.
+    pub async fn activity_since(
+        &self,
+        run_id: &str,
+        after: i64,
+        limit: i64,
+    ) -> Result<Vec<ActivityEvent>, PersistError> {
+        let rows = sqlx::query_as::<_, ActivityEvent>(
+            "SELECT id, node_id, kind, activity AS text, detail, tool_id, is_error, created_at
+             FROM harness_run_activity
+             WHERE run_id = $1 AND id > $2
+             ORDER BY id ASC
+             LIMIT $3",
+        )
+        .bind(run_id)
+        .bind(after)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
     }
 
     /// Mark a run's terminal status (run finished). Only updates a run that is
@@ -838,6 +955,14 @@ fn run_status_str(s: RunStatus) -> &'static str {
         RunStatus::Completed => "completed",
         RunStatus::Failed => "failed",
         RunStatus::Cancelled => "cancelled",
+    }
+}
+
+fn activity_kind_str(k: &harness_dag::ActivityKind) -> &'static str {
+    match k {
+        harness_dag::ActivityKind::Text => "text",
+        harness_dag::ActivityKind::Tool => "tool",
+        harness_dag::ActivityKind::ToolResult => "tool_result",
     }
 }
 
@@ -1236,6 +1361,86 @@ mod tests {
             store.run_status(&run_id).await.unwrap().as_deref(),
             Some("completed")
         );
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn activity_log_appends_and_pages_by_cursor() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let run_id = format!(
+            "test-activity-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        let report = sample_report();
+        store
+            .start_run(
+                &run_id,
+                &report.workflow,
+                None,
+                None,
+                None,
+                2,
+                &report.graph,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // Append a typed feed for the "build" node: a tool call, its result
+        // (same tool_id, for pairing), then text.
+        let acts = [
+            harness_dag::Activity::tool("bash", Some("cargo test".into()), Some("toolu_1".into())),
+            harness_dag::Activity::tool_result("test result: ok", Some("toolu_1".into()), false),
+            harness_dag::Activity::text("📋 1/3 first task"),
+        ];
+        for a in &acts {
+            store.record_activity(&run_id, "build", a).await.unwrap();
+        }
+
+        // First fetch (after=0) returns all three, oldest first, with kind/detail/tool_id.
+        let all = store.activity_since(&run_id, 0, 100).await.unwrap();
+        assert_eq!(all.len(), 3);
+        assert_eq!(all[0].kind, "tool");
+        assert_eq!(all[0].text, "bash");
+        assert_eq!(all[0].detail.as_deref(), Some("cargo test"));
+        assert_eq!(all[0].tool_id.as_deref(), Some("toolu_1"));
+        assert_eq!(all[1].kind, "tool_result");
+        assert_eq!(all[1].detail.as_deref(), Some("test result: ok"));
+        assert_eq!(all[1].tool_id.as_deref(), Some("toolu_1")); // pairs with the call
+        assert!(!all[1].is_error);
+        assert_eq!(all[2].kind, "text");
+        assert_eq!(all[2].text, "📋 1/3 first task");
+        assert!(all[0].id < all[1].id && all[1].id < all[2].id, "ids ascend");
+
+        // Paging by cursor returns only newer lines.
+        let after = all[1].id;
+        let tail = store.activity_since(&run_id, after, 100).await.unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].text, "📋 1/3 first task");
+
+        // A write for an unknown run is a no-op (FK guard), not an error.
+        store
+            .record_activity("no-such-run", "n", &harness_dag::Activity::text("x"))
+            .await
+            .unwrap();
+        assert!(store
+            .activity_since("no-such-run", 0, 100)
+            .await
+            .unwrap()
+            .is_empty());
+
+        // Deleting the run cascades its activity away.
+        store.delete_run(&run_id).await.unwrap();
+        assert!(store
+            .activity_since(&run_id, 0, 100)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

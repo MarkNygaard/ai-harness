@@ -10,12 +10,7 @@
  * persisted. Neither live state is ever stored.
  */
 export type NodeStatus =
-  | "pending"
-  | "running"
-  | "success"
-  | "failed"
-  | "skipped"
-  | "cancelled";
+  "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
 /** Terminal run status (+ derived live "running"). */
 export type RunStatus = "running" | "completed" | "failed" | "cancelled";
 
@@ -125,8 +120,53 @@ export type RunEvent =
       model: string | null;
     }
   | { type: "node_finished"; node: NodeRun }
-  | { type: "node_progress"; node_id: string; activity: string }
+  | { type: "node_progress"; node_id: string; activity: Activity }
   | { type: "run_finished"; status: RunStatus };
+
+/**
+ * What kind of live activity a line is (matches `harness_dag::ActivityKind`),
+ * so the UI renders it as a distinct card:
+ * - `text` — assistant prose or a `📋`/`🔁` progress marker;
+ * - `tool` — a tool call (`text` = tool name, `detail` = input summary);
+ * - `tool_result` — a tool's output (`detail` = a snippet).
+ */
+export type ActivityKind = "text" | "tool" | "tool_result";
+
+/** One live activity (matches `harness_dag::Activity`). */
+export interface Activity {
+  kind: ActivityKind;
+  /** Primary line: assistant text, or a tool name for `tool`. */
+  text: string;
+  /** Secondary detail: tool input summary or result snippet; absent for text. */
+  detail?: string | null;
+  /** Tool-call correlation id: pairs a `tool` with its `tool_result` (and lets
+   * the UI time it). Absent for text / unidentified tools. */
+  tool_id?: string | null;
+  /** Whether a `tool_result` reported failure (✗ vs ✓). Absent/false otherwise. */
+  is_error?: boolean;
+  /** When this activity was recorded (ISO). Populated by the activity poll from
+   * the row's `created_at`, so paired tool calls/results can show elapsed time.
+   * Frontend-only — never sent on the live `Activity` itself. */
+  ts?: string | null;
+}
+
+/**
+ * One durable activity row (matches `harness_persist::ActivityEvent`). The
+ * append-only backing for the live feed; the UI pages through these by `id`
+ * (the cursor) via `GET /api/runs/{id}/activity?after=<id>`. The `kind`/`text`/
+ * `detail` fields are exactly an [`Activity`] plus the row's id/node/time.
+ */
+export interface ActivityEvent extends Activity {
+  id: number;
+  node_id: string;
+  created_at: string;
+}
+
+/** One page of activity replay: the new lines plus the cursor to poll next. */
+export interface ActivityPage {
+  events: ActivityEvent[];
+  last: number;
+}
 
 export interface CreateRunRequest {
   workflow: string;
@@ -238,13 +278,12 @@ export interface NodeView {
   category: string | null;
   artifact: string | null;
   artifact_content: string | null;
-  /** Live-only latest activity line shown while the node is running (not
-   * persisted; cleared when the node starts or finishes). */
-  activity: string | null;
-  /** Live-only accumulated activity lines (sampled, deduped, capped) shown as
-   * a feed in the inspect dialog while the node runs. Not persisted; cleared
-   * when the node starts or finishes. */
-  activityLog: string[];
+  /** Latest activity shown while the node is running (cleared when the node
+   * starts or finishes). */
+  activity: Activity | null;
+  /** Accumulated activity feed (deduped, capped) shown in the inspect dialog
+   * while the node runs. Cleared when the node starts or finishes. */
+  activityLog: Activity[];
   /** Live-only progress while the node runs, parsed from progress markers and
    * sticky across activity updates (so it persists between markers), cleared
    * when the node starts or finishes. Two kinds: `task` — the implement step's

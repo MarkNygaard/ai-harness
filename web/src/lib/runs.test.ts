@@ -1,8 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { liveReducer, nodesFromDetail } from "./runs";
-import type { RunDetail, RunEvent } from "@/types/run";
+import type { Activity, ActivityKind, RunDetail, RunEvent } from "@/types/run";
 
 const NOW = "2026-01-01T00:00:10.000Z";
+
+/** Build an Activity for node_progress events (defaults to a text line). */
+function act(
+  text: string,
+  kind: ActivityKind = "text",
+  detail?: string,
+): Activity {
+  return { kind, text, detail: detail ?? null };
+}
 
 function reduce(events: RunEvent[]) {
   let state = liveReducer(undefined as never, { type: "reset" });
@@ -115,16 +124,16 @@ describe("liveReducer", () => {
         provider: "claude",
         model: "sonnet",
       },
-      { type: "node_progress", node_id: "a", activity: "reading files" },
-      { type: "node_progress", node_id: "a", activity: "reading files" },
-      { type: "node_progress", node_id: "a", activity: "2/11 tasks" },
+      { type: "node_progress", node_id: "a", activity: act("reading files") },
+      { type: "node_progress", node_id: "a", activity: act("reading files") },
+      { type: "node_progress", node_id: "a", activity: act("2/11 tasks") },
     ];
     const running = reduce(base);
     // Latest line drives the node glance; the feed keeps the distinct history.
-    expect(running.nodes.a.activity).toBe("2/11 tasks");
+    expect(running.nodes.a.activity).toEqual(act("2/11 tasks"));
     expect(running.nodes.a.activityLog).toEqual([
-      "reading files",
-      "2/11 tasks",
+      act("reading files"),
+      act("2/11 tasks"),
     ]);
 
     const finished = reduce([
@@ -159,17 +168,29 @@ describe("liveReducer", () => {
         nodes: [{ id: "a", depends_on: [] }],
       },
       { type: "node_started", node_id: "a", provider: "pi", model: "kimi" },
-      { type: "node_progress", node_id: "a", activity: "📋 3/13 wiring it" },
-      // A non-marker line keeps the badge (sticky) but updates the latest line.
-      { type: "node_progress", node_id: "a", activity: "⚙ bash" },
-      { type: "node_progress", node_id: "a", activity: "📋 4/13 next task" },
+      {
+        type: "node_progress",
+        node_id: "a",
+        activity: act("📋 3/13 wiring it"),
+      },
+      // A tool line keeps the badge (sticky) but updates the latest line.
+      {
+        type: "node_progress",
+        node_id: "a",
+        activity: act("bash", "tool", "cargo test"),
+      },
+      {
+        type: "node_progress",
+        node_id: "a",
+        activity: act("📋 4/13 next task"),
+      },
     ]);
     expect(state.nodes.a.liveProgress).toEqual({
       done: 4,
       total: 13,
       kind: "task",
     });
-    expect(state.nodes.a.activity).toBe("📋 4/13 next task");
+    expect(state.nodes.a.activity).toEqual(act("📋 4/13 next task"));
 
     // A loop marker is tagged kind:"loop" (total is a max, stops early).
     const loop = reduce([
@@ -180,7 +201,7 @@ describe("liveReducer", () => {
         nodes: [{ id: "r", depends_on: [] }],
       },
       { type: "node_started", node_id: "r", provider: "pi", model: "kimi" },
-      { type: "node_progress", node_id: "r", activity: "🔁 2/5" },
+      { type: "node_progress", node_id: "r", activity: act("🔁 2/5") },
     ]);
     expect(loop.nodes.r.liveProgress).toEqual({
       done: 2,
@@ -200,6 +221,90 @@ describe("liveReducer", () => {
       now: NOW,
     });
     expect(restarted.nodes.a.liveProgress).toBeNull();
+  });
+
+  it("folds a batched `events` action identically to sequential `event`s", () => {
+    // The activity poll replays a backlog as one batched dispatch (one
+    // re-render); it must produce the same state as feeding the lines one by
+    // one — same dedup, same sticky badge.
+    const base: RunEvent[] = [
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [] }],
+      },
+      { type: "node_started", node_id: "a", provider: "pi", model: "kimi" },
+    ];
+    const activity: RunEvent[] = [
+      {
+        type: "node_progress",
+        node_id: "a",
+        activity: act("bash", "tool", "cargo test"),
+      },
+      {
+        type: "node_progress",
+        node_id: "a",
+        activity: act("bash", "tool", "cargo test"),
+      },
+      { type: "node_progress", node_id: "a", activity: act("📋 1/3 first") },
+      { type: "node_progress", node_id: "a", activity: act("📋 2/3 second") },
+    ];
+
+    const sequential = reduce([...base, ...activity]);
+
+    let batched = reduce(base);
+    batched = liveReducer(batched, {
+      type: "events",
+      events: activity,
+      now: NOW,
+    });
+
+    expect(batched.nodes.a.activity).toEqual(act("📋 2/3 second"));
+    expect(batched.nodes.a.activityLog).toEqual([
+      act("bash", "tool", "cargo test"),
+      act("📋 1/3 first"),
+      act("📋 2/3 second"),
+    ]);
+    expect(batched.nodes.a.liveProgress).toEqual({
+      done: 2,
+      total: 3,
+      kind: "task",
+    });
+    expect(batched).toEqual(sequential);
+  });
+
+  it("keeps distinct tool calls but dedups an identical re-emit", () => {
+    const state = reduce([
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 1,
+        nodes: [{ id: "a", depends_on: [] }],
+      },
+      { type: "node_started", node_id: "a", provider: "pi", model: "kimi" },
+      // Same tool name, different command → both kept (dedup compares detail).
+      {
+        type: "node_progress",
+        node_id: "a",
+        activity: act("bash", "tool", "cargo build"),
+      },
+      {
+        type: "node_progress",
+        node_id: "a",
+        activity: act("bash", "tool", "cargo test"),
+      },
+      // An exact re-emit of the last line → collapsed.
+      {
+        type: "node_progress",
+        node_id: "a",
+        activity: act("bash", "tool", "cargo test"),
+      },
+    ]);
+    expect(state.nodes.a.activityLog).toEqual([
+      act("bash", "tool", "cargo build"),
+      act("bash", "tool", "cargo test"),
+    ]);
   });
 
   it("records terminal run status", () => {

@@ -113,16 +113,98 @@ pub struct NodeOutput {
 #[error("{0}")]
 pub struct RunnerError(pub String);
 
+/// What kind of live activity a [`NodeProgress`](RunEvent::NodeProgress) line
+/// is, so the UI can render it as a distinct card instead of a flat log line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityKind {
+    /// Assistant prose (a status line / what it's doing), or a progress marker.
+    Text,
+    /// A tool invocation: `text` is the tool name, `detail` its input summary.
+    Tool,
+    /// A tool's output: `detail` is a snippet of what the tool returned.
+    ToolResult,
+}
+
+/// One live activity update from a running node — a tool call, a tool result,
+/// or a line of assistant text. Replaces the old bare string so the UI can show
+/// a structured feed (cards) rather than an undifferentiated scroll.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Activity {
+    pub kind: ActivityKind,
+    /// Primary line: assistant text, or a tool name for `Tool`.
+    pub text: String,
+    /// Secondary detail: a tool's input summary or a result snippet; `None` for
+    /// plain text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// Tool-call correlation id, so the UI can pair a `Tool` with its
+    /// `ToolResult` (and time it): the call's own id for `Tool`, the referenced
+    /// call id for `ToolResult`. `None` for text and unidentified tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_id: Option<String>,
+    /// Whether a `ToolResult` reported failure (`is_error`), so the UI can mark
+    /// it ✗ instead of ✓. Always `false` for text and tool calls.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub is_error: bool,
+}
+
+impl Activity {
+    /// A plain text line (assistant prose or a progress marker).
+    pub fn text(text: impl Into<String>) -> Self {
+        Self {
+            kind: ActivityKind::Text,
+            text: text.into(),
+            detail: None,
+            tool_id: None,
+            is_error: false,
+        }
+    }
+    /// A tool call: `name` is the tool, `detail` a short input summary, `tool_id`
+    /// the call id the matching result references.
+    pub fn tool(name: impl Into<String>, detail: Option<String>, tool_id: Option<String>) -> Self {
+        Self {
+            kind: ActivityKind::Tool,
+            text: name.into(),
+            detail,
+            tool_id,
+            is_error: false,
+        }
+    }
+    /// A tool result: `detail` is a snippet of the tool's output, `tool_id` the
+    /// id of the call it answers, `is_error` whether the tool reported failure.
+    pub fn tool_result(detail: impl Into<String>, tool_id: Option<String>, is_error: bool) -> Self {
+        Self {
+            kind: ActivityKind::ToolResult,
+            text: String::new(),
+            detail: Some(detail.into()),
+            tool_id,
+            is_error,
+        }
+    }
+}
+
+impl From<String> for Activity {
+    fn from(s: String) -> Self {
+        Activity::text(s)
+    }
+}
+impl From<&str> for Activity {
+    fn from(s: &str) -> Self {
+        Activity::text(s)
+    }
+}
+
 /// A per-node sink the driver hands to a streaming runner so it can report the
-/// node's latest activity line *while it runs* (rendered on the running node in
-/// the graph). Cloning is cheap (an `Arc`); each call emits a live-only
+/// node's latest activity *while it runs* (rendered on the running node in the
+/// graph). Cloning is cheap (an `Arc`); each call emits a live-only
 /// [`RunEvent::NodeProgress`]. `None` when the run isn't streaming events.
 #[derive(Clone)]
-pub struct ProgressSink(pub Arc<dyn Fn(String) + Send + Sync>);
+pub struct ProgressSink(pub Arc<dyn Fn(Activity) + Send + Sync>);
 
 impl ProgressSink {
-    /// Report one activity line for the current node.
-    pub fn report(&self, activity: String) {
+    /// Report one activity update for the current node.
+    pub fn report(&self, activity: Activity) {
         (self.0)(activity);
     }
 }
@@ -249,10 +331,10 @@ pub enum RunEvent {
     },
     /// A node reached a terminal state (success/failed/skipped/cancelled).
     NodeFinished { node: NodeRun },
-    /// Live-only: the running node's latest activity line (e.g. its most recent
-    /// assistant output line or tool action). Broadcast to the UI for the live
-    /// graph overlay but NOT persisted to the event log.
-    NodeProgress { node_id: String, activity: String },
+    /// Live: the running node's latest activity — a tool call, a tool result,
+    /// or a line of assistant text. Broadcast to the UI for the live graph
+    /// overlay and appended to the durable activity log for replay.
+    NodeProgress { node_id: String, activity: Activity },
     /// The run reached a terminal state.
     RunFinished { status: RunStatus },
 }
@@ -599,11 +681,11 @@ async fn execute_node<R: NodeRunner>(
             events,
             RunEvent::NodeProgress {
                 node_id: node.id.clone(),
-                activity: format!(
+                activity: Activity::text(format!(
                     "step failed — retrying (attempt {}/{})",
                     attempt + 1,
                     max_attempts
-                ),
+                )),
             },
         );
     };
@@ -895,7 +977,7 @@ async fn run_loop<R: NodeRunner>(
         // iteration badge. `max_iterations` is a ceiling — the loop ends early
         // once `until` fires — so the UI frames the total as a max, not a target.
         if let Some(p) = &progress {
-            p.report(format!("🔁 {i}/{}", cfg.max_iterations));
+            p.report(Activity::text(format!("🔁 {i}/{}", cfg.max_iterations)));
         }
         // Expose the previous iteration's output to the prompt.
         let iter_vars = vars.clone().set("LOOP_PREV_OUTPUT", last_text.clone());

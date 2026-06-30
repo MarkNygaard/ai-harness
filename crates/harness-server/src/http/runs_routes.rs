@@ -908,6 +908,43 @@ pub async fn get_run(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ActivityQuery {
+    /// Highest activity `id` the caller already has; only newer lines are
+    /// returned. Defaults to 0 (the first poll fetches everything).
+    #[serde(default)]
+    pub after: i64,
+}
+
+/// `GET /runs/{id}/activity?after=<cursor>` — durable replay of a run's live
+/// activity log (the per-node progress overlay), oldest first, ids ascending.
+/// The frontend polls this while the run is `running`, passing the highest `id`
+/// it has seen as `after`, so each poll returns only what's new. Unlike the SSE
+/// stream this works regardless of *when* the page connects or which process
+/// owns the run — it reads from Postgres, not an in-memory broadcast.
+pub async fn get_run_activity(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(id): AxumPath<String>,
+    Query(q): Query<ActivityQuery>,
+) -> Response {
+    // Bound the page so a long-running step's backlog can't return unbounded
+    // rows in a single poll; the cursor lets the client page through the rest.
+    const ACTIVITY_PAGE: i64 = 1000;
+    let store = match state.store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.activity_since(&id, q.after, ACTIVITY_PAGE).await {
+        Ok(events) => {
+            // `last` is the new cursor: the max id returned, or echo `after`
+            // when nothing is new so the client's cursor never goes backwards.
+            let last = events.last().map(|e| e.id).unwrap_or(q.after);
+            Json(serde_json::json!({ "events": events, "last": last })).into_response()
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 /// `GET /runs/pair/{pair_id}` — both arms of an A/B pair, with full per-node
 /// detail, for the side-by-side comparison view. Arms come back ordered a → b.
 pub async fn get_run_pair(
@@ -1734,9 +1771,15 @@ async fn execute_run_task(
                     RunEvent::RunFinished { status } => {
                         let _ = store.finish_run(&persist_run_id, *status).await;
                     }
-                    // Live-only: broadcast below for the graph overlay, but never
-                    // written to the event log (it's transient per-node activity).
-                    RunEvent::NodeProgress { .. } => {}
+                    // Append to the durable activity log so a late/refreshed/
+                    // cross-process viewer can replay it (the frontend polls
+                    // `GET /runs/{id}/activity`), not just whoever was subscribed
+                    // to the live SSE broadcast at the instant it fired.
+                    RunEvent::NodeProgress { node_id, activity } => {
+                        let _ = store
+                            .record_activity(&persist_run_id, node_id, activity)
+                            .await;
+                    }
                 }
             }
             let _ = btx.send(ev);
