@@ -127,7 +127,7 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
         providers.push(ProviderInfo {
             id: "claude",
             label: "Claude Code",
-            models: vec!["sonnet", "opus", "haiku"],
+            models: vec!["sonnet", "opus", "haiku", "fable"],
         });
     }
     if creds.codex {
@@ -937,7 +937,7 @@ nodes:
             .iter()
             .any(|m| m.starts_with("openai-codex/")));
 
-        // Claude only: the three Claude Code models.
+        // Claude only: the Claude Code models.
         let claude = catalog(
             tmp.path(),
             ConnectedCreds {
@@ -947,6 +947,7 @@ nodes:
         );
         assert!(models(&claude, "claude").contains(&"sonnet"));
         assert!(models(&claude, "claude").contains(&"haiku"));
+        assert!(models(&claude, "claude").contains(&"fable"));
 
         // Cursor only: shown with its bare Cursor model ids.
         let cursor = catalog(
