@@ -349,24 +349,21 @@ async fn fetch_claude_usage(state: &RunsState) -> SubscriptionUsage {
     }
 }
 
-/// The Claude Code subscription OAuth access token. Prefer the self-refreshing
-/// on-disk credential (claude refreshes it on every run); fall back to the
-/// encrypted store.
+/// The Claude Code subscription OAuth access token, refreshed if it's expiring.
+/// The subscription access token is short-lived (~8h) and the CLI doesn't
+/// reliably refresh it headlessly, so we refresh it ourselves here (this probe
+/// runs often) — which keeps both the usage card *and* the next agent run
+/// authed. Falls back to a plain read if the store is unavailable.
 async fn claude_token(state: &RunsState) -> Option<String> {
-    let disk = std::fs::read_to_string(home_dir().join(".claude").join(".credentials.json"))
-        .ok()
-        .and_then(|j| parse_claude_access(&j));
-    if disk.is_some() {
-        return disk;
-    }
-    let store = state.cred_store().await.ok()?;
-    let claude = store.get("claude").await.ok().flatten()?;
-    if let Some(j) = claude.get("credentials_json").filter(|v| !v.is_empty()) {
-        if let Some(t) = parse_claude_access(j) {
+    if let Ok(store) = state.cred_store().await {
+        if let Some(t) = super::credentials_routes::ensure_fresh_claude_token(store).await {
             return Some(t);
         }
     }
-    claude.get("oauth_token").filter(|v| !v.is_empty()).cloned()
+    // No store (or nothing stored) → best-effort read of whatever's on disk.
+    std::fs::read_to_string(home_dir().join(".claude").join(".credentials.json"))
+        .ok()
+        .and_then(|j| parse_claude_access(&j))
 }
 
 /// Extract the access token from a `~/.claude/.credentials.json` body.

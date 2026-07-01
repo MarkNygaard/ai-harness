@@ -497,4 +497,266 @@ pub async fn materialize(store: &CredentialStore) {
             std::env::set_var("CURSOR_API_KEY", key);
         }
     }
+
+    // Keep the Claude subscription token fresh for this run: its OAuth access
+    // token is short-lived (~8h) and the CLI doesn't reliably refresh it in
+    // headless subscription runs, so an idle gap would otherwise 401 the run
+    // mid-pipeline. No-op when there's no Claude credential or it's still valid.
+    let _ = ensure_fresh_claude_token(store).await;
+}
+
+// ── Claude OAuth token refresh (keep-warm) ───────────────────────────────────
+//
+// The Claude Code subscription credential (`~/.claude/.credentials.json`) is a
+// short-lived (~8h) OAuth access token plus a single-use refresh token. The CLI
+// is meant to refresh on each run, but headless subscription runs don't reliably
+// do so — the access token expires and both agent runs and the usage card 401
+// until a human re-pastes. We refresh it ourselves: when the token is read (the
+// usage probe) or a run starts, if it's within `CLAUDE_REFRESH_SKEW_MS` of expiry
+// we exchange the refresh token for a new pair and write it back to disk AND the
+// DB (so the seed-if-missing fallback is never stale). The endpoint + client_id
+// are verified against the installed CLI; both are env-overridable in case
+// Anthropic moves them.
+
+/// Refresh once the access token has less than this before expiry (ms).
+const CLAUDE_REFRESH_SKEW_MS: i64 = 5 * 60 * 1000;
+
+/// Claude Code OAuth token endpoint (verified: `platform.claude.com`).
+fn claude_oauth_token_url() -> String {
+    std::env::var("HARNESS_CLAUDE_OAUTH_TOKEN_URL")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "https://platform.claude.com/v1/oauth/token".to_string())
+}
+
+/// Claude Code OAuth client id (verified present in the installed CLI).
+fn claude_oauth_client_id() -> String {
+    std::env::var("HARNESS_CLAUDE_OAUTH_CLIENT_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "9d1c250a-e61b-44d9-88ed-5944d1962f5e".to_string())
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Serialize refreshes so concurrent callers (usage probe + run start) can't
+/// double-spend the single-use refresh token.
+static CLAUDE_REFRESH_LOCK: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+fn oauth_str(root: &serde_json::Value, key: &str) -> Option<String> {
+    root.get("claudeAiOauth")?
+        .get(key)?
+        .as_str()
+        .map(str::to_string)
+}
+
+fn oauth_expires_ms(root: &serde_json::Value) -> Option<i64> {
+    root.get("claudeAiOauth")?.get("expiresAt")?.as_i64()
+}
+
+/// Load the current Claude credential JSON: the CLI's live on-disk copy first,
+/// then the DB `credentials_json` fallback.
+async fn load_claude_creds_json(store: &CredentialStore) -> Option<String> {
+    let path = home_dir().join(".claude").join(".credentials.json");
+    if let Ok(s) = std::fs::read_to_string(&path) {
+        if !s.trim().is_empty() {
+            return Some(s);
+        }
+    }
+    store
+        .get("claude")
+        .await
+        .ok()
+        .flatten()?
+        .get("credentials_json")
+        .filter(|v| !v.is_empty())
+        .cloned()
+}
+
+/// Overwrite accessToken/refreshToken/expiresAt in the parsed credential JSON,
+/// preserving `scopes`/`subscriptionType` and any other fields. False if the
+/// `claudeAiOauth` object is absent.
+fn apply_refreshed_tokens(
+    root: &mut serde_json::Value,
+    access: &str,
+    refresh: &str,
+    expires_at_ms: i64,
+) -> bool {
+    let Some(oauth) = root
+        .get_mut("claudeAiOauth")
+        .and_then(|v| v.as_object_mut())
+    else {
+        return false;
+    };
+    oauth.insert(
+        "accessToken".into(),
+        serde_json::Value::String(access.into()),
+    );
+    oauth.insert(
+        "refreshToken".into(),
+        serde_json::Value::String(refresh.into()),
+    );
+    oauth.insert(
+        "expiresAt".into(),
+        serde_json::Value::Number(expires_at_ms.into()),
+    );
+    true
+}
+
+/// Ensure the Claude access token is fresh, refreshing via the OAuth refresh
+/// token when it's within `CLAUDE_REFRESH_SKEW_MS` of expiry. Returns the current
+/// (possibly just-refreshed) access token. Best-effort: on refresh failure it
+/// logs and returns the existing token; `None` only when no credential exists.
+pub(crate) async fn ensure_fresh_claude_token(store: &CredentialStore) -> Option<String> {
+    let raw = load_claude_creds_json(store).await?;
+    let root: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let access = oauth_str(&root, "accessToken")?;
+    match oauth_expires_ms(&root) {
+        Some(exp) if exp - now_ms() > CLAUDE_REFRESH_SKEW_MS => return Some(access),
+        // Unknown expiry → don't churn refreshes; use what we have.
+        None => return Some(access),
+        Some(_) => {} // expired or within the skew window → refresh below
+    }
+
+    let _guard = CLAUDE_REFRESH_LOCK.lock().await;
+    // Re-read after locking: a concurrent caller may have just refreshed.
+    let raw = load_claude_creds_json(store).await?;
+    let mut root: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let access = oauth_str(&root, "accessToken")?;
+    if let Some(exp) = oauth_expires_ms(&root) {
+        if exp - now_ms() > CLAUDE_REFRESH_SKEW_MS {
+            return Some(access);
+        }
+    }
+    let Some(refresh) = oauth_str(&root, "refreshToken") else {
+        tracing::warn!("claude token refresh: credential has no refresh token");
+        return Some(access);
+    };
+
+    match refresh_claude_oauth(&refresh).await {
+        Ok((new_access, new_refresh, expires_in)) => {
+            let new_expires = now_ms() + expires_in.max(0) * 1000;
+            if apply_refreshed_tokens(&mut root, &new_access, &new_refresh, new_expires) {
+                if let Ok(json) = serde_json::to_string(&root) {
+                    write_secret_file(home_dir().join(".claude").join(".credentials.json"), &json);
+                    // Write-back so the seed-if-missing fallback is never stale.
+                    let _ = store
+                        .set(
+                            "claude",
+                            &BTreeMap::from([("credentials_json".to_string(), json)]),
+                        )
+                        .await;
+                }
+            }
+            tracing::info!("claude token refresh: succeeded (expires in {expires_in}s)");
+            Some(new_access)
+        }
+        Err(e) => {
+            tracing::warn!("claude token refresh failed: {e}");
+            Some(access)
+        }
+    }
+}
+
+/// Exchange a refresh token for a new access+refresh pair at Claude's OAuth
+/// token endpoint. Returns `(access_token, refresh_token, expires_in_secs)`.
+async fn refresh_claude_oauth(refresh_token: &str) -> Result<(String, String, i64), String> {
+    let resp = reqwest::Client::new()
+        .post(claude_oauth_token_url())
+        .json(&serde_json::json!({
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": claude_oauth_client_id(),
+        }))
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {e}"))?;
+    let status = resp.status();
+    let body = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // Truncate so a token in an error body can't sprawl across logs.
+        let snippet: String = body.chars().take(200).collect();
+        return Err(format!("HTTP {status}: {snippet}"));
+    }
+    let v: serde_json::Value =
+        serde_json::from_str(&body).map_err(|e| format!("bad JSON response: {e}"))?;
+    let access = v
+        .get("access_token")
+        .and_then(|x| x.as_str())
+        .ok_or_else(|| "response missing access_token".to_string())?
+        .to_string();
+    // Claude rotates the refresh token; keep the old one only if omitted.
+    let refresh = v
+        .get("refresh_token")
+        .and_then(|x| x.as_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| refresh_token.to_string());
+    let expires_in = v
+        .get("expires_in")
+        .and_then(|x| x.as_i64())
+        .unwrap_or(8 * 3600);
+    Ok((access, refresh, expires_in))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_refreshed_tokens_updates_and_preserves_siblings() {
+        let mut root: serde_json::Value = serde_json::from_str(
+            r#"{"claudeAiOauth":{"accessToken":"old","refreshToken":"oldR","expiresAt":1,"scopes":["a","b"],"subscriptionType":"team"}}"#,
+        )
+        .unwrap();
+        assert!(apply_refreshed_tokens(&mut root, "newA", "newR", 999));
+        let o = &root["claudeAiOauth"];
+        assert_eq!(o["accessToken"], "newA");
+        assert_eq!(o["refreshToken"], "newR");
+        assert_eq!(o["expiresAt"], 999);
+        // Untouched fields survive the rewrite.
+        assert_eq!(o["subscriptionType"], "team");
+        assert_eq!(o["scopes"], serde_json::json!(["a", "b"]));
+    }
+
+    #[test]
+    fn apply_refreshed_tokens_false_without_oauth_block() {
+        let mut root = serde_json::json!({ "other": 1 });
+        assert!(!apply_refreshed_tokens(&mut root, "a", "b", 1));
+    }
+
+    #[test]
+    fn oauth_helpers_extract_token_and_expiry() {
+        let root: serde_json::Value = serde_json::from_str(
+            r#"{"claudeAiOauth":{"accessToken":"tok","refreshToken":"r","expiresAt":1782821199284}}"#,
+        )
+        .unwrap();
+        assert_eq!(oauth_str(&root, "accessToken").as_deref(), Some("tok"));
+        assert_eq!(oauth_str(&root, "refreshToken").as_deref(), Some("r"));
+        assert_eq!(oauth_expires_ms(&root), Some(1782821199284));
+        // Missing pieces → None (drives the "unknown expiry, don't churn" path).
+        assert_eq!(oauth_expires_ms(&serde_json::json!({})), None);
+        assert_eq!(oauth_str(&serde_json::json!({}), "accessToken"), None);
+    }
+
+    #[test]
+    fn oauth_endpoint_and_client_id_defaults() {
+        // Defaults are the values verified against the installed CLI (env can
+        // override, but a clean env yields these).
+        std::env::remove_var("HARNESS_CLAUDE_OAUTH_TOKEN_URL");
+        std::env::remove_var("HARNESS_CLAUDE_OAUTH_CLIENT_ID");
+        assert_eq!(
+            claude_oauth_token_url(),
+            "https://platform.claude.com/v1/oauth/token"
+        );
+        assert_eq!(
+            claude_oauth_client_id(),
+            "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+        );
+    }
 }
