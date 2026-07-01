@@ -1,0 +1,215 @@
+name: review-area
+description: |
+  A read-only, cross-repo code review of a specific area, run in two stages to
+  keep the expensive model economical.
+
+  Flow: surface the repo layout, a cheap scout pass (Claude Sonnet) that maps the
+  target area across every repo in the workspace into a curated dossier, then a
+  deep review by Claude Fable at max effort that reasons from the dossier instead
+  of re-exploring — spending its expensive tokens on judgement, not navigation.
+
+  Works on a multi-repo project (e.g. a frontend whose logic lives partly in a
+  backend): each repo is already checked out into its own folder in the
+  workspace, and `HARNESS_REPOS` describes them. Also works single-repo (code at
+  the workspace root).
+
+  Output: a findings report artifact (`review-findings.md`). Makes NO code
+  changes and opens NO PR — it is an assessment only.
+
+  The review target is the task input (`$ARGUMENTS`): name the area/feature and
+  what to scrutinise.
+
+  NOT for: making changes, fixing bugs, or opening PRs. Read-only.
+
+provider: claude
+model: sonnet
+
+nodes:
+  # ── Stage 0: surface the repo layout (deterministic, no AI) ────────────────
+  # A multi-repo project checks each repo into its own folder in the workspace,
+  # with $HARNESS_REPOS describing folder→role. Capture that so the scout has an
+  # authoritative map instead of guessing.
+  - id: layout
+    category: planning
+    bash: |
+      set -uo pipefail
+      echo "## Repo layout"
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        echo "Multi-repo project. HARNESS_REPOS (folder / url / branch / role):"
+        echo "${HARNESS_REPOS}"
+      else
+        echo "Single-repo run — code is at the workspace root."
+      fi
+      echo
+      echo "## Top-level entries in the workspace"
+      ls -la
+    timeout: 60000
+
+  # ── Stage 1: cheap scout — build the dossier the expensive model reads ──────
+  - id: scout
+    category: planning
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [layout]
+    artifact: review-dossier.md
+    hooks:
+      pre_tool_use:
+        - matcher: "Edit|MultiEdit|NotebookEdit|Bash|mcp__harness__run"
+          decision: deny
+          reason: "Read-only node: no code edits, no shell, no run-spawning. Use Read/Grep/Glob to map the code; Write ONLY your dossier artifact."
+      post_tool_use:
+        - matcher: "Write"
+          additional_context: "Write ONLY review-dossier.md under $ARTIFACTS_DIR. Do not write or overwrite any source file."
+    prompt: |
+      You are a scout preparing a review dossier for a senior reviewer. Your job
+      is to do the CHEAP, high-volume work — navigating and summarising — so the
+      expensive reviewer that runs after you can spend its budget on judgement,
+      not on finding things. Be thorough in mapping; do not evaluate quality
+      yourself.
+
+      ## Review target
+      $ARGUMENTS
+
+      ## Where the code is
+      This may be a multi-repo project. The repo layout is:
+
+      $layout.output
+
+      Each repo is a folder under the workspace root; the `role` in the layout
+      tells you what each repo is (e.g. frontend, backend). If the layout says
+      single-repo, the code is at the workspace root. Pass the relevant folder
+      paths to Grep/Glob/Read.
+
+      ## Instructions (read-only — Read/Grep/Glob only; no edits, no shell)
+      1. Locate every file relevant to the target area, across ALL repos. Be
+         exhaustive: start from the obvious entry points, then follow the graph
+         in BOTH directions — imports/callers, the API calls the frontend makes
+         and the backend endpoints/handlers that serve them, shared types/DTOs,
+         config, and tests. Chase each cross-repo call to the code on the other
+         side. It is better to include a file that turns out to be irrelevant
+         than to miss one the reviewer needed.
+      2. Trace how the logic flows across the repo boundary: which frontend calls
+         hit which backend endpoints/handlers, the shapes exchanged, and where
+         behaviour is split between repos.
+      3. Extract the key code excerpts (with `path:line` references, folder
+         included) a reviewer must see — enough that they rarely need to re-open
+         a file.
+      4. If the area integrates a third-party service (a payment provider, auth
+         provider, or any external API/SDK), identify the SDK/library and the
+         API/webhook version in use, and — if you have web access
+         (WebSearch/WebFetch) — pull the
+         relevant official documentation (API reference for the calls used,
+         webhook/notification signature verification, and security guidance) so
+         the reviewer can check the code against the provider's contract. Record
+         the doc URLs and the key requirements in the dossier. If you have no web
+         access, note that and capture what the code itself implies about the
+         contract.
+      5. Produce a RANKED list of the specific spots that warrant deep scrutiny,
+         each with a one-line "why it's worth a close look" (e.g. trust boundary,
+         complex state, error handling, cross-repo contract mismatch risk,
+         third-party-contract conformance).
+
+      Write all of this to `$ARTIFACTS_DIR/review-dossier.md` using Write — that
+      is the ONLY file you may write. Structure it: Files (per repo) → Cross-repo
+      flow → Key excerpts → Ranked scrutiny list.
+
+      Output a one-line confirmation and: <promise>SCOUT-DONE</promise>
+
+  # ── Stage 2: deep review — Claude Fable at max effort, dossier-seeded ───────
+  - id: deep-review
+    category: review
+    provider: claude
+    model: fable
+    # Fable at its ceiling: this is the whole reason for the cheap scout stage —
+    # spend the expensive budget on reasoning, seeded with the dossier.
+    effort: max
+    context: fresh
+    depends_on: [scout]
+    artifact: review-findings.md
+    hooks:
+      pre_tool_use:
+        - matcher: "Edit|MultiEdit|NotebookEdit|Bash|mcp__harness__run"
+          decision: deny
+          reason: "Read-only review: no code edits, no shell, no run-spawning. Read/Grep/Glob to confirm; Write ONLY your findings artifact."
+      post_tool_use:
+        - matcher: "Write"
+          additional_context: "Write ONLY review-findings.md under $ARTIFACTS_DIR. Do not write or overwrite any source file."
+    prompt: |
+      You are a senior reviewer performing a rigorous, read-only review of a
+      specific area. A scout has already mapped the code for you.
+
+      ## Review target
+      $ARGUMENTS
+
+      ## Start from the dossier — do NOT re-explore from scratch
+      Read `$ARTIFACTS_DIR/review-dossier.md` first. It lists the relevant files
+      across every repo, the cross-repo flow, key excerpts, and a ranked list of
+      spots to scrutinise. Trust it as your map. Use Read/Grep/Glob ONLY to
+      confirm a specific detail or pull a snippet the dossier didn't fully
+      capture — each repo is a folder under the workspace root. Don't spend budget
+      re-deriving structure the dossier already gives you.
+
+      ## What to produce (read-only — no edits, no shell)
+      Work through the ranked scrutiny list and anything the dossier surfaces.
+      For the cross-repo seam specifically (e.g. frontend↔backend), check contract
+      mismatches, trust/validation boundaries, error and edge-case handling, and
+      state that can diverge between the two sides.
+
+      If the area integrates a third-party service (a payment provider, auth
+      provider, or any external API/SDK), verify the integration against the
+      provider's official documentation — correct API usage and versioning,
+      webhook/notification signature (HMAC) verification, idempotency,
+      decline/error handling, correct units and encoding of values, and any
+      security guidance (for payments, amounts in the right minor units and
+      currency, redirect/3-D-Secure return handling, PCI scope). Start from the
+      doc references the dossier
+      captured; if they're not enough and you have web access, use WebFetch /
+      WebSearch to consult the provider's docs directly. Flag anything the code
+      does that the provider's documentation warns against.
+
+      First write a human-readable report to `$ARTIFACTS_DIR/review-findings.md`
+      using Write (the ONLY file you may write). For each finding: severity,
+      `folder/path:line`, what's wrong, why it matters (concrete failure
+      scenario), and a suggested fix. Put the highest-severity findings first. If
+      an area is clean, say so explicitly rather than padding. End with a short
+      summary of the overall risk in the reviewed area.
+
+      Then emit ONLY the JSON verdict matching the schema — no prose, no fences.
+      Each finding's `fix` must be phrased as a standalone task an implementer
+      could pick up and land as a PR (name the file(s)/repo and the change), and
+      `location` should be the primary `folder/path:line`. If the area is clean,
+      return an empty `findings` array with a `summary` saying so.
+    output_format:
+      type: object
+      properties:
+        summary:
+          type: string
+          description: "2–4 sentence overall-risk summary of the reviewed area."
+        findings:
+          type: array
+          items:
+            type: object
+            properties:
+              severity:
+                type: string
+                enum: [critical, high, medium, low]
+              category:
+                type: string
+                description: "Grouping label, e.g. a repo/folder (frontend/backend) or a concern (contract, security, error-handling)."
+              title:
+                type: string
+              detail:
+                type: string
+                description: "What's wrong and the concrete failure scenario."
+              fix:
+                type: string
+                description: "The concrete change, phrased as a task for idea-to-pr."
+              location:
+                type: string
+                description: "Primary site, `folder/path:line`."
+              effort:
+                type: string
+                enum: [quick, medium, strategic]
+            required: [severity, category, title, fix]
+      required: [summary, findings]

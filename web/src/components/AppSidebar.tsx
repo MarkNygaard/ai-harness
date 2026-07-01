@@ -9,6 +9,7 @@ import {
   IconRocket,
   IconTags,
   IconWorldSearch,
+  IconZoomCode,
 } from "@tabler/icons-react";
 import { useRuns } from "@/lib/runs";
 import {
@@ -72,6 +73,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   // nav entry conditionally (the run list is cached/shared across pages).
   const runs = useRuns({});
   const hasGeoAudit = !!runs.data?.some((r) => r.workflow_name === "geo-audit");
+  const hasReview = !!runs.data?.some(
+    (r) => r.workflow_name === "review-area",
+  );
 
   const operations: NavItem[] = [
     { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
@@ -84,6 +88,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             label: "GEO Audit",
             icon: IconWorldSearch,
             match: "/geo",
+          } as NavItem,
+        ]
+      : []),
+    ...(hasReview
+      ? [
+          {
+            href: "/reviews",
+            label: "Code Review",
+            icon: IconZoomCode,
+            match: "/reviews",
           } as NavItem,
         ]
       : []),

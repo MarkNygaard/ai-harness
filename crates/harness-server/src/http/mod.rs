@@ -19,6 +19,7 @@ pub(crate) mod mcp_routes;
 pub(crate) mod misc_routes;
 pub(crate) mod projects_routes;
 pub(crate) mod rate_limit;
+pub(crate) mod review_routes;
 pub(crate) mod runs_routes;
 pub(crate) mod state;
 pub(crate) mod usage_routes;
