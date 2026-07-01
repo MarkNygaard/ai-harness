@@ -17,8 +17,10 @@ import { Markdown } from "@/components/Markdown";
 import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
 import { GeoReport } from "@/components/geo/GeoReport";
+import { ReviewReport } from "@/components/review/ReviewReport";
 import { useCancelRun, useRerunRun, useRunView } from "@/lib/runs";
 import { parseGeoVerdict } from "@/lib/geo";
+import { parseReviewVerdict } from "@/lib/review";
 import type { RunStatus } from "@/types/run";
 const STATUS_VARIANT: Record<
   RunStatus,
@@ -30,7 +32,7 @@ const STATUS_VARIANT: Record<
   cancelled: "failed",
 };
 
-type Panel = "graph" | "overview" | "geo";
+type Panel = "graph" | "overview" | "geo" | "review";
 
 export function RunDetailPage() {
   const { id = null } = useParams();
@@ -41,6 +43,8 @@ export function RunDetailPage() {
   const rerun = useRerunRun();
   // A geo-audit run carries a structured verdict in its `analyze` node.
   const geo = useMemo(() => parseGeoVerdict(run.nodes), [run.nodes]);
+  // A review-area run carries a review verdict in its `deep-review` node.
+  const review = useMemo(() => parseReviewVerdict(run.nodes), [run.nodes]);
 
   const done = run.nodes.filter((n) =>
     ["success", "failed", "skipped", "cancelled"].includes(n.status),
@@ -157,6 +161,13 @@ export function RunDetailPage() {
                 onClick={() => setPanel("geo")}
               />
             )}
+            {review && (
+              <PanelTab
+                label="Review"
+                active={panel === "review"}
+                onClick={() => setPanel("review")}
+              />
+            )}
           </div>
         </div>
 
@@ -168,6 +179,10 @@ export function RunDetailPage() {
           ) : panel === "geo" && geo ? (
             <div className="h-full overflow-y-auto p-6">
               <GeoReport verdict={geo} project={run.project} runId={id} />
+            </div>
+          ) : panel === "review" && review ? (
+            <div className="h-full overflow-y-auto p-6">
+              <ReviewReport verdict={review} project={run.project} runId={id} />
             </div>
           ) : (
             <div className="h-full overflow-y-auto p-6">

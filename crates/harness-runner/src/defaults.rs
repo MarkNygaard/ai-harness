@@ -42,6 +42,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "bc-idea-to-pr",
         include_str!("../defaults/workflows/bc-idea-to-pr.yaml"),
     ),
+    (
+        "review-area",
+        include_str!("../defaults/workflows/review-area.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.

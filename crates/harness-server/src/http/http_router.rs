@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use super::{
     auth, billing_routes, categories_routes, credentials_routes, geo_routes, health_check,
-    linear_routes, linear_source_routes, mcp_routes, password_reset, runs_routes, state::AppState,
-    workflows_routes,
+    linear_routes, linear_source_routes, mcp_routes, password_reset, review_routes, runs_routes,
+    state::AppState, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -106,6 +106,13 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(geo_routes::list_findings)
                 .put(geo_routes::set_finding)
                 .delete(geo_routes::clear_finding),
+        )
+        // ── Review report per-finding triage state (built / issued / ignored) ─
+        .route(
+            "/api/runs/{id}/review-findings",
+            get(review_routes::list_findings)
+                .put(review_routes::set_finding)
+                .delete(review_routes::clear_finding),
         )
         // ── Cluster-hosted MCP endpoint (JSON-RPC over HTTP; no local binary) ─
         // Authoring + run control for editors via `{ "type": "http", "url":

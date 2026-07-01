@@ -36,6 +36,9 @@ pub use linear_claims::{LinearClaim, LinearClaimStore};
 mod geo_findings;
 pub use geo_findings::{GeoFindingState, GeoFindingStateInput, GeoFindingStateStore};
 
+mod review_findings;
+pub use review_findings::{ReviewFindingState, ReviewFindingStateInput, ReviewFindingStateStore};
+
 /// A run row (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunSummary {
