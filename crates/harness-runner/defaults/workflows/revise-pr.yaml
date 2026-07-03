@@ -103,6 +103,15 @@ nodes:
       - Drop anything authored by the ai-harness bot / this workflow.
       - Drop inline comments whose thread already has a bot reply (a comment with
         `in_reply_to_id` pointing at it, authored by the bot) — already handled.
+      - Drop a review's top-level BODY when EVERY inline comment that review left
+        already has a bot reply — the body is just a summary of those threads and
+        the actionable patches are already applied. Keep a review ONLY if it has
+        at least one inline comment with no bot reply, OR it has no inline
+        comments at all (a standalone prose request). This is the safety net for
+        a stale or missing `last_complete_at` (e.g. a prior revision applied the
+        patches and replied in-thread but never posted its completion marker): a
+        review whose inline patches were all handled must NOT be re-worked just
+        because its `submittedAt` is after the watermark.
 
       ## 2. Linear tester / reviewer comments (functionality feedback)
       These are injected fresh for this trigger — look for the section
@@ -586,10 +595,15 @@ nodes:
       When done, output a one-line summary and: <promise>REPLIES-DONE</promise>
 
   # 16. Post a short summary on the PR and finish after final validation.
+  #     The completion marker this posts is the ONLY watermark the next
+  #     revise-pr run uses to ignore already-addressed feedback — a missed post
+  #     silently re-surfaces old comments — so it runs on a capable model, is
+  #     verified by re-fetching the comment, and retries once on failure.
   - id: summary
     category: delivery
     provider: claude
-    model: haiku
+    model: sonnet
+    retries: 1
     depends_on: [final-validate]
     when: "$final-validate.output.passed == 'true'"
     prompt: |
@@ -632,5 +646,28 @@ nodes:
       Do NOT change labels or title; the poller will move the Linear card back
       to the review column on completion.
 
-      End with: <promise>REVISE-SUMMARY-DONE</promise>
-      Emit ONLY the comment + the promise token.
+      ## Confirm the marker actually landed (critical)
+      The completion marker is the next run's ONLY watermark — posting the
+      comment is a side-effect that MUST succeed, not just be attempted. After
+      the `gh pr comment` call, re-fetch `gh pr view $resolve-pr.output.pr
+      --json comments` and confirm a comment authored by you now contains the
+      exact string `<!-- harness:revise-pr:complete -->` (only when the promise
+      was present — otherwise confirm NO such marker was added by this run). If
+      the expected marker comment is missing, post it again before finishing.
+
+      Emit ONLY this JSON verdict (no prose):
+        {"marker_posted": <true|false>, "converged": <true|false>}
+      - `converged`: whether `$implement.output` contained REVISION_DONE.
+      - `marker_posted`: true ONLY if you posted AND re-fetch-confirmed the
+        marker comment. When `converged` is false this MUST be false (a
+        non-converged pass intentionally posts no marker).
+    output_format:
+      type: object
+      properties:
+        marker_posted:
+          type: boolean
+          description: "true if the completion-marker comment was posted AND confirmed present via a follow-up gh pr view"
+        converged:
+          type: boolean
+          description: "true if $implement.output contained REVISION_DONE"
+      required: [marker_posted]
