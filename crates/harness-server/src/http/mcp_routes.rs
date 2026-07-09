@@ -315,6 +315,17 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
                 Err(e) => tool_error(e),
             }
         }
+        "workflow_set_ui" => {
+            let ui = args.get("ui").cloned().unwrap_or(Value::Null);
+            match authoring::set_ui(&state.project_root, &s("name"), ui) {
+                Ok(()) => state_after(
+                    &state.project_root,
+                    &s("name"),
+                    format!("set ui on `{}`", s("name")),
+                ),
+                Err(e) => tool_error(e),
+            }
+        }
         "workflow_remove_node" => {
             match authoring::remove_node(&state.project_root, &s("name"), &s("id")) {
                 Ok(()) => state_after(
@@ -446,7 +457,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_save",
-            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project).",
+            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project). The YAML may include a top-level `ui:` block ({ nav: { label, icon }, report: { label, verdict_node?, scored } }) to give the workflow a left-nav entry + a findings/report tab; or set it incrementally with workflow_set_ui.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -466,7 +477,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_create",
-            "description": "Create a new, empty workflow (build it up with workflow_set_node / workflow_connect). Errors if one already exists.",
+            "description": "Create a new, empty workflow (build it up with workflow_set_node / workflow_connect, and optionally workflow_set_ui for a nav entry + report tab). Errors if one already exists.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -494,6 +505,40 @@ fn mcp_tools() -> Vec<Value> {
                     }
                 },
                 "required": ["name", "node"],
+            }
+        }),
+        json!({
+            "name": "workflow_set_ui",
+            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score. Validates the whole workflow.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string" },
+                    "ui": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "nav": {
+                                "type": "object",
+                                "properties": {
+                                    "label": { "type": "string" },
+                                    "icon": { "type": "string" }
+                                },
+                                "required": ["label"]
+                            },
+                            "report": {
+                                "type": "object",
+                                "properties": {
+                                    "label": { "type": "string" },
+                                    "verdict_node": { "type": "string" },
+                                    "scored": { "type": "boolean" }
+                                },
+                                "required": ["label"]
+                            }
+                        }
+                    }
+                },
+                "required": ["name", "ui"],
             }
         }),
         json!({
@@ -574,6 +619,7 @@ mod tests {
             "workflow_catalog",
             "workflow_create",
             "workflow_set_node",
+            "workflow_set_ui",
             "workflow_connect",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");

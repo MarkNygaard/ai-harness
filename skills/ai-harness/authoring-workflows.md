@@ -29,6 +29,7 @@ file:
 | `workflow_catalog()` | Discover the legal node kinds, provider/model hints, available commands, and trigger rules. Start here. |
 | `workflow_create({name, description?, provider?, model?})` | New empty workflow. Errors if one by that name exists. |
 | `workflow_set_node({name, node})` | Add or replace one node by `id` (JSON spec — see below). Re-validates the whole DAG. |
+| `workflow_set_ui({name, ui})` | Set/clear the workflow's `ui:` — a left-nav entry + a report tab (see [`ui:`](#ui--nav-entry--report-tab)). Pass `null` to clear. |
 | `workflow_connect({name, from, to})` | Add an edge: `to` now depends on `from`. Catches unknown ids and cycles. |
 | `workflow_remove_node({name, id})` | Delete a node and strip it from every dependent's `depends_on`. |
 | `workflow_validate({yaml})` | Parse + check candidate YAML without saving. |
@@ -269,6 +270,36 @@ mcp__harness__workflow_get({ name: "triage-fix" })
 Then run it — the **run** tools take a `project` (the workflow is global, but a
 run targets a registered repo), see the main `SKILL.md`:
 `run_trigger({ project: "ticket0", workflow: "triage-fix", description: "<task>" })`.
+
+## `ui:` — nav entry + report tab
+
+A workflow can opt into two UI surfaces, so a report-style workflow you author
+over MCP shows up like the built-ins — no front-end changes. Set it with
+`workflow_set_ui` (or include a top-level `ui:` block in `workflow_save` YAML):
+
+```js
+mcp__harness__workflow_set_ui({
+  name: "security-audit",
+  ui: {
+    nav:    { label: "Security Audit", icon: "shield" },
+    report: { label: "Findings", verdict_node: "deep-review", scored: false }
+  }
+})
+```
+
+| Field | Meaning |
+|---|---|
+| `nav.label` | Left-nav entry; appears once the workflow has ≥1 run, links to a page listing its runs. |
+| `nav.icon` | Icon key: `shield`, `world-search`, `zoom-code`, `search`, `report`, `checklist` (falls back to a default). |
+| `report.label` | Tab label on the run detail page (e.g. `Findings`). |
+| `report.verdict_node` | Node whose JSON output is the verdict; if omitted the UI scans nodes. Must name a real node. |
+| `report.scored` | `true` → show a score + rating; `false` (default) → findings list only. |
+
+The report renders a node's JSON output shaped as
+`{ summary?, score?, rating?, findings: [{ title?, severity?, category?, detail?, fix?, location? }] }`
+— produce it with `output_format` on the verdict node. Each finding gets
+"Build this" (fires `idea-to-pr`), "Create issue" (Linear, when configured),
+and "Ignore" — persisted per run. Pass `ui: null` to clear it.
 
 ## Good practices
 

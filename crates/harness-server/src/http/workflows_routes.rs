@@ -10,6 +10,7 @@
 //! - `POST /api/authoring/workflows`        — `{name, yaml}` → validate + save
 //! - `POST /api/authoring/create`           — `{name, …}` → new empty workflow
 //! - `POST /api/authoring/set-node`         — `{name, node}` → add/replace a node
+//! - `POST /api/authoring/set-ui`           — `{name, ui}` → set/clear the `ui:` block
 //! - `POST /api/authoring/remove-node`      — `{name, id}` → delete a node
 //! - `POST /api/authoring/connect`          — `{name, from, to}` → add an edge
 
@@ -131,6 +132,21 @@ pub async fn set_node(
 ) -> Response {
     let root = &state.core.project_root;
     let r = authoring::set_node(root, &req.name, req.node);
+    mutation_result(root, &req.name, r)
+}
+
+#[derive(Deserialize)]
+pub struct SetUiBody {
+    pub name: String,
+    /// The `ui` block (`{ nav?, report? }`), or `null` to clear it.
+    #[serde(default)]
+    pub ui: serde_json::Value,
+}
+
+/// `POST /api/authoring/set-ui` — set or clear a workflow's `ui:` block.
+pub async fn set_ui(State(state): State<Arc<AppState>>, Json(req): Json<SetUiBody>) -> Response {
+    let root = &state.core.project_root;
+    let r = authoring::set_ui(root, &req.name, req.ui);
     mutation_result(root, &req.name, r)
 }
 
