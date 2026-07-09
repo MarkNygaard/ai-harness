@@ -5,11 +5,36 @@
 
 export type AuthoringSource = "bundled" | "project";
 
+/** A left-nav entry a workflow declares (shown once it has ≥1 run). */
+export interface WorkflowNav {
+  label: string;
+  /** Icon key from the curated allow-list (see ICONS in AppSidebar); falls back
+   * to a default when unset/unknown. */
+  icon: string | null;
+}
+
+/** A findings/report tab a workflow declares on its runs. */
+export interface WorkflowReport {
+  label: string;
+  /** Node id whose JSON output holds the verdict; when null the UI scans nodes. */
+  verdict_node: string | null;
+  /** Show a score gauge + history sparkline (GEO-style) vs. findings-only. */
+  scored: boolean;
+}
+
+/** Optional UI surfaces a workflow opts into (mirrors `harness_dag::WorkflowUi`). */
+export interface WorkflowUi {
+  nav: WorkflowNav | null;
+  report: WorkflowReport | null;
+}
+
 export interface WorkflowSummary {
   name: string;
   source: AuthoringSource;
   description: string | null;
   node_count: number;
+  /** Declarative nav/report surfaces; absent for workflows that opt out. */
+  ui?: WorkflowUi | null;
 }
 
 export interface WorkflowSource {
@@ -68,20 +93,11 @@ export interface Catalog {
 
 /** The node-kind discriminators (the single body each editor node carries). */
 export type NodeKindId =
-  | "prompt"
-  | "command"
-  | "bash"
-  | "loop"
-  | "script"
-  | "approval"
-  | "cancel";
+  "prompt" | "command" | "bash" | "loop" | "script" | "approval" | "cancel";
 
 export type ContextMode = "fresh" | "shared";
 export type TriggerRule =
-  | "all_success"
-  | "one_success"
-  | "none_failed_min_one_success"
-  | "all_done";
+  "all_success" | "one_success" | "none_failed_min_one_success" | "all_done";
 export type ScriptRuntime = "bun" | "uv";
 /** Reasoning-effort override for AI bodies, forwarded as `--effort` to
  * claude/codex CLIs. Higher effort suits high-leverage steps like planning. */

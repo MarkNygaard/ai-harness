@@ -25,6 +25,8 @@ struct RawWorkflow {
     #[serde(default)]
     model: Option<String>,
     #[serde(default)]
+    ui: Option<crate::model::WorkflowUi>,
+    #[serde(default)]
     nodes: Vec<RawNode>,
 }
 
@@ -269,11 +271,24 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
         }
     }
 
+    // A report's `verdict_node`, when named, must resolve to a declared node.
+    if let Some(node_id) = raw
+        .ui
+        .as_ref()
+        .and_then(|ui| ui.report.as_ref())
+        .and_then(|r| r.verdict_node.as_ref())
+    {
+        if !ids.contains(node_id) {
+            return Err(DagError::ReportVerdictNodeUnknown(node_id.clone()));
+        }
+    }
+
     Ok(Workflow {
         name: raw.name,
         description: raw.description,
         provider: raw.provider,
         model: raw.model,
+        ui: raw.ui,
         nodes,
     })
 }

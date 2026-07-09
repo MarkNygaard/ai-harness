@@ -111,6 +111,57 @@ nodes:
 }
 
 #[test]
+fn parses_workflow_ui_nav_and_report() {
+    let yaml = r#"
+name: security-audit
+ui:
+  nav:
+    label: "Security Audit"
+    icon: shield
+  report:
+    label: "Findings"
+    verdict_node: deep-review
+    scored: false
+nodes:
+  - id: deep-review
+    prompt: "review"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let ui = wf.ui.expect("ui present");
+    let nav = ui.nav.expect("nav present");
+    assert_eq!(nav.label, "Security Audit");
+    assert_eq!(nav.icon.as_deref(), Some("shield"));
+    let report = ui.report.expect("report present");
+    assert_eq!(report.label, "Findings");
+    assert_eq!(report.verdict_node.as_deref(), Some("deep-review"));
+    assert!(!report.scored);
+}
+
+#[test]
+fn workflow_without_ui_parses_with_none() {
+    let wf = parse_workflow("name: plain\nnodes:\n  - id: a\n    bash: \"x\"\n").unwrap();
+    assert!(wf.ui.is_none());
+}
+
+#[test]
+fn rejects_report_verdict_node_that_does_not_exist() {
+    let yaml = r#"
+name: bad-report
+ui:
+  report:
+    label: "Findings"
+    verdict_node: ghost
+nodes:
+  - id: a
+    prompt: "x"
+"#;
+    match parse_workflow(yaml) {
+        Err(DagError::ReportVerdictNodeUnknown(node)) => assert_eq!(node, "ghost"),
+        other => panic!("expected ReportVerdictNodeUnknown, got {other:?}"),
+    }
+}
+
+#[test]
 fn rejects_unknown_node_output_reference() {
     let yaml = r#"
 name: badref

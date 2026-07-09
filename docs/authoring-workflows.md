@@ -90,6 +90,9 @@ name: my-workflow            # required
 description: what it does     # optional — written for routing (see below)
 provider: pi                  # optional workflow-level default (per-node overrides)
 model: kimi-code/kimi-for-coding
+ui:                           # optional — opt into UI surfaces (see below)
+  nav: { label: "Security Audit", icon: shield }
+  report: { label: "Findings", verdict_node: deep-review, scored: false }
 nodes:
   - id: first
     bash: "echo hi"
@@ -100,6 +103,25 @@ nodes:
 
 A workflow is a list of **nodes** connected by `depends_on` edges. The scheduler
 computes topological layers; nodes in the same layer run in parallel.
+
+### `ui:` — nav entry + report tab
+
+A workflow can opt into two UI surfaces. Both are optional; omit `ui:` entirely
+for a plain workflow.
+
+| Field | Meaning |
+|---|---|
+| `nav.label` | Left-nav entry label. The entry appears once the workflow has ≥1 run and links to a page listing its runs. |
+| `nav.icon` | Icon key from the curated allow-list (`shield`, `world-search`, `zoom-code`, `search`, `report`, `checklist`); falls back to a default. |
+| `report.label` | Tab label on the run detail page (e.g. `Findings`, `Review`). |
+| `report.verdict_node` | Node whose JSON output is the **verdict**; if omitted the UI scans nodes for one matching the shape. Must reference a real node. |
+| `report.scored` | `true` → show a score + rating (GEO-style); `false` (default) → findings list only. |
+
+The report renders a node's JSON output shaped as
+`{ summary?, score?, rating?, findings: [{ title?, severity?, category?, detail?, fix?, location? }] }`
+— produce it with `output_format` on the verdict node. This is how any
+workflow (including MCP-authored ones) gets a report tab + nav entry without
+front-end changes.
 
 ## Node fields
 

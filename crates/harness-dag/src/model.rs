@@ -259,6 +259,48 @@ impl Node {
     }
 }
 
+/// Optional UI surfaces a workflow opts into. Absent → the workflow has no
+/// special UI (it's just a run in the list). Lets any workflow — including ones
+/// authored via the MCP endpoint — declare a left-nav entry and/or a
+/// findings/report tab on its runs, instead of the UI hard-coding workflow names.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct WorkflowUi {
+    /// A left-nav entry (shown once the workflow has at least one run).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nav: Option<WorkflowNav>,
+    /// A structured findings/report tab on the run detail page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report: Option<WorkflowReport>,
+}
+
+/// A left-navigation entry for a workflow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowNav {
+    /// Sidebar label (e.g. "Security Audit").
+    pub label: String,
+    /// Icon key from the UI's curated allow-list (e.g. `shield`, `world-search`);
+    /// the UI falls back to a default when unset or unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
+}
+
+/// A findings/report tab for a workflow's runs. The report is rendered from a
+/// node's JSON output — the verdict — shaped as `{ summary, findings[], score?,
+/// categories? }` (usually produced via that node's `output_format`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkflowReport {
+    /// Tab label on the run detail page (e.g. "Findings", "Review").
+    pub label: String,
+    /// Node id whose JSON output carries the verdict; when unset the UI scans
+    /// the run's nodes for one matching the verdict shape.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_node: Option<String>,
+    /// Show a score gauge + score-history sparkline (GEO-style). Default: the
+    /// findings list only (review-style).
+    #[serde(default)]
+    pub scored: bool,
+}
+
 /// A parsed, validated workflow DAG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workflow {
@@ -273,6 +315,9 @@ pub struct Workflow {
     /// Workflow-level default model.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Optional UI surfaces (left-nav entry, report tab) this workflow opts into.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui: Option<WorkflowUi>,
     /// Nodes in declaration order.
     pub nodes: Vec<Node>,
 }

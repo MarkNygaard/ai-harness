@@ -56,4 +56,8 @@ pub enum DagError {
     /// A loop's `until` signal is empty.
     #[error("loop completion signal is empty")]
     EmptySignal,
+
+    /// A workflow's `ui.report.verdict_node` names a node that doesn't exist.
+    #[error("workflow `ui.report.verdict_node` references unknown node `{0}`")]
+    ReportVerdictNodeUnknown(String),
 }
