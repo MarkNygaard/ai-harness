@@ -1,17 +1,22 @@
 import { Link, useLocation } from "react-router-dom";
 import {
   IconBinaryTree2,
+  IconClipboardCheck,
   IconFolderCog,
   IconGitCompare,
   IconHexagonalPrism,
   IconKey,
   IconLayoutDashboard,
+  IconReportSearch,
   IconRocket,
+  IconSearch,
+  IconShieldCheck,
   IconTags,
   IconWorldSearch,
   IconZoomCode,
 } from "@tabler/icons-react";
 import { useRuns } from "@/lib/runs";
+import { useWorkflowList } from "@/lib/authoring";
 import {
   Sidebar,
   SidebarContent,
@@ -32,6 +37,18 @@ interface NavItem {
   /** Active when the path equals href, or (for prefixes) starts with `match`. */
   match?: string;
 }
+
+/** Curated icon allow-list for workflow-declared nav entries (`ui.nav.icon`),
+ * so YAML picks an icon by key rather than injecting a component. */
+const NAV_ICONS: Record<string, typeof IconRocket> = {
+  shield: IconShieldCheck,
+  "world-search": IconWorldSearch,
+  "zoom-code": IconZoomCode,
+  search: IconSearch,
+  report: IconReportSearch,
+  checklist: IconClipboardCheck,
+};
+const DEFAULT_NAV_ICON = IconReportSearch;
 // Everything you author or configure — the building blocks you define and the
 // system settings — kept out of Operations (which is run-observation only).
 const MANAGE: NavItem[] = [
@@ -69,13 +86,32 @@ function isActive(pathname: string, item: NavItem): boolean {
 /** Left navigation, mirroring home-ops-agent's sidebar (base-nova). */
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { pathname } = useLocation();
-  // The GEO Audit page is only useful once a geo-audit run exists — show its
-  // nav entry conditionally (the run list is cached/shared across pages).
+  // A workflow's page is only useful once it has a run — show these nav entries
+  // conditionally (the run list is cached/shared across pages).
   const runs = useRuns({});
-  const hasGeoAudit = !!runs.data?.some((r) => r.workflow_name === "geo-audit");
-  const hasReview = !!runs.data?.some(
-    (r) => r.workflow_name === "review-area",
-  );
+  const workflows = useWorkflowList();
+  const hasRun = (name: string) =>
+    !!runs.data?.some((r) => r.workflow_name === name);
+  const hasGeoAudit = hasRun("geo-audit");
+  const hasReview = hasRun("review-area");
+
+  // Workflow-declared nav entries (`ui.nav`), shown once the workflow has run.
+  // geo-audit / review-area keep their bespoke entries below until they migrate
+  // to `ui`, so they're excluded here to avoid a duplicate.
+  const declaredNav: NavItem[] = (workflows.data ?? [])
+    .filter(
+      (w) =>
+        w.ui?.nav &&
+        w.name !== "geo-audit" &&
+        w.name !== "review-area" &&
+        hasRun(w.name),
+    )
+    .map((w) => ({
+      href: `/reports/${w.name}`,
+      label: w.ui!.nav!.label,
+      icon: NAV_ICONS[w.ui!.nav!.icon ?? ""] ?? DEFAULT_NAV_ICON,
+      match: `/reports/${w.name}`,
+    }));
 
   const operations: NavItem[] = [
     { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
@@ -101,6 +137,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           } as NavItem,
         ]
       : []),
+    ...declaredNav,
   ];
 
   const group = (label: string, items: NavItem[]) => (

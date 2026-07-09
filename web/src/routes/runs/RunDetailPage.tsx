@@ -18,9 +18,11 @@ import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
 import { GeoReport } from "@/components/geo/GeoReport";
 import { ReviewReport } from "@/components/review/ReviewReport";
+import { WorkflowReport } from "@/components/report/WorkflowReport";
 import { useCancelRun, useRerunRun, useRunView } from "@/lib/runs";
 import { parseGeoVerdict } from "@/lib/geo";
 import { parseReviewVerdict } from "@/lib/review";
+import { parseWorkflowVerdict, useWorkflowUi } from "@/lib/report";
 import type { RunStatus } from "@/types/run";
 const STATUS_VARIANT: Record<
   RunStatus,
@@ -32,7 +34,7 @@ const STATUS_VARIANT: Record<
   cancelled: "failed",
 };
 
-type Panel = "graph" | "overview" | "geo" | "review";
+type Panel = "graph" | "overview" | "geo" | "review" | "report";
 
 export function RunDetailPage() {
   const { id = null } = useParams();
@@ -41,10 +43,27 @@ export function RunDetailPage() {
   const [panel, setPanel] = useState<Panel>("graph");
   const cancel = useCancelRun();
   const rerun = useRerunRun();
+  // A workflow that declares `ui.report` gets a generic, declaration-driven
+  // report tab — and it takes precedence over the shape-based geo/review tabs
+  // (an explicit declaration wins over the heuristic, avoiding a double tab).
+  const declaredReport = useWorkflowUi(run.workflow)?.report ?? null;
+  const report = useMemo(
+    () =>
+      declaredReport
+        ? parseWorkflowVerdict(run.nodes, declaredReport.verdict_node)
+        : null,
+    [run.nodes, declaredReport],
+  );
   // A geo-audit run carries a structured verdict in its `analyze` node.
-  const geo = useMemo(() => parseGeoVerdict(run.nodes), [run.nodes]);
+  const geo = useMemo(
+    () => (declaredReport ? null : parseGeoVerdict(run.nodes)),
+    [run.nodes, declaredReport],
+  );
   // A review-area run carries a review verdict in its `deep-review` node.
-  const review = useMemo(() => parseReviewVerdict(run.nodes), [run.nodes]);
+  const review = useMemo(
+    () => (declaredReport ? null : parseReviewVerdict(run.nodes)),
+    [run.nodes, declaredReport],
+  );
 
   const done = run.nodes.filter((n) =>
     ["success", "failed", "skipped", "cancelled"].includes(n.status),
@@ -168,6 +187,13 @@ export function RunDetailPage() {
                 onClick={() => setPanel("review")}
               />
             )}
+            {report && declaredReport && (
+              <PanelTab
+                label={declaredReport.label}
+                active={panel === "report"}
+                onClick={() => setPanel("report")}
+              />
+            )}
           </div>
         </div>
 
@@ -183,6 +209,10 @@ export function RunDetailPage() {
           ) : panel === "review" && review ? (
             <div className="h-full overflow-y-auto p-6">
               <ReviewReport verdict={review} project={run.project} runId={id} />
+            </div>
+          ) : panel === "report" && report && declaredReport ? (
+            <div className="h-full overflow-y-auto p-6">
+              <WorkflowReport verdict={report} scored={declaredReport.scored} />
             </div>
           ) : (
             <div className="h-full overflow-y-auto p-6">
