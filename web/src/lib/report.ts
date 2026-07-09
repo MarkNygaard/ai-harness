@@ -1,16 +1,21 @@
 /**
- * Generic workflow **report** verdict — the declarative counterpart to the
- * bespoke `lib/geo.ts` (GEO keeps its bespoke report until it reaches parity).
- * Any workflow that declares
- * `ui.report` in its YAML gets a report tab rendered from a node's JSON output,
- * shaped as `{ summary?, score?, rating?, findings[] }`. Read-only for now
- * (no per-finding triage — that arrives when the finding-stores are unified).
+ * Generic workflow **report** verdict — the single report model behind every
+ * `ui.report` workflow (GEO audit, review, and any custom one). Rendered from a
+ * node's JSON output shaped as `{ summary?, score?, rating?, categories?[],
+ * findings[] }`. `scored` reports (e.g. GEO) additionally show a score, a
+ * per-dimension `categories` breakdown, and a score-history sparkline.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQueries,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { apiJson } from "./api";
 import { useWorkflowList } from "./authoring";
+import { nodesFromDetail, useRuns } from "./runs";
 import type { WorkflowUi } from "@/types/authoring";
-import type { NodeView } from "@/types/run";
+import type { NodeView, RunDetail } from "@/types/run";
 
 export interface WorkflowFinding {
   title?: string;
@@ -25,12 +30,30 @@ export interface WorkflowFinding {
   effort?: string;
 }
 
+/** A per-dimension score in a `scored` verdict (GEO-style breakdown). */
+export interface WorkflowCategory {
+  key: string;
+  score: number;
+  weight?: number;
+  summary?: string;
+}
+
 export interface WorkflowVerdict {
   summary?: string;
   /** Present for `scored` reports (GEO-style). */
   score?: number;
   rating?: string;
+  /** Per-dimension scores, shown as bars in a `scored` report. */
+  categories?: WorkflowCategory[];
   findings: WorkflowFinding[];
+}
+
+/** Rating band (0–100 score) → semantic colour token. */
+export function ratingColor(score: number): string {
+  if (score >= 75) return "var(--status-success)";
+  if (score >= 60) return "var(--accent-orange)";
+  if (score >= 40) return "var(--status-running)";
+  return "var(--status-failed)";
 }
 
 /** Severity order (worst first) for known levels; unknown severities sort last. */
@@ -74,6 +97,9 @@ function asVerdict(output: string | undefined): WorkflowVerdict | null {
     summary: typeof v.summary === "string" ? v.summary : undefined,
     score: typeof v.score === "number" ? v.score : undefined,
     rating: typeof v.rating === "string" ? v.rating : undefined,
+    categories: Array.isArray(v.categories)
+      ? (v.categories as WorkflowCategory[])
+      : undefined,
     findings: v.findings as WorkflowFinding[],
   };
 }
@@ -115,14 +141,19 @@ export function findingKey(f: WorkflowFinding): string {
 
 /**
  * The `idea-to-pr` task description for a finding — enough for the implementer
- * to land the fix as a PR in the right repo/folder.
+ * to land the fix as a PR in the right repo/folder. `externalUrl` (a project's
+ * live-site URL) is added as context when present (e.g. GEO-audit findings).
  */
-export function findingTaskDescription(f: WorkflowFinding): string {
+export function findingTaskDescription(
+  f: WorkflowFinding,
+  externalUrl?: string | null,
+): string {
   const title = f.title ?? f.summary ?? "Finding";
   const tags = [f.category, f.severity].filter(Boolean).join(" / ");
   return [
     tags ? `Finding — ${tags}: ${title}` : `Finding: ${title}`,
     f.location ? `Location: ${f.location}` : "",
+    externalUrl ? `Live site: ${externalUrl}` : "",
     "",
     f.detail ?? "",
     "",
@@ -135,6 +166,57 @@ export function findingTaskDescription(f: WorkflowFinding): string {
     .filter((l) => l !== "")
     .join("\n")
     .trim();
+}
+
+/** One report's score at a point in time, for the score-history sparkline. */
+export interface ScorePoint {
+  runId: string;
+  at: string;
+  score: number;
+}
+
+const MAX_HISTORY = 12;
+
+/**
+ * A workflow's score over time for a project — derived from its past runs (no
+ * new storage): fetch each run's detail and read its verdict score. Points are
+ * oldest → newest so the audit → fix → re-audit loop is visible. Generic over
+ * the workflow (the counterpart to the former `useGeoHistory`).
+ */
+export function useReportHistory(
+  workflow: string | null,
+  project: string | null,
+  verdictNode?: string | null,
+): { points: ScorePoint[]; loading: boolean } {
+  const runs = useRuns({ project: project ?? undefined });
+  const scoredRuns = (runs.data ?? [])
+    .filter((r) => r.workflow_name === workflow)
+    .slice(0, MAX_HISTORY); // runs arrive newest-first
+  const details = useQueries({
+    queries: scoredRuns.map((r) => ({
+      queryKey: ["run", r.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        apiJson<RunDetail>(`/api/runs/${r.id}`, { signal }),
+      staleTime: 60_000,
+    })),
+  });
+  const points: ScorePoint[] = [];
+  details.forEach((d, i) => {
+    if (!d.data) return;
+    const v = parseWorkflowVerdict(nodesFromDetail(d.data), verdictNode);
+    if (v && typeof v.score === "number") {
+      points.push({
+        runId: scoredRuns[i].id,
+        at: scoredRuns[i].recorded_at,
+        score: v.score,
+      });
+    }
+  });
+  points.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return {
+    points,
+    loading: runs.isLoading || details.some((d) => d.isLoading),
+  };
 }
 
 // ── Per-finding triage state (persisted server-side, keyed by run) ───────────

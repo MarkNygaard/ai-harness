@@ -6,8 +6,7 @@
 //! (keyed by the run + a stable `finding_key`) so the report shows the same
 //! checkmarks / dimmed rows on the next visit. "Rebuild" / "Unignore" clear a
 //! finding's state, restoring its buttons. Backed by the unified
-//! [`harness_persist::FindingStateStore`]; served at `/findings` and the legacy
-//! `/geo-findings` + `/review-findings` aliases.
+//! [`harness_persist::FindingStateStore`], served at `/api/runs/{id}/findings`.
 
 use std::sync::Arc;
 

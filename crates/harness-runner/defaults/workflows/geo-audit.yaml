@@ -18,6 +18,16 @@ description: |
 
 provider: claude
 model: opus
+
+ui:
+  nav:
+    label: GEO Audit
+    icon: world-search
+  report:
+    label: GEO
+    verdict_node: synthesize
+    scored: true
+
 nodes:
   - id: discover
     category: setup

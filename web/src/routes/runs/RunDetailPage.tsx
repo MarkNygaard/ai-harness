@@ -16,10 +16,8 @@ import {
 import { Markdown } from "@/components/Markdown";
 import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
-import { GeoReport } from "@/components/geo/GeoReport";
 import { WorkflowReport } from "@/components/report/WorkflowReport";
 import { useCancelRun, useRerunRun, useRunView } from "@/lib/runs";
-import { parseGeoVerdict } from "@/lib/geo";
 import { parseWorkflowVerdict, useWorkflowUi } from "@/lib/report";
 import type { RunStatus } from "@/types/run";
 const STATUS_VARIANT: Record<
@@ -32,7 +30,7 @@ const STATUS_VARIANT: Record<
   cancelled: "failed",
 };
 
-type Panel = "graph" | "overview" | "geo" | "report";
+type Panel = "graph" | "overview" | "report";
 
 export function RunDetailPage() {
   const { id = null } = useParams();
@@ -41,20 +39,14 @@ export function RunDetailPage() {
   const [panel, setPanel] = useState<Panel>("graph");
   const cancel = useCancelRun();
   const rerun = useRerunRun();
-  // A workflow that declares `ui.report` gets a generic, declaration-driven
-  // report tab — and it takes precedence over the shape-based geo/review tabs
-  // (an explicit declaration wins over the heuristic, avoiding a double tab).
+  // A workflow that declares `ui.report` gets a report tab, rendered from its
+  // verdict node's JSON output.
   const declaredReport = useWorkflowUi(run.workflow)?.report ?? null;
   const report = useMemo(
     () =>
       declaredReport
         ? parseWorkflowVerdict(run.nodes, declaredReport.verdict_node)
         : null,
-    [run.nodes, declaredReport],
-  );
-  // A geo-audit run carries a structured verdict in its `analyze` node.
-  const geo = useMemo(
-    () => (declaredReport ? null : parseGeoVerdict(run.nodes)),
     [run.nodes, declaredReport],
   );
 
@@ -166,13 +158,6 @@ export function RunDetailPage() {
               active={panel === "overview"}
               onClick={() => setPanel("overview")}
             />
-            {geo && (
-              <PanelTab
-                label="GEO"
-                active={panel === "geo"}
-                onClick={() => setPanel("geo")}
-              />
-            )}
             {report && declaredReport && (
               <PanelTab
                 label={declaredReport.label}
@@ -188,10 +173,6 @@ export function RunDetailPage() {
             <ReactFlowProvider>
               <RunFlow nodes={run.nodes} />
             </ReactFlowProvider>
-          ) : panel === "geo" && geo ? (
-            <div className="h-full overflow-y-auto p-6">
-              <GeoReport verdict={geo} project={run.project} runId={id} />
-            </div>
           ) : panel === "report" && report && declaredReport ? (
             <div className="h-full overflow-y-auto p-6">
               <WorkflowReport
@@ -199,6 +180,8 @@ export function RunDetailPage() {
                 scored={declaredReport.scored}
                 project={run.project}
                 runId={id}
+                workflow={run.workflow}
+                verdictNode={declaredReport.verdict_node}
               />
             </div>
           ) : (

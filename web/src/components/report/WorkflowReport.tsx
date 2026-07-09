@@ -1,12 +1,12 @@
 /**
- * Report for any workflow that declares `ui.report`: an optional score (for
- * `scored` reports), a summary, and the findings list. Each finding can be
- * acted on — "Build this" fires `idea-to-pr` from the finding's fix, and (when
- * the project has Linear configured) "Create issue" files it into Linear.
- * Acted-on findings get a green check + a "Rebuild"; "Ignore" dims them. All
- * three persist per run via the unified finding-state store, so the report
- * shows the same state next visit. The generic counterpart to GeoReport (which
- * stays bespoke until the generic report reaches its dimensions/history parity).
+ * The single report view behind every `ui.report` workflow (GEO audit, review,
+ * and any custom one). Rendered from a run's verdict:
+ * - `scored` reports show a score dashboard, a per-dimension breakdown, and a
+ *   score-history sparkline (GEO-style);
+ * - all reports show the summary + findings list, where each finding can be
+ *   acted on: "Build this" fires `idea-to-pr`, "Create issue" files it into
+ *   Linear (when configured), "Ignore" dims it. All three persist per run via
+ *   the unified finding-state store, so state survives reloads.
  */
 import { useState } from "react";
 import { Check } from "lucide-react";
@@ -16,14 +16,17 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useCreateRun } from "@/lib/runs";
+import { useProjects } from "@/lib/projects";
 import { useProjectCredentials } from "@/lib/credentials";
 import { useCreateLinearIssue, useLinearSources } from "@/lib/linear";
 import {
   SEVERITY_RANK,
   findingKey,
   findingTaskDescription,
+  ratingColor,
   useClearFindingState,
   useFindingStates,
+  useReportHistory,
   useSetFindingState,
   type FindingState,
   type WorkflowFinding,
@@ -46,12 +49,20 @@ export function WorkflowReport({
   scored,
   project,
   runId,
+  workflow,
+  verdictNode,
 }: {
   verdict: WorkflowVerdict;
   scored: boolean;
   project: string | null;
   runId: string | null;
+  workflow: string | null;
+  verdictNode: string | null;
 }) {
+  const projects = useProjects();
+  const externalUrl =
+    projects.data?.find((p) => p.name === project)?.external_url ?? "";
+
   const findings = [...verdict.findings].sort(
     (a, b) =>
       (SEVERITY_RANK[a.severity ?? ""] ?? 9) -
@@ -78,8 +89,23 @@ export function WorkflowReport({
   const createIssue = useCreateLinearIssue(project);
   const setState = useSetFindingState(runId);
   const clearState = useClearFindingState(runId);
-  const [busy, setBusy] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | "bulk" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+
+  async function issueOne(f: WorkflowFinding) {
+    const key = findingKey(f);
+    if (stateByKey[key]) return;
+    const created = await createIssue.mutateAsync({
+      title: f.title ?? f.summary ?? "Finding",
+      description: findingTaskDescription(f, externalUrl),
+    });
+    await setState.mutateAsync({
+      finding_key: key,
+      action: "issued",
+      issue_identifier: created.identifier,
+      issue_url: created.url,
+    });
+  }
 
   async function build(f: WorkflowFinding) {
     setActionError(null);
@@ -90,7 +116,7 @@ export function WorkflowReport({
         project: project ?? undefined,
         real: true,
         title: f.title ?? f.summary ?? "Finding",
-        description: findingTaskDescription(f),
+        description: findingTaskDescription(f, externalUrl),
       });
       await setState.mutateAsync({
         finding_key: findingKey(f),
@@ -108,16 +134,7 @@ export function WorkflowReport({
     setActionError(null);
     setBusy(findingKey(f));
     try {
-      const created = await createIssue.mutateAsync({
-        title: f.title ?? f.summary ?? "Finding",
-        description: findingTaskDescription(f),
-      });
-      await setState.mutateAsync({
-        finding_key: findingKey(f),
-        action: "issued",
-        issue_identifier: created.identifier,
-        issue_url: created.url,
-      });
+      await issueOne(f);
     } catch (e) {
       setActionError((e as Error).message);
     } finally {
@@ -146,29 +163,124 @@ export function WorkflowReport({
     }
   }
 
+  async function createAll() {
+    setActionError(null);
+    setBusy("bulk");
+    try {
+      for (const f of findings) {
+        if (stateByKey[findingKey(f)]) continue;
+        await issueOne(f);
+      }
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const untouched = findings.filter((f) => !stateByKey[findingKey(f)]).length;
+  const showScore = scored && verdict.score != null;
+
   return (
     <div className="mx-auto flex max-w-4xl flex-col gap-6">
-      {scored && verdict.score != null && (
-        <div className="flex items-baseline gap-3">
-          <span className="text-4xl font-bold tabular-nums">
-            {verdict.score}
-          </span>
-          {verdict.rating && (
-            <Badge variant="secondary">{verdict.rating}</Badge>
-          )}
+      {showScore ? (
+        <div className="flex items-center gap-4 border border-border p-4">
+          <div className="flex flex-col items-center">
+            <span
+              className="text-4xl font-semibold tabular-nums"
+              style={{ color: ratingColor(verdict.score!) }}
+            >
+              {verdict.score}
+            </span>
+            <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              score
+            </span>
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              {verdict.rating && (
+                <Badge variant="secondary">{verdict.rating}</Badge>
+              )}
+              {externalUrl && (
+                <a
+                  href={externalUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="truncate text-xs text-accent-orange hover:underline"
+                >
+                  {externalUrl}
+                </a>
+              )}
+            </div>
+            {verdict.summary && (
+              <p className="mt-1 text-[13px] text-muted-foreground">
+                {verdict.summary}
+              </p>
+            )}
+          </div>
         </div>
+      ) : (
+        verdict.summary && (
+          <div className="rounded-md bg-muted p-4 text-sm">
+            <Markdown>{verdict.summary}</Markdown>
+          </div>
+        )
       )}
 
-      {verdict.summary && (
-        <div className="rounded-md bg-muted p-4 text-sm">
-          <Markdown>{verdict.summary}</Markdown>
-        </div>
+      {scored && (
+        <ReportHistory
+          workflow={workflow}
+          project={project}
+          verdictNode={verdictNode}
+        />
+      )}
+
+      {scored && verdict.categories && verdict.categories.length > 0 && (
+        <section className="flex flex-col gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Scores by dimension
+          </h3>
+          <div className="flex flex-col gap-2 border border-border p-3">
+            {verdict.categories.map((c) => (
+              <div key={c.key} className="flex items-center gap-3 text-[13px]">
+                <div className="w-28 shrink-0 font-medium">{c.key}</div>
+                <div className="h-2.5 flex-1 overflow-hidden bg-secondary/50">
+                  <div
+                    className="h-full"
+                    style={{
+                      width: `${Math.max(0, Math.min(100, c.score))}%`,
+                      backgroundColor: ratingColor(c.score),
+                    }}
+                  />
+                </div>
+                <div className="w-8 shrink-0 text-right tabular-nums text-muted-foreground">
+                  {c.score}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       <section className="flex flex-col gap-2">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Findings ({findings.length}) — “Build this” fixes it via idea-to-pr
-        </h2>
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Findings ({findings.length}) — “Build this” fixes it via idea-to-pr
+          </h3>
+          {linearEnabled && untouched > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={busy !== null}
+              onClick={createAll}
+            >
+              {busy === "bulk"
+                ? "Filing…"
+                : `Create Linear issues for all (${untouched})`}
+            </Button>
+          )}
+        </div>
         {actionError && (
           <p className="text-[11px] text-destructive">{actionError}</p>
         )}
@@ -183,7 +295,7 @@ export function WorkflowReport({
                 linearEnabled={linearEnabled}
                 buildable={!!project}
                 state={stateByKey[findingKey(f)]}
-                busy={busy === findingKey(f)}
+                busy={busy === findingKey(f) || busy === "bulk"}
                 onBuild={() => build(f)}
                 onCreateIssue={() => createIssueOne(f)}
                 onIgnore={() => ignore(f)}
@@ -193,6 +305,60 @@ export function WorkflowReport({
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+/**
+ * Score over time for the report's workflow + project: a sparkline of past runs
+ * + the delta since the previous one. Hidden until there are two scored runs to
+ * compare. The generic counterpart to the former GeoHistory.
+ */
+function ReportHistory({
+  workflow,
+  project,
+  verdictNode,
+}: {
+  workflow: string | null;
+  project: string | null;
+  verdictNode: string | null;
+}) {
+  const { points, loading } = useReportHistory(workflow, project, verdictNode);
+  if (loading || points.length < 2) return null;
+  const last = points[points.length - 1];
+  const prev = points[points.length - 2];
+  const delta = last.score - prev.score;
+  return (
+    <div className="flex items-center gap-3 border border-border p-3">
+      <span className="shrink-0 text-[11px] uppercase tracking-wide text-muted-foreground">
+        Score history
+      </span>
+      <div className="flex h-8 items-end gap-0.5">
+        {points.map((p) => (
+          <Link
+            key={p.runId}
+            to={`/runs/${p.runId}`}
+            title={`${new Date(p.at).toLocaleDateString()}: ${p.score}`}
+          >
+            <div
+              className="w-2"
+              style={{
+                height: `${Math.max(4, (p.score / 100) * 32)}px`,
+                backgroundColor: ratingColor(p.score),
+              }}
+            />
+          </Link>
+        ))}
+      </div>
+      <span
+        className="shrink-0 text-xs tabular-nums"
+        style={{
+          color: delta >= 0 ? "var(--status-success)" : "var(--status-failed)",
+        }}
+      >
+        {delta > 0 ? `▲ +${delta}` : delta < 0 ? `▼ ${delta}` : "±0"} vs
+        previous
+      </span>
     </div>
   );
 }

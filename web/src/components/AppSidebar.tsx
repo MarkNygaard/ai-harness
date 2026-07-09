@@ -92,13 +92,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const workflows = useWorkflowList();
   const hasRun = (name: string) =>
     !!runs.data?.some((r) => r.workflow_name === name);
-  const hasGeoAudit = hasRun("geo-audit");
 
-  // Workflow-declared nav entries (`ui.nav`), shown once the workflow has run.
-  // geo-audit keeps its bespoke entry below until it migrates to `ui`, so it's
-  // excluded here to avoid a duplicate.
+  // Every nav entry is workflow-declared (`ui.nav`), shown once the workflow
+  // has at least one run, linking to its generic report list page.
   const declaredNav: NavItem[] = (workflows.data ?? [])
-    .filter((w) => w.ui?.nav && w.name !== "geo-audit" && hasRun(w.name))
+    .filter((w) => w.ui?.nav && hasRun(w.name))
     .map((w) => ({
       href: `/reports/${w.name}`,
       label: w.ui!.nav!.label,
@@ -110,16 +108,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
     { href: "/runs", label: "Runs", icon: IconRocket, match: "/runs" },
     { href: "/ab", label: "A/B Tests", icon: IconGitCompare, match: "/ab" },
-    ...(hasGeoAudit
-      ? [
-          {
-            href: "/geo",
-            label: "GEO Audit",
-            icon: IconWorldSearch,
-            match: "/geo",
-          } as NavItem,
-        ]
-      : []),
     ...declaredNav,
   ];
 
