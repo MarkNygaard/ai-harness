@@ -36,6 +36,10 @@ pub struct WorkflowSummary {
     pub source: Source,
     pub description: Option<String>,
     pub node_count: usize,
+    /// Optional UI surfaces (left-nav entry, report tab) the workflow declares;
+    /// lets the web render nav/report generically instead of hard-coding names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ui: Option<harness_dag::WorkflowUi>,
 }
 
 /// A workflow's editable source.
@@ -299,6 +303,7 @@ pub fn list_workflows(project_root: &Path) -> Vec<WorkflowSummary> {
                         source: Source::Project,
                         description: wf.description.clone(),
                         node_count: wf.nodes.len(),
+                        ui: wf.ui.clone(),
                     });
                 }
             }
@@ -316,6 +321,7 @@ pub fn list_workflows(project_root: &Path) -> Vec<WorkflowSummary> {
                     source: Source::Bundled,
                     description: wf.description.clone(),
                     node_count: wf.nodes.len(),
+                    ui: wf.ui.clone(),
                 });
             }
         }
