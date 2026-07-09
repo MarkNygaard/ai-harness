@@ -13,6 +13,12 @@ export interface WorkflowNav {
   icon: string | null;
 }
 
+/** An opt-in per-finding action a report offers. */
+export type ReportAction = "build" | "issue" | "ignore";
+
+/** The per-item status control shown on each finding. */
+export type ReportStatus = "none" | "check" | "pass_fail";
+
 /** A findings/report tab a workflow declares on its runs. */
 export interface WorkflowReport {
   label: string;
@@ -20,6 +26,10 @@ export interface WorkflowReport {
   verdict_node: string | null;
   /** Show a score gauge + history sparkline (GEO-style) vs. findings-only. */
   scored: boolean;
+  /** Opt-in per-finding buttons; absent/empty → a clean read-only list. */
+  actions?: ReportAction[];
+  /** Per-item status control; absent → `none`. */
+  status?: ReportStatus;
 }
 
 /** Optional UI surfaces a workflow opts into (mirrors `harness_dag::WorkflowUi`). */

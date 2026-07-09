@@ -135,6 +135,33 @@ nodes:
     assert_eq!(report.label, "Findings");
     assert_eq!(report.verdict_node.as_deref(), Some("deep-review"));
     assert!(!report.scored);
+    // Defaults: no fix-actions (clean box), no status control.
+    assert!(report.actions.is_empty());
+    assert!(report.status.is_none());
+}
+
+#[test]
+fn parses_report_actions_and_status() {
+    use crate::model::{ReportAction, ReportStatus};
+    let yaml = r#"
+name: checkout-tests
+ui:
+  report:
+    label: "Test cases"
+    verdict_node: scenarios
+    actions: [issue, ignore]
+    status: pass_fail
+nodes:
+  - id: scenarios
+    prompt: "list scenarios"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let report = wf.ui.unwrap().report.unwrap();
+    assert_eq!(
+        report.actions,
+        vec![ReportAction::Issue, ReportAction::Ignore]
+    );
+    assert_eq!(report.status, ReportStatus::PassFail);
 }
 
 #[test]

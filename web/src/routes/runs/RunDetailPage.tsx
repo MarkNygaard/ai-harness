@@ -182,6 +182,8 @@ export function RunDetailPage() {
                 runId={id}
                 workflow={run.workflow}
                 verdictNode={declaredReport.verdict_node}
+                actions={declaredReport.actions ?? []}
+                status={declaredReport.status ?? "none"}
               />
             </div>
           ) : (

@@ -27,6 +27,7 @@ ui:
     label: GEO
     verdict_node: synthesize
     scored: true
+    actions: [build, issue, ignore]
 
 nodes:
   - id: discover

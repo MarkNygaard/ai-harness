@@ -28,10 +28,12 @@ import {
   useFindingStates,
   useReportHistory,
   useSetFindingState,
+  type FindingAction,
   type FindingState,
   type WorkflowFinding,
   type WorkflowVerdict,
 } from "@/lib/report";
+import type { ReportAction, ReportStatus } from "@/types/authoring";
 
 /** The workflow findings are filed/built against. */
 const IDEA_WORKFLOW = "idea-to-pr";
@@ -51,6 +53,8 @@ export function WorkflowReport({
   runId,
   workflow,
   verdictNode,
+  actions,
+  status,
 }: {
   verdict: WorkflowVerdict;
   scored: boolean;
@@ -58,7 +62,14 @@ export function WorkflowReport({
   runId: string | null;
   workflow: string | null;
   verdictNode: string | null;
+  /** Opt-in fix/triage buttons; empty → a clean read-only list. */
+  actions: ReportAction[];
+  /** Per-item status control (checkbox / pass-fail); `none` → hidden. */
+  status: ReportStatus;
 }) {
+  const canBuild = actions.includes("build");
+  const canIssue = actions.includes("issue");
+  const canIgnore = actions.includes("ignore");
   const projects = useProjects();
   const externalUrl =
     projects.data?.find((p) => p.name === project)?.external_url ?? "";
@@ -158,6 +169,24 @@ export function WorkflowReport({
     setActionError(null);
     try {
       await clearState.mutateAsync(findingKey(f));
+    } catch (e) {
+      setActionError((e as Error).message);
+    }
+  }
+
+  // Set a per-item status (checked / passed / failed); re-selecting the current
+  // one clears it.
+  async function mark(f: WorkflowFinding, value: FindingAction) {
+    setActionError(null);
+    try {
+      if (stateByKey[findingKey(f)]?.action === value) {
+        await clearState.mutateAsync(findingKey(f));
+      } else {
+        await setState.mutateAsync({
+          finding_key: findingKey(f),
+          action: value,
+        });
+      }
     } catch (e) {
       setActionError((e as Error).message);
     }
@@ -265,9 +294,11 @@ export function WorkflowReport({
       <section className="flex flex-col gap-2">
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            Findings ({findings.length}) — “Build this” fixes it via idea-to-pr
+            {verdict.findings.length === findings.length && canBuild
+              ? `Findings (${findings.length}) — “Build this” fixes it via idea-to-pr`
+              : `Findings (${findings.length})`}
           </h3>
-          {linearEnabled && untouched > 0 && (
+          {canIssue && linearEnabled && untouched > 0 && (
             <Button
               type="button"
               size="sm"
@@ -292,14 +323,17 @@ export function WorkflowReport({
               <FindingRow
                 key={i}
                 finding={f}
-                linearEnabled={linearEnabled}
-                buildable={!!project}
+                canBuild={canBuild && !!project}
+                canIssue={canIssue && linearEnabled}
+                canIgnore={canIgnore}
+                status={status}
                 state={stateByKey[findingKey(f)]}
                 busy={busy === findingKey(f) || busy === "bulk"}
                 onBuild={() => build(f)}
                 onCreateIssue={() => createIssueOne(f)}
                 onIgnore={() => ignore(f)}
                 onReset={() => reset(f)}
+                onMark={(v) => mark(f, v)}
               />
             ))}
           </div>
@@ -365,34 +399,47 @@ function ReportHistory({
 
 function FindingRow({
   finding,
-  linearEnabled,
-  buildable,
+  canBuild,
+  canIssue,
+  canIgnore,
+  status,
   state,
   busy,
   onBuild,
   onCreateIssue,
   onIgnore,
   onReset,
+  onMark,
 }: {
   finding: WorkflowFinding;
-  linearEnabled: boolean;
-  buildable: boolean;
+  canBuild: boolean;
+  canIssue: boolean;
+  canIgnore: boolean;
+  status: ReportStatus;
   state: FindingState | undefined;
   busy: boolean;
   onBuild: () => void;
   onCreateIssue: () => void;
   onIgnore: () => void;
   onReset: () => void;
+  onMark: (value: FindingAction) => void;
 }) {
   const action = state?.action;
   const ignored = action === "ignored";
-  const done = action === "built" || action === "issued";
+  const failed = action === "failed";
+  const positive =
+    action === "built" ||
+    action === "issued" ||
+    action === "checked" ||
+    action === "passed";
+  const hasFixActions = canBuild || canIssue || canIgnore;
   const title = finding.title ?? finding.summary ?? "(untitled finding)";
   return (
     <div
       className={cn(
         "border-l-2 border-border bg-card p-3",
-        done && "border-l-status-success",
+        positive && "border-l-status-success",
+        failed && "border-l-status-failed",
         ignored && "opacity-50",
       )}
     >
@@ -417,73 +464,134 @@ function FindingRow({
           {title}
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          {done ? (
-            <>
-              <Check className="size-4 text-status-success" aria-label="done" />
-              {action === "built" && state?.ref_run_id ? (
-                <Link
-                  to={`/runs/${state.ref_run_id}`}
-                  className="text-xs text-accent-orange hover:underline"
+          {/* Per-item status control (checkbox / pass-fail). */}
+          {status === "check" && (
+            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                className="size-3.5"
+                checked={action === "checked"}
+                disabled={busy}
+                onChange={() => onMark("checked")}
+              />
+              tested
+            </label>
+          )}
+          {status === "pass_fail" &&
+            (action === "passed" || action === "failed" ? (
+              <>
+                <Badge variant={action === "passed" ? "success" : "failed"}>
+                  {action === "passed" ? "Passed" : "Failed"}
+                </Badge>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={onReset}
                 >
-                  Building →
-                </Link>
-              ) : action === "issued" && state?.issue_url ? (
-                <a
-                  href={state.issue_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-xs text-accent-orange hover:underline"
-                  title="Open the Linear issue"
-                >
-                  {state.issue_identifier ?? "Issue"} →
-                </a>
-              ) : null}
-              <Button type="button" size="sm" variant="ghost" onClick={onReset}>
-                Rebuild
-              </Button>
-            </>
-          ) : ignored ? (
-            <Button type="button" size="sm" variant="ghost" onClick={onReset}>
-              Unignore
-            </Button>
-          ) : (
-            <>
-              {linearEnabled && (
+                  Clear
+                </Button>
+              </>
+            ) : (
+              <>
                 <Button
                   type="button"
                   size="sm"
                   variant="outline"
                   disabled={busy}
-                  title="Create a Linear issue (AI Eligible) for this finding"
-                  onClick={onCreateIssue}
+                  onClick={() => onMark("passed")}
                 >
-                  {busy ? "Working…" : "Create issue"}
+                  Passed
                 </Button>
-              )}
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                disabled={busy || !buildable}
-                title={
-                  buildable
-                    ? "Build a fix via idea-to-pr"
-                    : "Run has no project to open a PR against"
-                }
-                onClick={onBuild}
-              >
-                {busy ? "Working…" : "Build this"}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => onMark("failed")}
+                >
+                  Failed
+                </Button>
+              </>
+            ))}
+
+          {/* Opt-in fix/triage actions (build / issue / ignore). */}
+          {hasFixActions &&
+            (action === "built" || action === "issued" ? (
+              <>
+                <Check
+                  className="size-4 text-status-success"
+                  aria-label="done"
+                />
+                {action === "built" && state?.ref_run_id ? (
+                  <Link
+                    to={`/runs/${state.ref_run_id}`}
+                    className="text-xs text-accent-orange hover:underline"
+                  >
+                    Building →
+                  </Link>
+                ) : action === "issued" && state?.issue_url ? (
+                  <a
+                    href={state.issue_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-xs text-accent-orange hover:underline"
+                    title="Open the Linear issue"
+                  >
+                    {state.issue_identifier ?? "Issue"} →
+                  </a>
+                ) : null}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  onClick={onReset}
+                >
+                  Rebuild
+                </Button>
+              </>
+            ) : ignored ? (
+              <Button type="button" size="sm" variant="ghost" onClick={onReset}>
+                Unignore
               </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                onClick={onIgnore}
-              >
-                Ignore
-              </Button>
-            </>
-          )}
+            ) : (
+              <>
+                {canIssue && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    title="Create a Linear issue (AI Eligible) for this finding"
+                    onClick={onCreateIssue}
+                  >
+                    {busy ? "Working…" : "Create issue"}
+                  </Button>
+                )}
+                {canBuild && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={busy}
+                    title="Build a fix via idea-to-pr"
+                    onClick={onBuild}
+                  >
+                    {busy ? "Working…" : "Build this"}
+                  </Button>
+                )}
+                {canIgnore && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    onClick={onIgnore}
+                  >
+                    Ignore
+                  </Button>
+                )}
+              </>
+            ))}
         </div>
       </div>
       {finding.location && (
