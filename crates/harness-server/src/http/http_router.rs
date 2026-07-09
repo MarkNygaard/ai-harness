@@ -165,6 +165,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             post(workflows_routes::create_workflow),
         )
         .route("/api/authoring/set-node", post(workflows_routes::set_node))
+        .route("/api/authoring/set-ui", post(workflows_routes::set_ui))
         .route(
             "/api/authoring/remove-node",
             post(workflows_routes::remove_node),

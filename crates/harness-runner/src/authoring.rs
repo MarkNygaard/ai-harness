@@ -508,6 +508,25 @@ pub fn set_node(project_root: &Path, name: &str, node: serde_json::Value) -> Res
     save_doc(project_root, name, &doc)
 }
 
+/// Set (or clear) the workflow-level `ui:` block — the declarative left-nav
+/// entry + findings/report tab. Pass the `ui` object (`{ nav?, report? }`);
+/// pass `null` to remove it. The save validates the whole workflow (e.g.
+/// `report.verdict_node` must name a real node), so a bad shape fails atomically.
+pub fn set_ui(project_root: &Path, name: &str, ui: serde_json::Value) -> Result<(), String> {
+    let mut doc = load_doc(project_root, name)?;
+    let map = doc
+        .as_mapping_mut()
+        .ok_or_else(|| "workflow is not a mapping".to_string())?;
+    let key = serde_yaml::Value::from("ui");
+    if ui.is_null() {
+        map.remove(&key);
+    } else {
+        let ui_yaml = serde_yaml::to_value(&ui).map_err(|e| format!("convert ui: {e}"))?;
+        map.insert(key, ui_yaml);
+    }
+    save_doc(project_root, name, &doc)
+}
+
 /// Remove a node by id and strip it from every other node's `depends_on`.
 pub fn remove_node(project_root: &Path, name: &str, id: &str) -> Result<(), String> {
     let mut doc = load_doc(project_root, name)?;
@@ -1068,5 +1087,45 @@ nodes:
         assert_eq!(wf.nodes.len(), 1);
         assert!(wf.node("plan").unwrap().depends_on.is_empty());
         assert!(remove_node(root, "built", "explore").is_err());
+    }
+
+    #[test]
+    fn set_ui_sets_validates_and_clears() {
+        use serde_json::json;
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+
+        create_workflow(root, "audit", None, Some("claude"), None).unwrap();
+        set_node(root, "audit", json!({ "id": "review", "prompt": "look" })).unwrap();
+
+        // Set a valid ui block.
+        set_ui(
+            root,
+            "audit",
+            json!({
+                "nav": { "label": "Audit", "icon": "shield" },
+                "report": { "label": "Findings", "verdict_node": "review" }
+            }),
+        )
+        .unwrap();
+        let wf = parse_workflow(&get_workflow(root, "audit").unwrap().yaml).unwrap();
+        let ui = wf.ui.clone().expect("ui set");
+        assert_eq!(ui.nav.unwrap().label, "Audit");
+        assert_eq!(ui.report.unwrap().verdict_node.as_deref(), Some("review"));
+
+        // A report pointing at a missing node is rejected atomically (ui unchanged).
+        assert!(set_ui(
+            root,
+            "audit",
+            json!({ "report": { "label": "X", "verdict_node": "ghost" } }),
+        )
+        .is_err());
+        let wf = parse_workflow(&get_workflow(root, "audit").unwrap().yaml).unwrap();
+        assert!(wf.ui.is_some(), "rejected set_ui must not have mutated");
+
+        // Null clears it.
+        set_ui(root, "audit", serde_json::Value::Null).unwrap();
+        let wf = parse_workflow(&get_workflow(root, "audit").unwrap().yaml).unwrap();
+        assert!(wf.ui.is_none());
     }
 }
