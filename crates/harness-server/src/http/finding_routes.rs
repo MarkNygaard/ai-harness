@@ -23,9 +23,13 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
 }
 
-/// Recognized triage actions.
+/// Recognized triage/status actions: the fix-triage set (built/issued/ignored)
+/// plus the per-item status values (checked, passed, failed).
 fn valid_action(action: &str) -> bool {
-    matches!(action, "built" | "issued" | "ignored")
+    matches!(
+        action,
+        "built" | "issued" | "ignored" | "checked" | "passed" | "failed"
+    )
 }
 
 /// `GET /api/runs/{run_id}/findings` — all remembered finding states.

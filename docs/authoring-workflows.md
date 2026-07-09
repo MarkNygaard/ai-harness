@@ -115,13 +115,20 @@ for a plain workflow.
 | `nav.icon` | Icon key from the curated allow-list (`shield`, `world-search`, `zoom-code`, `search`, `report`, `checklist`); falls back to a default. |
 | `report.label` | Tab label on the run detail page (e.g. `Findings`, `Review`). |
 | `report.verdict_node` | Node whose JSON output is the **verdict**; if omitted the UI scans nodes for one matching the shape. Must reference a real node. |
-| `report.scored` | `true` → show a score + rating (GEO-style); `false` (default) → findings list only. |
+| `report.scored` | `true` → show a score + rating + per-dimension bars + score-history sparkline (GEO-style); `false` (default) → findings list only. |
+| `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (fire idea-to-pr), `issue` (file into Linear), `ignore`. A bug/finding report uses `[build, issue, ignore]`. |
+| `report.status` | Per-item status control: `none` (default), `check` (a "tested" checkbox), or `pass_fail` (Passed / Failed) — for manual test checklists. |
 
 The report renders a node's JSON output shaped as
-`{ summary?, score?, rating?, findings: [{ title?, severity?, category?, detail?, fix?, location? }] }`
+`{ summary?, score?, rating?, categories?[], findings: [{ title?, severity?, category?, detail?, fix?, location?, effort? }] }`
 — produce it with `output_format` on the verdict node. This is how any
 workflow (including MCP-authored ones) gets a report tab + nav entry without
 front-end changes.
+
+The per-item marks a user sets (`build`/`issue`/`ignore` or `checked`/`passed`/
+`failed`) persist per run and are readable back over MCP via `run_findings`
+(each finding's `finding_key` + `action`) — so a downstream agent can see, e.g.,
+which test scenarios a human passed vs failed.
 
 ## Node fields
 

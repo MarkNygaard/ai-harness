@@ -178,6 +178,23 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
                 Err(e) => tool_error(e.to_string()),
             }
         }
+        "run_findings" => {
+            let id = s("run_id");
+            if id.is_empty() {
+                return tool_error("`run_id` is required");
+            }
+            let store = match state.finding_store().await {
+                Ok(s) => s,
+                Err(e) => return tool_error(e),
+            };
+            match store.list_for_run(&id).await {
+                Ok(rows) => to_result(
+                    format!("{} finding state(s) for run {id}", rows.len()),
+                    &json!({ "findings": rows }),
+                ),
+                Err(e) => tool_error(e.to_string()),
+            }
+        }
         "workflow_models" => {
             match resolve_workflow_models(state, &s("workflow"), Some(&s("project"))) {
                 Ok(pairs) => to_result(
@@ -394,6 +411,16 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "run_findings",
+            "description": "Read the per-finding state a human set in a run's report: each finding's `finding_key` (category::title) + `action` — built | issued | ignored | checked | passed | failed — plus any `ref_run_id` / Linear `issue_identifier`+`issue_url`. Use to see which report items a person marked, e.g. which manual test scenarios passed vs failed. Findings with no recorded state are absent from the list.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "run_id": { "type": "string" } },
+                "required": ["run_id"],
+            }
+        }),
+        json!({
             "name": "workflow_models",
             "description": "List the distinct provider+model pairs a workflow uses (default, nodes, loop bodies) — the candidate swap targets for an A/B test.",
             "inputSchema": {
@@ -509,7 +536,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_set_ui",
-            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score. Validates the whole workflow.",
+            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (idea-to-pr), issue (Linear), ignore. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -531,7 +558,12 @@ fn mcp_tools() -> Vec<Value> {
                                 "properties": {
                                     "label": { "type": "string" },
                                     "verdict_node": { "type": "string" },
-                                    "scored": { "type": "boolean" }
+                                    "scored": { "type": "boolean" },
+                                    "actions": {
+                                        "type": "array",
+                                        "items": { "enum": ["build", "issue", "ignore"] }
+                                    },
+                                    "status": { "enum": ["none", "check", "pass_fail"] }
                                 },
                                 "required": ["label"]
                             }
@@ -616,6 +648,7 @@ mod tests {
             "workflow_models",
             "run_list",
             "run_status",
+            "run_findings",
             "workflow_catalog",
             "workflow_create",
             "workflow_set_node",

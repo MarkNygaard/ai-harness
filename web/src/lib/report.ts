@@ -221,8 +221,18 @@ export function useReportHistory(
 
 // ── Per-finding triage state (persisted server-side, keyed by run) ───────────
 
-/** What the user did with a finding in the report. */
-export type FindingAction = "built" | "issued" | "ignored";
+/**
+ * What the user did with a finding: a fix/triage action (built / issued /
+ * ignored) or a per-item status (checked / passed / failed). All share the one
+ * state slot per finding.
+ */
+export type FindingAction =
+  | "built"
+  | "issued"
+  | "ignored"
+  | "checked"
+  | "passed"
+  | "failed";
 
 /** A remembered finding action (mirrors the server's `FindingState`). */
 export interface FindingState {

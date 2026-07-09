@@ -299,6 +299,47 @@ pub struct WorkflowReport {
     /// findings list only (review-style).
     #[serde(default)]
     pub scored: bool,
+    /// Opt-in per-finding action buttons. Default empty → a clean, read-only
+    /// list (right for a test checklist); a bug/finding report opts into
+    /// `[build, issue, ignore]`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<ReportAction>,
+    /// Per-item status control shown on each finding. Default `none`; a test
+    /// report uses `check` (a "tested" checkbox) or `pass_fail` (Passed/Failed).
+    #[serde(default, skip_serializing_if = "ReportStatus::is_none")]
+    pub status: ReportStatus,
+}
+
+/// An opt-in per-finding action a report offers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportAction {
+    /// "Build this" — fire `idea-to-pr` from the finding's fix.
+    Build,
+    /// "Create issue" — file the finding into Linear.
+    Issue,
+    /// "Ignore" — dim/skip the finding.
+    Ignore,
+}
+
+/// The per-item status control a report shows on each finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportStatus {
+    /// No status control (default).
+    #[default]
+    None,
+    /// A single "tested / done" checkbox.
+    Check,
+    /// Passed / Failed buttons (e.g. manual browser test outcomes).
+    PassFail,
+}
+
+impl ReportStatus {
+    /// `true` for the `None` variant — used to skip serialization.
+    pub fn is_none(&self) -> bool {
+        matches!(self, ReportStatus::None)
+    }
 }
 
 /// A parsed, validated workflow DAG.

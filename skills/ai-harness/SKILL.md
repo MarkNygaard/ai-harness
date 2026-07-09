@@ -103,6 +103,10 @@ the work happens on the cluster.
   Poll until the status is terminal (`completed` / `failed` / `cancelled`).
 - Report the outcome to the user: the PR URL (from the finalize/summary node
   output) and the verdict, or the failure and which node failed.
+- `mcp__harness__run_findings({ run_id })` — for a workflow with a report tab,
+  the per-finding marks a human set: each `finding_key` + `action` (`built` /
+  `issued` / `ignored` / `checked` / `passed` / `failed`). Use it to read back,
+  e.g., which manual test scenarios a person passed vs failed.
 
 Don't fabricate a `run_id` or a result — only report what `run_status` returns.
 

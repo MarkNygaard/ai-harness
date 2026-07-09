@@ -293,13 +293,28 @@ mcp__harness__workflow_set_ui({
 | `nav.icon` | Icon key: `shield`, `world-search`, `zoom-code`, `search`, `report`, `checklist` (falls back to a default). |
 | `report.label` | Tab label on the run detail page (e.g. `Findings`). |
 | `report.verdict_node` | Node whose JSON output is the verdict; if omitted the UI scans nodes. Must name a real node. |
-| `report.scored` | `true` → show a score + rating; `false` (default) → findings list only. |
+| `report.scored` | `true` → score + rating + per-dimension bars + score-history sparkline; `false` (default) → findings list only. |
+| `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (idea-to-pr), `issue` (Linear), `ignore`. A bug report uses `[build, issue, ignore]`. |
+| `report.status` | Per-item status control: `none` (default), `check` (a "tested" checkbox), or `pass_fail` (Passed / Failed) — for manual test checklists. |
 
 The report renders a node's JSON output shaped as
-`{ summary?, score?, rating?, findings: [{ title?, severity?, category?, detail?, fix?, location? }] }`
-— produce it with `output_format` on the verdict node. Each finding gets
-"Build this" (fires `idea-to-pr`), "Create issue" (Linear, when configured),
-and "Ignore" — persisted per run. Pass `ui: null` to clear it.
+`{ summary?, score?, rating?, categories?[], findings: [{ title?, severity?, category?, detail?, fix?, location?, effort? }] }`
+— produce it with `output_format` on the verdict node. Default is a clean,
+read-only list; opt into per-finding actions/status via `actions`/`status`
+above. The marks a user sets persist per run and are readable back over MCP via
+**`run_findings`** (each finding's `finding_key` + `action` — e.g. which test
+scenarios `passed`/`failed`). Pass `ui: null` to clear the block.
+
+Example — a manual test checklist (clean list + pass/fail, no code actions):
+```js
+mcp__harness__workflow_set_ui({
+  name: "checkout-tests",
+  ui: {
+    nav:    { label: "Checkout Tests", icon: "checklist" },
+    report: { label: "Test cases", verdict_node: "scenarios", status: "pass_fail" }
+  }
+})
+```
 
 ## Good practices
 
