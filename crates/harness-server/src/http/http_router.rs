@@ -6,9 +6,9 @@ use axum::{
 use std::sync::Arc;
 
 use super::{
-    auth, billing_routes, categories_routes, credentials_routes, geo_routes, health_check,
-    linear_routes, linear_source_routes, mcp_routes, password_reset, review_routes, runs_routes,
-    state::AppState, workflows_routes,
+    auth, billing_routes, categories_routes, credentials_routes, finding_routes, health_check,
+    linear_routes, linear_source_routes, mcp_routes, password_reset, runs_routes, state::AppState,
+    workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -100,19 +100,27 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/runs/{id}/activity",
             get(runs_routes::get_run_activity),
         )
-        // ── GEO report per-finding triage state (built / issued / ignored) ───
+        // ── Report per-finding triage state (built / issued / ignored) ───────
+        // One unified store behind three paths: the generic `/findings` plus the
+        // legacy `/geo-findings` + `/review-findings` aliases (kept until their
+        // bespoke report components migrate to the generic report).
+        .route(
+            "/api/runs/{id}/findings",
+            get(finding_routes::list_findings)
+                .put(finding_routes::set_finding)
+                .delete(finding_routes::clear_finding),
+        )
         .route(
             "/api/runs/{id}/geo-findings",
-            get(geo_routes::list_findings)
-                .put(geo_routes::set_finding)
-                .delete(geo_routes::clear_finding),
+            get(finding_routes::list_findings)
+                .put(finding_routes::set_finding)
+                .delete(finding_routes::clear_finding),
         )
-        // ── Review report per-finding triage state (built / issued / ignored) ─
         .route(
             "/api/runs/{id}/review-findings",
-            get(review_routes::list_findings)
-                .put(review_routes::set_finding)
-                .delete(review_routes::clear_finding),
+            get(finding_routes::list_findings)
+                .put(finding_routes::set_finding)
+                .delete(finding_routes::clear_finding),
         )
         // ── Cluster-hosted MCP endpoint (JSON-RPC over HTTP; no local binary) ─
         // Authoring + run control for editors via `{ "type": "http", "url":

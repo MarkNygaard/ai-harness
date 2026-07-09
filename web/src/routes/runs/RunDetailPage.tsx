@@ -212,7 +212,12 @@ export function RunDetailPage() {
             </div>
           ) : panel === "report" && report && declaredReport ? (
             <div className="h-full overflow-y-auto p-6">
-              <WorkflowReport verdict={report} scored={declaredReport.scored} />
+              <WorkflowReport
+                verdict={report}
+                scored={declaredReport.scored}
+                project={run.project}
+                runId={id}
+              />
             </div>
           ) : (
             <div className="h-full overflow-y-auto p-6">

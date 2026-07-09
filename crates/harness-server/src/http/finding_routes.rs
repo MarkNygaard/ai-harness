@@ -1,11 +1,13 @@
-//! Per-finding triage state for a `review-area` run's report.
+//! Per-finding triage state for any report run (GEO, review, or a workflow that
+//! declares `ui.report`).
 //!
-//! The report (rendered from a run's review verdict) lets the user act on each
-//! finding — "Build this", "Create issue", or "Ignore". These routes persist
-//! that state (keyed by the review run + a stable `finding_key`) so the report
-//! shows the same checkmarks / dimmed rows on the next visit. "Rebuild" /
-//! "Unignore" clear a finding's state, restoring its buttons. Mirror of
-//! [`super::geo_routes`].
+//! The report (rendered from a run's verdict) lets the user act on each finding
+//! — "Build this", "Create issue", or "Ignore". These routes persist that state
+//! (keyed by the run + a stable `finding_key`) so the report shows the same
+//! checkmarks / dimmed rows on the next visit. "Rebuild" / "Unignore" clear a
+//! finding's state, restoring its buttons. Backed by the unified
+//! [`harness_persist::FindingStateStore`]; served at `/findings` and the legacy
+//! `/geo-findings` + `/review-findings` aliases.
 
 use std::sync::Arc;
 
@@ -13,7 +15,7 @@ use axum::extract::{Extension, Path, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use harness_persist::ReviewFindingStateInput;
+use harness_persist::FindingStateInput;
 use serde::Deserialize;
 
 use super::runs_routes::RunsState;
@@ -27,12 +29,12 @@ fn valid_action(action: &str) -> bool {
     matches!(action, "built" | "issued" | "ignored")
 }
 
-/// `GET /api/runs/{run_id}/review-findings` — all remembered finding states.
+/// `GET /api/runs/{run_id}/findings` — all remembered finding states.
 pub async fn list_findings(
     Extension(state): Extension<Arc<RunsState>>,
     Path(run_id): Path<String>,
 ) -> Response {
-    let store = match state.review_finding_store().await {
+    let store = match state.finding_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
@@ -51,7 +53,7 @@ pub struct SetFindingBody {
     pub issue_url: Option<String>,
 }
 
-/// `PUT /api/runs/{run_id}/review-findings` — record one finding's state.
+/// `PUT /api/runs/{run_id}/findings` — record one finding's state.
 pub async fn set_finding(
     Extension(state): Extension<Arc<RunsState>>,
     Path(run_id): Path<String>,
@@ -66,11 +68,11 @@ pub async fn set_finding(
             "`action` must be one of: built, issued, ignored",
         );
     }
-    let store = match state.review_finding_store().await {
+    let store = match state.finding_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    let input = ReviewFindingStateInput {
+    let input = FindingStateInput {
         action: body.action,
         ref_run_id: body.ref_run_id,
         issue_identifier: body.issue_identifier,
@@ -87,7 +89,7 @@ pub struct ClearFindingQuery {
     pub key: String,
 }
 
-/// `DELETE /api/runs/{run_id}/review-findings?key=` — forget a finding's state.
+/// `DELETE /api/runs/{run_id}/findings?key=` — forget a finding's state.
 pub async fn clear_finding(
     Extension(state): Extension<Arc<RunsState>>,
     Path(run_id): Path<String>,
@@ -96,7 +98,7 @@ pub async fn clear_finding(
     if q.key.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "`key` is required");
     }
-    let store = match state.review_finding_store().await {
+    let store = match state.finding_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };

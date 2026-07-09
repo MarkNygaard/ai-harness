@@ -5,6 +5,8 @@
  * shaped as `{ summary?, score?, rating?, findings[] }`. Read-only for now
  * (no per-finding triage — that arrives when the finding-stores are unified).
  */
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiJson } from "./api";
 import { useWorkflowList } from "./authoring";
 import type { WorkflowUi } from "@/types/authoring";
 import type { NodeView } from "@/types/run";
@@ -100,4 +102,100 @@ export function useWorkflowUi(
   const list = useWorkflowList();
   if (!name) return null;
   return list.data?.find((w) => w.name === name)?.ui ?? null;
+}
+
+/** Stable key for a finding within a run's report (`category::title`). */
+export function findingKey(f: WorkflowFinding): string {
+  const title = f.title ?? f.summary ?? "";
+  return `${f.category ?? ""}::${title}`;
+}
+
+/**
+ * The `idea-to-pr` task description for a finding — enough for the implementer
+ * to land the fix as a PR in the right repo/folder.
+ */
+export function findingTaskDescription(f: WorkflowFinding): string {
+  const title = f.title ?? f.summary ?? "Finding";
+  const tags = [f.category, f.severity].filter(Boolean).join(" / ");
+  return [
+    tags ? `Finding — ${tags}: ${title}` : `Finding: ${title}`,
+    f.location ? `Location: ${f.location}` : "",
+    "",
+    f.detail ?? "",
+    "",
+    f.fix ? `Fix: ${f.fix}` : "",
+    "",
+    "Implement this fix in the project's source and open a PR. In a multi-repo " +
+      "project, make the change in the repo/folder named in the location above. " +
+      "Keep the change focused on this finding.",
+  ]
+    .filter((l) => l !== "")
+    .join("\n")
+    .trim();
+}
+
+// ── Per-finding triage state (persisted server-side, keyed by run) ───────────
+
+/** What the user did with a finding in the report. */
+export type FindingAction = "built" | "issued" | "ignored";
+
+/** A remembered finding action (mirrors the server's `FindingState`). */
+export interface FindingState {
+  finding_key: string;
+  action: FindingAction;
+  ref_run_id: string | null;
+  issue_identifier: string | null;
+  issue_url: string | null;
+}
+
+/** Body for recording a finding's state. */
+export interface SetFindingState {
+  finding_key: string;
+  action: FindingAction;
+  ref_run_id?: string;
+  issue_identifier?: string;
+  issue_url?: string;
+}
+
+/** Remembered finding states for a report run, keyed by `finding_key`. */
+export function useFindingStates(runId: string | null) {
+  return useQuery<FindingState[], Error>({
+    queryKey: ["findings", runId],
+    enabled: !!runId,
+    queryFn: ({ signal }) =>
+      apiJson<FindingState[]>(
+        `/api/runs/${encodeURIComponent(runId!)}/findings`,
+        { signal },
+      ),
+  });
+}
+
+/** Record a finding's state (Build this / Create issue / Ignore). */
+export function useSetFindingState(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<FindingState, Error, SetFindingState>({
+    mutationFn: (body) =>
+      apiJson<FindingState>(
+        `/api/runs/${encodeURIComponent(runId!)}/findings`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["findings", runId] }),
+  });
+}
+
+/** Forget a finding's state — the "Rebuild" / "Unignore" action. */
+export function useClearFindingState(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<unknown, Error, string>({
+    mutationFn: (key) =>
+      apiJson(
+        `/api/runs/${encodeURIComponent(runId!)}/findings?key=${encodeURIComponent(key)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["findings", runId] }),
+  });
 }
