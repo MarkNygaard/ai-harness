@@ -1,6 +1,7 @@
 /**
  * Generic workflow **report** verdict — the declarative counterpart to the
- * bespoke `lib/geo.ts` / `lib/review.ts`. Any workflow that declares
+ * bespoke `lib/geo.ts` (GEO keeps its bespoke report until it reaches parity).
+ * Any workflow that declares
  * `ui.report` in its YAML gets a report tab rendered from a node's JSON output,
  * shaped as `{ summary?, score?, rating?, findings[] }`. Read-only for now
  * (no per-finding triage — that arrives when the finding-stores are unified).
@@ -20,6 +21,8 @@ export interface WorkflowFinding {
   fix?: string;
   /** Primary site, e.g. `folder/path:line`. */
   location?: string;
+  /** Relative effort to address (e.g. `quick` | `medium` | `strategic`). */
+  effort?: string;
 }
 
 export interface WorkflowVerdict {

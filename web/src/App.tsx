@@ -6,7 +6,6 @@ import { RunDetailPage } from "./routes/runs/RunDetailPage";
 import { RunPairComparisonPage } from "./routes/runs/RunPairComparisonPage";
 import { AbTestsPage } from "./routes/runs/AbTestsPage";
 import { GeoAuditsPage } from "./routes/runs/GeoAuditsPage";
-import { ReviewsPage } from "./routes/runs/ReviewsPage";
 import { WorkflowReportsPage } from "./routes/runs/WorkflowReportsPage";
 import { WorkflowEditor } from "./routes/editor/WorkflowEditor";
 import { WorkflowsList } from "./routes/editor/WorkflowsList";
@@ -36,7 +35,6 @@ export function App() {
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/ab" element={<AbTestsPage />} />
           <Route path="/geo" element={<GeoAuditsPage />} />
-          <Route path="/reviews" element={<ReviewsPage />} />
           <Route path="/reports/:workflow" element={<WorkflowReportsPage />} />
           {/* Static segment before `:id` so it isn't captured as a run id. */}
           <Route
