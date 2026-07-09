@@ -101,9 +101,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(runs_routes::get_run_activity),
         )
         // ── Report per-finding triage state (built / issued / ignored) ───────
-        // One unified store behind three paths: the generic `/findings` plus the
-        // legacy `/geo-findings` + `/review-findings` aliases (kept until their
-        // bespoke report components migrate to the generic report).
+        // One unified store behind the generic `/findings` plus the legacy
+        // `/geo-findings` alias (kept until GeoReport migrates to the generic
+        // report; review-area already uses `/findings`).
         .route(
             "/api/runs/{id}/findings",
             get(finding_routes::list_findings)
@@ -112,12 +112,6 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/api/runs/{id}/geo-findings",
-            get(finding_routes::list_findings)
-                .put(finding_routes::set_finding)
-                .delete(finding_routes::clear_finding),
-        )
-        .route(
-            "/api/runs/{id}/review-findings",
             get(finding_routes::list_findings)
                 .put(finding_routes::set_finding)
                 .delete(finding_routes::clear_finding),

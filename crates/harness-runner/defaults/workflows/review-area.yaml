@@ -24,6 +24,14 @@ description: |
 provider: claude
 model: sonnet
 
+ui:
+  nav:
+    label: Code Review
+    icon: zoom-code
+  report:
+    label: Review
+    verdict_node: deep-review
+
 nodes:
   # ── Stage 0: surface the repo layout (deterministic, no AI) ────────────────
   # A multi-repo project checks each repo into its own folder in the workspace,

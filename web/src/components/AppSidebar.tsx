@@ -93,19 +93,12 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const hasRun = (name: string) =>
     !!runs.data?.some((r) => r.workflow_name === name);
   const hasGeoAudit = hasRun("geo-audit");
-  const hasReview = hasRun("review-area");
 
   // Workflow-declared nav entries (`ui.nav`), shown once the workflow has run.
-  // geo-audit / review-area keep their bespoke entries below until they migrate
-  // to `ui`, so they're excluded here to avoid a duplicate.
+  // geo-audit keeps its bespoke entry below until it migrates to `ui`, so it's
+  // excluded here to avoid a duplicate.
   const declaredNav: NavItem[] = (workflows.data ?? [])
-    .filter(
-      (w) =>
-        w.ui?.nav &&
-        w.name !== "geo-audit" &&
-        w.name !== "review-area" &&
-        hasRun(w.name),
-    )
+    .filter((w) => w.ui?.nav && w.name !== "geo-audit" && hasRun(w.name))
     .map((w) => ({
       href: `/reports/${w.name}`,
       label: w.ui!.nav!.label,
@@ -124,16 +117,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             label: "GEO Audit",
             icon: IconWorldSearch,
             match: "/geo",
-          } as NavItem,
-        ]
-      : []),
-    ...(hasReview
-      ? [
-          {
-            href: "/reviews",
-            label: "Code Review",
-            icon: IconZoomCode,
-            match: "/reviews",
           } as NavItem,
         ]
       : []),

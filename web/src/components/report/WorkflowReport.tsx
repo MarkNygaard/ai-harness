@@ -5,8 +5,8 @@
  * the project has Linear configured) "Create issue" files it into Linear.
  * Acted-on findings get a green check + a "Rebuild"; "Ignore" dims them. All
  * three persist per run via the unified finding-state store, so the report
- * shows the same state next visit. The generic counterpart to GeoReport /
- * ReviewReport.
+ * shows the same state next visit. The generic counterpart to GeoReport (which
+ * stays bespoke until the generic report reaches its dimensions/history parity).
  */
 import { useState } from "react";
 import { Check } from "lucide-react";
@@ -239,6 +239,7 @@ function FindingRow({
         {finding.category && (
           <span className="text-[11px] text-muted-foreground">
             {finding.category}
+            {finding.effort ? ` · ${finding.effort}` : ""}
           </span>
         )}
         <span
