@@ -599,16 +599,14 @@ function FindingRow({
           {finding.location}
         </p>
       )}
-      {finding.detail && (
-        <p className="mt-1 text-[13px] text-muted-foreground">
-          {finding.detail}
-        </p>
-      )}
+      {finding.detail && <Markdown className="mt-1">{finding.detail}</Markdown>}
       {finding.fix && (
-        <p className="mt-1 text-[13px]">
-          <span className="text-muted-foreground">Fix: </span>
-          {finding.fix}
-        </p>
+        <div className="mt-1">
+          <span className="text-[13px] font-medium text-muted-foreground">
+            Fix:
+          </span>
+          <Markdown>{finding.fix}</Markdown>
+        </div>
       )}
     </div>
   );
