@@ -6,7 +6,17 @@
  * saves — so what the canvas produces is exactly what gets persisted. Pure.
  */
 import yaml from "js-yaml";
-import type { EditorNode, EditorWorkflow, NodeKindId, PrebuiltStep } from "@/types/authoring";
+import type {
+  EditorNode,
+  EditorWorkflow,
+  NodeKindId,
+  PrebuiltStep,
+  ReportAction,
+  ReportStatus,
+  WorkflowNav,
+  WorkflowReport,
+  WorkflowUi,
+} from "@/types/authoring";
 
 /** The body field that defines a node's kind (first present wins; default prompt). */
 export function nodeKind(node: EditorNode): NodeKindId {
@@ -63,6 +73,61 @@ function clean<T extends Record<string, unknown>>(
   return out;
 }
 
+/** Serialize the `ui` block to a terse doc, or undefined when it declares
+ *  nothing — a nav/report entry needs a label, so empty ones are omitted. */
+function uiToDoc(
+  ui: WorkflowUi | null | undefined,
+): Record<string, unknown> | undefined {
+  if (!ui) return undefined;
+  const nav =
+    ui.nav && ui.nav.label
+      ? clean({ label: ui.nav.label, icon: ui.nav.icon })
+      : undefined;
+  const report =
+    ui.report && ui.report.label
+      ? clean({
+          label: ui.report.label,
+          verdict_node: ui.report.verdict_node,
+          scored: ui.report.scored,
+          // `none` is the implicit default — omit it rather than writing it out.
+          status:
+            ui.report.status && ui.report.status !== "none"
+              ? ui.report.status
+              : undefined,
+          actions: ui.report.actions,
+        })
+      : undefined;
+  const out = clean({ nav, report });
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Parse the `ui` block from raw YAML into the structured editor shape. */
+function uiFromRaw(raw: unknown): WorkflowUi | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const r = raw as Record<string, unknown>;
+  const navRaw = r.nav as Record<string, unknown> | undefined;
+  const nav: WorkflowNav | null = navRaw
+    ? {
+        label: String(navRaw.label ?? ""),
+        icon: (navRaw.icon as string | undefined) ?? null,
+      }
+    : null;
+  const repRaw = r.report as Record<string, unknown> | undefined;
+  const report: WorkflowReport | null = repRaw
+    ? {
+        label: String(repRaw.label ?? ""),
+        verdict_node: (repRaw.verdict_node as string | undefined) ?? null,
+        scored: Boolean(repRaw.scored),
+        actions: Array.isArray(repRaw.actions)
+          ? (repRaw.actions as ReportAction[])
+          : undefined,
+        status: repRaw.status as ReportStatus | undefined,
+      }
+    : null;
+  if (!nav && !report) return undefined;
+  return { nav, report };
+}
+
 /** Serialize a workflow to YAML, keeping each node's single body + set options. */
 export function toYaml(wf: EditorWorkflow): string {
   const doc = clean({
@@ -101,6 +166,7 @@ export function toYaml(wf: EditorWorkflow): string {
         cancel: n.cancel,
       });
     }),
+    ui: uiToDoc(wf.ui),
   });
   return yaml.dump(doc, { lineWidth: 100, noRefs: true });
 }
@@ -140,5 +206,6 @@ export function fromYaml(text: string): EditorWorkflow {
     provider: raw.provider as string | undefined,
     model: raw.model as string | undefined,
     nodes,
+    ui: uiFromRaw(raw.ui),
   };
 }

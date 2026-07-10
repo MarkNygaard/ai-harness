@@ -172,4 +172,7 @@ export interface EditorWorkflow {
   provider?: string;
   model?: string;
   nodes: EditorNode[];
+  /** Declarative nav/report surfaces — round-tripped so the builder never
+   *  silently drops a workflow's left-nav entry or report tab on save. */
+  ui?: WorkflowUi | null;
 }
