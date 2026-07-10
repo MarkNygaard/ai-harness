@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { emptyNode, fromYaml, nodeKind, prebuiltNode, toYaml } from "./workflow-yaml";
+import {
+  emptyNode,
+  fromYaml,
+  nodeKind,
+  prebuiltNode,
+  toYaml,
+} from "./workflow-yaml";
 import type { EditorWorkflow, PrebuiltStep } from "@/types/authoring";
 describe("nodeKind", () => {
   it("derives the kind from the active body field", () => {
@@ -161,6 +167,73 @@ it("round-trips artifact through toYaml/fromYaml", () => {
   const back = fromYaml(yaml);
   expect(back.nodes[0].artifact).toBe("exploration.md");
   expect(back.nodes[1].artifact).toBeUndefined();
+});
+
+describe("ui block round-trip", () => {
+  it("preserves nav + report through toYaml/fromYaml", () => {
+    const wf: EditorWorkflow = {
+      name: "scenarios",
+      nodes: [{ id: "refine", prompt: "x" }],
+      ui: {
+        nav: { label: "Test Scenarios", icon: "checklist" },
+        report: {
+          label: "Scenarios",
+          verdict_node: "refine",
+          scored: false,
+          status: "pass_fail",
+          actions: ["build", "ignore"],
+        },
+      },
+    };
+    const yaml = toYaml(wf);
+    expect(yaml).toContain("label: Test Scenarios");
+    expect(yaml).toContain("verdict_node: refine");
+    expect(yaml).toContain("status: pass_fail");
+
+    const back = fromYaml(yaml);
+    expect(back.ui?.nav).toEqual({
+      label: "Test Scenarios",
+      icon: "checklist",
+    });
+    expect(back.ui?.report?.verdict_node).toBe("refine");
+    expect(back.ui?.report?.scored).toBe(false);
+    expect(back.ui?.report?.status).toBe("pass_fail");
+    expect(back.ui?.report?.actions).toEqual(["build", "ignore"]);
+  });
+
+  it("omits the ui block entirely when absent, and drops default status", () => {
+    // No ui → no `ui:` key at all.
+    expect(
+      toYaml({ name: "n", nodes: [{ id: "a", prompt: "p" }] }),
+    ).not.toContain("ui:");
+    // `status: none` is the implicit default and must not be serialized.
+    const yaml = toYaml({
+      name: "n",
+      nodes: [{ id: "a", prompt: "p" }],
+      ui: {
+        nav: null,
+        report: {
+          label: "R",
+          verdict_node: null,
+          scored: false,
+          status: "none",
+        },
+      },
+    });
+    expect(yaml).not.toContain("status:");
+    expect(yaml).not.toContain("verdict_node:"); // null dropped
+    expect(fromYaml(yaml).ui?.report?.label).toBe("R");
+  });
+
+  it("drops an empty ui block (no label) rather than writing junk", () => {
+    const yaml = toYaml({
+      name: "n",
+      nodes: [{ id: "a", prompt: "p" }],
+      ui: { nav: { label: "", icon: null }, report: null },
+    });
+    expect(yaml).not.toContain("ui:");
+    expect(fromYaml(yaml).ui).toBeUndefined();
+  });
 });
 
 it("round-trips effort through toYaml/fromYaml", () => {

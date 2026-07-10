@@ -21,6 +21,7 @@ import {
   Loader2,
   RotateCcw,
   Save,
+  Settings2,
   Trash2,
   TriangleAlert,
 } from "lucide-react";
@@ -35,11 +36,17 @@ import {
   useWorkflowSource,
 } from "@/lib/authoring";
 import { fromYaml, toYaml } from "@/lib/workflow-yaml";
-import type { EditorNode, NodeKindId, PrebuiltStep } from "@/types/authoring";
+import type {
+  EditorNode,
+  NodeKindId,
+  PrebuiltStep,
+  WorkflowUi,
+} from "@/types/authoring";
 import { EditorNode as EditorNodeView } from "@/components/editor/EditorNode";
 import { EditorActionsContext } from "@/components/editor/context";
 import { Palette } from "@/components/editor/Palette";
 import { PropertiesDrawer } from "@/components/editor/PropertiesDrawer";
+import { WorkflowSettingsDrawer } from "@/components/editor/WorkflowSettingsDrawer";
 import {
   type EditorNodeData,
   fromGraph,
@@ -56,6 +63,7 @@ interface Meta {
   description?: string;
   provider?: string;
   model?: string;
+  ui?: WorkflowUi | null;
 }
 
 function Editor() {
@@ -76,6 +84,7 @@ function Editor() {
     name: routeName ?? "untitled-workflow",
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const loadedFor = useRef<string | null>(null);
 
   // Load an existing workflow once its source arrives.
@@ -90,6 +99,7 @@ function Editor() {
       description: wf.description,
       provider: wf.provider,
       model: wf.model,
+      ui: wf.ui,
     });
     loadedFor.current = source.data.name;
   }, [source.data, setNodes, setEdges]);
@@ -338,6 +348,18 @@ function Editor() {
       <Button
         variant="outline"
         size="sm"
+        onClick={() => {
+          setSelectedId(null);
+          setSettingsOpen((o) => !o);
+        }}
+        title="Edit this workflow's nav entry and report tab (the UI block)"
+      >
+        <Settings2 className="h-3.5 w-3.5" />
+        UI
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
         onClick={tidy}
         disabled={nodes.length === 0}
       >
@@ -384,7 +406,10 @@ function Editor() {
                 onNodesChange={onNodesChange}
                 onEdgesChange={onEdgesChange}
                 onConnect={onConnect}
-                onNodeClick={(_e, n) => setSelectedId(n.id)}
+                onNodeClick={(_e, n) => {
+                  setSettingsOpen(false);
+                  setSelectedId(n.id);
+                }}
                 onPaneClick={() => setSelectedId(null)}
                 fitView
                 colorMode="dark"
@@ -404,14 +429,21 @@ function Editor() {
               </ReactFlow>
             </EditorActionsContext.Provider>
           </div>
-          {selectedNode && (
+          {selectedNode ? (
             <PropertiesDrawer
               node={selectedNode}
               catalog={catalog.data}
               onChange={updateNode}
               onClose={() => setSelectedId(null)}
             />
-          )}
+          ) : settingsOpen ? (
+            <WorkflowSettingsDrawer
+              ui={meta.ui}
+              nodeIds={nodes.map((n) => n.id)}
+              onChange={(next) => setMeta((m) => ({ ...m, ui: next }))}
+              onClose={() => setSettingsOpen(false)}
+            />
+          ) : null}
         </div>
       </div>
     </AppShell>

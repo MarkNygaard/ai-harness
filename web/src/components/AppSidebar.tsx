@@ -55,6 +55,9 @@ const NAV_ICONS: Record<string, typeof IconRocket> = {
   checklist: IconClipboardCheck,
 };
 const DEFAULT_NAV_ICON = IconReportSearch;
+/** Icon keys a workflow may pick for `ui.nav.icon` (the builder's picker reads
+ *  this so its options stay in sync with what the sidebar can actually render). */
+export const NAV_ICON_KEYS = Object.keys(NAV_ICONS);
 // Everything you author or configure — the building blocks you define and the
 // system settings — kept out of Operations (which is run-observation only).
 const MANAGE: NavItem[] = [

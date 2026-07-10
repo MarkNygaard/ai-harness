@@ -88,7 +88,10 @@ export function toGraph(wf: EditorWorkflow): {
 export function fromGraph(
   nodes: Node<EditorNodeData>[],
   edges: Edge[],
-  meta: Pick<EditorWorkflow, "name" | "description" | "provider" | "model">,
+  meta: Pick<
+    EditorWorkflow,
+    "name" | "description" | "provider" | "model" | "ui"
+  >,
 ): EditorWorkflow {
   const depsByTarget = new Map<string, string[]>();
   for (const e of edges) {
