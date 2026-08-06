@@ -66,7 +66,7 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
 # Node (Claude Code + Codex CLIs are npm packages).
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code @openai/codex \
+    && npm install -g @anthropic-ai/claude-code@2.1.223 @openai/codex \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 
