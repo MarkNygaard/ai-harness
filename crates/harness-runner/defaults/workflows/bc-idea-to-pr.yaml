@@ -454,7 +454,7 @@ nodes:
     depends_on: [pi-review-fix-loop]
     provider: pi
     # gpt-5.x via omp on the ChatGPT subscription; id MUST be namespace-qualified.
-    model: openai-codex/gpt-5.5
+    model: openai-codex/gpt-5.6-sol
     context: fresh
     prompt: |
       Model-diverse review of an AL PR already implemented + self-reviewed. Find

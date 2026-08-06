@@ -304,7 +304,7 @@ nodes:
       # whole point of this guard. gpt-5.x via omp on the ChatGPT subscription;
       # the id MUST be namespace-qualified or the pi provider mis-prefixes it.
       provider: pi
-      model: openai-codex/gpt-5.5
+      model: openai-codex/gpt-5.6-sol
       # A loop (not a plain node) so a transient empty/failed reviewer turn gets
       # retried instead of silently waving the diff through. The
       # `require-behavior-review` gate below then fails the run loudly if the
