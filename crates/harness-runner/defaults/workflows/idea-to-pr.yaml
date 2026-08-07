@@ -522,7 +522,7 @@ nodes:
     # a bare name would be mis-prefixed to `kimi-code/...` by the pi provider.
     # Connect once on the cluster image: `omp /login` → "ChatGPT Plus/Pro
     # (Codex)". To see an account's exact list run `omp` → `/model`.
-    model: openai-codex/gpt-5.5
+    model: openai-codex/gpt-5.6-sol
     context: fresh
     prompt: |
       You are reviewing a PR that an upstream agent already authored

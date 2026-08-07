@@ -65,7 +65,7 @@ nodes:
         `gh pr view <pr-url> --json commits` (and `gh api
         repos/{owner}/{repo}/commits/{sha}` for per-commit additions/deletions if
         useful). Commit authors encode the step + model that made them, e.g.
-        `gpt-review-fix (openai-codex/gpt-5.5)` and
+        `gpt-review-fix (openai-codex/gpt-5.6-sol)` and
         `sonnet-review-fix (claude/sonnet)` — use that to separate the late
         reviewers' commits from the implement / early-review commits. If authors
         are a single generic identity (older runs predate per-step attribution),

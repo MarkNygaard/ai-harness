@@ -2131,7 +2131,7 @@ mod tests {
     #[test]
     fn ab_swap_replaces_every_kimi_occurrence_and_leaves_others() {
         // Real bundled workflow: kimi as the default + many node pins + a loop
-        // body, with gpt-5.5 and sonnet pinned on specialist review steps.
+        // body, with gpt-5.6-sol and sonnet pinned on specialist review steps.
         let yaml = harness_runner::default_workflow("idea-to-pr").expect("bundled idea-to-pr");
         let mut wf = parse_workflow(yaml).expect("idea-to-pr parses");
 
@@ -2143,8 +2143,8 @@ mod tests {
             "kimi present"
         );
         assert!(
-            has(&before, "pi", "openai-codex/gpt-5.5"),
-            "gpt-5.5 present"
+            has(&before, "pi", "openai-codex/gpt-5.6-sol"),
+            "gpt-5.6-sol present"
         );
         assert!(has(&before, "claude", "sonnet"), "sonnet present");
 
@@ -2172,8 +2172,8 @@ mod tests {
         );
         // Specialist review steps pinned to other models are untouched.
         assert!(
-            has(&after, "pi", "openai-codex/gpt-5.5"),
-            "gpt-5.5 unchanged"
+            has(&after, "pi", "openai-codex/gpt-5.6-sol"),
+            "gpt-5.6-sol unchanged"
         );
         assert!(has(&after, "claude", "sonnet"), "sonnet unchanged");
     }

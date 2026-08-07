@@ -184,7 +184,7 @@ mod tests {
             .find(|n| n.id == "gpt-review-fix")
             .expect("gpt review node exists");
         assert_eq!(node.provider.as_deref(), Some("pi"));
-        assert_eq!(node.model.as_deref(), Some("openai-codex/gpt-5.5"));
+        assert_eq!(node.model.as_deref(), Some("openai-codex/gpt-5.6-sol"));
     }
 
     #[test]
