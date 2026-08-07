@@ -3,6 +3,7 @@ import {
   IconDatabase,
   IconFolderCog,
   IconKey,
+  IconPencil,
   IconPlus,
   IconTrash,
 } from "@tabler/icons-react";
@@ -68,19 +69,20 @@ export function ProjectsPage() {
   return (
     <AppShell title="Projects">
       <div className="mx-auto flex max-w-4xl flex-col gap-5 p-6">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <IconFolderCog className="size-5 text-accent-orange" /> Projects
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            A project scopes runs to a git repo. Registering one clones it onto
-            the control plane; runs you trigger for it operate on an isolated
-            worktree off its base branch. Private repos use the global GitHub
-            token from the Credentials page.
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="flex items-center gap-2 text-lg font-semibold">
+              <IconFolderCog className="size-5 text-accent-orange" /> Projects
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A project scopes runs to a git repo. Registering one clones it
+              onto the control plane; runs you trigger for it operate on an
+              isolated worktree off its base branch. Private repos use the
+              global GitHub token from the Credentials page.
+            </p>
+          </div>
+          <RegisterProjectDialog />
         </div>
-
-        <RegisterForm />
 
         <section className="flex flex-col gap-2">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -168,25 +170,29 @@ function ProjectRow({ project }: { project: Project }) {
             </div>
           )}
         </div>
-        <ProjectLinearDialog project={project.name} />
-        <ProjectCredentialsDialog project={project.name} />
-        <ProjectEnvDialog project={project.name} />
-        <ProjectCacheDialog project={project} />
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            if (
-              confirm(`Deregister "${project.name}" and remove its checkout?`)
-            ) {
-              del.mutate(project.name);
-            }
-          }}
-          disabled={del.isPending}
-          title="Deregister + remove checkout"
-        >
-          <IconTrash className="size-3.5" /> Remove
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <ProjectEditDialog project={project} />
+          <ProjectLinearDialog project={project.name} />
+          <ProjectCredentialsDialog project={project.name} />
+          <ProjectEnvDialog project={project.name} />
+          <ProjectCacheDialog project={project} />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              if (
+                confirm(`Deregister "${project.name}" and remove its checkout?`)
+              ) {
+                del.mutate(project.name);
+              }
+            }}
+            disabled={del.isPending}
+            title="Deregister + remove checkout"
+            className="text-destructive hover:text-destructive"
+          >
+            <IconTrash className="size-3.5" />
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
@@ -199,10 +205,10 @@ function ProjectCredentialsDialog({ project }: { project: string }) {
     <Dialog>
       <DialogTrigger
         render={
-          <Button variant="ghost" size="sm" title="Project credentials" />
+          <Button variant="ghost" size="icon-sm" title="Project credentials" />
         }
       >
-        <IconKey className="size-3.5" /> Keys
+        <IconKey className="size-3.5" />
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -253,10 +259,10 @@ function ProjectCacheDialog({ project }: { project: Project }) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
-          <Button variant="ghost" size="sm" title="Build cache settings" />
+          <Button variant="ghost" size="icon-sm" title="Build cache settings" />
         }
       >
-        <IconDatabase className="size-3.5" /> Cache
+        <IconDatabase className="size-3.5" />
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -424,17 +430,37 @@ function CredentialField({
   );
 }
 
-function RegisterForm() {
+function ProjectForm({
+  initial,
+  onSaved,
+}: {
+  initial?: Project;
+  onSaved?: () => void;
+}) {
+  // Prefilled + name-locked = edit an existing project; blank = register a new
+  // one. Both submit the same upsert (POST /api/projects).
+  const editing = !!initial;
   const register = useRegisterProject();
-  const [name, setName] = useState("");
-  const [gitUrl, setGitUrl] = useState("");
-  const [baseBranch, setBaseBranch] = useState("");
-  const [defaultWorkflow, setDefaultWorkflow] = useState("");
-  const [externalUrl, setExternalUrl] = useState("");
-  const [toolchains, setToolchains] = useState("");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [gitUrl, setGitUrl] = useState(initial?.git_url ?? "");
+  const [baseBranch, setBaseBranch] = useState(initial?.base_branch ?? "");
+  const [defaultWorkflow, setDefaultWorkflow] = useState(
+    initial?.default_workflow ?? "",
+  );
+  const [externalUrl, setExternalUrl] = useState(initial?.external_url ?? "");
+  const [toolchains, setToolchains] = useState(
+    initial?.toolchains.join(", ") ?? "",
+  );
   // Extra repos for a multi-repo project. Empty = single-repo (the Git URL
   // above). Each row needs a url + folder; blank branch defaults to `main`.
-  const [repos, setRepos] = useState<ProjectRepo[]>([]);
+  const [repos, setRepos] = useState<ProjectRepo[]>(
+    initial?.repos.map((r) => ({
+      url: r.url,
+      base_branch: r.base_branch,
+      folder: r.folder,
+      role: r.role ?? "",
+    })) ?? [],
+  );
   const [warning, setWarning] = useState<string | null>(null);
 
   function addRepo() {
@@ -478,7 +504,10 @@ function RegisterForm() {
       {
         onSuccess: (res) => {
           setWarning(res.warning ?? null);
-          if (!res.warning) {
+          // A non-fatal repo warning stays on screen — keep the dialog open.
+          if (res.warning) return;
+          // Reset the fields in register mode (edit mode keeps the values).
+          if (!editing) {
             setName("");
             setGitUrl("");
             setBaseBranch("");
@@ -487,6 +516,8 @@ function RegisterForm() {
             setToolchains("");
             setRepos([]);
           }
+          // Both register and edit are modal now — close on success.
+          onSaved?.();
         },
       },
     );
@@ -495,180 +526,245 @@ function RegisterForm() {
   const nameOk = /^[A-Za-z0-9_-]{1,64}$/.test(name.trim());
 
   return (
-    <Card>
-      <CardContent className="py-4">
-        <form onSubmit={submit} className="flex flex-col gap-3">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">
-                Name (slug)
-              </span>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="ticket0"
-                className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-              />
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="text-xs font-medium text-muted-foreground">
-                Base branch (optional)
-              </span>
-              <input
-                value={baseBranch}
-                onChange={(e) => setBaseBranch(e.target.value)}
-                placeholder="auto-detect (e.g. main, develop)"
-                className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-              />
-            </label>
-          </div>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">
-              Git URL
-            </span>
-            <input
-              value={gitUrl}
-              onChange={(e) => setGitUrl(e.target.value)}
-              placeholder="https://github.com/you/ticket0.git"
-              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">
-              Default workflow (optional)
-            </span>
-            <input
-              value={defaultWorkflow}
-              onChange={(e) => setDefaultWorkflow(e.target.value)}
-              placeholder="idea-to-pr"
-              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-            />
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">
-              External URL (optional)
-            </span>
-            <input
-              value={externalUrl}
-              onChange={(e) => setExternalUrl(e.target.value)}
-              placeholder="https://ticket0.ai/"
-              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-            />
-            <span className="text-[10px] text-muted-foreground">
-              The project's deployed site. Exposed to runs as{" "}
-              <code>$EXTERNAL_URL</code> (used by flows that analyze the live
-              site, e.g. a GEO audit).
-            </span>
-          </label>
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-muted-foreground">
-              Toolchains (optional)
-            </span>
-            <input
-              value={toolchains}
-              onChange={(e) => setToolchains(e.target.value)}
-              placeholder="rust, node@22, pnpm"
-              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-            />
-            <span className="text-[10px] text-muted-foreground">
-              Installed on demand with mise before each run (cached, no image
-              rebuild).
-            </span>
-          </label>
+    <form onSubmit={submit} className="flex flex-col gap-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">
+            Name (slug)
+          </span>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="ticket0"
+            disabled={editing}
+            title={
+              editing
+                ? "The name is the project's key — remove & re-register to rename"
+                : undefined
+            }
+            className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-60"
+          />
+        </label>
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-muted-foreground">
+            Base branch (optional)
+          </span>
+          <input
+            value={baseBranch}
+            onChange={(e) => setBaseBranch(e.target.value)}
+            placeholder="auto-detect (e.g. main, develop)"
+            className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+          />
+        </label>
+      </div>
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-muted-foreground">
+          Git URL
+        </span>
+        <input
+          value={gitUrl}
+          onChange={(e) => setGitUrl(e.target.value)}
+          placeholder="https://github.com/you/ticket0.git"
+          className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+        />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-muted-foreground">
+          Default workflow (optional)
+        </span>
+        <input
+          value={defaultWorkflow}
+          onChange={(e) => setDefaultWorkflow(e.target.value)}
+          placeholder="idea-to-pr"
+          className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+        />
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-muted-foreground">
+          External URL (optional)
+        </span>
+        <input
+          value={externalUrl}
+          onChange={(e) => setExternalUrl(e.target.value)}
+          placeholder="https://ticket0.ai/"
+          className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+        />
+        <span className="text-[10px] text-muted-foreground">
+          The project's deployed site. Exposed to runs as{" "}
+          <code>$EXTERNAL_URL</code> (used by flows that analyze the live site,
+          e.g. a GEO audit).
+        </span>
+      </label>
+      <label className="flex flex-col gap-1">
+        <span className="text-xs font-medium text-muted-foreground">
+          Toolchains (optional)
+        </span>
+        <input
+          value={toolchains}
+          onChange={(e) => setToolchains(e.target.value)}
+          placeholder="rust, node@22, pnpm"
+          className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+        />
+        <span className="text-[10px] text-muted-foreground">
+          Installed on demand with mise before each run (cached, no image
+          rebuild).
+        </span>
+      </label>
 
-          {/* Multi-repo: additional repos checked out alongside the Git URL. */}
-          <div className="flex flex-col gap-2 rounded-md border border-border p-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-medium text-muted-foreground">
-                Additional repos (optional — multi-repo project)
-              </span>
+      {/* Multi-repo: additional repos checked out alongside the Git URL. */}
+      <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs font-medium text-muted-foreground">
+            Additional repos (optional — multi-repo project)
+          </span>
+          <Button type="button" size="sm" variant="outline" onClick={addRepo}>
+            <IconPlus className="size-3.5" /> Add repo
+          </Button>
+        </div>
+        <span className="text-[10px] text-muted-foreground">
+          Leave empty for a single-repo project. Add repos to span e.g. a
+          frontend + backend — each is checked out into its folder, and a run
+          works and opens a PR across whichever repos it changes. The Git URL
+          above is the primary repo.
+        </span>
+        {repos.map((repo, i) => (
+          <div
+            key={i}
+            className="flex flex-col gap-2 border-t border-border/50 pt-2"
+          >
+            <div className="grid gap-2 sm:grid-cols-2">
+              <input
+                value={repo.folder}
+                onChange={(e) => updateRepo(i, { folder: e.target.value })}
+                placeholder="folder (e.g. backend)"
+                className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              />
+              <input
+                value={repo.base_branch}
+                onChange={(e) => updateRepo(i, { base_branch: e.target.value })}
+                placeholder="base branch (default main)"
+                className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+            <input
+              value={repo.url}
+              onChange={(e) => updateRepo(i, { url: e.target.value })}
+              placeholder="https://github.com/you/backend.git"
+              className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+            />
+            <div className="flex items-center gap-2">
+              <input
+                value={repo.role ?? ""}
+                onChange={(e) => updateRepo(i, { role: e.target.value })}
+                placeholder="role (optional, e.g. orders + payments API)"
+                className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 text-[12px] outline-none focus:ring-2 focus:ring-ring"
+              />
               <Button
                 type="button"
                 size="sm"
-                variant="outline"
-                onClick={addRepo}
+                variant="ghost"
+                onClick={() => removeRepo(i)}
               >
-                <IconPlus className="size-3.5" /> Add repo
+                <IconTrash className="size-3.5" /> Remove
               </Button>
             </div>
-            <span className="text-[10px] text-muted-foreground">
-              Leave empty for a single-repo project. Add repos to span e.g. a
-              frontend + backend — each is checked out into its folder, and a
-              run works and opens a PR across whichever repos it changes. The
-              Git URL above is the primary repo.
-            </span>
-            {repos.map((repo, i) => (
-              <div
-                key={i}
-                className="flex flex-col gap-2 border-t border-border/50 pt-2"
-              >
-                <div className="grid gap-2 sm:grid-cols-2">
-                  <input
-                    value={repo.folder}
-                    onChange={(e) => updateRepo(i, { folder: e.target.value })}
-                    placeholder="folder (e.g. backend)"
-                    className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <input
-                    value={repo.base_branch}
-                    onChange={(e) =>
-                      updateRepo(i, { base_branch: e.target.value })
-                    }
-                    placeholder="base branch (default main)"
-                    className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-                  />
-                </div>
-                <input
-                  value={repo.url}
-                  onChange={(e) => updateRepo(i, { url: e.target.value })}
-                  placeholder="https://github.com/you/backend.git"
-                  className="h-8 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
-                />
-                <div className="flex items-center gap-2">
-                  <input
-                    value={repo.role ?? ""}
-                    onChange={(e) => updateRepo(i, { role: e.target.value })}
-                    placeholder="role (optional, e.g. orders + payments API)"
-                    className="h-8 flex-1 rounded-md border border-input bg-transparent px-2.5 text-[12px] outline-none focus:ring-2 focus:ring-ring"
-                  />
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => removeRepo(i)}
-                  >
-                    <IconTrash className="size-3.5" /> Remove
-                  </Button>
-                </div>
-              </div>
-            ))}
           </div>
+        ))}
+      </div>
 
-          <div className="flex items-center gap-2">
-            <Button
-              type="submit"
-              size="sm"
-              disabled={register.isPending || !nameOk || !gitUrl.trim()}
-            >
-              <IconPlus className="size-4" />
-              {register.isPending ? "Cloning…" : "Register project"}
-            </Button>
-            {name.trim() && !nameOk && (
-              <span className="text-xs text-destructive">
-                name must be [A-Za-z0-9_-], ≤64 chars
-              </span>
-            )}
-            {register.isError && (
-              <span className="text-xs text-destructive">
-                {register.error.message}
-              </span>
-            )}
-            {warning && (
-              <span className="text-xs text-status-running">{warning}</span>
-            )}
-          </div>
-        </form>
-      </CardContent>
-    </Card>
+      <div className="flex items-center gap-2">
+        <Button
+          type="submit"
+          size="sm"
+          disabled={register.isPending || !nameOk || !gitUrl.trim()}
+        >
+          {editing ? (
+            <IconPencil className="size-4" />
+          ) : (
+            <IconPlus className="size-4" />
+          )}
+          {register.isPending
+            ? editing
+              ? "Saving…"
+              : "Cloning…"
+            : editing
+              ? "Save changes"
+              : "Register project"}
+        </Button>
+        {name.trim() && !nameOk && (
+          <span className="text-xs text-destructive">
+            name must be [A-Za-z0-9_-], ≤64 chars
+          </span>
+        )}
+        {register.isError && (
+          <span className="text-xs text-destructive">
+            {register.error.message}
+          </span>
+        )}
+        {warning && (
+          <span className="text-xs text-status-running">{warning}</span>
+        )}
+      </div>
+    </form>
+  );
+}
+
+/** Pencil button opening a dialog with the project form prefilled — edit one
+ *  field without retyping everything (the name is locked; it's the upsert key). */
+function ProjectEditDialog({ project }: { project: Project }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={<Button variant="ghost" size="icon-sm" title="Edit project" />}
+      >
+        <IconPencil className="size-3.5" />
+      </DialogTrigger>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle className="font-mono text-base">
+            {project.name}
+          </DialogTitle>
+          <DialogDescription>
+            Update this project's settings. Saving re-registers it — metadata
+            applies immediately and the repo re-syncs. The name is the project's
+            key and can't be changed here.
+          </DialogDescription>
+        </DialogHeader>
+        <ProjectForm initial={project} onSaved={() => setOpen(false)} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** "Register project" button that opens the blank project form in a dialog, so
+ *  the form doesn't occupy the page when you're just browsing projects. */
+function RegisterProjectDialog() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button
+            size="sm"
+            className="shrink-0"
+            title="Register a new project"
+          />
+        }
+      >
+        <IconPlus className="size-4" /> Register project
+      </DialogTrigger>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Register project</DialogTitle>
+          <DialogDescription>
+            A project scopes runs to a git repo. Registering clones it onto the
+            control plane; private repos use the global GitHub token from the
+            Credentials page.
+          </DialogDescription>
+        </DialogHeader>
+        <ProjectForm onSaved={() => setOpen(false)} />
+      </DialogContent>
+    </Dialog>
   );
 }
