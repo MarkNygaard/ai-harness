@@ -90,9 +90,11 @@ export function ProjectLinearDialog({ project }: { project: string }) {
   return (
     <Dialog>
       <DialogTrigger
-        render={<Button variant="ghost" size="sm" title="Linear triggers" />}
+        render={
+          <Button variant="ghost" size="icon-sm" title="Linear triggers" />
+        }
       >
-        <IconBolt className="size-3.5" /> Linear
+        <IconBolt className="size-3.5" />
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>

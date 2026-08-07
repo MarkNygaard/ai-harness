@@ -69,23 +69,20 @@ export function ProjectsPage() {
   return (
     <AppShell title="Projects">
       <div className="mx-auto flex max-w-4xl flex-col gap-5 p-6">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <IconFolderCog className="size-5 text-accent-orange" /> Projects
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            A project scopes runs to a git repo. Registering one clones it onto
-            the control plane; runs you trigger for it operate on an isolated
-            worktree off its base branch. Private repos use the global GitHub
-            token from the Credentials page.
-          </p>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h1 className="flex items-center gap-2 text-lg font-semibold">
+              <IconFolderCog className="size-5 text-accent-orange" /> Projects
+            </h1>
+            <p className="mt-1 text-sm text-muted-foreground">
+              A project scopes runs to a git repo. Registering one clones it
+              onto the control plane; runs you trigger for it operate on an
+              isolated worktree off its base branch. Private repos use the
+              global GitHub token from the Credentials page.
+            </p>
+          </div>
+          <RegisterProjectDialog />
         </div>
-
-        <Card>
-          <CardContent className="py-4">
-            <ProjectForm />
-          </CardContent>
-        </Card>
 
         <section className="flex flex-col gap-2">
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -173,26 +170,29 @@ function ProjectRow({ project }: { project: Project }) {
             </div>
           )}
         </div>
-        <ProjectEditDialog project={project} />
-        <ProjectLinearDialog project={project.name} />
-        <ProjectCredentialsDialog project={project.name} />
-        <ProjectEnvDialog project={project.name} />
-        <ProjectCacheDialog project={project} />
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            if (
-              confirm(`Deregister "${project.name}" and remove its checkout?`)
-            ) {
-              del.mutate(project.name);
-            }
-          }}
-          disabled={del.isPending}
-          title="Deregister + remove checkout"
-        >
-          <IconTrash className="size-3.5" /> Remove
-        </Button>
+        <div className="flex shrink-0 items-center gap-1">
+          <ProjectEditDialog project={project} />
+          <ProjectLinearDialog project={project.name} />
+          <ProjectCredentialsDialog project={project.name} />
+          <ProjectEnvDialog project={project.name} />
+          <ProjectCacheDialog project={project} />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            onClick={() => {
+              if (
+                confirm(`Deregister "${project.name}" and remove its checkout?`)
+              ) {
+                del.mutate(project.name);
+              }
+            }}
+            disabled={del.isPending}
+            title="Deregister + remove checkout"
+            className="text-destructive hover:text-destructive"
+          >
+            <IconTrash className="size-3.5" />
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );
@@ -205,10 +205,10 @@ function ProjectCredentialsDialog({ project }: { project: string }) {
     <Dialog>
       <DialogTrigger
         render={
-          <Button variant="ghost" size="sm" title="Project credentials" />
+          <Button variant="ghost" size="icon-sm" title="Project credentials" />
         }
       >
-        <IconKey className="size-3.5" /> Keys
+        <IconKey className="size-3.5" />
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -259,10 +259,10 @@ function ProjectCacheDialog({ project }: { project: Project }) {
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
         render={
-          <Button variant="ghost" size="sm" title="Build cache settings" />
+          <Button variant="ghost" size="icon-sm" title="Build cache settings" />
         }
       >
-        <IconDatabase className="size-3.5" /> Cache
+        <IconDatabase className="size-3.5" />
       </DialogTrigger>
       <DialogContent>
         <DialogHeader>
@@ -504,12 +504,10 @@ function ProjectForm({
       {
         onSuccess: (res) => {
           setWarning(res.warning ?? null);
+          // A non-fatal repo warning stays on screen — keep the dialog open.
           if (res.warning) return;
-          if (editing) {
-            // Metadata saved (the repo may still be re-syncing) — close the dialog.
-            onSaved?.();
-          } else {
-            // Reset the form for the next registration.
+          // Reset the fields in register mode (edit mode keeps the values).
+          if (!editing) {
             setName("");
             setGitUrl("");
             setBaseBranch("");
@@ -518,6 +516,8 @@ function ProjectForm({
             setToolchains("");
             setRepos([]);
           }
+          // Both register and edit are modal now — close on success.
+          onSaved?.();
         },
       },
     );
@@ -716,11 +716,11 @@ function ProjectEditDialog({ project }: { project: Project }) {
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger
-        render={<Button variant="ghost" size="sm" title="Edit project" />}
+        render={<Button variant="ghost" size="icon-sm" title="Edit project" />}
       >
-        <IconPencil className="size-3.5" /> Edit
+        <IconPencil className="size-3.5" />
       </DialogTrigger>
-      <DialogContent className="max-h-[85vh] overflow-y-auto">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="font-mono text-base">
             {project.name}
@@ -732,6 +732,38 @@ function ProjectEditDialog({ project }: { project: Project }) {
           </DialogDescription>
         </DialogHeader>
         <ProjectForm initial={project} onSaved={() => setOpen(false)} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** "Register project" button that opens the blank project form in a dialog, so
+ *  the form doesn't occupy the page when you're just browsing projects. */
+function RegisterProjectDialog() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger
+        render={
+          <Button
+            size="sm"
+            className="shrink-0"
+            title="Register a new project"
+          />
+        }
+      >
+        <IconPlus className="size-4" /> Register project
+      </DialogTrigger>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Register project</DialogTitle>
+          <DialogDescription>
+            A project scopes runs to a git repo. Registering clones it onto the
+            control plane; private repos use the global GitHub token from the
+            Credentials page.
+          </DialogDescription>
+        </DialogHeader>
+        <ProjectForm onSaved={() => setOpen(false)} />
       </DialogContent>
     </Dialog>
   );

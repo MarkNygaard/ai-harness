@@ -124,10 +124,14 @@ export function ProjectEnvDialog({ project }: { project: string }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogTrigger
         render={
-          <Button variant="ghost" size="sm" title="Environment variables" />
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            title="Environment variables"
+          />
         }
       >
-        <IconBraces className="size-3.5" /> Env
+        <IconBraces className="size-3.5" />
       </DialogTrigger>
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
