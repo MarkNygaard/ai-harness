@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::{
     auth, billing_routes, categories_routes, credentials_routes, finding_routes, health_check,
     linear_routes, linear_source_routes, mcp_routes, password_reset, runs_routes, state::AppState,
-    workflows_routes,
+    system_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -70,6 +70,15 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/favicon.ico", get(crate::dashboard::favicon))
         .route("/health", get(health_check))
         .route("/auth/reset-password", post(password_reset))
+        // ── System: agent-CLI version + in-app update ───────────────────────
+        .route(
+            "/api/system/claude-version",
+            get(system_routes::claude_version),
+        )
+        .route(
+            "/api/system/claude-update",
+            post(system_routes::claude_update),
+        )
         // ── Runs API (harness-dag execution model) ──────────────────────────
         // Under /api so the SPA can own `/runs/{id}` as a client route.
         .route(

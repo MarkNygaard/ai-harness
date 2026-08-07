@@ -21,6 +21,7 @@ pub(crate) mod projects_routes;
 pub(crate) mod rate_limit;
 pub(crate) mod runs_routes;
 pub(crate) mod state;
+pub(crate) mod system_routes;
 pub(crate) mod usage_routes;
 pub(crate) mod workflows_routes;
 
@@ -42,6 +43,13 @@ pub async fn serve(server: Arc<HarnessServer>, addr: SocketAddr) -> anyhow::Resu
     crate::handlers::dashboard::SERVER_START.get_or_init(std::time::Instant::now);
 
     let state = Arc::new(build_app_state(server.clone()).await?);
+
+    // Best-effort: seed an updatable Claude Code into $HOME/.local so the in-app
+    // updater has a user-writable, PATH-priority target (the image copy is
+    // root-owned). Spawned so it never blocks accepting connections.
+    tokio::spawn(system_routes::bootstrap_claude_code(
+        state.core.home_dir.clone(),
+    ));
 
     // Startup summary — one clean line instead of scattered logs.
     tracing::info!(

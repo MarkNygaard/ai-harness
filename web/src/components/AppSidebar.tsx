@@ -22,6 +22,7 @@ import {
 import { cn } from "@/lib/utils";
 import { useRuns } from "@/lib/runs";
 import { useWorkflowList } from "@/lib/authoring";
+import { ClaudeCodeVersion } from "@/components/ClaudeCodeVersion";
 import {
   Sidebar,
   SidebarContent,
@@ -231,6 +232,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        <ClaudeCodeVersion />
       </SidebarFooter>
     </Sidebar>
   );
