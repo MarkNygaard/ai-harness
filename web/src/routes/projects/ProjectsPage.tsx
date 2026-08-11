@@ -44,11 +44,6 @@ const PROJECT_CRED_META: Record<
   string,
   { label: string; placeholder: string; help: string; secret?: boolean }
 > = {
-  api_key: {
-    label: "Linear API key",
-    placeholder: "lin_api_…",
-    help: "Personal API key for this project's Linear workspace. Overrides the global Linear key; used by the Linear trigger to discover teams and claim issues.",
-  },
   token: {
     label: "GitHub token",
     placeholder: "ghp_… / github_pat_…",

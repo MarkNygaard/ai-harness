@@ -5,10 +5,12 @@
 //! fire" preview before anything is wired up.
 //!
 //! - `GET /api/linear/discovery`            — teams + workflow states + labels
-//! - `GET /api/linear/preview?team=&state=&label=` — matching issues (preview)
+//! - `GET /api/linear/preview?team=&state=` — matching issues (preview)
 //!
-//! The Linear API key is read from the encrypted credential store under provider
-//! `linear` (field `api_key`); absent → a 4xx telling the operator to connect.
+//! Auth comes from the global `linear` credential in the encrypted store: the
+//! `actor=app` OAuth token once the workspace is connected, else a legacy
+//! `api_key`; neither → a 4xx telling the operator to connect. The `{project}`
+//! in the paths scopes the *bindings*, not the credential.
 
 use std::sync::Arc;
 
@@ -25,44 +27,21 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
 }
 
-/// Build a Linear client from the stored credential, or a 4xx/5xx response.
-async fn linear_client(state: &Arc<RunsState>, project: &str) -> Result<LinearClient, Response> {
-    let store = state
-        .cred_store()
+/// Build a Linear client from the stored credential, or a 4xx response.
+/// Attribution and token freshness are decided in
+/// [`linear_client`](super::linear_oauth::linear_client).
+async fn client(state: &Arc<RunsState>) -> Result<LinearClient, Response> {
+    super::linear_oauth::linear_client(state)
         .await
-        .map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, e))?;
-    // Project-scoped key first, then the global `linear` credential.
-    let fields = store
-        .get_for_project(project, "linear")
-        .await
-        .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .ok_or_else(|| {
-            err(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "Linear not connected for `{project}` — store an API key (project or global) under provider `linear`"
-                ),
-            )
-        })?;
-    let key = fields
-        .get("api_key")
-        .filter(|k| !k.is_empty())
-        .ok_or_else(|| {
-            err(
-                StatusCode::BAD_REQUEST,
-                "Linear credential is missing the `api_key` field",
-            )
-        })?;
-    Ok(LinearClient::new(key))
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
 }
 
-/// `GET /api/projects/{project}/linear/discovery` — teams + states + labels,
-/// using the project's Linear key (or the global fallback).
+/// `GET /api/projects/{project}/linear/discovery` — teams + states + labels.
 pub async fn discovery(
     Extension(state): Extension<Arc<RunsState>>,
-    AxumPath(project): AxumPath<String>,
+    AxumPath(_project): AxumPath<String>,
 ) -> Response {
-    let client = match linear_client(&state, &project).await {
+    let client = match client(&state).await {
         Ok(c) => c,
         Err(resp) => return resp,
     };
@@ -76,26 +55,33 @@ pub async fn discovery(
 pub struct PreviewQuery {
     pub team: String,
     pub state: String,
-    #[serde(default)]
-    pub label: Option<String>,
 }
 
-/// `GET /api/projects/{project}/linear/preview?team=&state=&label=` — issues the
-/// filter matches, using the project's Linear key. Read-only; nothing is claimed.
+/// `GET /api/projects/{project}/linear/preview?team=&state=` — the issues a
+/// binding would actually claim: in that status **and** delegated to the harness.
+/// Read-only; nothing is claimed.
 pub async fn preview(
     Extension(state): Extension<Arc<RunsState>>,
-    AxumPath(project): AxumPath<String>,
+    AxumPath(_project): AxumPath<String>,
     Query(q): Query<PreviewQuery>,
 ) -> Response {
     if q.team.trim().is_empty() || q.state.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "`team` and `state` are required");
     }
-    let client = match linear_client(&state, &project).await {
+    let client = match client(&state).await {
         Ok(c) => c,
         Err(resp) => return resp,
     };
-    let label = q.label.as_deref().filter(|l| !l.is_empty());
-    match client.preview_issues(&q.team, &q.state, label).await {
+    // Mirrors the poller's gate exactly, so the preview can't promise more than
+    // the poller would take.
+    let Some(delegate_id) = super::linear_oauth::app_user_id(&state).await else {
+        return err(
+            StatusCode::PRECONDITION_FAILED,
+            "the harness's Linear app user id is unknown — reconnect the workspace on the \
+             Credentials page so delegated issues can be identified",
+        );
+    };
+    match client.preview_issues(&q.team, &q.state, &delegate_id).await {
         Ok(issues) => {
             Json(serde_json::json!({ "count": issues.len(), "issues": issues })).into_response()
         }

@@ -27,6 +27,12 @@ CREATE TABLE IF NOT EXISTS harness_linear_claims (
     created_at        timestamptz NOT NULL DEFAULT now()
 )";
 
+/// Runs triggered by **delegation** carry the Linear agent session that asked for
+/// them, so status-sync can report progress back into that session's thread
+/// instead of as a detached comment. Null for poller-claimed runs.
+const ADD_AGENT_SESSION_ID: &str =
+    "ALTER TABLE harness_linear_claims ADD COLUMN IF NOT EXISTS agent_session_id text";
+
 /// A claim row (matches `harness_linear_claims`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LinearClaim {
@@ -41,6 +47,10 @@ pub struct LinearClaim {
     pub original_state_id: String,
     /// `claimed` → `in_review` → `done`.
     pub phase: String,
+    /// Linear agent session that delegated this run, when it came from a
+    /// delegation/mention rather than the column poller. Progress is reported
+    /// into this session as agent activities.
+    pub agent_session_id: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -60,10 +70,14 @@ impl LinearClaimStore {
 
     pub async fn from_pool(pool: PgPool) -> Result<Self, PersistError> {
         sqlx::query(CREATE_LINEAR_CLAIMS).execute(&pool).await?;
+        sqlx::query(ADD_AGENT_SESSION_ID).execute(&pool).await?;
         Ok(Self { pool })
     }
 
     /// Record a new claim (phase `claimed`). Idempotent on `run_id`.
+    ///
+    /// `agent_session_id` links the claim to the Linear agent session that
+    /// delegated the work; `None` for a run the column poller claimed itself.
     #[allow(clippy::too_many_arguments)]
     pub async fn record(
         &self,
@@ -73,11 +87,13 @@ impl LinearClaimStore {
         issue_id: &str,
         identifier: &str,
         original_state_id: &str,
+        agent_session_id: Option<&str>,
     ) -> Result<(), PersistError> {
         sqlx::query(
             "INSERT INTO harness_linear_claims
-                (run_id, project, workflow, issue_id, identifier, original_state_id, phase, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, 'claimed', now())
+                (run_id, project, workflow, issue_id, identifier, original_state_id,
+                 phase, agent_session_id, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, 'claimed', $7, now())
              ON CONFLICT (run_id) DO NOTHING",
         )
         .bind(run_id)
@@ -86,6 +102,7 @@ impl LinearClaimStore {
         .bind(issue_id)
         .bind(identifier)
         .bind(original_state_id)
+        .bind(agent_session_id)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -110,7 +127,7 @@ impl LinearClaimStore {
     pub async fn list_active(&self) -> Result<Vec<LinearClaim>, PersistError> {
         let rows = sqlx::query_as::<_, LinearClaim>(
             "SELECT run_id, project, workflow, issue_id, identifier, original_state_id,
-                    phase, created_at
+                    phase, agent_session_id, created_at
              FROM harness_linear_claims
              WHERE phase <> 'done'
              ORDER BY created_at",
@@ -154,12 +171,35 @@ impl LinearClaimStore {
         Ok(row.0)
     }
 
+    /// Whether any claim already exists for this Linear **agent session** — the
+    /// idempotency check for a redelivered `AgentSessionEvent`.
+    ///
+    /// Linear resends a delivery that took over 5 seconds (then again after 1
+    /// minute, 1 hour and 6 hours), and each resend carries the same session id.
+    /// Without this, a slow first response would start a second run for one
+    /// delegation. Deliberately *not* a unique constraint on the column: a Rerun
+    /// re-records the same session against a new `run_id` on purpose.
+    pub async fn claim_exists_for_session(
+        &self,
+        agent_session_id: &str,
+    ) -> Result<bool, PersistError> {
+        let row: (bool,) = sqlx::query_as(
+            "SELECT EXISTS (
+                 SELECT 1 FROM harness_linear_claims WHERE agent_session_id = $1
+             )",
+        )
+        .bind(agent_session_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
+    }
+
     /// The claim a given run was fired for, if any. `None` means the run wasn't
     /// Linear-triggered (no claim linkage) — e.g. a manual or MCP run.
     pub async fn claim_for_run(&self, run_id: &str) -> Result<Option<LinearClaim>, PersistError> {
         let row = sqlx::query_as::<_, LinearClaim>(
             "SELECT run_id, project, workflow, issue_id, identifier, original_state_id,
-                    phase, created_at
+                    phase, agent_session_id, created_at
              FROM harness_linear_claims
              WHERE run_id = $1",
         )
@@ -246,7 +286,7 @@ mod tests {
         put_run(&pool, &rid("ok"), "completed").await;
         for run in [rid("f1"), rid("f2"), rid("ok")] {
             store
-                .record(&run, "proj", "idea-to-pr", &issue, "PROJ-1", "todo")
+                .record(&run, "proj", "idea-to-pr", &issue, "PROJ-1", "todo", None)
                 .await
                 .unwrap();
         }
@@ -286,11 +326,11 @@ mod tests {
         assert_eq!(store.count_active(&project, wf).await.unwrap(), 0);
 
         store
-            .record("ca-run-1", &project, wf, "iss-1", "P-1", "todo")
+            .record("ca-run-1", &project, wf, "iss-1", "P-1", "todo", None)
             .await
             .unwrap();
         store
-            .record("ca-run-2", &project, wf, "iss-2", "P-2", "todo")
+            .record("ca-run-2", &project, wf, "iss-2", "P-2", "todo", None)
             .await
             .unwrap();
         assert_eq!(store.count_active(&project, wf).await.unwrap(), 2);
@@ -326,11 +366,11 @@ mod tests {
         put_run(&pool, &rr1, "failed").await;
         put_run(&pool, &rr2, "failed").await;
         store
-            .record(&rr1, "proj", "wf", &issue, "P-1", "todo")
+            .record(&rr1, "proj", "wf", &issue, "P-1", "todo", None)
             .await
             .unwrap();
         store
-            .record(&rr2, "proj", "wf", &issue, "P-1", "todo")
+            .record(&rr2, "proj", "wf", &issue, "P-1", "todo", None)
             .await
             .unwrap();
 

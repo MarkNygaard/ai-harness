@@ -1,9 +1,11 @@
 //! Linear GraphQL client — read-only discovery + issue preview (Slice 1).
 //!
-//! Auth uses a Linear **personal API key** in the `Authorization` header (raw
-//! key, not `Bearer`). Parsing is split from the HTTP call so the response
-//! shaping is unit-tested with fixtures (no mock server), matching the
-//! `intake/github_issues` pattern.
+//! Auth is either an **OAuth access token** from an `actor=app` install (sent as
+//! `Bearer …`, so Linear attributes writes to the application) or a legacy
+//! **personal API key** (sent verbatim, which attributes every write to the
+//! human who minted the key) — see [`LinearAuth`]. Parsing is split from the
+//! HTTP call so the response shaping is unit-tested with fixtures (no mock
+//! server), matching the `intake/github_issues` pattern.
 
 use serde::{Deserialize, Serialize};
 
@@ -46,6 +48,16 @@ pub struct WorkflowState {
 pub struct Label {
     pub id: String,
     pub name: String,
+}
+
+/// The Linear workspace a credential belongs to — recorded at connect time so
+/// the UI can name what it's talking to.
+#[derive(Debug, Clone, Serialize)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+    /// The workspace's URL slug (`linear.app/<url_key>/…`).
+    pub url_key: String,
 }
 
 /// A newly created issue — the fields surfaced back to the caller.
@@ -117,6 +129,19 @@ struct LabelNode {
 }
 
 #[derive(Deserialize)]
+struct OrganizationData {
+    organization: OrganizationNode,
+}
+
+#[derive(Deserialize)]
+struct OrganizationNode {
+    id: String,
+    name: String,
+    #[serde(rename = "urlKey")]
+    url_key: String,
+}
+
+#[derive(Deserialize)]
 struct IssuesData {
     issues: Conn<IssueNode>,
 }
@@ -180,9 +205,49 @@ query Discovery {
   }
 }"#;
 
+// Cheapest possible authenticated query — used as the connect-time probe that a
+// freshly exchanged token works, and to record which workspace it belongs to.
+const ORGANIZATION_QUERY: &str = r#"
+query Organization {
+  organization { id name urlKey }
+}"#;
+
+// The app's own user id in this workspace. Under an `actor=app` token `viewer`
+// resolves to the app user, which is who delegated issues are assigned to.
+const ME_QUERY: &str = r#"
+query Me {
+  viewer { id }
+}"#;
+
+const AGENT_ACTIVITY_MUTATION: &str = r#"
+mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
+  agentActivityCreate(input: $input) { success }
+}"#;
+
+// Where a single issue sits — the team that maps it to a project binding, and the
+// status that binding gates on. `state` is non-null on Issue; `delegate` is null
+// until an agent is delegated to it.
+const ISSUE_CONTEXT_QUERY: &str = r#"
+query IssueContext($id: String!) {
+  issue(id: $id) {
+    team { id }
+    state { id name }
+    delegate { id }
+  }
+}"#;
+
+// Issues in a team's column that are **delegated to this app**. `delegate`
+// (`IssueFilter.delegate: NullableUserFilter`) is Linear's agent-delegation
+// field — "the agent user that is delegated to work on this issue" — and is what
+// replaced the old eligibility label as the pickup signal. Filtering server-side
+// keeps the response small and makes the gate unmissable.
 const ISSUES_QUERY: &str = r#"
-query Preview($teamId: ID!, $stateId: ID!) {
-  issues(first: 50, filter: { team: { id: { eq: $teamId } }, state: { id: { eq: $stateId } } }) {
+query Preview($teamId: ID!, $stateId: ID!, $delegateId: ID!) {
+  issues(first: 50, filter: {
+    team: { id: { eq: $teamId } },
+    state: { id: { eq: $stateId } },
+    delegate: { id: { eq: $delegateId } }
+  }) {
     nodes { id identifier title url description labels { nodes { name } } }
   }
 }"#;
@@ -286,8 +351,20 @@ pub fn parse_discovery(json: &[u8]) -> Result<Discovery, LinearError> {
     Ok(Discovery { teams })
 }
 
-/// Parse an issues response, optionally keeping only issues carrying `label`.
-pub fn parse_issues(json: &[u8], label: Option<&str>) -> Result<Vec<Issue>, LinearError> {
+/// Parse an organization response into a [`Workspace`].
+pub fn parse_organization(json: &[u8]) -> Result<Workspace, LinearError> {
+    let data: OrganizationData = gql_data(json)?;
+    Ok(Workspace {
+        id: data.organization.id,
+        name: data.organization.name,
+        url_key: data.organization.url_key,
+    })
+}
+
+/// Parse an issues response. `labels` are still returned per issue — the
+/// failed-label lifecycle filters on them — but there is no eligibility-label
+/// gate any more: work reaches the harness by being delegated to it in Linear.
+pub fn parse_issues(json: &[u8]) -> Result<Vec<Issue>, LinearError> {
     let data: IssuesData = gql_data(json)?;
     let issues = data
         .issues
@@ -303,10 +380,6 @@ pub fn parse_issues(json: &[u8], label: Option<&str>) -> Result<Vec<Issue>, Line
                 .labels
                 .map(|c| c.nodes.into_iter().map(|l| l.name).collect())
                 .unwrap_or_default(),
-        })
-        .filter(|i| match label {
-            Some(l) => i.labels.iter().any(|x| x == l),
-            None => true,
         })
         .collect();
     Ok(issues)
@@ -329,19 +402,333 @@ pub fn parse_comments(json: &[u8]) -> Result<Vec<Comment>, LinearError> {
     Ok(comments)
 }
 
+// ── Agent sessions (delegation / @-mention) ──────────────────────────────────
+//
+// Delegating an issue to the app — or @-mentioning it — makes Linear open an
+// **agent session** and deliver an `AgentSessionEvent` webhook. The session is
+// the conversation surface: the harness reports progress into it as *agent
+// activities* rather than as plain comments, and Linear marks a session
+// unresponsive if no activity arrives within 10 seconds of `created`.
+
+/// Which agent-session event arrived.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentSessionAction {
+    /// A session was opened (the issue was delegated, or the app was mentioned).
+    Created,
+    /// A follow-up message was posted into an existing session.
+    Prompted,
+    /// Any other action Linear may add; carried through so callers can ignore it
+    /// without the parse failing.
+    Other(String),
+}
+
+/// A parsed `AgentSessionEvent` webhook — the trigger for a delegated run.
+///
+/// Every field except `action` and `session_id` is optional: Linear's payload
+/// varies by how the session was opened (delegation carries the issue, a mention
+/// in a thread carries the comment), and being permissive here means an
+/// unexpected shape degrades into a session we can still acknowledge instead of
+/// a rejected webhook.
+#[derive(Debug, Clone)]
+pub struct AgentSessionEvent {
+    pub action: AgentSessionAction,
+    /// Target for [`LinearClient::create_agent_activity`].
+    pub session_id: String,
+    pub issue_id: Option<String>,
+    pub issue_identifier: Option<String>,
+    pub issue_title: Option<String>,
+    pub issue_description: Option<String>,
+    /// Body of the comment that opened the session, when it was a mention.
+    pub comment_body: Option<String>,
+    /// Linear's pre-formatted summary of the session's context.
+    pub prompt_context: Option<String>,
+    /// Workspace/team-level instructions for agents.
+    pub guidance: Option<String>,
+    /// The new message on a `prompted` event.
+    pub prompt_body: Option<String>,
+}
+
+impl AgentSessionEvent {
+    /// The task text to hand a workflow: prefer the issue's own description,
+    /// falling back to Linear's formatted context, then the triggering comment.
+    pub fn task_text(&self) -> Option<&str> {
+        [
+            self.issue_description.as_deref(),
+            self.prompt_context.as_deref(),
+            self.comment_body.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|s| !s.trim().is_empty())
+    }
+}
+
+/// An activity the agent emits into a session. `Response` is what tells Linear
+/// the work is finished — sessions complete on it, so it is sent exactly once.
+#[derive(Debug, Clone)]
+pub enum AgentActivity {
+    /// Internal reasoning. The `created` acknowledgement must be one of these.
+    Thought { body: String },
+    /// A step being taken. `result` is filled in when it's known.
+    Action {
+        action: String,
+        parameter: String,
+        result: Option<String>,
+    },
+    /// Terminal success — completes the session.
+    Response { body: String },
+    /// Terminal failure.
+    Error { body: String },
+}
+
+impl AgentActivity {
+    /// The `content` object of an `agentActivityCreate` input.
+    fn content(&self) -> serde_json::Value {
+        match self {
+            Self::Thought { body } => serde_json::json!({ "type": "thought", "body": body }),
+            Self::Action {
+                action,
+                parameter,
+                result,
+            } => {
+                let mut v = serde_json::json!({
+                    "type": "action", "action": action, "parameter": parameter,
+                });
+                if let Some(r) = result {
+                    v["result"] = serde_json::Value::String(r.clone());
+                }
+                v
+            }
+            Self::Response { body } => serde_json::json!({ "type": "response", "body": body }),
+            Self::Error { body } => serde_json::json!({ "type": "error", "body": body }),
+        }
+    }
+}
+
+// Wire types for the webhook payload. All nested pieces are optional — see
+// `AgentSessionEvent`.
+#[derive(Deserialize)]
+struct AgentSessionEventWire {
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    action: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "agentSession")]
+    agent_session: Option<AgentSessionWire>,
+    #[serde(default)]
+    #[serde(rename = "agentActivity")]
+    agent_activity: Option<AgentActivityWire>,
+    #[serde(default)]
+    #[serde(rename = "promptContext")]
+    prompt_context: Option<String>,
+    #[serde(default)]
+    guidance: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AgentSessionWire {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    issue: Option<SessionIssueWire>,
+    #[serde(default)]
+    comment: Option<SessionCommentWire>,
+    // Linear also supplies these at session level on some payloads.
+    #[serde(default)]
+    #[serde(rename = "promptContext")]
+    prompt_context: Option<String>,
+    #[serde(default)]
+    guidance: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SessionIssueWire {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    identifier: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct SessionCommentWire {
+    #[serde(default)]
+    body: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AgentActivityWire {
+    #[serde(default)]
+    body: Option<String>,
+}
+
+/// Parse an agent-session webhook body.
+///
+/// `Ok(None)` means "not an agent-session event" — Linear delivers other event
+/// types to the same endpoint, and those are acknowledged and ignored rather
+/// than treated as errors.
+pub fn parse_agent_session_event(json: &[u8]) -> Result<Option<AgentSessionEvent>, LinearError> {
+    let wire: AgentSessionEventWire =
+        serde_json::from_slice(json).map_err(|e| LinearError(format!("bad webhook: {e}")))?;
+    if wire.kind != "AgentSessionEvent" {
+        return Ok(None);
+    }
+    let action = match wire.action.as_deref() {
+        Some("created") => AgentSessionAction::Created,
+        Some("prompted") => AgentSessionAction::Prompted,
+        Some(other) => AgentSessionAction::Other(other.to_string()),
+        None => return Err(LinearError("agent session event had no action".into())),
+    };
+    let session = wire.agent_session;
+    let session_id = session
+        .as_ref()
+        .and_then(|s| s.id.clone())
+        .ok_or_else(|| LinearError("agent session event had no agentSession.id".into()))?;
+    let issue = session.as_ref().and_then(|s| s.issue.as_ref());
+    Ok(Some(AgentSessionEvent {
+        action,
+        session_id,
+        issue_id: issue.and_then(|i| i.id.clone()),
+        issue_identifier: issue.and_then(|i| i.identifier.clone()),
+        issue_title: issue.and_then(|i| i.title.clone()),
+        issue_description: issue.and_then(|i| i.description.clone()),
+        comment_body: session
+            .as_ref()
+            .and_then(|s| s.comment.as_ref())
+            .and_then(|c| c.body.clone()),
+        // Top-level wins; Linear has carried this at either level.
+        prompt_context: wire
+            .prompt_context
+            .or_else(|| session.as_ref().and_then(|s| s.prompt_context.clone())),
+        guidance: wire
+            .guidance
+            .or_else(|| session.as_ref().and_then(|s| s.guidance.clone())),
+        prompt_body: wire.agent_activity.and_then(|a| a.body),
+    }))
+}
+
+/// Where an issue sits: the team it belongs to, the status it is in, and the
+/// agent (if any) it is delegated to. Every field is optional so an unresolvable
+/// id degrades instead of erroring.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct IssueContext {
+    pub team_id: Option<String>,
+    pub state_id: Option<String>,
+    /// Human-readable status name, for messages ("… is in Backlog").
+    pub state_name: Option<String>,
+    /// The agent user delegated to this issue, if any.
+    pub delegate_id: Option<String>,
+}
+
+/// Parse an issue's team / status / delegate. An unresolvable issue id yields a
+/// default (all-`None`) context rather than an error.
+pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        issue: Option<IssueNode>,
+    }
+    #[derive(Deserialize)]
+    struct IssueNode {
+        #[serde(default)]
+        team: Option<IdRef>,
+        #[serde(default)]
+        state: Option<StateRef>,
+        #[serde(default)]
+        delegate: Option<IdRef>,
+    }
+    #[derive(Deserialize)]
+    struct IdRef {
+        id: String,
+    }
+    #[derive(Deserialize)]
+    struct StateRef {
+        id: String,
+        #[serde(default)]
+        name: Option<String>,
+    }
+    let data: Data = gql_data(json)?;
+    let Some(issue) = data.issue else {
+        return Ok(IssueContext::default());
+    };
+    Ok(IssueContext {
+        team_id: issue.team.map(|t| t.id),
+        state_id: issue.state.as_ref().map(|s| s.id.clone()),
+        state_name: issue.state.and_then(|s| s.name),
+        delegate_id: issue.delegate.map(|d| d.id),
+    })
+}
+
+/// Parse `query Me { viewer { id } }` — the app's user id in this workspace.
+pub fn parse_app_user_id(json: &[u8]) -> Result<String, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        viewer: Viewer,
+    }
+    #[derive(Deserialize)]
+    struct Viewer {
+        id: String,
+    }
+    let data: Data = gql_data(json)?;
+    Ok(data.viewer.id)
+}
+
 // ── HTTP client ──────────────────────────────────────────────────────────────
 
-/// A read-only Linear GraphQL client.
+/// How a [`LinearClient`] authenticates — and therefore **who Linear records as
+/// the author** of everything the harness writes.
+#[derive(Debug, Clone)]
+pub enum LinearAuth {
+    /// An OAuth access token from an `actor=app` install. Sent as `Bearer …`;
+    /// comments, status moves and attachments are attributed to the *application*.
+    /// This is the intended mode.
+    OauthToken(String),
+    /// A personal API key, sent in `Authorization` **verbatim** (not `Bearer`).
+    /// Legacy: Linear resolves the key to the person who minted it, so the
+    /// harness's comments read as written by that human.
+    PersonalKey(String),
+}
+
+impl LinearAuth {
+    /// The `Authorization` header value for this scheme.
+    fn header_value(&self) -> String {
+        match self {
+            // Linear's OAuth tokens are ordinary bearer tokens.
+            Self::OauthToken(t) => format!("Bearer {t}"),
+            Self::PersonalKey(k) => k.clone(),
+        }
+    }
+
+    /// Whether writes made with this credential are attributed to the app
+    /// rather than a human — what the UI reports as the connection mode.
+    pub fn is_app_actor(&self) -> bool {
+        matches!(self, Self::OauthToken(_))
+    }
+}
+
+/// A Linear GraphQL client.
 pub struct LinearClient {
     http: reqwest::Client,
-    api_key: String,
+    auth: LinearAuth,
 }
 
 impl LinearClient {
+    /// Build a client from a **personal API key** (legacy attribution — see
+    /// [`LinearAuth::PersonalKey`]). Prefer [`Self::with_auth`] with an
+    /// [`LinearAuth::OauthToken`].
     pub fn new(api_key: impl Into<String>) -> Self {
+        Self::with_auth(LinearAuth::PersonalKey(api_key.into()))
+    }
+
+    /// Build a client for an explicit auth scheme.
+    pub fn with_auth(auth: LinearAuth) -> Self {
         Self {
             http: reqwest::Client::new(),
-            api_key: api_key.into(),
+            auth,
         }
     }
 
@@ -349,8 +736,7 @@ impl LinearClient {
         let resp = self
             .http
             .post(LINEAR_GRAPHQL_URL)
-            // Personal API keys go in `Authorization` verbatim (not `Bearer`).
-            .header(reqwest::header::AUTHORIZATION, &self.api_key)
+            .header(reqwest::header::AUTHORIZATION, self.auth.header_value())
             .json(&body)
             .send()
             .await
@@ -370,25 +756,73 @@ impl LinearClient {
         Ok(bytes.to_vec())
     }
 
+    /// The workspace this credential belongs to — also the cheapest probe that
+    /// the credential authenticates at all.
+    pub async fn organization(&self) -> Result<Workspace, LinearError> {
+        let body = serde_json::json!({ "query": ORGANIZATION_QUERY });
+        parse_organization(&self.post(body).await?)
+    }
+
+    /// The app's own user id in this workspace (`viewer` under an app-actor
+    /// token). Recorded at connect time so delegated issues can be recognised.
+    pub async fn app_user_id(&self) -> Result<String, LinearError> {
+        let body = serde_json::json!({ "query": ME_QUERY });
+        parse_app_user_id(&self.post(body).await?)
+    }
+
+    /// Where an issue sits — team, status and delegated agent.
+    pub async fn issue_context(&self, issue_id: &str) -> Result<IssueContext, LinearError> {
+        let body = serde_json::json!({
+            "query": ISSUE_CONTEXT_QUERY,
+            "variables": { "id": issue_id },
+        });
+        parse_issue_context(&self.post(body).await?)
+    }
+
+    /// Emit an activity into an agent session.
+    ///
+    /// Time-critical for the first one: Linear marks a session unresponsive if
+    /// nothing arrives within 10 seconds of the `created` webhook, so the
+    /// acknowledging [`AgentActivity::Thought`] is sent before any slower work.
+    pub async fn create_agent_activity(
+        &self,
+        session_id: &str,
+        activity: &AgentActivity,
+    ) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": AGENT_ACTIVITY_MUTATION,
+            "variables": { "input": {
+                "agentSessionId": session_id,
+                "content": activity.content(),
+            }},
+        });
+        expect_mutation_success(&self.post(body).await?, "agentActivityCreate")
+    }
+
     /// List the workspace's teams + states + labels.
     pub async fn discover(&self) -> Result<Discovery, LinearError> {
         let body = serde_json::json!({ "query": DISCOVERY_QUERY });
         parse_discovery(&self.post(body).await?)
     }
 
-    /// Preview the issues a `team + state (+ optional label)` filter matches.
-    /// Read-only — does not claim or modify anything.
+    /// Issues in `team + state` that are **delegated to `delegate_id`** (the
+    /// harness's own app user). Read-only — does not claim or modify anything.
+    ///
+    /// Both gates are deliberate: delegation says a human wants the harness on
+    /// it, the status says the work is ready to start.
     pub async fn preview_issues(
         &self,
         team_id: &str,
         state_id: &str,
-        label: Option<&str>,
+        delegate_id: &str,
     ) -> Result<Vec<Issue>, LinearError> {
         let body = serde_json::json!({
             "query": ISSUES_QUERY,
-            "variables": { "teamId": team_id, "stateId": state_id },
+            "variables": {
+                "teamId": team_id, "stateId": state_id, "delegateId": delegate_id,
+            },
         });
-        parse_issues(&self.post(body).await?, label)
+        parse_issues(&self.post(body).await?)
     }
     /// List an issue's comments (read-only). `issue_id` is the Linear internal
     /// id (the `id` field of a previewed [`Issue`]), not the `COR-12` identifier.
@@ -533,6 +967,244 @@ mod tests {
     use super::*;
 
     #[test]
+    fn oauth_tokens_are_bearer_personal_keys_are_verbatim() {
+        // The whole point of the OAuth switch: an app-actor token must go out as
+        // `Bearer …`, while a legacy personal key is sent raw (Linear rejects a
+        // `Bearer`-prefixed personal key).
+        let oauth = LinearAuth::OauthToken("lin_oauth_abc".into());
+        assert_eq!(oauth.header_value(), "Bearer lin_oauth_abc");
+        assert!(oauth.is_app_actor());
+
+        let personal = LinearAuth::PersonalKey("lin_api_xyz".into());
+        assert_eq!(personal.header_value(), "lin_api_xyz");
+        assert!(!personal.is_app_actor());
+
+        // `new` stays the legacy personal-key constructor.
+        assert!(!LinearClient::new("lin_api_xyz").auth.is_app_actor());
+        assert!(LinearClient::with_auth(LinearAuth::OauthToken("t".into()))
+            .auth
+            .is_app_actor());
+    }
+
+    #[test]
+    fn parse_agent_session_event_reads_a_delegation() {
+        let json = br#"{
+            "type":"AgentSessionEvent","action":"created",
+            "promptContext":"Formatted context for the session",
+            "guidance":"Always open a PR",
+            "agentSession":{"id":"sess-1","issue":{
+                "id":"iss-1","identifier":"COR-12","title":"Fix the thing",
+                "description":"The thing is broken."}}}"#;
+        let ev = parse_agent_session_event(json).unwrap().unwrap();
+        assert_eq!(ev.action, AgentSessionAction::Created);
+        assert_eq!(ev.session_id, "sess-1");
+        assert_eq!(ev.issue_id.as_deref(), Some("iss-1"));
+        assert_eq!(ev.issue_identifier.as_deref(), Some("COR-12"));
+        assert_eq!(ev.issue_title.as_deref(), Some("Fix the thing"));
+        assert_eq!(ev.guidance.as_deref(), Some("Always open a PR"));
+        // The issue's own description is the preferred task text.
+        assert_eq!(ev.task_text(), Some("The thing is broken."));
+    }
+
+    #[test]
+    fn parse_agent_session_event_reads_a_follow_up_prompt() {
+        let json = br#"{
+            "type":"AgentSessionEvent","action":"prompted",
+            "agentSession":{"id":"sess-2"},
+            "agentActivity":{"body":"Also update the docs"}}"#;
+        let ev = parse_agent_session_event(json).unwrap().unwrap();
+        assert_eq!(ev.action, AgentSessionAction::Prompted);
+        assert_eq!(ev.session_id, "sess-2");
+        assert_eq!(ev.prompt_body.as_deref(), Some("Also update the docs"));
+        assert_eq!(ev.issue_id, None);
+    }
+
+    #[test]
+    fn parse_agent_session_event_tolerates_sparse_and_unknown_payloads() {
+        // A mention in a thread: comment, no issue description. Falls back
+        // through prompt_context to the comment body for the task text.
+        let json = br#"{
+            "type":"AgentSessionEvent","action":"created",
+            "agentSession":{"id":"s","comment":{"body":"@harness please look"},
+                            "issue":{"id":"i"}},
+            "somethingLinearAddedLater":{"nested":true}}"#;
+        let ev = parse_agent_session_event(json).unwrap().unwrap();
+        assert_eq!(ev.task_text(), Some("@harness please look"));
+        assert_eq!(ev.issue_id.as_deref(), Some("i"));
+        assert_eq!(ev.issue_description, None);
+
+        // An empty description must not win over the comment body.
+        let json = br#"{"type":"AgentSessionEvent","action":"created",
+            "agentSession":{"id":"s","comment":{"body":"use this"},
+                            "issue":{"description":"   "}}}"#;
+        assert_eq!(
+            parse_agent_session_event(json)
+                .unwrap()
+                .unwrap()
+                .task_text(),
+            Some("use this")
+        );
+
+        // An unknown action parses (callers ignore it) rather than failing.
+        let json = br#"{"type":"AgentSessionEvent","action":"resumed",
+            "agentSession":{"id":"s"}}"#;
+        assert_eq!(
+            parse_agent_session_event(json).unwrap().unwrap().action,
+            AgentSessionAction::Other("resumed".into())
+        );
+    }
+
+    #[test]
+    fn parse_agent_session_event_ignores_other_webhook_types() {
+        // Linear delivers Issue/Comment/OAuthApp events to the same endpoint.
+        let json = br#"{"type":"Issue","action":"update","data":{"id":"x"}}"#;
+        assert!(parse_agent_session_event(json).unwrap().is_none());
+        // AppUserNotification is the older agent webhook — also not ours.
+        let json = br#"{"type":"AppUserNotification","appUserId":"u"}"#;
+        assert!(parse_agent_session_event(json).unwrap().is_none());
+    }
+
+    #[test]
+    fn parse_agent_session_event_rejects_unusable_payloads() {
+        // No session id → nothing to acknowledge into.
+        let json = br#"{"type":"AgentSessionEvent","action":"created","agentSession":{}}"#;
+        assert!(parse_agent_session_event(json).is_err());
+        // Missing action.
+        let json = br#"{"type":"AgentSessionEvent","agentSession":{"id":"s"}}"#;
+        assert!(parse_agent_session_event(json).is_err());
+        assert!(parse_agent_session_event(b"not json").is_err());
+    }
+
+    #[test]
+    fn agent_activity_content_matches_linear_shapes() {
+        assert_eq!(
+            AgentActivity::Thought {
+                body: "looking".into()
+            }
+            .content(),
+            serde_json::json!({ "type": "thought", "body": "looking" })
+        );
+        assert_eq!(
+            AgentActivity::Response {
+                body: "opened PR".into()
+            }
+            .content(),
+            serde_json::json!({ "type": "response", "body": "opened PR" })
+        );
+        assert_eq!(
+            AgentActivity::Error {
+                body: "run failed".into()
+            }
+            .content(),
+            serde_json::json!({ "type": "error", "body": "run failed" })
+        );
+        // `result` is omitted while a step is still in flight, present after.
+        assert_eq!(
+            AgentActivity::Action {
+                action: "run".into(),
+                parameter: "idea-to-pr".into(),
+                result: None,
+            }
+            .content(),
+            serde_json::json!({ "type": "action", "action": "run", "parameter": "idea-to-pr" })
+        );
+        assert_eq!(
+            AgentActivity::Action {
+                action: "run".into(),
+                parameter: "idea-to-pr".into(),
+                result: Some("done".into()),
+            }
+            .content(),
+            serde_json::json!({
+                "type": "action", "action": "run",
+                "parameter": "idea-to-pr", "result": "done"
+            })
+        );
+    }
+
+    #[test]
+    fn parse_issue_context_reads_team_state_and_delegate() {
+        let json = br#"{"data":{"issue":{
+            "team":{"id":"team-1"},
+            "state":{"id":"state-1","name":"To Do"},
+            "delegate":{"id":"app-user-1"}}}}"#;
+        let ctx = parse_issue_context(json).unwrap();
+        assert_eq!(ctx.team_id.as_deref(), Some("team-1"));
+        assert_eq!(ctx.state_id.as_deref(), Some("state-1"));
+        assert_eq!(ctx.state_name.as_deref(), Some("To Do"));
+        assert_eq!(ctx.delegate_id.as_deref(), Some("app-user-1"));
+    }
+
+    #[test]
+    fn parse_issue_context_degrades_on_missing_pieces() {
+        // Not delegated to anyone — `delegate` is null until an agent is assigned.
+        let json = br#"{"data":{"issue":{"team":{"id":"t"},
+            "state":{"id":"s","name":"Backlog"},"delegate":null}}}"#;
+        let ctx = parse_issue_context(json).unwrap();
+        assert_eq!(ctx.delegate_id, None);
+        assert_eq!(ctx.state_name.as_deref(), Some("Backlog"));
+        // An unresolvable id gives an empty context, not an error.
+        assert_eq!(
+            parse_issue_context(br#"{"data":{"issue":null}}"#).unwrap(),
+            IssueContext::default()
+        );
+        assert!(parse_issue_context(br#"{"errors":[{"message":"no"}]}"#).is_err());
+    }
+
+    #[test]
+    fn preview_query_gates_on_delegation_and_status() {
+        // Regression guard for the two gates. `delegate` replaced the old
+        // eligibility label; dropping it would make the poller claim anything in
+        // the column, and dropping `state` would ignore the configured trigger.
+        assert!(
+            ISSUES_QUERY.contains("delegate: { id: { eq: $delegateId } }"),
+            "the poller must only claim issues delegated to the app"
+        );
+        assert!(
+            ISSUES_QUERY.contains("state: { id: { eq: $stateId } }"),
+            "the poller must only claim issues in the binding's source status"
+        );
+        assert!(ISSUES_QUERY.contains("$delegateId: ID!"));
+    }
+
+    #[test]
+    fn parse_app_user_id_reads_viewer() {
+        let json = br#"{"data":{"viewer":{"id":"app-user-1"}}}"#;
+        assert_eq!(parse_app_user_id(json).unwrap(), "app-user-1");
+        assert!(parse_app_user_id(br#"{"errors":[{"message":"nope"}]}"#).is_err());
+    }
+
+    #[test]
+    fn agent_activity_mutation_success_parsing() {
+        assert!(expect_mutation_success(
+            br#"{"data":{"agentActivityCreate":{"success":true}}}"#,
+            "agentActivityCreate"
+        )
+        .is_ok());
+        assert!(expect_mutation_success(
+            br#"{"data":{"agentActivityCreate":{"success":false}}}"#,
+            "agentActivityCreate"
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn parse_organization_maps_workspace() {
+        let json = br#"{"data":{"organization":{"id":"org1","name":"Acme","urlKey":"acme"}}}"#;
+        let w = parse_organization(json).unwrap();
+        assert_eq!(w.id, "org1");
+        assert_eq!(w.name, "Acme");
+        assert_eq!(w.url_key, "acme");
+    }
+
+    #[test]
+    fn parse_organization_surfaces_graphql_errors() {
+        let json = br#"{"errors":[{"message":"Authentication required, not authenticated"}]}"#;
+        let err = parse_organization(json).unwrap_err();
+        assert!(err.0.contains("not authenticated"));
+    }
+
+    #[test]
     fn mutation_success_parsing() {
         assert!(expect_mutation_success(
             br#"{"data":{"issueUpdate":{"success":true}}}"#,
@@ -596,7 +1268,7 @@ mod tests {
              "states":{"nodes":[
                 {"id":"s1","name":"To Do","type":"unstarted","position":1.0},
                 {"id":"s2","name":"In Progress","type":"started","position":2.0}]},
-             "labels":{"nodes":[{"id":"l1","name":"AI Eligible"}]}}
+             "labels":{"nodes":[{"id":"l1","name":"bug"}]}}
         ]}}}"#;
         let d = parse_discovery(json).unwrap();
         assert_eq!(d.teams.len(), 1);
@@ -604,7 +1276,7 @@ mod tests {
         assert_eq!(t.key, "COR");
         assert_eq!(t.states.len(), 2);
         assert_eq!(t.states[1].kind, "started");
-        assert_eq!(t.labels[0].name, "AI Eligible");
+        assert_eq!(t.labels[0].name, "bug");
     }
 
     #[test]
@@ -647,18 +1319,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_issues_filters_by_label() {
+    fn parse_issues_returns_every_issue_with_its_labels() {
+        // No eligibility gate any more — every issue in the column comes back,
+        // but labels are still carried so the failed-label lifecycle can filter.
         let json = br#"{"data":{"issues":{"nodes":[
-            {"id":"i1","identifier":"COR-1","title":"Eligible one","url":"u1",
-             "labels":{"nodes":[{"name":"AI Eligible"}]}},
-            {"id":"i2","identifier":"COR-2","title":"Not tagged","url":"u2",
+            {"id":"i1","identifier":"COR-1","title":"One","url":"u1",
+             "labels":{"nodes":[{"name":"ai-failed"}]}},
+            {"id":"i2","identifier":"COR-2","title":"Two","url":"u2",
              "labels":{"nodes":[{"name":"bug"}]}}
         ]}}}"#;
-        let all = parse_issues(json, None).unwrap();
+        let all = parse_issues(json).unwrap();
         assert_eq!(all.len(), 2);
-        let eligible = parse_issues(json, Some("AI Eligible")).unwrap();
-        assert_eq!(eligible.len(), 1);
-        assert_eq!(eligible[0].identifier, "COR-1");
+        assert_eq!(all[0].labels, vec!["ai-failed".to_string()]);
     }
 
     #[test]
@@ -666,7 +1338,7 @@ mod tests {
         let json = br#"{"data":{"issues":{"nodes":[
             {"id":"i1","identifier":"COR-3","title":"No labels field","url":"u3"}
         ]}}}"#;
-        let issues = parse_issues(json, None).unwrap();
+        let issues = parse_issues(json).unwrap();
         assert_eq!(issues.len(), 1);
         assert!(issues[0].labels.is_empty());
     }

@@ -17,6 +17,10 @@ import {
   type CodexConnectStart,
 } from "@/lib/credentials";
 import { LANE_FOR_CREDENTIAL } from "@/lib/billing";
+import {
+  LinearCallbackBanner,
+  LinearConnect,
+} from "@/components/credentials/LinearConnect";
 import { BillingFields } from "./BillingFields";
 import {
   Dialog,
@@ -38,13 +42,16 @@ interface ProviderField {
   help: string;
 }
 
-/** Per-provider form fields (mirrors the server's materialization contract). */
-const PROVIDERS: {
+/** A provider whose credential is a set of pasted fields. */
+interface ProviderDef {
   id: string;
   label: string;
   help: string;
   fields: ProviderField[];
-}[] = [
+}
+
+/** Per-provider form fields (mirrors the server's materialization contract). */
+const PROVIDERS: ProviderDef[] = [
   {
     id: "claude",
     label: "Claude (subscription)",
@@ -89,10 +96,47 @@ const PROVIDERS: {
       },
     ],
   },
+  {
+    id: "linear",
+    label: "Linear",
+    help: "The OAuth application backing the workspace connection above. Create it in Linear → Settings → API → OAuth applications, registering the callback URL shown above.",
+    fields: [
+      {
+        key: "client_id",
+        label: "OAuth client ID",
+        secret: false,
+        help: "From the Linear OAuth application. Used to build the authorization URL.",
+      },
+      {
+        key: "client_secret",
+        label: "OAuth client secret",
+        help: "The same application's secret. Used only for the code exchange and token refresh.",
+      },
+      {
+        key: "webhook_secret",
+        label: "Webhook signing secret",
+        help: "From the OAuth application's webhook (subscribe it to agent session events, pointed at the webhook URL above). Every inbound delegation is verified against this; without it the webhook rejects everything.",
+      },
+      {
+        key: "api_key",
+        label: "Personal API key (legacy)",
+        placeholder: "lin_api_…",
+        help: "Fallback for a workspace not yet connected as an app. Linear attributes every comment and status change made with this key to the person who owns it — prefer the app install.",
+      },
+    ],
+  },
 ];
 
-/** Provider IDs that have a dashboard usage card (and so a show/hide toggle). */
-const USAGE_CARD_PROVIDERS = new Set(["claude", "codex", "pi", "cursor"]);
+/** Look up a field-based provider definition by id. */
+function providerDef(id: string): ProviderDef {
+  const def = PROVIDERS.find((p) => p.id === id);
+  if (!def) throw new Error(`no provider definition for \`${id}\``);
+  return def;
+}
+
+// Which providers have a dashboard usage card (and so a show/hide toggle) is now
+// expressed by the `usageCardProvider` passed per row below — it is exactly the
+// agent-provider group, which is why the page is grouped that way.
 
 export function CredentialsPage() {
   const creds = useCredentials();
@@ -122,40 +166,109 @@ export function CredentialsPage() {
           </p>
         )}
 
-        {PROVIDERS.map((p) => (
+        {/* Outcome of a returning Linear OAuth redirect, if any. */}
+        <LinearCallbackBanner />
+
+        {/* Agent backends: these run the workflow nodes, and are the ones with
+            a usage card and a billing lane. */}
+        <Section
+          title="Agent providers"
+          help="The CLIs that execute workflow nodes. Each node picks its provider and model."
+        >
           <ProviderSummary
-            key={p.id}
-            label={p.label}
-            help={p.help}
-            configured={configured.get(p.id) ?? false}
-            usageCardProvider={
-              USAGE_CARD_PROVIDERS.has(p.id) ? p.id : undefined
-            }
+            label={providerDef("claude").label}
+            help={providerDef("claude").help}
+            configured={configured.get("claude") ?? false}
+            usageCardProvider="claude"
           >
             <ProviderCard
-              provider={p}
-              configured={configured.get(p.id) ?? false}
+              provider={providerDef("claude")}
+              configured={configured.get("claude") ?? false}
             />
           </ProviderSummary>
-        ))}
-        <ProviderSummary
-          label="Kimi-for-Coding"
-          help="Connect your Kimi subscription for `provider: pi` nodes."
-          configured={configured.get("pi") ?? false}
-          usageCardProvider="pi"
+          <ProviderSummary
+            label="ChatGPT (Codex)"
+            help="Connect your ChatGPT/Codex subscription for gpt-5.5 review steps."
+            configured={configured.get("codex") ?? false}
+            usageCardProvider="codex"
+          >
+            <CodexConnectCard configured={configured.get("codex") ?? false} />
+          </ProviderSummary>
+          <ProviderSummary
+            label="Kimi-for-Coding"
+            help="Connect your Kimi subscription for `provider: pi` nodes."
+            configured={configured.get("pi") ?? false}
+            usageCardProvider="pi"
+          >
+            <KimiConnectCard configured={configured.get("pi") ?? false} />
+          </ProviderSummary>
+          <ProviderSummary
+            label={providerDef("cursor").label}
+            help={providerDef("cursor").help}
+            configured={configured.get("cursor") ?? false}
+            usageCardProvider="cursor"
+          >
+            <ProviderCard
+              provider={providerDef("cursor")}
+              configured={configured.get("cursor") ?? false}
+            />
+          </ProviderSummary>
+        </Section>
+
+        {/* Where work comes from and where it goes. No usage card, no lane. */}
+        <Section
+          title="Integrations"
+          help="Where work comes from and where results land: the repos runs operate on, and the issue tracker that triggers them."
         >
-          <KimiConnectCard configured={configured.get("pi") ?? false} />
-        </ProviderSummary>
-        <ProviderSummary
-          label="ChatGPT (Codex)"
-          help="Connect your ChatGPT/Codex subscription for gpt-5.5 review steps."
-          configured={configured.get("codex") ?? false}
-          usageCardProvider="codex"
-        >
-          <CodexConnectCard configured={configured.get("codex") ?? false} />
-        </ProviderSummary>
+          <ProviderSummary
+            label={providerDef("github").label}
+            help={providerDef("github").help}
+            configured={configured.get("github") ?? false}
+          >
+            <ProviderCard
+              provider={providerDef("github")}
+              configured={configured.get("github") ?? false}
+            />
+          </ProviderSummary>
+          <ProviderSummary
+            label="Linear"
+            help="Connect the workspace as an app so the harness's comments and status changes are authored by the app, not by a person."
+            configured={configured.get("linear") ?? false}
+          >
+            <div className="flex flex-col gap-4">
+              <LinearConnect />
+              <ProviderCard
+                provider={providerDef("linear")}
+                configured={configured.get("linear") ?? false}
+              />
+            </div>
+          </ProviderSummary>
+        </Section>
       </div>
     </AppShell>
+  );
+}
+
+/** A titled group of provider rows, so agents and integrations read apart. */
+function Section({
+  title,
+  help,
+  children,
+}: {
+  title: string;
+  help: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="flex flex-col gap-2">
+      <div>
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {title}
+        </h2>
+        <p className="mt-0.5 text-xs text-muted-foreground">{help}</p>
+      </div>
+      {children}
+    </section>
   );
 }
 

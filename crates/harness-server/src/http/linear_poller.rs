@@ -8,21 +8,36 @@
 //!      - run completed → **ready** (Functional testing),
 //!      - run failed/cancelled → **back to its original state**.
 //! 2. **Claim/fire** — for each *enabled* binding, on its `poll_interval`:
-//!      - `live`  → claim one eligible issue (move to In Progress, fire the bound
-//!        workflow, record the claim) — **one at a time per binding**,
+//!      - `live`  → claim one **delegated** issue from the binding's source
+//!        status (move to In Progress, fire the bound workflow, record the
+//!        claim) — **one at a time per binding**,
 //!      - dry-run → just log what it *would* do.
 //!
-//! Per-project Linear key (project-scoped, else global). The `live` flag defaults
-//! to false, so a binding is dry-run until explicitly switched on.
+//! Both triggers apply the same two gates, so they agree on what is startable:
+//! the issue must be **delegated to the harness's app user** (what replaced the
+//! old "AI Eligible" label) *and* sitting in the binding's **source status**.
+//! [`super::linear_agent`] is the fast path — Linear pushes an
+//! `AgentSessionEvent` the moment someone delegates, and the run starts in
+//! seconds. This poller is the **reconciliation** path: if the harness was down
+//! or a webhook delivery failed, the delegated issue is still picked up on a
+//! later tick. Without a known app user id the gate cannot be evaluated, so the
+//! poller claims **nothing** rather than everything.
+//!
+//! The Linear credential is global, resolved by [`linear_client_or_none`] — an
+//! `actor=app` OAuth token once the workspace is connected, so the comments and
+//! transitions below are authored by the app rather than by whoever's personal
+//! API key was pasted. The `live` flag defaults to false, so a binding is dry-run
+//! until explicitly switched on.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use harness_persist::LinearSource;
-use harness_sources::linear::{Comment, Issue, LinearClient};
+use harness_persist::{LinearClaim, LinearSource};
+use harness_sources::linear::{AgentActivity, Comment, Issue, LinearClient};
 use tokio::time::{interval, Instant, MissedTickBehavior};
 
+use super::linear_oauth::{app_user_id, linear_client_or_none};
 use super::runs_routes::{start_run, CreateRunRequest, RunsState};
 
 /// Base loop cadence. A binding is only *claimed* once its own
@@ -51,16 +66,6 @@ pub(crate) fn spawn_poller(state: Arc<RunsState>) {
             poll_once(&state, &mut last).await;
         }
     });
-}
-
-/// The Linear API key for `project` (project-scoped credential first, else global).
-pub(crate) async fn linear_key_for_project(
-    state: &Arc<RunsState>,
-    project: &str,
-) -> Option<String> {
-    let store = state.cred_store().await.ok()?;
-    let fields = store.get_for_project(project, "linear").await.ok()??;
-    fields.get("api_key").filter(|k| !k.is_empty()).cloned()
 }
 
 async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), Instant>) {
@@ -94,28 +99,40 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
         }
         last.insert(key, now);
 
-        let Some(api_key) = linear_key_for_project(state, &b.project).await else {
+        let Some(client) = linear_client_or_none(state).await else {
             tracing::debug!(
-                "linear poller: {}/{} — no Linear credential for project",
+                "linear poller: {}/{} — Linear is not connected",
                 b.project,
                 b.workflow
             );
             continue;
         };
-        let client = LinearClient::new(api_key);
+        // Delegation is the eligibility gate, so without knowing our own app user
+        // id there is no gate — claim nothing rather than everything in the
+        // column. Reconnecting the workspace records the id.
+        let Some(delegate_id) = app_user_id(state).await else {
+            tracing::warn!(
+                "linear poller: {}/{} — the harness's Linear app user id is unknown, so \
+                 delegated issues cannot be identified; skipping (reconnect the workspace \
+                 on the Credentials page)",
+                b.project,
+                b.workflow
+            );
+            continue;
+        };
 
         if b.live {
-            claim_and_fire(state, &client, &b).await;
+            claim_and_fire(state, &client, &b, &delegate_id).await;
         } else {
-            dry_run_log(&client, &b).await;
+            dry_run_log(&client, &b, &delegate_id).await;
         }
     }
 }
 
 /// Log what a binding *would* claim, without mutating anything.
-async fn dry_run_log(client: &LinearClient, b: &LinearSource) {
+async fn dry_run_log(client: &LinearClient, b: &LinearSource, delegate_id: &str) {
     match client
-        .preview_issues(&b.team_id, &b.source_state_id, b.label.as_deref())
+        .preview_issues(&b.team_id, &b.source_state_id, delegate_id)
         .await
     {
         Ok(issues) => {
@@ -133,7 +150,7 @@ async fn dry_run_log(client: &LinearClient, b: &LinearSource) {
             let ids: Vec<&str> = issues.iter().map(|i| i.identifier.as_str()).collect();
             let pick = ids.first().copied().unwrap_or("?");
             tracing::info!(
-                "linear poller [dry-run]: {}/{} — {} eligible [{}]; would claim {} and fire `{}` (set live=true to act)",
+                "linear poller [dry-run]: {}/{} — {} delegated in the source status [{}]; would claim {} and fire `{}` (set live=true to act)",
                 b.project, b.workflow, ids.len(), ids.join(", "), pick, b.workflow
             );
         }
@@ -188,8 +205,7 @@ pub(crate) async fn rearm_linear_claim(
         Ok(s) => s.get(&claim.project, &claim.workflow).await.ok().flatten(),
         Err(_) => None,
     };
-    if let Some(api_key) = linear_key_for_project(state, &claim.project).await {
-        let client = LinearClient::new(api_key);
+    if let Some(client) = linear_client_or_none(state).await {
         if let Some(b) = &binding {
             // Clear the failed-label so the issue no longer reads as failed.
             if let Some(name) = b.failed_label.as_deref() {
@@ -215,6 +231,9 @@ pub(crate) async fn rearm_linear_claim(
             &claim.issue_id,
             &claim.identifier,
             &claim.original_state_id,
+            // Carry the delegating session across a rerun, so progress keeps
+            // reporting into the same Linear thread.
+            claim.agent_session_id.as_deref(),
         )
         .await
     {
@@ -224,7 +243,12 @@ pub(crate) async fn rearm_linear_claim(
 
 /// Claim one eligible issue for a live binding and fire its workflow — one at a
 /// time per binding.
-async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &LinearSource) {
+async fn claim_and_fire(
+    state: &Arc<RunsState>,
+    client: &LinearClient,
+    b: &LinearSource,
+    delegate_id: &str,
+) {
     let claim_store = match state.linear_claim_store().await {
         Ok(s) => s,
         Err(_) => return,
@@ -248,7 +272,7 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
     }
 
     let issues = match client
-        .preview_issues(&b.team_id, &b.source_state_id, b.label.as_deref())
+        .preview_issues(&b.team_id, &b.source_state_id, delegate_id)
         .await
     {
         Ok(i) => i,
@@ -357,6 +381,8 @@ async fn claim_and_fire(state: &Arc<RunsState>, client: &LinearClient, b: &Linea
                     &issue.id,
                     &issue.identifier,
                     &b.source_state_id,
+                    // Poller-claimed: no delegating session.
+                    None,
                 )
                 .await
             {
@@ -488,10 +514,9 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
             }
             Err(_) => continue,
         };
-        let Some(api_key) = linear_key_for_project(state, &c.project).await else {
+        let Some(client) = linear_client_or_none(state).await else {
             continue;
         };
-        let client = LinearClient::new(api_key);
         let binding = match &source_store {
             Some(s) => s.get(&c.project, &c.workflow).await.ok().flatten(),
             None => None,
@@ -502,12 +527,14 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                 if let Some(ready) = binding.as_ref().and_then(|b| b.ready_state_id.as_deref()) {
                     let _ = client.set_issue_state(&c.issue_id, ready).await;
                 }
-                let _ = client
-                    .add_comment(
-                        &c.issue_id,
-                        &format!("✅ ai-harness run `{}` completed.", c.run_id),
-                    )
-                    .await;
+                // A `response` activity is what marks a delegated session
+                // complete; a poller-claimed issue gets the comment instead.
+                let msg = format!("✅ ai-harness run `{}` completed.", c.run_id);
+                if !report_to_session(&client, &c, AgentActivity::Response { body: msg.clone() })
+                    .await
+                {
+                    let _ = client.add_comment(&c.issue_id, &msg).await;
+                }
                 let _ = claim_store.set_phase(&c.run_id, "done").await;
                 tracing::info!("linear poller: {} — run completed → ready", c.identifier);
             }
@@ -570,7 +597,11 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                             c.run_id, detail.run.status, attempts
                         )
                     };
-                    let _ = client.add_comment(&c.issue_id, &msg).await;
+                    if !report_to_session(&client, &c, AgentActivity::Error { body: msg.clone() })
+                        .await
+                    {
+                        let _ = client.add_comment(&c.issue_id, &msg).await;
+                    }
                     tracing::warn!(
                         "linear poller: {} — {} attempt(s) failed; giving up (labeled={})",
                         c.identifier,
@@ -582,15 +613,17 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                     let _ = client
                         .set_issue_state(&c.issue_id, &c.original_state_id)
                         .await;
-                    let _ = client
-                        .add_comment(
-                            &c.issue_id,
-                            &format!(
-                                "⚠️ ai-harness run `{}` did not complete ({}); returning for retry (attempt {}/{}).",
-                                c.run_id, detail.run.status, attempts, max_attempts
-                            ),
-                        )
-                        .await;
+                    let msg = format!(
+                        "⚠️ ai-harness run `{}` did not complete ({}); returning for retry (attempt {}/{}).",
+                        c.run_id, detail.run.status, attempts, max_attempts
+                    );
+                    // A retry is not terminal, so it stays a `thought` — an
+                    // `error` would close the session before the next attempt.
+                    if !report_to_session(&client, &c, AgentActivity::Thought { body: msg.clone() })
+                        .await
+                    {
+                        let _ = client.add_comment(&c.issue_id, &msg).await;
+                    }
                     tracing::info!(
                         "linear poller: {} — run {} → rolled back (attempt {}/{})",
                         c.identifier,
@@ -611,11 +644,46 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                         let _ = client.set_issue_state(&c.issue_id, review).await;
                         let _ = claim_store.set_phase(&c.run_id, "in_review").await;
                         tracing::info!("linear poller: {} — PR opened → In Review", c.identifier);
+                        // Mid-run progress for a delegated session: an `action`,
+                        // not a `response` — the run is still going.
+                        report_to_session(
+                            &client,
+                            &c,
+                            AgentActivity::Action {
+                                action: "Opened pull request".into(),
+                                parameter: c.workflow.clone(),
+                                result: Some("moved to In Review".into()),
+                            },
+                        )
+                        .await;
                     }
                 }
             }
         }
     }
+}
+
+/// Report a run's progress into the agent session that delegated it.
+///
+/// Returns whether the claim *was* delegated, which is also the caller's signal
+/// to skip the plain issue comment: for a delegated run the session thread is the
+/// conversation, and posting both duplicates every update.
+async fn report_to_session(
+    client: &LinearClient,
+    claim: &LinearClaim,
+    activity: AgentActivity,
+) -> bool {
+    let Some(session) = claim.agent_session_id.as_deref() else {
+        return false;
+    };
+    if let Err(e) = client.create_agent_activity(session, &activity).await {
+        tracing::warn!(
+            "linear poller: {} — failed to report into session {session}: {}",
+            claim.identifier,
+            e.0
+        );
+    }
+    true
 }
 
 /// True once any `delivery`-category node in the run has succeeded (the PR step).

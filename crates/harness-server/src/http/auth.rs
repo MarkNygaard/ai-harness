@@ -114,6 +114,14 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             | "/signals"
             | "/favicon.ico"
             | "/auth/reset-password"
+            // Linear's OAuth redirect: a browser navigation cannot carry an
+            // `Authorization` header. Authenticated instead by the single-use,
+            // unguessable `state` nonce the server minted (see `linear_oauth`).
+            | "/api/linear/oauth/callback"
+            // Linear's agent-session webhook (delegation / @-mention). Also a
+            // third party we cannot hand a bearer token; authenticated by the
+            // `Linear-Signature` HMAC over the raw body (see `linear_agent`).
+            | "/api/linear/webhook"
             | "/"
             | "/overview"
             | "/worktrees"
@@ -124,9 +132,10 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
 /// Bearer token authentication middleware.
 ///
 /// Exempts `/health`, `/webhook`, `/webhook/feishu`, `/signals`, `/favicon.ico`,
-/// `/auth/reset-password`, `/` (dashboard HTML), `/overview` (system overview
-/// HTML), `/assets/*` (hashed React bundle assets), and `/ws` (WebSocket
-/// upgrade).
+/// `/auth/reset-password`, `/api/linear/oauth/callback` (Linear's OAuth
+/// redirect — a browser navigation, authenticated by its single-use `state`
+/// nonce), `/` (dashboard HTML), `/overview` (system overview HTML),
+/// `/assets/*` (hashed React bundle assets), and `/ws` (WebSocket upgrade).
 /// The dashboard HTML no longer embeds the token, so it is safe to serve without
 /// auth. `/ws` is exempt from *this middleware* because the WebSocket upgrade
 /// cannot carry a body and must be handled before axum reads headers twice;
