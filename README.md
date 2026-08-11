@@ -27,14 +27,19 @@ runs anywhere a container does (Kubernetes or plain Docker).
   - an **MCP-over-HTTP** endpoint — `run_trigger` / `run_list` / `run_status`
     plus the workflow-authoring tools — so an MCP-connected assistant can author
     *and* fire workflows;
-  - a **Linear poller** — watches a column (plus an optional eligibility label),
-    claims one issue at a time, walks it through a configurable status map
-    (e.g. In Progress → In Review → Ready for merge), fires the bound workflow,
-    and tags the PR so Linear links it back to the issue. A per-binding `live`
-    flag gates dry-run vs. acting.
+  - **Linear delegation** — the harness registers as a Linear *agent*: delegate an
+    issue to it (or @-mention it) and it picks the work up, walks the issue through
+    a configurable status map (e.g. In Progress → In Review → Ready for merge),
+    and reports progress inside the issue's agent-session thread. A **column
+    poller** remains for stage-to-stage pipelines, gated per binding by `live`.
+- **Linear as an app, not as a person.** The workspace is connected once from the
+  Credentials page through an OAuth install with `actor=app`, so the comments,
+  status moves and run links the harness writes are authored by the application
+  instead of by whoever's personal API key was pasted. See
+  [Connecting Linear](docs/linear-connect.md).
 - **Projects.** Register a git repo; runs operate on an isolated worktree off
-  its base branch. Per-project **Linear/GitHub API keys** (with global fallback)
-  are managed from the Projects page.
+  its base branch. Per-project **GitHub credentials** (with global fallback) and
+  Linear trigger bindings are managed from the Projects page.
 - **Toolchain provisioning.** Declare a project's toolchains; `mise` installs
   them on demand (cached on the data volume — no image rebuild).
 - **Secrets.** Credentials are encrypted at rest (AES-256-GCM), and

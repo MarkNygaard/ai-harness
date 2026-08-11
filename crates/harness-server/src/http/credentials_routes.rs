@@ -23,8 +23,11 @@ use serde::Deserialize;
 
 use super::runs_routes::RunsState;
 
-/// Providers the UI can configure (the agent backends + GitHub for repo access).
-const PROVIDERS: &[&str] = &["claude", "codex", "pi", "github", "cursor"];
+/// Providers the UI can configure (the agent backends, GitHub for repo access,
+/// and Linear — whose fields are the OAuth app's `client_id`/`client_secret`,
+/// with the tokens themselves written by the `actor=app` connect flow in
+/// [`super::linear_oauth`]).
+const PROVIDERS: &[&str] = &["claude", "codex", "pi", "github", "cursor", "linear"];
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
@@ -222,11 +225,17 @@ pub async fn delete_credential(
     }
 }
 
-// ── Per-project credentials (linear / github only; project-first, global fallback) ──
+// ── Per-project credentials (github only; project-first, global fallback) ────
 
 /// Providers that may be overridden **per project** — the external integrations
 /// whose account can differ by project. AI provider keys stay global only.
-const PROJECT_PROVIDERS: &[&str] = &["linear", "github"];
+///
+/// **Linear is deliberately not here.** The identity connected to Linear is the
+/// *app* (an `actor=app` OAuth install), which is the same for every project, so
+/// it lives on the Credentials page as a single global credential. Any
+/// per-project `linear` row left over from an earlier version is inert —
+/// [`super::linear_oauth::linear_client`] reads the global credential only.
+const PROJECT_PROVIDERS: &[&str] = &["github"];
 
 /// `GET /api/projects/{project}/credentials` — which per-project providers are
 /// configured for this project (no secrets).
@@ -247,7 +256,7 @@ pub async fn list_project_credentials(
         .map(|p| ProviderCredential {
             provider: p.to_string(),
             configured: configured.iter().any(|c| c == p),
-            // Per-project providers (linear/github) have no usage card.
+            // Per-project providers (github) have no usage card.
             show_usage_card: true,
         })
         .collect();
@@ -255,7 +264,7 @@ pub async fn list_project_credentials(
 }
 
 /// `PUT /api/projects/{project}/credentials/{provider}` — set a project-scoped
-/// credential (allowlisted to `linear` / `github`).
+/// credential (allowlisted to `github`).
 pub async fn set_project_credential(
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath((project, provider)): AxumPath<(String, String)>,
@@ -264,9 +273,7 @@ pub async fn set_project_credential(
     if !PROJECT_PROVIDERS.contains(&provider.as_str()) {
         return err(
             StatusCode::BAD_REQUEST,
-            format!(
-                "provider `{provider}` is not configurable per project (allowed: linear, github)"
-            ),
+            format!("provider `{provider}` is not configurable per project (allowed: github)"),
         );
     }
     if req.fields.is_empty() {

@@ -11,10 +11,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use harness_persist::LinearSourceInput;
-use harness_sources::linear::LinearClient;
 use serde::Deserialize;
 
-use super::linear_poller::linear_key_for_project;
+use super::linear_oauth::linear_client;
 use super::runs_routes::RunsState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -51,7 +50,6 @@ pub struct PutSourceBody {
     pub team_id: String,
     pub team_name: String,
     pub source_state_id: String,
-    pub label: Option<String>,
     /// Label applied on give-up (optional); while present it excludes the issue
     /// from pickup. Removing it re-arms. `None`/empty disables the feature.
     pub failed_label: Option<String>,
@@ -134,7 +132,7 @@ fn trimmed_non_empty(s: String) -> Option<String> {
 #[derive(Debug, Deserialize)]
 pub struct CreateIssueBody {
     /// The binding to file against (defaults to `idea-to-pr`). Determines the
-    /// team, source status, and eligibility label the issue is created with.
+    /// team and source status the issue is created in.
     #[serde(default = "default_issue_workflow")]
     pub workflow: String,
     pub title: String,
@@ -147,9 +145,11 @@ fn default_issue_workflow() -> String {
 }
 
 /// `POST /api/projects/{project}/linear-issues` — create a Linear issue from a
-/// task (e.g. a GEO finding) in the project's bound team + **source status**,
-/// tagged with the binding's eligibility label, so the poller can claim it and
-/// fire the workflow on its normal cadence. Returns the created issue.
+/// task (e.g. a GEO finding) in the project's bound team + **source status**.
+///
+/// The issue is filed unlabelled and *not* started: a human triages it and, if
+/// they want the harness on it, delegates it to the app in Linear. Returns the
+/// created issue.
 pub async fn create_issue(
     Extension(state): Extension<Arc<RunsState>>,
     axum::extract::Path(project): axum::extract::Path<String>,
@@ -163,7 +163,7 @@ pub async fn create_issue(
         return r;
     }
 
-    // The binding supplies team + source status + eligibility label.
+    // The binding supplies the team + the status to create the issue in.
     let src_store = match state.linear_source_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -182,56 +182,22 @@ pub async fn create_issue(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
 
-    // API key: project-scoped credential first, else the global one.
-    let Some(api_key) = linear_key_for_project(&state, &project).await else {
-        return err(
-            StatusCode::BAD_REQUEST,
-            format!("no Linear API key for project `{project}` — add the `linear` credential"),
-        );
-    };
-    let client = LinearClient::new(api_key);
-
-    // issueCreate needs label *ids*; the binding stores the label *name*, so
-    // resolve it through discovery. No label on the binding → create without.
-    let label_ids = match binding.label.as_deref() {
-        Some(name) => match client.discover().await {
-            Ok(discovery) => {
-                let resolved = discovery
-                    .teams
-                    .iter()
-                    .find(|t| t.id == binding.team_id)
-                    .and_then(|t| t.labels.iter().find(|l| l.name.eq_ignore_ascii_case(name)));
-                match resolved {
-                    Some(label) => vec![label.id.clone()],
-                    None => {
-                        return err(
-                            StatusCode::UNPROCESSABLE_ENTITY,
-                            format!(
-                                "eligibility label `{name}` not found on team `{}` — \
-                                 check the project's Linear binding",
-                                binding.team_name
-                            ),
-                        )
-                    }
-                }
-            }
-            Err(e) => {
-                return err(
-                    StatusCode::BAD_GATEWAY,
-                    format!("Linear discovery failed: {e}"),
-                )
-            }
-        },
-        None => Vec::new(),
+    // App-actor OAuth token if the workspace is connected, else a legacy key.
+    let client = match linear_client(&state).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
 
+    // No labels: the issue is filed for a human to triage and — if they want the
+    // harness on it — delegate to the app in Linear. Nothing picks it up
+    // automatically from a label any more.
     match client
         .create_issue(
             &binding.team_id,
             &title,
             &body.description,
             Some(&binding.source_state_id),
-            &label_ids,
+            &[],
         )
         .await
     {
@@ -316,7 +282,6 @@ pub async fn put_source(
         team_id,
         team_name,
         source_state_id,
-        label: optional_trimmed_non_empty(body.label),
         failed_label: optional_trimmed_non_empty(body.failed_label),
         in_progress_state_id: optional_trimmed_non_empty(body.in_progress_state_id),
         review_state_id: optional_trimmed_non_empty(body.review_state_id),

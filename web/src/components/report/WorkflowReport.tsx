@@ -562,7 +562,7 @@ function FindingRow({
                     size="sm"
                     variant="outline"
                     disabled={busy}
-                    title="Create a Linear issue (AI Eligible) for this finding"
+                    title="File a Linear issue for this finding — delegate it to the harness in Linear to start work"
                     onClick={onCreateIssue}
                   >
                     {busy ? "Working…" : "Create issue"}

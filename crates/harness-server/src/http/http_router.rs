@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use super::{
     auth, billing_routes, categories_routes, credentials_routes, finding_routes, health_check,
-    linear_routes, linear_source_routes, mcp_routes, password_reset, runs_routes, state::AppState,
-    system_routes, workflows_routes,
+    linear_agent, linear_oauth, linear_routes, linear_source_routes, mcp_routes, password_reset,
+    runs_routes, state::AppState, system_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -131,6 +131,21 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/projects/{project}/linear/preview",
             get(linear_routes::preview),
         )
+        // ── Linear OAuth (`actor=app`) — writes attributed to the app, not to
+        // the person whose personal API key was pasted. Global: one workspace,
+        // one install, managed on the Credentials page. `start` returns the
+        // authorization URL as JSON (a bearer-authenticated fetch); the callback
+        // is a browser redirect and is auth-exempt, guarded by its `state` nonce.
+        .route("/api/linear/oauth/start", get(linear_oauth::start))
+        .route("/api/linear/oauth/status", get(linear_oauth::status))
+        .route(
+            "/api/linear/oauth/disconnect",
+            post(linear_oauth::disconnect),
+        )
+        .route(linear_oauth::CALLBACK_PATH, get(linear_oauth::callback))
+        // Agent sessions: delegating an issue to the app (or @-mentioning it)
+        // posts here. Auth-exempt, verified by its `Linear-Signature` HMAC.
+        .route(linear_oauth::WEBHOOK_PATH, post(linear_agent::webhook))
         // ── Step categories (global registry for overview grouping/colour) ──
         .route("/api/categories", get(categories_routes::list_categories))
         .route(

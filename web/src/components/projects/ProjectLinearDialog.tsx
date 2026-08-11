@@ -11,10 +11,10 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useWorkflowList } from "@/lib/authoring";
-import { useProjectCredentials } from "@/lib/credentials";
 import {
   useDeleteLinearSource,
   useLinearDiscovery,
+  useLinearOauthStatus,
   useLinearSources,
   useSaveLinearSource,
 } from "@/lib/linear";
@@ -81,11 +81,11 @@ function StateSelect({
  * the project has a Linear credential configured.
  */
 export function ProjectLinearDialog({ project }: { project: string }) {
-  const creds = useProjectCredentials(project);
-  const hasLinearKey =
-    creds.data?.some((c) => c.provider === "linear" && c.configured) ?? false;
-
-  if (!hasLinearKey) return null;
+  // Gate on a credential that can actually authenticate (an app install or a
+  // legacy key) — a credential holding only OAuth client details isn't one yet.
+  // The Linear connection is global; the bindings below are per project.
+  const status = useLinearOauthStatus();
+  if ((status.data?.mode ?? "none") === "none") return null;
 
   return (
     <Dialog>
@@ -100,9 +100,13 @@ export function ProjectLinearDialog({ project }: { project: string }) {
         <DialogHeader>
           <DialogTitle className="font-mono text-base">{project}</DialogTitle>
           <DialogDescription>
-            Linear trigger bindings for this project. Each binding watches a
-            team and fires a workflow for matching issues. One binding per
-            workflow.
+            Maps a Linear team to this project: which workflow runs, the source
+            status that triggers it, the rest of the status map, and the base
+            branch. Work starts only when an issue is both{" "}
+            <strong>delegated to the harness in Linear</strong> and sitting in
+            that source status. Delegating is the fast path; enabling{" "}
+            <em>live</em> also lets the poller catch delegated issues it missed.
+            One binding per workflow.
           </DialogDescription>
         </DialogHeader>
         <DialogBody project={project} />
@@ -267,7 +271,6 @@ function BindingForm({
   const [sourceStateId, setSourceStateId] = useState(
     source?.source_state_id ?? "",
   );
-  const [label, setLabel] = useState(source?.label ?? "");
   const [failedLabel, setFailedLabel] = useState(source?.failed_label ?? "");
   const [inProgressStateId, setInProgressStateId] = useState(
     source?.in_progress_state_id ?? "",
@@ -317,7 +320,6 @@ function BindingForm({
         team_id: teamId,
         team_name: teamName,
         source_state_id: sourceStateId,
-        label: label.trim() || undefined,
         failed_label: failedLabel.trim() || undefined,
         in_progress_state_id: inProgressStateId.trim() || undefined,
         review_state_id: reviewStateId.trim() || undefined,
@@ -367,7 +369,6 @@ function BindingForm({
           onChange={(e) => {
             setTeamId(e.target.value);
             setSourceStateId("");
-            setLabel("");
             setInProgressStateId("");
             setReviewStateId("");
             setReadyStateId("");
@@ -391,23 +392,6 @@ function BindingForm({
         disabled={!teamId}
         placeholder="Select a status…"
       />
-
-      {/* Eligibility label */}
-      <Field label="Eligibility label">
-        <select
-          className={inputCls}
-          value={label}
-          onChange={(e) => setLabel(e.target.value)}
-          disabled={!teamId}
-        >
-          <option value="">(none)</option>
-          {labels.map((l) => (
-            <option key={l.id} value={l.name}>
-              {l.name}
-            </option>
-          ))}
-        </select>
-      </Field>
 
       {/* Failed label — applied when the binding gives up (optional). */}
       <Field label="Failed label">

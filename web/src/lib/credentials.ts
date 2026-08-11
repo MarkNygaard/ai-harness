@@ -51,9 +51,14 @@ export function useSetCredential() {
 // `configured` only reports presence.
 // ---------------------------------------------------------------------------
 
-/** Provider fields that can be overridden per project. */
+/**
+ * Provider fields that can be overridden per project.
+ *
+ * Linear is deliberately absent: the identity connected to Linear is the *app*
+ * (an `actor=app` OAuth install), which is the same for every project, so it is
+ * a single global credential on the Credentials page.
+ */
 export const PROJECT_CREDENTIALS: { provider: string; field: string }[] = [
-  { provider: "linear", field: "api_key" },
   { provider: "github", field: "token" },
   { provider: "github", field: "git_author_email" },
 ];
@@ -86,12 +91,8 @@ export function useSetProjectCredential(project: string | null) {
           body: JSON.stringify({ fields }),
         },
       ),
-    onSuccess: (_data, { provider }) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["project-credentials", project] });
-      // Linear discovery uses the key — refetch so trigger dropdowns populate.
-      if (provider === "linear") {
-        qc.invalidateQueries({ queryKey: ["linear", "discovery", project] });
-      }
     },
   });
 }
@@ -104,11 +105,8 @@ export function useDeleteProjectCredential(project: string | null) {
         `/api/projects/${encodeURIComponent(project!)}/credentials/${encodeURIComponent(provider)}`,
         { method: "DELETE" },
       ),
-    onSuccess: (_data, provider) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["project-credentials", project] });
-      if (provider === "linear") {
-        qc.invalidateQueries({ queryKey: ["linear", "discovery", project] });
-      }
     },
   });
 }
