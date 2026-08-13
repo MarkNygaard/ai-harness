@@ -21,6 +21,7 @@ import {
   Loader2,
   RotateCcw,
   Save,
+  FileText,
   Settings2,
   Trash2,
   TriangleAlert,
@@ -46,6 +47,7 @@ import { EditorNode as EditorNodeView } from "@/components/editor/EditorNode";
 import { EditorActionsContext } from "@/components/editor/context";
 import { Palette } from "@/components/editor/Palette";
 import { PropertiesDrawer } from "@/components/editor/PropertiesDrawer";
+import { WorkflowDescriptionDrawer } from "@/components/editor/WorkflowDescriptionDrawer";
 import { WorkflowSettingsDrawer } from "@/components/editor/WorkflowSettingsDrawer";
 import {
   type EditorNodeData,
@@ -84,7 +86,10 @@ function Editor() {
     name: routeName ?? "untitled-workflow",
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // The three right-hand panels (node inspector, description, UI block) are
+  // mutually exclusive — only one drawer is ever open.
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
   const loadedFor = useRef<string | null>(null);
 
   // Load an existing workflow once its source arrives.
@@ -350,6 +355,20 @@ function Editor() {
         size="sm"
         onClick={() => {
           setSelectedId(null);
+          setSettingsOpen(false);
+          setDescriptionOpen((o) => !o);
+        }}
+        title="Read and edit this workflow's description (shown on its card)"
+      >
+        <FileText className="h-3.5 w-3.5" />
+        Description
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          setSelectedId(null);
+          setDescriptionOpen(false);
           setSettingsOpen((o) => !o);
         }}
         title="Edit this workflow's nav entry and report tab (the UI block)"
@@ -435,6 +454,12 @@ function Editor() {
               catalog={catalog.data}
               onChange={updateNode}
               onClose={() => setSelectedId(null)}
+            />
+          ) : descriptionOpen ? (
+            <WorkflowDescriptionDrawer
+              description={meta.description}
+              onChange={(next) => setMeta((m) => ({ ...m, description: next }))}
+              onClose={() => setDescriptionOpen(false)}
             />
           ) : settingsOpen ? (
             <WorkflowSettingsDrawer
