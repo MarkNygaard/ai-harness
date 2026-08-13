@@ -41,8 +41,11 @@ export function WorkflowsList() {
 
   // The API already resolves shadowing (a project workflow hides the bundled
   // default of the same name), so a name appears in exactly one group.
+  //
+  // "Custom", not "Yours": the harness is a shared instance, so a project
+  // workflow was as likely authored by a teammate as by whoever is looking.
   const all = workflows.data ?? [];
-  const yours = all.filter((wf) => wf.source === "project");
+  const custom = all.filter((wf) => wf.source === "project");
   const templates = all.filter((wf) => wf.source === "bundled");
 
   return (
@@ -58,7 +61,7 @@ export function WorkflowsList() {
         </>
       }
     >
-      <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
+      <div className="mx-auto flex max-w-7xl flex-col gap-6 p-6">
         <div className="sm:pr-64">
           <h1 className="flex items-center gap-2 text-lg font-semibold">
             <IconBinaryTree2 className="size-5 text-accent-orange" />
@@ -83,19 +86,25 @@ export function WorkflowsList() {
           <p className="text-sm text-muted-foreground">No workflows yet.</p>
         )}
 
-        <Section title="Yours" count={yours.length} view={view}>
-          {yours.map((wf) => (
+        <Section
+          title="Custom workflows"
+          count={custom.length}
+          note="editable"
+          view={view}
+        >
+          {custom.map((wf) => (
             <WorkflowCard key={wf.name} wf={wf} view={view} />
           ))}
         </Section>
-        {yours.length === 0 && all.length > 0 && (
+        {custom.length === 0 && all.length > 0 && (
           <p className="-mt-4 text-xs text-muted-foreground">
-            None yet — saving a template below creates an editable copy here.
+            None yet — saving a bundled template below creates an editable copy
+            here.
           </p>
         )}
 
         <Section
-          title="Templates"
+          title="Bundled templates"
           count={templates.length}
           note="read-only"
           view={view}
@@ -176,7 +185,7 @@ function Section({
       <div
         className={
           view === "grid"
-            ? "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3"
+            ? "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
             : "flex flex-col gap-2"
         }
       >
@@ -201,12 +210,12 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
     >
       <Card className="h-full transition-colors group-hover:border-accent-orange/50">
         {view === "grid" ? (
-          // Portrait by construction: a 4:5 aspect ratio is taller than wide at
-          // every breakpoint and makes every card in a row exactly the same
-          // height, so no pixel height needs maintaining as the columns change.
-          // Single-column (narrow screens) falls back to a short fixed height —
-          // a full-width portrait card would be absurdly tall.
-          <CardContent className="flex h-40 flex-col gap-2 py-3 sm:h-auto sm:aspect-4/5">
+          // A fixed height rather than an aspect ratio: the height is then the
+          // same at every breakpoint, so the description's line clamp below can
+          // be a single value that actually matches the box. (With a ratio, the
+          // card's height changed with the column count and no one clamp could
+          // reach the footer at every width.)
+          <CardContent className="flex h-40 flex-col gap-2 py-3 sm:h-72">
             <div className="flex items-start gap-2">
               <IconBinaryTree2 className="mt-0.5 size-4 shrink-0 text-accent-orange" />
               <div className="min-w-0">
@@ -218,13 +227,13 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
                 </span>
               </div>
             </div>
-            {/* Flows to the bottom of the card and ellipsises there. CSS can only
-                clamp to a *line count*, never to a container height, so the count
-                is tuned to the 4:5 box: at three columns the text area is ~320px
-                and `text-xs` lines are 16px, so ~20 lines reaches the footer.
-                Descriptions here run 7-20 paragraph-lines, so the clamp is
-                virtually always what truncates — the dots land at the card edge. */}
-            <p className="line-clamp-3 flex-1 overflow-hidden text-xs leading-4 text-muted-foreground sm:line-clamp-20">
+            {/* `whitespace-pre-line` keeps the blank lines from the YAML block
+                scalar, so multi-paragraph descriptions read as paragraphs instead
+                of one run-on wall of text. Line height is roomier than the text
+                size would default to for the same reason. The clamp is sized to
+                the fixed card height (~200px of text area at 20px lines), one
+                short of capacity so the ellipsis always lands inside the card. */}
+            <p className="line-clamp-3 flex-1 overflow-hidden whitespace-pre-line text-xs leading-5 text-muted-foreground sm:line-clamp-9">
               {wf.description ?? ""}
             </p>
             <div className="text-[11px] tabular-nums text-muted-foreground">
