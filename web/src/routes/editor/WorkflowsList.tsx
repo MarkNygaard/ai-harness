@@ -221,7 +221,7 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
           // the modest `py` spends the fixed height on content rather than air.
           <CardContent className="flex h-40 flex-col gap-3 px-7 py-3 sm:h-72">
             <div className="min-w-0">
-              <span className="line-clamp-2 text-sm font-medium leading-snug text-accent-orange">
+              <span className="line-clamp-2 text-sm font-medium leading-snug">
                 {title}
               </span>
               <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
@@ -249,9 +249,7 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
             <IconBinaryTree2 className="size-5 shrink-0 text-accent-orange" />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-baseline gap-2">
-                <span className="truncate text-sm font-medium text-accent-orange">
-                  {title}
-                </span>
+                <span className="truncate text-sm font-medium">{title}</span>
                 <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
                   {wf.name}
                 </span>
