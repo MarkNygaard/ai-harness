@@ -95,12 +95,17 @@ Click **Reconnect**.
 Delegation carries no configuration of its own, so the issue's **team** is matched
 against the Linear trigger bindings (Projects → the project → the ⚡ icon). The
 matching binding supplies the project, the workflow to run, the base branch, the
-source status that gates it, and the rest of the status map. A binding is used for
-this whether or not it is `enabled` — those flags govern only the column poller.
+source status that gates it, and the rest of the status map.
 
-With exactly one binding overall, it is used regardless of team (the status gate
-still applies). With none that match, the harness replies in the session saying so
-rather than guessing.
+**The binding must be `enabled`.** Unchecking it stops work arriving by *either*
+route — delegation as well as the poller. `live` is poller-only (claim vs. dry-run),
+so a delegation-only setup is `enabled` on, `live` off. This matters when two
+bindings share a source status: disabling the one you don't want is how you choose
+between them.
+
+With exactly one enabled binding overall, it is used regardless of team (the status
+gate still applies). With none that match, the harness replies in the session saying
+so rather than guessing.
 
 ## Images pasted into an issue
 
@@ -304,7 +309,7 @@ in one step is possible if that ever becomes the preference.)
 | The project's Linear trigger button disappeared | The bindings dialog only appears once Linear is connected. Connect on the Credentials page. |
 | Delegating does nothing | Check the panel's two Delegation lines. Then check the OAuth app's webhook is enabled, subscribed to *Agent session events*, and pointed at the webhook URL shown. Server logs record every rejected delivery with the reason. |
 | Session shows "unresponsive" in Linear | The acknowledging `thought` didn't land within 10s — usually the webhook never arrived, or the Linear credential can't write. The log line is `failed to acknowledge session`. |
-| "No harness project is set up for this issue's team" | No Linear binding matches the issue's team. Add one on the Projects page (it does not need to be enabled). |
+| "No enabled Linear trigger covers this issue’s team" | No **enabled** binding matches the issue’s team. Add one on the Projects page, or enable the existing one — a disabled binding is inert for delegation too. |
 | "This issue is in X, and `wf` only starts from…" | Working as intended: the binding's source status is the gate. Move the issue there. |
 | Delegated an issue in the right column and nothing happened | The poller logs `app user id is unknown` if the install predates that being recorded — reconnect the workspace. Otherwise check the webhook (see above). |
 | Preview returns "app user id is unknown" | Same cause: reconnect. The preview mirrors the poller's gate, so it can't show delegated issues without knowing who the harness is. |

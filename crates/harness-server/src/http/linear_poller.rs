@@ -493,7 +493,7 @@ fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     );
     let human: Vec<&Comment> = comments
         .iter()
-        .filter(|c| !is_bot_status(&c.body))
+        .filter(|c| !is_bot_status(&c.body) && !is_agent_session_preamble(&c.body))
         .collect();
     if !human.is_empty() {
         task.push_str("\n\n## Reviewer comments (Linear)\n\n");
@@ -516,6 +516,16 @@ fn is_bot_status(body: &str) -> bool {
     let t = body.trim_start();
     let has_prefix = ["🤖", "✅", "⚠️", "❌"].iter().any(|p| t.starts_with(p));
     has_prefix && body.contains("ai-harness")
+}
+
+/// True for the comment **Linear itself** posts to open an agent-session thread
+/// ("This thread is for an agent session with <app>."). It carries no reviewer
+/// intent, so feeding it to the agent as feedback is pure noise — and unlike our
+/// own status comments it has no emoji prefix, so [`is_bot_status`] misses it.
+///
+/// Matched on Linear's wording rather than the app name, which varies per install.
+fn is_agent_session_preamble(body: &str) -> bool {
+    body.contains("is for an agent session with")
 }
 
 /// Walk in-flight claims and transition their issues based on run progress.
@@ -737,7 +747,7 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use super::task_for_issue;
+    use super::{is_agent_session_preamble, task_for_issue};
     use harness_sources::linear::{Comment, Issue};
     fn sample_issue() -> Issue {
         Issue {
@@ -781,6 +791,32 @@ mod tests {
         assert!(task.contains("## Reviewer comments (Linear)"));
         assert!(!task.contains("🤖 ai-harness started"));
         assert!(task.contains("Please add a toggle."));
+    }
+
+    /// Delegating an issue makes Linear post its own thread-opening comment. It
+    /// has no emoji prefix, so the bot-status heuristic misses it, and it reached
+    /// the agent as if a reviewer had written it.
+    #[test]
+    fn task_for_issue_filters_linears_agent_session_preamble() {
+        let comments = vec![
+            sample_comment(
+                "This thread is for an agent session with aiharness.",
+                "unknown",
+            ),
+            sample_comment("Please add a toggle.", "Alice"),
+        ];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(!task.contains("agent session with"));
+        assert!(task.contains("Please add a toggle."));
+
+        // Matched on Linear's wording, so any app name is covered…
+        assert!(is_agent_session_preamble(
+            "This thread is for an agent session with some-other-bot."
+        ));
+        // …but a human discussing agent sessions is not silenced.
+        assert!(!is_agent_session_preamble(
+            "Should we use an agent session for this?"
+        ));
     }
     #[test]
     fn task_for_issue_omits_section_when_all_comments_are_bot_status() {
