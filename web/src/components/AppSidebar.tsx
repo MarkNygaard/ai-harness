@@ -225,12 +225,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               <span>{editing ? "Done editing menu" : "Edit menu"}</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton className="cursor-default hover:bg-transparent">
-              <span className="size-2 rounded-full bg-status-success" />
-              <span className="text-xs text-muted-foreground">local</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
         </SidebarMenu>
         <ClaudeCodeVersion />
       </SidebarFooter>
