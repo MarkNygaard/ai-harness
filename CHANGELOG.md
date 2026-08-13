@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Delegated runs report progress into the Linear session.** An `action` as each
+  workflow step finishes, plus a `thought` heartbeat if nothing has been posted for
+  ~10 minutes. Previously two activities were posted at the start and nothing until
+  the run ended, so Linear marked the session stale after its 30-minute limit and
+  showed "stopped responding" for most of a long run while the harness worked
+  normally.
+
 ### Fixed
 
 - **A disabled Linear binding no longer wins delegation.** `enabled` governed only

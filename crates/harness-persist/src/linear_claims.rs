@@ -33,6 +33,22 @@ CREATE TABLE IF NOT EXISTS harness_linear_claims (
 const ADD_AGENT_SESSION_ID: &str =
     "ALTER TABLE harness_linear_claims ADD COLUMN IF NOT EXISTS agent_session_id text";
 
+/// Node ids already reported into the agent session, comma-separated. Stored
+/// rather than derived because status-sync runs every 30s and must not re-post an
+/// activity it already sent. An exact set (not a high-water mark) because a DAG
+/// finishes nodes out of ordinal order when branches run in parallel.
+const ADD_REPORTED_NODES: &str =
+    "ALTER TABLE harness_linear_claims ADD COLUMN IF NOT EXISTS reported_nodes text NOT NULL DEFAULT ''";
+
+/// When an activity was last posted into the session. Drives the heartbeat that
+/// keeps a session alive through a single long-running node — Linear marks a
+/// session stale after 30 minutes without one.
+///
+/// In the database rather than in memory so a harness restart mid-run neither
+/// loses track (letting the session go stale) nor re-posts a burst.
+const ADD_LAST_ACTIVITY_AT: &str = "ALTER TABLE harness_linear_claims \
+     ADD COLUMN IF NOT EXISTS last_activity_at timestamptz NOT NULL DEFAULT now()";
+
 /// A claim row (matches `harness_linear_claims`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LinearClaim {
@@ -51,7 +67,33 @@ pub struct LinearClaim {
     /// delegation/mention rather than the column poller. Progress is reported
     /// into this session as agent activities.
     pub agent_session_id: Option<String>,
+    /// Node ids already reported into the session, comma-separated.
+    pub reported_nodes: String,
+    /// When an activity was last posted into the session.
+    pub last_activity_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
+}
+
+impl LinearClaim {
+    /// Whether `node_id` has already been reported into the session.
+    pub fn has_reported(&self, node_id: &str) -> bool {
+        self.reported_nodes.split(',').any(|n| n == node_id)
+    }
+
+    /// `reported_nodes` with `node_ids` appended, skipping any already present.
+    pub fn with_reported(&self, node_ids: &[String]) -> String {
+        let mut out: Vec<&str> = self
+            .reported_nodes
+            .split(',')
+            .filter(|n| !n.is_empty())
+            .collect();
+        for id in node_ids {
+            if !out.iter().any(|n| n == id) {
+                out.push(id);
+            }
+        }
+        out.join(",")
+    }
 }
 
 /// Postgres-backed store for Linear claim linkage.
@@ -71,6 +113,8 @@ impl LinearClaimStore {
     pub async fn from_pool(pool: PgPool) -> Result<Self, PersistError> {
         sqlx::query(CREATE_LINEAR_CLAIMS).execute(&pool).await?;
         sqlx::query(ADD_AGENT_SESSION_ID).execute(&pool).await?;
+        sqlx::query(ADD_REPORTED_NODES).execute(&pool).await?;
+        sqlx::query(ADD_LAST_ACTIVITY_AT).execute(&pool).await?;
         Ok(Self { pool })
     }
 
@@ -127,7 +171,7 @@ impl LinearClaimStore {
     pub async fn list_active(&self) -> Result<Vec<LinearClaim>, PersistError> {
         let rows = sqlx::query_as::<_, LinearClaim>(
             "SELECT run_id, project, workflow, issue_id, identifier, original_state_id,
-                    phase, agent_session_id, created_at
+                    phase, agent_session_id, reported_nodes, last_activity_at, created_at
              FROM harness_linear_claims
              WHERE phase <> 'done'
              ORDER BY created_at",
@@ -199,7 +243,7 @@ impl LinearClaimStore {
     pub async fn claim_for_run(&self, run_id: &str) -> Result<Option<LinearClaim>, PersistError> {
         let row = sqlx::query_as::<_, LinearClaim>(
             "SELECT run_id, project, workflow, issue_id, identifier, original_state_id,
-                    phase, agent_session_id, created_at
+                    phase, agent_session_id, reported_nodes, last_activity_at, created_at
              FROM harness_linear_claims
              WHERE run_id = $1",
         )
@@ -223,6 +267,28 @@ impl LinearClaimStore {
     }
 
     /// Advance a claim's phase.
+    /// Record that activities were posted into the session: which nodes have now
+    /// been reported, and that "just now" is the last time we spoke.
+    ///
+    /// Both move together because every activity we post is either a node report
+    /// or a heartbeat, and each resets the staleness clock.
+    pub async fn set_session_progress(
+        &self,
+        run_id: &str,
+        reported_nodes: &str,
+    ) -> Result<(), PersistError> {
+        sqlx::query(
+            "UPDATE harness_linear_claims
+             SET reported_nodes = $2, last_activity_at = now()
+             WHERE run_id = $1",
+        )
+        .bind(run_id)
+        .bind(reported_nodes)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn set_phase(&self, run_id: &str, phase: &str) -> Result<(), PersistError> {
         sqlx::query("UPDATE harness_linear_claims SET phase = $2 WHERE run_id = $1")
             .bind(run_id)
@@ -236,6 +302,60 @@ impl LinearClaimStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn claim_with_reported(reported: &str) -> LinearClaim {
+        LinearClaim {
+            run_id: "r1".into(),
+            project: "p".into(),
+            workflow: "w".into(),
+            issue_id: "i".into(),
+            identifier: "ECOM-1".into(),
+            original_state_id: "todo".into(),
+            phase: "claimed".into(),
+            agent_session_id: Some("sess-1".into()),
+            reported_nodes: reported.into(),
+            last_activity_at: Utc::now(),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn reported_nodes_is_an_exact_set_not_a_high_water_mark() {
+        let claim = claim_with_reported("explore,create-plan");
+        assert!(claim.has_reported("explore"));
+        assert!(claim.has_reported("create-plan"));
+        assert!(!claim.has_reported("validate"));
+        // Not a prefix or substring match: `plan` must not look reported just
+        // because `create-plan` is.
+        assert!(!claim.has_reported("plan"));
+        assert!(!claim.has_reported(""));
+    }
+
+    #[test]
+    fn with_reported_appends_without_duplicating() {
+        let claim = claim_with_reported("explore");
+        assert_eq!(
+            claim.with_reported(&["create-plan".into()]),
+            "explore,create-plan"
+        );
+        // Re-reporting a node is a no-op, so a repeated status-sync tick can't
+        // grow the column or re-post an activity.
+        assert_eq!(claim.with_reported(&["explore".into()]), "explore");
+        // Several at once, mixed new and seen.
+        assert_eq!(
+            claim.with_reported(&["explore".into(), "validate".into()]),
+            "explore,validate"
+        );
+    }
+
+    #[test]
+    fn with_reported_handles_an_empty_starting_set() {
+        let claim = claim_with_reported("");
+        assert_eq!(claim.with_reported(&[]), "");
+        assert_eq!(claim.with_reported(&["explore".into()]), "explore");
+        // No leading comma from the empty initial value.
+        assert!(!claim.with_reported(&["explore".into()]).starts_with(','));
+    }
 
     fn db_url() -> Option<String> {
         let url = std::env::var("HARNESS_DATABASE_URL").ok()?;

@@ -33,6 +33,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use harness_persist::{LinearClaim, LinearSource};
 use harness_sources::linear::{AgentActivity, Comment, Issue, LinearClient};
 use tokio::time::{interval, Instant, MissedTickBehavior};
@@ -681,8 +682,14 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                 let _ = claim_store.set_phase(&c.run_id, "done").await;
             }
             _ => {
-                // Still running: move to Review once the PR exists (a delivery
-                // node has succeeded), and only once.
+                // Still running: stream node progress into the session and keep it
+                // from going stale. Without this a delegated session shows
+                // "stopped responding" for most of a long run while the harness
+                // works fine.
+                report_progress(&client, claim_store, &c, &detail).await;
+
+                // Move to Review once the PR exists (a delivery node has
+                // succeeded), and only once.
                 if c.phase == "claimed" && delivery_succeeded(&detail) {
                     if let Some(review) =
                         binding.as_ref().and_then(|b| b.review_state_id.as_deref())
@@ -733,6 +740,112 @@ async fn report_to_session(
 }
 
 /// True once any `delivery`-category node in the run has succeeded (the PR step).
+/// Linear considers an agent session **stale** after 30 minutes without an
+/// activity. Heartbeat at a third of that so a missed tick, a slow Linear call or
+/// a brief restart can't cross the line — and so the margin is obvious rather
+/// than incidental.
+const SESSION_HEARTBEAT_MINS: i64 = 10;
+
+// Keep at least a 3x margin under Linear's 30-minute stale window.
+const _: () = assert!(SESSION_HEARTBEAT_MINS > 0 && SESSION_HEARTBEAT_MINS * 3 <= 30);
+
+/// Nodes that have finished but not yet been reported into the session, in graph
+/// order, as `(node_id, status)`.
+fn unreported_finished_nodes(
+    claim: &LinearClaim,
+    detail: &harness_persist::RunDetail,
+) -> Vec<(String, String)> {
+    detail
+        .nodes
+        .iter()
+        .filter(|n| matches!(n.status.as_str(), "success" | "failed" | "cancelled"))
+        .filter(|n| !claim.has_reported(&n.node_id))
+        .map(|n| (n.node_id.clone(), n.status.clone()))
+        .collect()
+}
+
+/// Report progress into a delegated run's session and keep it alive.
+///
+/// Two jobs, because neither covers the other:
+///
+/// * **Per-node activities.** A multi-node workflow finishes something every few
+///   minutes, which is both genuinely informative and enough to keep the session
+///   warm.
+/// * **A heartbeat.** A single node can run far longer than Linear's 30-minute
+///   window — `implement-tasks` routinely takes 15 minutes and the review loops
+///   can take much more — so per-node reporting alone would let the session go
+///   stale *mid-node*, which is exactly when a human is most likely to look.
+///
+/// Only ever posts for claims that carry a session (delegated runs); a
+/// poller-claimed run has nowhere to post and is left alone.
+async fn report_progress(
+    client: &LinearClient,
+    claim_store: &harness_persist::LinearClaimStore,
+    claim: &LinearClaim,
+    detail: &harness_persist::RunDetail,
+) {
+    if claim.agent_session_id.is_none() {
+        return;
+    }
+
+    let finished = unreported_finished_nodes(claim, detail);
+    if !finished.is_empty() {
+        for (node_id, status) in &finished {
+            let result = match status.as_str() {
+                "success" => None,
+                other => Some(other.to_string()),
+            };
+            report_to_session(
+                client,
+                claim,
+                AgentActivity::Action {
+                    action: format!("Finished {node_id}"),
+                    parameter: claim.workflow.clone(),
+                    result,
+                },
+            )
+            .await;
+        }
+        let ids: Vec<String> = finished.into_iter().map(|(id, _)| id).collect();
+        let _ = claim_store
+            .set_session_progress(&claim.run_id, &claim.with_reported(&ids))
+            .await;
+        return;
+    }
+
+    // Nothing finished this tick. Keep the session alive if we've gone quiet,
+    // naming the node in flight and how long it has been going — that is the most
+    // the claim can honestly say, since it sees node status rather than the
+    // agent's internal progress.
+    let quiet_for = Utc::now().signed_duration_since(claim.last_activity_at);
+    if quiet_for.num_minutes() < SESSION_HEARTBEAT_MINS {
+        return;
+    }
+    let running = detail
+        .nodes
+        .iter()
+        .find(|n| n.status == "running")
+        .map(|n| n.node_id.clone());
+    let body = match &running {
+        Some(node) => format!(
+            "Still working — `{node}` has been running for {} minutes.",
+            quiet_for.num_minutes()
+        ),
+        // No node in flight but the run is live: between nodes, or starting one.
+        None => format!(
+            "Still working on `{}` — {} minutes since the last update.",
+            claim.workflow,
+            quiet_for.num_minutes()
+        ),
+    };
+    if report_to_session(client, claim, AgentActivity::Thought { body }).await {
+        // Reset the clock even though no node was reported.
+        let _ = claim_store
+            .set_session_progress(&claim.run_id, &claim.reported_nodes)
+            .await;
+    }
+}
+
 fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
     let delivery: HashSet<&str> = detail
         .graph
@@ -747,8 +860,113 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 }
 #[cfg(test)]
 mod tests {
-    use super::{is_agent_session_preamble, task_for_issue};
+    use super::{is_agent_session_preamble, task_for_issue, unreported_finished_nodes};
     use harness_sources::linear::{Comment, Issue};
+
+    fn node(node_id: &str, ordinal: i32, status: &str) -> harness_persist::PersistedNode {
+        harness_persist::PersistedNode {
+            node_id: node_id.into(),
+            ordinal,
+            status: status.into(),
+            provider: None,
+            model: None,
+            output: String::new(),
+            iterations: 1,
+            converged: None,
+            note: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read: None,
+            cache_write: None,
+            started_at: None,
+            ended_at: None,
+            artifact_content: None,
+        }
+    }
+
+    fn detail_with(nodes: Vec<harness_persist::PersistedNode>) -> harness_persist::RunDetail {
+        harness_persist::RunDetail {
+            run: harness_persist::RunSummary {
+                id: "r1".into(),
+                workflow_name: "idea-to-pr".into(),
+                title: None,
+                description: Some(String::new()),
+                status: "running".into(),
+                node_count: nodes.len() as i32,
+                started_at: Some(chrono::Utc::now()),
+                ended_at: None,
+                recorded_at: chrono::Utc::now(),
+                project: Some("p".into()),
+                ab_pair_id: None,
+                ab_arm: None,
+                ab_label: None,
+            },
+            nodes,
+            graph: vec![],
+        }
+    }
+
+    fn claim(reported: &str, quiet_minutes: i64) -> harness_persist::LinearClaim {
+        harness_persist::LinearClaim {
+            run_id: "r1".into(),
+            project: "p".into(),
+            workflow: "idea-to-pr".into(),
+            issue_id: "i".into(),
+            identifier: "ECOM-16".into(),
+            original_state_id: "todo".into(),
+            phase: "claimed".into(),
+            agent_session_id: Some("sess-1".into()),
+            reported_nodes: reported.into(),
+            last_activity_at: chrono::Utc::now() - chrono::Duration::minutes(quiet_minutes),
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    #[test]
+    fn only_finished_and_unreported_nodes_are_selected() {
+        let detail = detail_with(vec![
+            node("explore", 0, "success"),
+            node("create-plan", 1, "success"),
+            node("implement-tasks", 2, "running"),
+            node("validate", 3, "pending"),
+        ]);
+        // `explore` already reported → only `create-plan` is new. A running or
+        // pending node is not progress to report.
+        let got = unreported_finished_nodes(&claim("explore", 0), &detail);
+        assert_eq!(
+            got,
+            vec![("create-plan".to_string(), "success".to_string())]
+        );
+
+        // Nothing reported yet → both finished nodes, in graph order.
+        let got = unreported_finished_nodes(&claim("", 0), &detail);
+        assert_eq!(
+            got.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(),
+            vec!["explore", "create-plan"]
+        );
+
+        // All reported → nothing, so a repeated tick posts nothing.
+        assert!(unreported_finished_nodes(&claim("explore,create-plan", 0), &detail).is_empty());
+    }
+
+    #[test]
+    fn failed_and_cancelled_nodes_are_reported_too() {
+        // A failure is progress a human wants to see in the thread, and it also
+        // resets the staleness clock.
+        let detail = detail_with(vec![
+            node("validate", 0, "failed"),
+            node("finalize-pr", 1, "cancelled"),
+        ]);
+        let got = unreported_finished_nodes(&claim("", 0), &detail);
+        assert_eq!(
+            got,
+            vec![
+                ("validate".to_string(), "failed".to_string()),
+                ("finalize-pr".to_string(), "cancelled".to_string()),
+            ]
+        );
+    }
+
     fn sample_issue() -> Issue {
         Issue {
             id: "issue-123".into(),
