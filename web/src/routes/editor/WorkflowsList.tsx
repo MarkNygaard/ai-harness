@@ -88,7 +88,7 @@ export function WorkflowsList() {
         )}
 
         <Section
-          title="Custom workflows"
+          title="Custom"
           count={custom.length}
           note="editable"
           view={view}
@@ -99,13 +99,12 @@ export function WorkflowsList() {
         </Section>
         {custom.length === 0 && all.length > 0 && (
           <p className="-mt-4 text-xs text-muted-foreground">
-            None yet — saving a bundled template below creates an editable copy
-            here.
+            None yet — saving a template below creates an editable copy here.
           </p>
         )}
 
         <Section
-          title="Bundled templates"
+          title="Templates"
           count={templates.length}
           note="read-only"
           view={view}
@@ -222,7 +221,7 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
           // the modest `py` spends the fixed height on content rather than air.
           <CardContent className="flex h-40 flex-col gap-3 px-7 py-3 sm:h-72">
             <div className="min-w-0">
-              <span className="line-clamp-2 text-sm font-medium leading-snug">
+              <span className="line-clamp-2 text-sm font-medium leading-snug text-accent-orange">
                 {title}
               </span>
               <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
@@ -231,13 +230,17 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
             </div>
             {/* Reflowed first (see `reflowParagraphs`) so paragraphs wrap to the
                 card's width instead of to the YAML's, then `whitespace-pre-line`
-                keeps the blank lines between them. The clamp sits comfortably
-                inside the fixed card height (~190px of text area at 20px lines
-                would fit nine), leaving the ellipsis clear of the footer. */}
-            <p className="line-clamp-3 flex-1 overflow-hidden whitespace-pre-line text-xs leading-5 text-muted-foreground sm:line-clamp-8">
+                keeps the blank lines between them.
+                Deliberately NOT `flex-1`: that sized the box from the flex
+                container while the clamp sized it from the line count, and the
+                overflow clipped the disagreement — a sliced part-line instead of
+                a clean ellipsis. Letting the clamp own the height means the box is
+                always a whole number of lines; the card's fixed height has room
+                for eight with slack, and `mt-auto` below pins the footer. */}
+            <p className="line-clamp-3 whitespace-pre-line text-xs leading-5 text-muted-foreground sm:line-clamp-8">
               {description}
             </p>
-            <div className="text-[11px] tabular-nums text-muted-foreground">
+            <div className="mt-auto text-[11px] tabular-nums text-muted-foreground">
               {steps}
             </div>
           </CardContent>
@@ -246,7 +249,9 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
             <IconBinaryTree2 className="size-5 shrink-0 text-accent-orange" />
             <div className="min-w-0 flex-1">
               <div className="flex min-w-0 items-baseline gap-2">
-                <span className="truncate text-sm font-medium">{title}</span>
+                <span className="truncate text-sm font-medium text-accent-orange">
+                  {title}
+                </span>
                 <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
                   {wf.name}
                 </span>
