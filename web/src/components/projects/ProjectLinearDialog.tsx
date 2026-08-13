@@ -182,8 +182,15 @@ function DialogBody({ project }: { project: string }) {
             >
               <div className="min-w-0 flex-1 flex flex-col gap-1">
                 <div className="flex items-center gap-2">
-                  <span className="truncate font-mono text-[13px] font-medium">
-                    {s.workflow}
+                  {/* Team in the heading, not just the detail line: bindings in
+                      one project can watch different teams, and the team is what
+                      distinguishes them at a glance. */}
+                  <span className="truncate text-[13px] font-medium">
+                    <span className="font-mono">{s.workflow}</span>
+                    <span className="text-muted-foreground">
+                      {" "}
+                      ({s.team_name})
+                    </span>
                   </span>
                   <Badge
                     variant={s.enabled ? "success" : "outline"}
@@ -198,9 +205,10 @@ function DialogBody({ project }: { project: string }) {
                     {s.live ? "live" : "dry-run"}
                   </Badge>
                 </div>
+                {/* Team moved to the heading above, so this is the status it
+                    triggers from — the other thing that identifies a binding. */}
                 <span className="truncate text-[11px] text-muted-foreground">
-                  {s.team_name} ·{" "}
-                  {resolveStateName(s.team_id, s.source_state_id)}
+                  starts from {resolveStateName(s.team_id, s.source_state_id)}
                 </span>
               </div>
               <Button
