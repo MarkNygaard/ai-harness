@@ -102,6 +102,48 @@ With exactly one binding overall, it is used regardless of team (the status gate
 still applies). With none that match, the harness replies in the session saying so
 rather than guessing.
 
+## Images pasted into an issue
+
+Screenshots and images in an issue's description or comments are **downloaded and
+handed to the agent as files**, so a ticket saying "fix this, see screenshot"
+actually works.
+
+Linear's upload URLs are private — an unauthenticated request gets a 401, and the
+agent holds no Linear credential — so forwarding the link would be useless. Instead
+the harness fetches each image with the workspace credential, writes it next to the
+project checkouts (**outside** every worktree, so a screenshot can never be
+committed into a PR), and rewrites the link in the task text to that path. Agents
+read images from a path natively, so this needs nothing from the agent side.
+
+Worth knowing:
+
+- **Nothing is resized or re-encoded.** The agent's own tooling downscales on the
+  way to the model. Sizes vary enormously — a UI screenshot is a few hundred KB, a
+  photograph tens of MB — and both work.
+- **Very large screenshots lose fine text.** Downscaling a 5K capture halves small
+  UI labels; crop to the relevant region if the detail matters.
+- **Only `png`, `jpeg`, `gif` and `webp`** are passed on. No SVG (it can carry
+  script), and nothing non-image.
+- **Only `uploads.linear.app` is ever fetched.** Issue text is written by anyone who
+  can file an issue, so treating arbitrary URLs in it as fetchable would be an SSRF
+  hole. Links to other hosts are left as text, untouched.
+- **At most 5 images per task**, and any single file over 25MB is skipped.
+- **Failure is never fatal.** If a download fails the original URL stays in the text
+  and the run proceeds — an image is a bonus, not a prerequisite.
+- On a **text-only** model the agent simply won't see the image; omp substitutes
+  `[image omitted: model does not support vision]` rather than erroring.
+
+Files live under `<projects-dir>/../attachments/<issue>/`, overridable with
+`HARNESS_ATTACHMENTS_DIR`, and are **swept hourly**: a task's directory is deleted
+once nothing has written to it for a week (`HARNESS_ATTACHMENTS_TTL_HOURS`). The
+sweep also runs on startup, so anything a crash left behind is cleared.
+
+The lifetime is deliberately age-based rather than tied to a run finishing. A run
+reads its images at any point, retries re-read them, and a rerun a week later simply
+re-downloads — so wall-clock age needs no coordination with run state and can't
+delete files a live run is about to open. A week is far longer than any run, and
+re-downloading is cheap.
+
 ## What the harness reports back
 
 Inside the agent session, as Linear agent activities rather than plain comments:

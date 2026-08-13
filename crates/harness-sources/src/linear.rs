@@ -677,6 +677,61 @@ pub fn parse_app_user_id(json: &[u8]) -> Result<String, LinearError> {
     Ok(data.viewer.id)
 }
 
+// ── Uploaded files (images pasted into issues and comments) ──────────────────
+
+/// Host serving Linear's uploaded files. **The only host we ever fetch from.**
+///
+/// Issue and comment text is written by anyone who can file an issue, so treating
+/// the URLs in it as fetchable would be an SSRF hole. Everything else found in the
+/// markdown is left alone.
+const UPLOADS_HOST: &str = "https://uploads.linear.app/";
+
+/// A downloaded upload.
+#[derive(Debug, Clone)]
+pub struct Upload {
+    pub bytes: Vec<u8>,
+    /// The `Content-Type` Linear served it as.
+    pub content_type: String,
+}
+
+impl Upload {
+    /// File extension for the served content type, or `None` for a type we don't
+    /// hand to models. Deliberately no SVG: it can carry script, and no model
+    /// needs it.
+    pub fn extension(&self) -> Option<&'static str> {
+        match self.content_type.split(';').next()?.trim() {
+            "image/png" => Some("png"),
+            "image/jpeg" => Some("jpg"),
+            "image/gif" => Some("gif"),
+            "image/webp" => Some("webp"),
+            _ => None,
+        }
+    }
+}
+
+/// Every `uploads.linear.app` URL in some markdown, in order of appearance and
+/// deduplicated.
+///
+/// Matches bare occurrences rather than only markdown image syntax, so a link
+/// (`[file](…)`) or a plain pasted URL is picked up too. Trailing markdown or
+/// sentence punctuation is trimmed — Linear's upload paths are UUID segments, so
+/// nothing legitimate ends in `)`, `"` or `.`.
+pub fn extract_upload_urls(markdown: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for (idx, _) in markdown.match_indices(UPLOADS_HOST) {
+        let tail = &markdown[idx..];
+        let end = tail
+            .find(|c: char| c.is_whitespace() || matches!(c, ')' | '"' | '\'' | '>' | '<' | '|'))
+            .unwrap_or(tail.len());
+        let url = tail[..end].trim_end_matches(['.', ',', ';', ':', '!', '?']);
+        // A bare host with no path is not a file.
+        if url.len() > UPLOADS_HOST.len() && !out.iter().any(|u| u == url) {
+            out.push(url.to_string());
+        }
+    }
+    out
+}
+
 // ── HTTP client ──────────────────────────────────────────────────────────────
 
 /// How a [`LinearClient`] authenticates — and therefore **who Linear records as
@@ -754,6 +809,71 @@ impl LinearClient {
             )));
         }
         Ok(bytes.to_vec())
+    }
+
+    /// Download an uploaded file (an image pasted into an issue or comment).
+    ///
+    /// Linear's file storage takes the same credential as the GraphQL API — an
+    /// unauthenticated request is refused with 401 — so this reuses the client's
+    /// auth header. `max_bytes` guards against a pathological file; note it is
+    /// *not* a model-facing size limit, since the agent's own tooling downscales
+    /// (a plain screenshot is a few hundred KB, a photo can be tens of MB).
+    ///
+    /// Refuses any URL outside [`UPLOADS_HOST`]: the markdown it came from is
+    /// user-authored, so fetching arbitrary hosts would be an SSRF hole.
+    pub async fn download_upload(
+        &self,
+        url: &str,
+        max_bytes: usize,
+    ) -> Result<Upload, LinearError> {
+        if !url.starts_with(UPLOADS_HOST) {
+            return Err(LinearError(format!(
+                "refusing to download `{url}`: not a {UPLOADS_HOST} URL"
+            )));
+        }
+        let resp = self
+            .http
+            .get(url)
+            .header(reqwest::header::AUTHORIZATION, self.auth.header_value())
+            .send()
+            .await
+            .map_err(|e| LinearError(format!("upload request failed: {e}")))?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(LinearError(format!(
+                "HTTP {} downloading upload",
+                status.as_u16()
+            )));
+        }
+        let content_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or_default()
+            .to_string();
+        // Reject on the advertised length before reading, when it's given.
+        if let Some(len) = resp.content_length() {
+            if len as usize > max_bytes {
+                return Err(LinearError(format!(
+                    "upload is {len} bytes, over the {max_bytes} limit"
+                )));
+            }
+        }
+        let bytes = resp
+            .bytes()
+            .await
+            .map_err(|e| LinearError(format!("read upload failed: {e}")))?;
+        // …and again on what actually arrived, since the header is a claim.
+        if bytes.len() > max_bytes {
+            return Err(LinearError(format!(
+                "upload is {} bytes, over the {max_bytes} limit",
+                bytes.len()
+            )));
+        }
+        Ok(Upload {
+            bytes: bytes.to_vec(),
+            content_type,
+        })
     }
 
     /// The workspace this credential belongs to — also the cheapest probe that
@@ -1186,6 +1306,78 @@ mod tests {
             "agentActivityCreate"
         )
         .is_err());
+    }
+
+    #[test]
+    fn extract_upload_urls_finds_images_links_and_bare_urls() {
+        let md = "Repro below.\n\n\
+            ![shot](https://uploads.linear.app/a/b/c)\n\
+            Also [the log](https://uploads.linear.app/d/e/f) and bare \
+            https://uploads.linear.app/g/h/i here.\n";
+        assert_eq!(
+            extract_upload_urls(md),
+            vec![
+                "https://uploads.linear.app/a/b/c",
+                "https://uploads.linear.app/d/e/f",
+                "https://uploads.linear.app/g/h/i",
+            ]
+        );
+    }
+
+    #[test]
+    fn extract_upload_urls_ignores_other_hosts_and_dedupes() {
+        // Only the uploads host is ever collected — the markdown is user-authored,
+        // so treating any URL in it as fetchable would be an SSRF hole.
+        let md = "![a](https://evil.example.com/x.png) \
+                  ![b](https://linear.app/acme/issue/COR-1) \
+                  ![c](https://uploads.linear.app/keep/me) \
+                  ![c again](https://uploads.linear.app/keep/me)";
+        assert_eq!(
+            extract_upload_urls(md),
+            vec!["https://uploads.linear.app/keep/me"]
+        );
+        // A bare host with no path isn't a file.
+        assert!(extract_upload_urls("https://uploads.linear.app/").is_empty());
+        assert!(extract_upload_urls("no links here").is_empty());
+    }
+
+    #[test]
+    fn extract_upload_urls_trims_trailing_punctuation() {
+        // Upload paths are UUID segments, so nothing legitimate ends in these.
+        for (md, want) in [
+            (
+                "see https://uploads.linear.app/a/b.",
+                "https://uploads.linear.app/a/b",
+            ),
+            (
+                "see https://uploads.linear.app/a/b, then",
+                "https://uploads.linear.app/a/b",
+            ),
+            (
+                "<https://uploads.linear.app/a/b>",
+                "https://uploads.linear.app/a/b",
+            ),
+        ] {
+            assert_eq!(extract_upload_urls(md), vec![want.to_string()], "for {md}");
+        }
+    }
+
+    #[test]
+    fn upload_extension_allowlists_model_safe_image_types() {
+        let up = |ct: &str| Upload {
+            bytes: vec![],
+            content_type: ct.to_string(),
+        };
+        assert_eq!(up("image/png").extension(), Some("png"));
+        assert_eq!(up("image/jpeg").extension(), Some("jpg"));
+        assert_eq!(up("image/gif").extension(), Some("gif"));
+        assert_eq!(up("image/webp").extension(), Some("webp"));
+        // Charset parameters are tolerated.
+        assert_eq!(up("image/png; charset=binary").extension(), Some("png"));
+        // SVG can carry script; PDFs and everything else are not images we pass on.
+        assert_eq!(up("image/svg+xml").extension(), None);
+        assert_eq!(up("application/pdf").extension(), None);
+        assert_eq!(up("").extension(), None);
     }
 
     #[test]
