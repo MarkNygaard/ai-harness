@@ -292,43 +292,51 @@ async fn start_delegated_run(
     client: LinearClient,
 ) {
     let session = event.session_id.clone();
-    let (project, workflow, base_branch, source_state_id) = match resolve_target(state, &event)
-        .await
-    {
-        Target::Ready {
-            project,
-            workflow,
-            base_branch,
-            source_state_id,
-        } => (project, workflow, base_branch, source_state_id),
-        Target::NoBinding => {
-            let _ = client
-                .create_agent_activity(
-                    &session,
-                    &AgentActivity::Error {
-                        body: "No enabled Linear trigger covers this issue's team. Add one for \
+    let (project, workflow, base_branch, source_state_id, in_progress_state_id) =
+        match resolve_target(state, &event).await {
+            Target::Ready {
+                project,
+                workflow,
+                base_branch,
+                source_state_id,
+                in_progress_state_id,
+            } => (
+                project,
+                workflow,
+                base_branch,
+                source_state_id,
+                in_progress_state_id,
+            ),
+            Target::NoBinding => {
+                let _ = client
+                    .create_agent_activity(
+                        &session,
+                        &AgentActivity::Error {
+                            body:
+                                "No enabled Linear trigger covers this issue's team. Add one for \
                                the project on the Projects page — or enable the existing one — \
                                then delegate again."
-                            .into(),
-                    },
-                )
-                .await;
-            return;
-        }
-        // The configured source statuses are still the gate — say so plainly, and
-        // name the statuses that would have worked.
-        Target::WrongStatus {
-            current,
-            team_id,
-            triggers,
-        } => {
-            let body = wrong_status_message(&client, &current, team_id.as_deref(), &triggers).await;
-            let _ = client
-                .create_agent_activity(&session, &AgentActivity::Error { body })
-                .await;
-            return;
-        }
-    };
+                                    .into(),
+                        },
+                    )
+                    .await;
+                return;
+            }
+            // The configured source statuses are still the gate — say so plainly, and
+            // name the statuses that would have worked.
+            Target::WrongStatus {
+                current,
+                team_id,
+                triggers,
+            } => {
+                let body =
+                    wrong_status_message(&client, &current, team_id.as_deref(), &triggers).await;
+                let _ = client
+                    .create_agent_activity(&session, &AgentActivity::Error { body })
+                    .await;
+                return;
+            }
+        };
 
     let title = match (&event.issue_identifier, &event.issue_title) {
         (Some(id), Some(t)) => Some(format!("{id} {t}")),
@@ -349,6 +357,25 @@ async fn start_delegated_run(
         &task_text(&event),
     )
     .await;
+    // Move the issue out of the source status before firing, exactly as the
+    // poller does. This is not only cosmetic: leaving the source column is the
+    // *claim signal*. An issue that stays there is still delegated and still in
+    // the source status, so the poller remains eligible to claim it — today only
+    // `max_concurrent_runs` stops a second run, which stops nothing once a
+    // binding raises that above 1.
+    if let (Some(issue_id), Some(in_progress)) =
+        (event.issue_id.as_deref(), in_progress_state_id.as_deref())
+    {
+        if let Err(e) = client.set_issue_state(issue_id, in_progress).await {
+            // Non-fatal: better to run the work than to refuse over a status move.
+            tracing::warn!(
+                "linear webhook: could not move {} to in-progress: {}",
+                event.issue_identifier.as_deref().unwrap_or(issue_id),
+                e.0
+            );
+        }
+    }
+
     let req = CreateRunRequest {
         workflow: workflow.clone(),
         title,
@@ -483,6 +510,8 @@ enum Target {
         workflow: String,
         base_branch: Option<String>,
         source_state_id: String,
+        /// Where to move the issue as work begins, when the binding maps one.
+        in_progress_state_id: Option<String>,
     },
     /// No Linear trigger binding covers the issue's team.
     NoBinding,
@@ -602,6 +631,7 @@ fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
         },
         base_branch: chosen.base_branch.clone(),
         source_state_id: chosen.source_state_id.clone(),
+        in_progress_state_id: chosen.in_progress_state_id.clone(),
     }
 }
 
@@ -758,6 +788,16 @@ mod tests {
         }
     }
 
+    /// A binding with a full status map, as the UI produces.
+    fn binding_with_status_map(team: &str, workflow: &str, source_state: &str) -> LinearSource {
+        LinearSource {
+            in_progress_state_id: Some("in-progress".into()),
+            review_state_id: Some("in-review".into()),
+            ready_state_id: Some("ready".into()),
+            ..binding(team, workflow, source_state)
+        }
+    }
+
     fn disabled_binding(team: &str, workflow: &str, source_state: &str) -> LinearSource {
         let now = chrono::Utc::now();
         LinearSource {
@@ -892,6 +932,42 @@ mod tests {
             choose_target(&[], &context("team-a", "todo", "To Do")),
             Target::NoBinding
         ));
+    }
+
+    /// Regression: a delegated run must be able to move the issue out of the
+    /// source status. The binding's `in_progress_state_id` previously never left
+    /// `choose_target`, so the delegation path had nothing to move the issue with
+    /// and it sat in the source column — where the poller still considered it
+    /// claimable, with only `max_concurrent_runs` preventing a second run.
+    #[test]
+    fn ready_carries_the_bindings_in_progress_status() {
+        let bindings = vec![binding_with_status_map("ecom", "idea-to-pr", "todo")];
+        match choose_target(&bindings, &context("ecom", "todo", "Todo")) {
+            Target::Ready {
+                in_progress_state_id,
+                source_state_id,
+                ..
+            } => {
+                assert_eq!(in_progress_state_id.as_deref(), Some("in-progress"));
+                // The source status is still reported, so a failure can roll back.
+                assert_eq!(source_state_id, "todo");
+            }
+            other => panic!("expected Ready, got {}", target_name(&other)),
+        }
+
+        // A binding with no in-progress status maps to None — the move is then
+        // skipped rather than guessed at.
+        match choose_target(&bindings_without_map(), &context("ecom", "todo", "Todo")) {
+            Target::Ready {
+                in_progress_state_id,
+                ..
+            } => assert_eq!(in_progress_state_id, None),
+            other => panic!("expected Ready, got {}", target_name(&other)),
+        }
+    }
+
+    fn bindings_without_map() -> Vec<LinearSource> {
+        vec![binding("ecom", "idea-to-pr", "todo")]
     }
 
     /// Regression: unchecking `enabled` must stop delegation routing to a
