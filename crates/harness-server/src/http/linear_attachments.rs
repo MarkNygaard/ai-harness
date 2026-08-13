@@ -24,6 +24,7 @@
 //! proceeds. An image is a bonus, never a prerequisite.
 
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use harness_sources::linear::{extract_upload_urls, LinearClient};
 
@@ -34,6 +35,11 @@ const MAX_UPLOADS_PER_TASK: usize = 5;
 /// Refuse a single upload larger than this. Generous on purpose — a 12MB
 /// photograph is normal and reads fine — this only stops absurd files.
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024;
+
+// The guard exists to stop absurd files, not to limit what models receive: a 12MB
+// photograph is a real, verified working case, so it must sit well clear of that.
+const _: () = assert!(MAX_UPLOAD_BYTES > 12 * 1024 * 1024);
+const _: () = assert!(MAX_UPLOADS_PER_TASK >= 1);
 
 /// Where downloaded uploads live: a sibling of the project checkouts, so they are
 /// **outside** every worktree.
@@ -50,6 +56,78 @@ pub(crate) fn attachments_root(projects_dir: &Path) -> PathBuf {
         .parent()
         .map(|p| p.join("attachments"))
         .unwrap_or_else(|| projects_dir.join("attachments"))
+}
+
+/// How long a task's downloaded images are kept, in hours. A week: long enough
+/// that no realistic run — including a slow retry — can have its images deleted
+/// out from under it, short enough that the directory doesn't grow forever.
+/// Overridable with `HARNESS_ATTACHMENTS_TTL_HOURS`.
+const DEFAULT_TTL_HOURS: u64 = 24 * 7;
+
+/// Time after which an untouched task directory is swept.
+pub(crate) fn ttl() -> Duration {
+    let hours = std::env::var("HARNESS_ATTACHMENTS_TTL_HOURS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|h| *h > 0)
+        .unwrap_or(DEFAULT_TTL_HOURS);
+    Duration::from_secs(hours * 3600)
+}
+
+/// Whether a directory last written at `modified` has outlived `ttl`.
+///
+/// A clock that reports a modification time in the future (skew, or a copied
+/// tree) yields "not expired" rather than deleting something unexpectedly.
+fn is_expired(modified: SystemTime, now: SystemTime, ttl: Duration) -> bool {
+    now.duration_since(modified)
+        .map(|age| age > ttl)
+        .unwrap_or(false)
+}
+
+/// Delete task directories not written to within `ttl`, returning how many went.
+///
+/// Age-based rather than tied to run completion, deliberately: a run's images may
+/// be read at any point during it, retries re-read them, and a rerun days later
+/// simply re-downloads. Keying the lifetime to wall-clock age needs no coordination
+/// with run state and cannot delete files a live run is about to open, whereas
+/// "delete when the run ends" would need to be right about every exit path
+/// (cancel, crash, lease takeover) to avoid leaking anyway.
+///
+/// A missing root is not an error — nothing has been downloaded yet.
+pub(crate) fn sweep(root: &Path, now: SystemTime, ttl: Duration) -> usize {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    let mut removed = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        // Only ever remove directories we created; never stray files at the root.
+        match entry.metadata() {
+            Ok(meta) if meta.is_dir() => {
+                let Ok(modified) = meta.modified() else {
+                    continue; // no mtime on this platform/fs — leave it alone
+                };
+                if !is_expired(modified, now, ttl) {
+                    continue;
+                }
+                match std::fs::remove_dir_all(&path) {
+                    Ok(()) => removed += 1,
+                    Err(e) => {
+                        tracing::warn!("linear attachments: cannot remove {}: {e}", path.display())
+                    }
+                }
+            }
+            _ => continue,
+        }
+    }
+    if removed > 0 {
+        tracing::info!(
+            "linear attachments: swept {removed} expired task director{} from {}",
+            if removed == 1 { "y" } else { "ies" },
+            root.display()
+        );
+    }
+    removed
 }
 
 /// Directory name, under the harness's attachment root, holding one task's files.
@@ -175,11 +253,85 @@ mod tests {
     }
 
     #[test]
-    fn caps_are_sane() {
-        // A 12MB photograph is a real, working case — the guard must sit well above
-        // it, since it exists to stop absurd files rather than to limit what models
-        // receive.
-        assert!(MAX_UPLOAD_BYTES > 12 * 1024 * 1024);
-        assert!(MAX_UPLOADS_PER_TASK >= 1);
+    fn is_expired_compares_age_against_the_ttl_and_tolerates_clock_skew() {
+        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        let ttl = Duration::from_secs(100);
+        // Older than the TTL → expired.
+        assert!(is_expired(now - Duration::from_secs(101), now, ttl));
+        // Exactly at the TTL is not yet expired (strictly greater).
+        assert!(!is_expired(now - ttl, now, ttl));
+        assert!(!is_expired(now - Duration::from_secs(1), now, ttl));
+        // A modification time in the future (skew, copied tree) must never read as
+        // expired — deleting on a bad clock would be the worst failure here.
+        assert!(!is_expired(now + Duration::from_secs(10_000), now, ttl));
+    }
+
+    /// Ages are exercised by moving `now`, not by backdating directory mtimes:
+    /// Windows refuses `set_times` on a directory opened without backup semantics,
+    /// which `std` has no way to request. Per-entry age comparison is covered by
+    /// `is_expired` above; this covers the filesystem side.
+    #[test]
+    fn sweep_keeps_directories_inside_the_ttl() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let dir = root.path().join("ECOM-1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.png"), b"x").unwrap();
+
+        // Just created, so well inside an hour.
+        assert_eq!(
+            sweep(root.path(), SystemTime::now(), Duration::from_secs(3600)),
+            0
+        );
+        assert!(dir.exists(), "a fresh directory must survive");
+    }
+
+    #[test]
+    fn sweep_removes_expired_directories_and_leaves_stray_files() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let a = root.path().join("ECOM-1");
+        let b = root.path().join("ECOM-2");
+        std::fs::create_dir_all(&a).unwrap();
+        std::fs::create_dir_all(&b).unwrap();
+        std::fs::write(a.join("a.png"), b"x").unwrap();
+        std::fs::write(b.join("b.png"), b"y").unwrap();
+        // A stray file at the root is not ours to delete.
+        let stray = root.path().join("stray.txt");
+        std::fs::write(&stray, b"keep me").unwrap();
+
+        // Look at the tree from two hours in the future with a one-hour TTL.
+        let later = SystemTime::now() + Duration::from_secs(7200);
+        let ttl = Duration::from_secs(3600);
+
+        assert_eq!(sweep(root.path(), later, ttl), 2);
+        assert!(!a.exists());
+        assert!(!b.exists());
+        assert!(stray.exists(), "stray files are not ours to delete");
+
+        // Idempotent: a second sweep finds nothing left to do.
+        assert_eq!(sweep(root.path(), later, ttl), 0);
+    }
+
+    #[test]
+    fn sweep_tolerates_a_missing_root() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let missing = root.path().join("never-created");
+        assert_eq!(
+            sweep(&missing, SystemTime::now(), Duration::from_secs(1)),
+            0
+        );
+    }
+
+    #[test]
+    fn ttl_defaults_to_a_week_and_honors_the_override() {
+        std::env::remove_var("HARNESS_ATTACHMENTS_TTL_HOURS");
+        assert_eq!(ttl(), Duration::from_secs(7 * 24 * 3600));
+        std::env::set_var("HARNESS_ATTACHMENTS_TTL_HOURS", "6");
+        assert_eq!(ttl(), Duration::from_secs(6 * 3600));
+        // Nonsense and zero fall back rather than sweeping everything instantly.
+        std::env::set_var("HARNESS_ATTACHMENTS_TTL_HOURS", "0");
+        assert_eq!(ttl(), Duration::from_secs(7 * 24 * 3600));
+        std::env::set_var("HARNESS_ATTACHMENTS_TTL_HOURS", "not-a-number");
+        assert_eq!(ttl(), Duration::from_secs(7 * 24 * 3600));
+        std::env::remove_var("HARNESS_ATTACHMENTS_TTL_HOURS");
     }
 }

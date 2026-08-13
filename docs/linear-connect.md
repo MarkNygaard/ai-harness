@@ -133,8 +133,16 @@ Worth knowing:
 - On a **text-only** model the agent simply won't see the image; omp substitutes
   `[image omitted: model does not support vision]` rather than erroring.
 
-Files accumulate under `<projects-dir>/../attachments/<issue>/`, overridable with
-`HARNESS_ATTACHMENTS_DIR`. They are not cleaned up automatically yet.
+Files live under `<projects-dir>/../attachments/<issue>/`, overridable with
+`HARNESS_ATTACHMENTS_DIR`, and are **swept hourly**: a task's directory is deleted
+once nothing has written to it for a week (`HARNESS_ATTACHMENTS_TTL_HOURS`). The
+sweep also runs on startup, so anything a crash left behind is cleared.
+
+The lifetime is deliberately age-based rather than tied to a run finishing. A run
+reads its images at any point, retries re-read them, and a rerun a week later simply
+re-downloads — so wall-clock age needs no coordination with run state and can't
+delete files a live run is about to open. A week is far longer than any run, and
+re-downloading is cheap.
 
 ## What the harness reports back
 

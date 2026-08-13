@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into a PR; only `uploads.linear.app` is ever fetched (issue text is
   user-authored); `png`/`jpeg`/`gif`/`webp` only; max 5 per task and 25MB each.
   Nothing is resized or re-encoded — the agent's tooling downscales for the model —
-  and any failure leaves the URL in place rather than failing the run.
+  and any failure leaves the URL in place rather than failing the run. Downloaded
+  files are swept hourly once untouched for a week
+  (`HARNESS_ATTACHMENTS_TTL_HOURS`), including on startup so a crash leaves nothing
+  behind.
 - **Linear OAuth (`actor=app`)** — the workspace is connected from the
   Credentials page instead of by pasting a personal API key, so the comments,
   status transitions and run links the harness writes are attributed to the

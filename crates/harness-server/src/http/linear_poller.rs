@@ -59,13 +59,41 @@ pub(crate) fn spawn_poller(state: Arc<RunsState>) {
     }
     tokio::spawn(async move {
         let mut last: HashMap<(String, String), Instant> = HashMap::new();
+        // Sweeping downloaded attachments is a directory walk, so it runs on its
+        // own slow cadence rather than every tick.
+        let mut last_sweep: Option<Instant> = None;
         let mut tick = interval(Duration::from_secs(POLLER_TICK_SECS));
         tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
+            sweep_attachments_if_due(&state, &mut last_sweep);
             poll_once(&state, &mut last).await;
         }
     });
+}
+
+/// How often expired Linear attachment directories are swept.
+const ATTACHMENT_SWEEP_INTERVAL_SECS: u64 = 3600;
+
+/// Sweep expired attachment directories, at most once per
+/// [`ATTACHMENT_SWEEP_INTERVAL_SECS`]. Runs on the first tick so a restart also
+/// clears anything left behind by a crash.
+fn sweep_attachments_if_due(state: &Arc<RunsState>, last_sweep: &mut Option<Instant>) {
+    let due = last_sweep
+        .map(|t| {
+            Instant::now().duration_since(t) >= Duration::from_secs(ATTACHMENT_SWEEP_INTERVAL_SECS)
+        })
+        .unwrap_or(true);
+    if !due {
+        return;
+    }
+    *last_sweep = Some(Instant::now());
+    let root = super::linear_attachments::attachments_root(&state.projects_dir);
+    super::linear_attachments::sweep(
+        &root,
+        std::time::SystemTime::now(),
+        super::linear_attachments::ttl(),
+    );
 }
 
 async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), Instant>) {
