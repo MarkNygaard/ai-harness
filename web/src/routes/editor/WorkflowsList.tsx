@@ -10,6 +10,7 @@ import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useWorkflowList } from "@/lib/authoring";
+import { reflowParagraphs } from "@/lib/prose";
 import { titleFromSlug } from "@/lib/workflow-name";
 import type { WorkflowSummary } from "@/types/authoring";
 
@@ -201,12 +202,13 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
   // in YAML, pass to MCP and bind Linear triggers to, so hiding it would cost
   // more than the prettier title gains.
   const title = titleFromSlug(wf.name);
+  const description = wf.description ? reflowParagraphs(wf.description) : "";
 
   return (
     <Link
       to={`/editor/${encodeURIComponent(wf.name)}`}
       className="group block"
-      title={wf.description ?? title}
+      title={description || title}
     >
       <Card className="h-full transition-colors group-hover:border-accent-orange/50">
         {view === "grid" ? (
@@ -215,26 +217,25 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
           // be a single value that actually matches the box. (With a ratio, the
           // card's height changed with the column count and no one clamp could
           // reach the footer at every width.)
-          <CardContent className="flex h-40 flex-col gap-2 py-3 sm:h-72">
-            <div className="flex items-start gap-2">
-              <IconBinaryTree2 className="mt-0.5 size-4 shrink-0 text-accent-orange" />
-              <div className="min-w-0">
-                <span className="line-clamp-2 text-sm font-medium leading-snug">
-                  {title}
-                </span>
-                <span className="block truncate font-mono text-[10px] text-muted-foreground">
-                  {wf.name}
-                </span>
-              </div>
+          // Wide side margins, shallow top and bottom: the generous `px` narrows
+          // the text column so lines are short enough to read comfortably, while
+          // the modest `py` spends the fixed height on content rather than air.
+          <CardContent className="flex h-40 flex-col gap-3 px-7 py-3 sm:h-72">
+            <div className="min-w-0">
+              <span className="line-clamp-2 text-sm font-medium leading-snug">
+                {title}
+              </span>
+              <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                {wf.name}
+              </span>
             </div>
-            {/* `whitespace-pre-line` keeps the blank lines from the YAML block
-                scalar, so multi-paragraph descriptions read as paragraphs instead
-                of one run-on wall of text. Line height is roomier than the text
-                size would default to for the same reason. The clamp is sized to
-                the fixed card height (~200px of text area at 20px lines), one
-                short of capacity so the ellipsis always lands inside the card. */}
-            <p className="line-clamp-3 flex-1 overflow-hidden whitespace-pre-line text-xs leading-5 text-muted-foreground sm:line-clamp-9">
-              {wf.description ?? ""}
+            {/* Reflowed first (see `reflowParagraphs`) so paragraphs wrap to the
+                card's width instead of to the YAML's, then `whitespace-pre-line`
+                keeps the blank lines between them. The clamp sits comfortably
+                inside the fixed card height (~190px of text area at 20px lines
+                would fit nine), leaving the ellipsis clear of the footer. */}
+            <p className="line-clamp-3 flex-1 overflow-hidden whitespace-pre-line text-xs leading-5 text-muted-foreground sm:line-clamp-8">
+              {description}
             </p>
             <div className="text-[11px] tabular-nums text-muted-foreground">
               {steps}
@@ -250,9 +251,11 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
                   {wf.name}
                 </span>
               </div>
-              {wf.description && (
+              {description && (
+                // No `whitespace-pre-line` here: at two lines a paragraph break
+                // would spend one of them, so the reflowed text runs on instead.
                 <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                  {wf.description}
+                  {description}
                 </p>
               )}
             </div>
