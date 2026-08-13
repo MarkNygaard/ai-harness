@@ -62,21 +62,20 @@ export function ProjectsPage() {
   const projects = useProjects();
 
   return (
-    <AppShell title="Projects">
+    <AppShell title="Projects" viewActions={<RegisterProjectDialog />}>
       <div className="mx-auto flex max-w-4xl flex-col gap-5 p-6">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <h1 className="flex items-center gap-2 text-lg font-semibold">
-              <IconFolderCog className="size-5 text-accent-orange" /> Projects
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              A project scopes runs to a git repo. Registering one clones it
-              onto the control plane; runs you trigger for it operate on an
-              isolated worktree off its base branch. Private repos use the
-              global GitHub token from the Credentials page.
-            </p>
-          </div>
-          <RegisterProjectDialog />
+        {/* `sm:pr-64` reserves room for the view actions, which are positioned
+            out of flow against the view's right edge. */}
+        <div className="sm:pr-64">
+          <h1 className="flex items-center gap-2 text-lg font-semibold">
+            <IconFolderCog className="size-5 text-accent-orange" /> Projects
+          </h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            A project scopes runs to a git repo. Registering one clones it onto
+            the control plane; runs you trigger for it operate on an isolated
+            worktree off its base branch. Private repos use the global GitHub
+            token from the Credentials page.
+          </p>
         </div>
 
         <section className="flex flex-col gap-2">
