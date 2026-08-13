@@ -360,7 +360,15 @@ async fn claim_and_fire(
     let req = CreateRunRequest {
         workflow: b.workflow.clone(),
         title: Some(format!("{} {}", issue.identifier, issue.title)),
-        description: task_for_issue(&issue, &comments),
+        // Images pasted into the issue or its comments are downloaded and the
+        // links rewritten to local paths, so the agent can actually see them.
+        description: super::linear_attachments::localize(
+            client,
+            &super::linear_attachments::attachments_root(&state.projects_dir),
+            &issue.identifier,
+            &task_for_issue(&issue, &comments),
+        )
+        .await,
         args: String::new(),
         real: true,
         base_branch: b.base_branch.clone(),

@@ -336,7 +336,19 @@ async fn start_delegated_run(
         (None, Some(t)) => Some(t.clone()),
         (None, None) => None,
     };
-    let description = task_text(&event);
+    // Images pasted into the issue are downloaded and their links rewritten to
+    // local paths, so the agent can see them rather than getting a URL it has no
+    // credential for. Keyed by issue identifier, falling back to the session id.
+    let description = super::linear_attachments::localize(
+        &client,
+        &super::linear_attachments::attachments_root(&state.projects_dir),
+        event
+            .issue_identifier
+            .as_deref()
+            .unwrap_or(&event.session_id),
+        &task_text(&event),
+    )
+    .await;
     let req = CreateRunRequest {
         workflow: workflow.clone(),
         title,
