@@ -306,9 +306,9 @@ async fn start_delegated_run(
                 .create_agent_activity(
                     &session,
                     &AgentActivity::Error {
-                        body: "No harness project is set up for this issue's team. Add a Linear \
-                               trigger binding for the project on the Projects page, then \
-                               delegate again."
+                        body: "No enabled Linear trigger covers this issue's team. Add one for \
+                               the project on the Projects page — or enable the existing one — \
+                               then delegate again."
                             .into(),
                     },
                 )
@@ -530,17 +530,30 @@ async fn resolve_target(state: &Arc<RunsState>, event: &AgentSessionEvent) -> Ta
 /// so the issue's current status is what picks the workflow, exactly as it does
 /// for the column poller. (Checking the status against one arbitrarily-chosen
 /// binding of the team would let only that one workflow ever start.)
+///
+/// **Disabled bindings are skipped.** `enabled` means "this binding is active",
+/// for delegation as much as for the poller: unchecking it must stop work
+/// arriving by any route. It previously governed only the poller, so a disabled
+/// binding still won delegation — and when two bindings shared a source status,
+/// the disabled one could shadow the one that was meant to run. `live` remains
+/// poller-only (claim vs. dry-run), so a delegation-only setup is `enabled` on,
+/// `live` off.
 fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
-    // Candidates: every binding for the issue's team. With an unknown team, a
-    // lone binding is assumed to be the intended one.
+    let active: Vec<&LinearSource> = bindings.iter().filter(|b| b.enabled).collect();
+    // Candidates: every active binding for the issue's team. With an unknown
+    // team, a lone active binding is assumed to be the intended one.
     let candidates: Vec<&LinearSource> = match context.team_id.as_deref() {
-        Some(team) => bindings.iter().filter(|b| b.team_id == team).collect(),
+        Some(team) => active
+            .iter()
+            .copied()
+            .filter(|b| b.team_id == team)
+            .collect(),
         None => Vec::new(),
     };
     let candidates = if !candidates.is_empty() {
         candidates
-    } else if bindings.len() == 1 {
-        vec![&bindings[0]]
+    } else if active.len() == 1 {
+        vec![active[0]]
     } else {
         return Target::NoBinding;
     };
@@ -736,7 +749,16 @@ mod tests {
         assert!(!text.contains("## Additional instruction"), "{text}");
     }
 
+    /// An **enabled** binding — the normal case. `live` stays off, since it is
+    /// poller-only and delegation must work without it.
     fn binding(team: &str, workflow: &str, source_state: &str) -> LinearSource {
+        LinearSource {
+            enabled: true,
+            ..disabled_binding(team, workflow, source_state)
+        }
+    }
+
+    fn disabled_binding(team: &str, workflow: &str, source_state: &str) -> LinearSource {
         let now = chrono::Utc::now();
         LinearSource {
             project: format!("{team}-project"),
@@ -752,9 +774,9 @@ mod tests {
             poll_interval_secs: 60,
             max_concurrent_runs: 1,
             max_attempts: 1,
-            // Deliberately off: `enabled`/`live` gate only the column poller, so
-            // delegation must still resolve through a disabled binding.
             enabled: false,
+            // `live` is poller-only (claim vs. dry-run) and stays off throughout:
+            // delegation must resolve without it.
             live: false,
             created_at: now,
             updated_at: now,
@@ -870,6 +892,70 @@ mod tests {
             choose_target(&[], &context("team-a", "todo", "To Do")),
             Target::NoBinding
         ));
+    }
+
+    /// Regression: unchecking `enabled` must stop delegation routing to a
+    /// binding. It previously governed only the poller, so a disabled binding
+    /// still won — and with two bindings on one status the disabled one shadowed
+    /// the one that was meant to run, because it sorted first.
+    #[test]
+    fn a_disabled_binding_is_skipped_and_cannot_shadow_an_enabled_one() {
+        // `list_all` order: `idea-to-pr` sorts before `image-vision-test`.
+        let bindings = vec![
+            disabled_binding("ecom", "idea-to-pr", "todo"),
+            binding("ecom", "image-vision-test", "todo"),
+        ];
+        match choose_target(&bindings, &context("ecom", "todo", "Todo")) {
+            Target::Ready { workflow, .. } => assert_eq!(
+                workflow, "image-vision-test",
+                "the enabled binding must win over a disabled one that sorts first"
+            ),
+            other => panic!("expected Ready, got {}", target_name(&other)),
+        }
+
+        // Disabled on its own → nothing to route to.
+        assert!(matches!(
+            choose_target(
+                &[disabled_binding("ecom", "idea-to-pr", "todo")],
+                &context("ecom", "todo", "Todo")
+            ),
+            Target::NoBinding
+        ));
+    }
+
+    #[test]
+    fn a_lone_binding_fallback_only_considers_enabled_ones() {
+        // Unknown team + exactly one *enabled* binding → still used.
+        let unknown_team = IssueContext {
+            team_id: None,
+            state_id: Some("todo".into()),
+            state_name: Some("Todo".into()),
+            delegate_id: None,
+        };
+        let bindings = vec![
+            disabled_binding("ecom", "idea-to-pr", "todo"),
+            binding("other", "only-live-one", "todo"),
+        ];
+        match choose_target(&bindings, &unknown_team) {
+            Target::Ready { workflow, .. } => assert_eq!(workflow, "only-live-one"),
+            other => panic!("expected Ready, got {}", target_name(&other)),
+        }
+        // …but a lone *disabled* binding is not a fallback.
+        assert!(matches!(
+            choose_target(
+                &[disabled_binding("ecom", "idea-to-pr", "todo")],
+                &unknown_team
+            ),
+            Target::NoBinding
+        ));
+    }
+
+    fn target_name(t: &Target) -> &'static str {
+        match t {
+            Target::Ready { .. } => "Ready",
+            Target::NoBinding => "NoBinding",
+            Target::WrongStatus { .. } => "WrongStatus",
+        }
     }
 
     #[test]

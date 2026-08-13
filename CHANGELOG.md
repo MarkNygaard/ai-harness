@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A disabled Linear binding no longer wins delegation.** `enabled` governed only
+  the column poller, so unchecking it did not stop work arriving by delegation — and
+  where two bindings shared a source status, the disabled one could shadow the one
+  meant to run (it sorts first). `enabled` now means "active" for both routes;
+  `live` stays poller-only (claim vs. dry-run), so a delegation-only setup is
+  `enabled` on, `live` off.
+- Linear's own thread-opening comment ("This thread is for an agent session with
+  …") is no longer fed to the agent as reviewer feedback. It has no emoji prefix, so
+  the existing bot-comment filter missed it.
+- The note appended after downloading images read "what they shows" — four separate
+  singular/plural interpolations with one wrong. Rewritten as two whole sentences.
+
 ### Added
 
 - **Linear image attachments reach the agent.** Screenshots pasted into an issue or

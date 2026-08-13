@@ -217,15 +217,26 @@ pub(crate) async fn localize(client: &LinearClient, root: &Path, key: &str, text
     );
     // Tell the agent the paths are real files, since a rewritten markdown link
     // alone doesn't imply "you may open this".
-    out.push_str(&format!(
-        "\n\n---\n\n{saved} image{} from this issue {} been downloaded to the paths \
-         referenced above. Read {} if the task depends on what {} shows.\n",
-        if saved == 1 { "" } else { "s" },
-        if saved == 1 { "has" } else { "have" },
-        if saved == 1 { "it" } else { "them" },
-        if saved == 1 { "it" } else { "they" },
-    ));
+    out.push_str(&attachment_note(saved));
     out
+}
+
+/// The line appended to a task once images have been downloaded for it.
+///
+/// Written as two whole sentences rather than one with inflected fragments: the
+/// first version interpolated four separate singular/plural choices and got one
+/// of them wrong ("what they shows"), which is prose a model reads.
+fn attachment_note(saved: usize) -> String {
+    if saved == 1 {
+        "\n\n---\n\n1 image from this issue has been downloaded to the path referenced \
+         above. Read it if the task depends on what it shows.\n"
+            .to_string()
+    } else {
+        format!(
+            "\n\n---\n\n{saved} images from this issue have been downloaded to the paths \
+             referenced above. Read them if the task depends on what they show.\n"
+        )
+    }
 }
 
 #[cfg(test)]
@@ -250,6 +261,27 @@ mod tests {
         // (the runtime isn't even entered).
         let text = "Plain task text with a [link](https://linear.app/acme/issue/COR-1).";
         assert!(extract_upload_urls(text).is_empty());
+    }
+
+    #[test]
+    fn attachment_note_reads_as_english_in_both_numbers() {
+        let one = attachment_note(1);
+        assert!(
+            one.contains("1 image from this issue has been downloaded"),
+            "{one}"
+        );
+        assert!(one.contains("the path referenced above"), "{one}");
+        assert!(one.contains("what it shows"), "{one}");
+
+        let many = attachment_note(3);
+        assert!(
+            many.contains("3 images from this issue have been downloaded"),
+            "{many}"
+        );
+        assert!(many.contains("the paths referenced above"), "{many}");
+        // Regression: the first version emitted "what they shows".
+        assert!(many.contains("what they show."), "{many}");
+        assert!(!many.contains("they shows"), "{many}");
     }
 
     #[test]
