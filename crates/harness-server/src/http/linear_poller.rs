@@ -841,6 +841,29 @@ fn unannounced_running_nodes(
         .collect()
 }
 
+/// Where a node sits in the workflow as authored: `(position, total)`, 1-based.
+///
+/// Read from the run's stored graph — one entry per *declared* node, in
+/// declaration order — rather than from the node's execution `ordinal`. Someone
+/// asking "which step is it on" means the workflow's own numbering, the one the
+/// DAG view shows; the two diverge as soon as a layer runs in parallel or a
+/// `when:` skips something, because `ordinal` is the order nodes actually ran in.
+///
+/// The total counts declared nodes, so it includes any a `when:` will skip. That
+/// is the honest denominator: how many steps the workflow *has* is knowable, how
+/// many will run is not.
+///
+/// `None` when the graph is empty (runs recorded before graphs were stored) or the
+/// node isn't in it — the counter is then dropped rather than invented.
+fn step_position(node_id: &str, detail: &harness_persist::RunDetail) -> Option<(usize, usize)> {
+    let total = detail.graph.len();
+    if total == 0 {
+        return None;
+    }
+    let at = detail.graph.iter().position(|m| m.id == node_id)?;
+    Some((at + 1, total))
+}
+
 /// How a step reads in the session thread.
 ///
 /// Linear concatenates an action activity's `action` and `parameter` in the UI, and
@@ -851,12 +874,16 @@ fn unannounced_running_nodes(
 /// was a step and which a workflow.
 ///
 /// A failed or cancelled node is not "finished" — saying so was actively wrong.
-fn step_action(node_id: &str, status: &str) -> String {
+fn step_action(node_id: &str, status: &str, position: Option<(usize, usize)>) -> String {
+    let at = match position {
+        Some((n, total)) => format!(" ({n} of {total})"),
+        None => String::new(),
+    };
     match status {
-        "running" => format!("Running the {node_id} step of workflow"),
-        "failed" => format!("The {node_id} step failed in workflow"),
-        "cancelled" => format!("The {node_id} step was cancelled in workflow"),
-        _ => format!("Finished the {node_id} step of workflow"),
+        "running" => format!("Running the {node_id} step{at} of workflow"),
+        "failed" => format!("The {node_id} step{at} failed in workflow"),
+        "cancelled" => format!("The {node_id} step{at} was cancelled in workflow"),
+        _ => format!("Finished the {node_id} step{at} of workflow"),
     }
 }
 
@@ -894,7 +921,7 @@ async fn report_progress(
             client,
             claim,
             AgentActivity::Action {
-                action: step_action(&node_id, &status),
+                action: step_action(&node_id, &status, step_position(&node_id, detail)),
                 parameter: claim.workflow.clone(),
                 // The action text now names the outcome, so repeating the raw
                 // status behind a disclosure arrow adds nothing.
@@ -916,7 +943,7 @@ async fn report_progress(
             client,
             claim,
             AgentActivity::Action {
-                action: step_action(&node_id, "running"),
+                action: step_action(&node_id, "running", step_position(&node_id, detail)),
                 parameter: claim.workflow.clone(),
                 result: None,
             },
@@ -947,7 +974,11 @@ async fn report_progress(
         .map(|n| n.node_id.clone());
     let body = match &running {
         Some(node) => format!(
-            "Still working — the `{node}` step has been running for {} minutes.",
+            "Still working — the `{node}` step{} has been running for {} minutes.",
+            match step_position(node, detail) {
+                Some((n, total)) => format!(" ({n} of {total})"),
+                None => String::new(),
+            },
             quiet_for.num_minutes()
         ),
         // No node in flight but the run is live: between nodes, or starting one.
@@ -980,8 +1011,8 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_agent_session_preamble, step_action, task_for_issue, unannounced_running_nodes,
-        unreported_finished_nodes,
+        is_agent_session_preamble, step_action, step_position, task_for_issue,
+        unannounced_running_nodes, unreported_finished_nodes,
     };
     use harness_sources::linear::{Comment, Issue};
 
@@ -1003,6 +1034,15 @@ mod tests {
             started_at: None,
             ended_at: None,
             artifact_content: None,
+        }
+    }
+
+    fn meta(id: &str) -> harness_dag::NodeMeta {
+        harness_dag::NodeMeta {
+            id: id.into(),
+            depends_on: vec![],
+            category: None,
+            artifact: None,
         }
     }
 
@@ -1128,26 +1168,81 @@ mod tests {
     /// ending in the workflow name. The old wording produced "Finished explore
     /// idea-to-pr" — three names in a row, nothing saying which was which.
     #[test]
-    fn step_wording_names_both_the_step_and_the_workflow() {
+    fn step_wording_names_the_step_its_position_and_the_workflow() {
+        let at = Some((6, 15));
         let rendered =
-            |node: &str, status: &str| format!("{} idea-to-pr", step_action(node, status));
+            |node: &str, status: &str| format!("{} idea-to-pr", step_action(node, status, at));
         assert_eq!(
             rendered("explore", "success"),
-            "Finished the explore step of workflow idea-to-pr"
+            "Finished the explore step (6 of 15) of workflow idea-to-pr"
         );
         assert_eq!(
             rendered("create-plan", "running"),
-            "Running the create-plan step of workflow idea-to-pr"
+            "Running the create-plan step (6 of 15) of workflow idea-to-pr"
         );
         // A failed step did not "finish" — the old wording said it did.
         assert_eq!(
             rendered("validate", "failed"),
-            "The validate step failed in workflow idea-to-pr"
+            "The validate step (6 of 15) failed in workflow idea-to-pr"
         );
         assert_eq!(
             rendered("finalize-pr", "cancelled"),
-            "The finalize-pr step was cancelled in workflow idea-to-pr"
+            "The finalize-pr step (6 of 15) was cancelled in workflow idea-to-pr"
         );
+    }
+
+    /// A run recorded before graphs were stored has no positions to report; the
+    /// counter is dropped rather than guessed at.
+    #[test]
+    fn wording_omits_the_counter_when_the_position_is_unknown() {
+        assert_eq!(
+            step_action("explore", "success", None),
+            "Finished the explore step of workflow"
+        );
+        assert_eq!(
+            step_action("explore", "running", None),
+            "Running the explore step of workflow"
+        );
+    }
+
+    /// The position is the workflow's own numbering — what the DAG view shows —
+    /// not the order nodes happened to execute in.
+    #[test]
+    fn step_position_counts_declared_nodes_in_declaration_order() {
+        let mut detail = detail_with(vec![node("validate", 0, "running")]);
+        detail.graph = ["explore", "create-plan", "install-deps", "validate"]
+            .into_iter()
+            .map(meta)
+            .collect();
+        // 4th declared node, 1-based — a human counting steps starts at one.
+        assert_eq!(step_position("validate", &detail), Some((4, 4)));
+        assert_eq!(step_position("explore", &detail), Some((1, 4)));
+        // The total counts every declared node, including any a `when:` skips:
+        // how many steps the workflow has is knowable, how many will run is not.
+        assert_eq!(step_position("install-deps", &detail), Some((3, 4)));
+        // A node not in the graph, and a run stored without one, both degrade.
+        assert_eq!(step_position("nope", &detail), None);
+        assert_eq!(
+            step_position(
+                "validate",
+                &detail_with(vec![node("validate", 0, "running")])
+            ),
+            None
+        );
+    }
+
+    /// `ordinal` is execution order, which diverges from the authored order as soon
+    /// as a layer runs in parallel — so the counter must not be derived from it.
+    #[test]
+    fn step_position_ignores_execution_order() {
+        let mut detail = detail_with(vec![
+            // `test` ran first despite being declared second.
+            node("test", 0, "success"),
+            node("lint", 1, "running"),
+        ]);
+        detail.graph = ["lint", "test"].into_iter().map(meta).collect();
+        assert_eq!(step_position("lint", &detail), Some((1, 2)));
+        assert_eq!(step_position("test", &detail), Some((2, 2)));
     }
 
     #[test]

@@ -18,10 +18,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes. Every node of a parallel layer is announced, each exactly once. The heartbeat
   is now what it was meant to be — a fallback for when a single long step is in flight
   — rather than the only way to learn what is happening.
-- **Step activities name what is a step and what is a workflow.** They rendered as
+- **Step activities name the step, its position, and the workflow.** They rendered as
   "Finished explore idea-to-pr": three names in a row, since Linear concatenates an
-  action activity's `action` and `parameter`. Now "Finished the explore step of workflow
-  idea-to-pr". A failed or cancelled step no longer claims to have finished, and the
+  action activity's `action` and `parameter`. Now "Finished the validate step (6 of 15)
+  of workflow idea-to-pr", so a reader can see how far through the run is. The counter
+  is the workflow's authored numbering (what the graph view shows), not execution order,
+  and the total counts declared steps including any a `when:` will skip. A failed or cancelled step no longer claims to have finished, and the
   poller's start activity drops the redundant issue identifier (the session is already
   on the issue) to match the delegated wording.
 - **Delegated runs report progress into the Linear session.** An `action` as each
