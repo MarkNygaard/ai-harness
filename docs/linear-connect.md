@@ -169,9 +169,16 @@ Inside the agent session, as Linear agent activities rather than plain comments:
 | When | Activity |
 |---|---|
 | Immediately on delegation | `thought` — "Picking up COR-12…" (Linear marks a session unresponsive without one inside **10 seconds**, so this is emitted before any slower work) |
-| As each workflow step finishes | `action` — "Finished create-plan" (failures and cancellations are reported too) |
+| As each workflow step **starts** | `action` — "Running the validate step (6 of 15) of workflow idea-to-pr". Every node of a parallel layer is named, and each is announced once |
+| As each workflow step **finishes** | `action` — "Finished the validate step (6 of 15) of workflow idea-to-pr". A failure or cancellation says so rather than claiming it finished |
 | When the **poller** claims an issue | it opens a session of its own first, so a poller-claimed run reports into a thread rather than posting detached comments. Needs the app (OAuth) connection — a personal API key cannot open a session, so those runs still use plain comments |
-| Every ~10 minutes of silence | `thought` — "Still working — `implement-tasks` has been running for 20 minutes" |
+| Every ~10 minutes with nothing else posted | `thought` — "Still working — the `implement-tasks` step (4 of 15) has been running for 20 minutes". A fallback, not the main channel: with starts and finishes both reported, this only fires while a single long step is in flight |
+
+The `(6 of 15)` counter is the workflow's own numbering — the position in the DAG as
+authored, which is what the run's graph view shows — not the order nodes happened to
+execute in. The total counts every declared step, including any a `when:` condition
+will skip: how many steps a workflow *has* is knowable up front, how many will
+actually run is not.
 | Delegated, but not in the source status | `error` — names the status it's in and what to do |
 | Delegated, but no binding covers the team | `error` — asks for a binding |
 | Delegated while the binding is at **Max simultaneous tasks** | `response` — says what's running and that the issue is waiting (not an `error`: nothing failed) |
