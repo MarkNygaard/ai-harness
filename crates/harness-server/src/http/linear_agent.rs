@@ -187,11 +187,16 @@ static SESSIONS_IN_FLIGHT: LazyLock<std::sync::Mutex<HashSet<String>>> =
 
 /// Claims exclusive handling of a session, releasing it on drop so an early
 /// return or a panic can't wedge the session permanently.
-struct SessionGuard(String);
+///
+/// Also held by the **poller** across opening a session of its own: if Linear
+/// echoes an `AgentSessionEvent created` back for a session we just created
+/// ourselves, [`handle_created`] must return before posting anything rather than
+/// acknowledging and then refusing in the very thread we are about to stream into.
+pub(crate) struct SessionGuard(String);
 
 impl SessionGuard {
     /// `None` when another task is already handling this session.
-    fn acquire(session_id: &str) -> Option<Self> {
+    pub(crate) fn acquire(session_id: &str) -> Option<Self> {
         let mut set = SESSIONS_IN_FLIGHT.lock().ok()?;
         set.insert(session_id.to_string())
             .then(|| SessionGuard(session_id.to_string()))

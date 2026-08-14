@@ -408,6 +408,32 @@ async fn claim_and_fire(
         ab_arm: None,
         ab_label: None,
     };
+    // Open a session of our own so this run reports progress into a thread like a
+    // delegated one, instead of leaving detached comments. Delegation supplies a
+    // session; a claim the poller made has none — and that is the retry-after-
+    // failure path, which is exactly when the visibility is wanted.
+    //
+    // The guard is held until the claim carries the session id: if Linear echoes a
+    // `created` webhook for a session we opened ourselves, the delegation handler
+    // must bail before acknowledging it. After that the claim's session id makes
+    // `already_handled` reject the echo on its own.
+    let session = client
+        .create_agent_session(&issue.id, delegate_id)
+        .await
+        .map_err(|e| {
+            // Non-fatal: fall back to the plain comment rather than lose the run.
+            tracing::warn!(
+                "linear poller: {} — could not open an agent session, falling back to \
+                 comments: {}",
+                issue.identifier,
+                e.0
+            );
+        })
+        .ok();
+    let _session_guard = session
+        .as_deref()
+        .and_then(super::linear_agent::SessionGuard::acquire);
+
     match start_run(state, req).await {
         Ok(run_id) => {
             if let Err(e) = claim_store
@@ -418,19 +444,40 @@ async fn claim_and_fire(
                     &issue.id,
                     &issue.identifier,
                     &b.source_state_id,
-                    // Poller-claimed: no delegating session.
-                    None,
+                    session.as_deref(),
                 )
                 .await
             {
                 tracing::warn!("linear poller: failed to record claim for {}: {e}", run_id);
             }
-            let _ = client
-                .add_comment(
-                    &issue.id,
-                    &format!("🤖 ai-harness started `{}` (run `{}`).", b.workflow, run_id),
-                )
-                .await;
+            let run_url = state
+                .public_url
+                .as_deref()
+                .map(|base| format!("{base}/runs/{run_id}"));
+            match session.as_deref() {
+                // With a session, progress belongs in the thread — a comment as
+                // well would just duplicate it.
+                Some(s) => {
+                    let _ = client
+                        .create_agent_activity(
+                            s,
+                            &AgentActivity::Action {
+                                action: format!("Started workflow {}", b.workflow),
+                                parameter: issue.identifier.clone(),
+                                result: run_url.clone(),
+                            },
+                        )
+                        .await;
+                }
+                None => {
+                    let _ = client
+                        .add_comment(
+                            &issue.id,
+                            &format!("🤖 ai-harness started `{}` (run `{}`).", b.workflow, run_id),
+                        )
+                        .await;
+                }
+            }
             if let Some(base) = &state.public_url {
                 let run_url = format!("{base}/runs/{run_id}");
                 if let Err(e) = client

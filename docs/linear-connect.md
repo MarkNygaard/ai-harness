@@ -157,6 +157,7 @@ Inside the agent session, as Linear agent activities rather than plain comments:
 |---|---|
 | Immediately on delegation | `thought` — "Picking up COR-12…" (Linear marks a session unresponsive without one inside **10 seconds**, so this is emitted before any slower work) |
 | As each workflow step finishes | `action` — "Finished create-plan" (failures and cancellations are reported too) |
+| When the **poller** claims an issue | it opens a session of its own first, so a poller-claimed run reports into a thread rather than posting detached comments |
 | Every ~10 minutes of silence | `thought` — "Still working — `implement-tasks` has been running for 20 minutes" |
 | Delegated, but not in the source status | `error` — names the status it's in and what to do |
 | Delegated, but no binding covers the team | `error` — asks for a binding |
