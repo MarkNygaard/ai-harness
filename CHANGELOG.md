@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Runs report progress into a Linear agent session.** A poller-claimed run now opens
+  a session of its own (`agentSessionCreate`), so retries report into a thread like a
+  delegated run instead of leaving detached comments.
 - **Delegated runs report progress into the Linear session.** An `action` as each
   workflow step finishes, plus a `thought` heartbeat if nothing has been posted for
   ~10 minutes. Previously two activities were posted at the start and nothing until

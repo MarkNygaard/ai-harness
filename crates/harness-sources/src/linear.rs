@@ -224,6 +224,18 @@ mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
   agentActivityCreate(input: $input) { success }
 }"#;
 
+// Open an agent session on an issue the harness picked up itself. Delegation
+// creates one for us; a poller-claimed run has none, and without a session there
+// is nowhere to stream progress — so it opens its own.
+//
+// `agentSessionCreate` over `agentSessionCreateOnIssue`: the former takes
+// `appUserId` explicitly, so the session is unambiguously ours rather than
+// inferred from whichever credential happens to be calling.
+const AGENT_SESSION_CREATE_MUTATION: &str = r#"
+mutation AgentSessionCreate($input: AgentSessionCreateInput!) {
+  agentSessionCreate(input: $input) { success agentSession { id } }
+}"#;
+
 // Where a single issue sits — the team that maps it to a project binding, and the
 // status that binding gates on. `state` is non-null on Issue; `delegate` is null
 // until an agent is delegated to it.
@@ -904,6 +916,26 @@ impl LinearClient {
     /// Time-critical for the first one: Linear marks a session unresponsive if
     /// nothing arrives within 10 seconds of the `created` webhook, so the
     /// acknowledging [`AgentActivity::Thought`] is sent before any slower work.
+    /// Open an agent session on `issue_id` for our own app user, returning its id.
+    ///
+    /// Delegation creates a session for us; a run the **poller** claimed has none,
+    /// so it opens one and streams progress into it rather than posting detached
+    /// comments. A fresh session per claim is deliberate: a re-claim after a
+    /// failure is a new attempt, and reusing the previous session would mean
+    /// posting into one that has already terminated (`complete`/`error`), which
+    /// Linear does not document as accepted.
+    pub async fn create_agent_session(
+        &self,
+        issue_id: &str,
+        app_user_id: &str,
+    ) -> Result<String, LinearError> {
+        let body = serde_json::json!({
+            "query": AGENT_SESSION_CREATE_MUTATION,
+            "variables": { "input": { "issueId": issue_id, "appUserId": app_user_id } },
+        });
+        parse_created_session(&self.post(body).await?)
+    }
+
     pub async fn create_agent_activity(
         &self,
         session_id: &str,
@@ -1065,6 +1097,37 @@ fn parse_created_issue(json: &[u8]) -> Result<CreatedIssue, LinearError> {
             url: n.url,
         })
         .ok_or_else(|| LinearError("issueCreate returned no issue".into()))
+}
+
+/// Parse an `agentSessionCreate` response into the new session's id.
+pub fn parse_created_session(json: &[u8]) -> Result<String, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(rename = "agentSessionCreate")]
+        create: Payload,
+    }
+    #[derive(Deserialize)]
+    struct Payload {
+        success: bool,
+        #[serde(default, rename = "agentSession")]
+        agent_session: Option<Node>,
+    }
+    #[derive(Deserialize)]
+    struct Node {
+        id: String,
+    }
+    // `agentSession` is non-null in the schema, but treat it as optional so a
+    // shape change degrades to an error rather than a deserialize panic.
+    let data: Data = gql_data(json)?;
+    if !data.create.success {
+        return Err(LinearError(
+            "agentSessionCreate did not report success".into(),
+        ));
+    }
+    data.create
+        .agent_session
+        .map(|n| n.id)
+        .ok_or_else(|| LinearError("agentSessionCreate returned no session".into()))
 }
 
 /// Check a mutation response reported `{ <field>: { success: true } }`.
@@ -1378,6 +1441,38 @@ mod tests {
         assert_eq!(up("image/svg+xml").extension(), None);
         assert_eq!(up("application/pdf").extension(), None);
         assert_eq!(up("").extension(), None);
+    }
+
+    #[test]
+    fn parse_created_session_reads_the_id() {
+        let json = br#"{"data":{"agentSessionCreate":{"success":true,
+            "agentSession":{"id":"sess-abc"}}}}"#;
+        assert_eq!(parse_created_session(json).unwrap(), "sess-abc");
+    }
+
+    #[test]
+    fn parse_created_session_rejects_failure_and_missing_session() {
+        assert!(parse_created_session(
+            br#"{"data":{"agentSessionCreate":{"success":false,"agentSession":null}}}"#
+        )
+        .is_err());
+        assert!(parse_created_session(
+            br#"{"data":{"agentSessionCreate":{"success":true,"agentSession":null}}}"#
+        )
+        .is_err());
+        // A GraphQL error — e.g. a credential without the agent scopes — surfaces
+        // rather than being read as a session id.
+        let err =
+            parse_created_session(br#"{"errors":[{"message":"not authorized"}]}"#).unwrap_err();
+        assert!(err.0.contains("not authorized"));
+    }
+
+    #[test]
+    fn session_create_mutation_names_the_app_user() {
+        // `appUserId` is what makes the session unambiguously ours, rather than
+        // inferred from whichever credential is calling.
+        assert!(AGENT_SESSION_CREATE_MUTATION.contains("AgentSessionCreateInput"));
+        assert!(AGENT_SESSION_CREATE_MUTATION.contains("agentSession { id }"));
     }
 
     #[test]
