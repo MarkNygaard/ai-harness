@@ -174,6 +174,50 @@ mod tests {
         assert!(wf.nodes.iter().any(|n| n.id == "pi-review-fix-loop"));
     }
 
+    /// Bundled workflows ship to every project, so an agent prompt must never
+    /// name a concrete verify chain. `final-verify-loop` used to branch on paths
+    /// starting with `web/` or `crates/` and otherwise fall back to "run the
+    /// Rust+web gate" — in a pnpm monorepo (`apps/web/...`) no branch matched, so
+    /// the gate was told to run `cargo` in a repo with no `Cargo.toml`. Project
+    /// commands belong in the project's `CLAUDE.md`, which every agent node reads.
+    #[test]
+    fn bundled_workflows_name_no_concrete_verify_chain() {
+        for name in ["idea-to-pr", "architect", "revise-pr", "merge-pr"] {
+            let yaml = default_workflow(name).unwrap_or_else(|| panic!("bundled {name}"));
+            // `cargo clippy` is deliberately absent from this list: architect's
+            // metrics node runs it behind its own `HAS_RUST` stack detection,
+            // which is guarded, not assumed.
+            for needle in ["bunx", "cargo nextest", "RUSTFLAGS", "pnpm --filter"] {
+                assert!(
+                    !yaml.contains(needle),
+                    "`{name}` hardcodes `{needle}` — read the chain from the \
+                     project's CLAUDE.md instead"
+                );
+            }
+        }
+    }
+
+    /// The final gate skips re-running what `validate` already proved by comparing
+    /// HEAD against the sha recorded right after it. That recording must land
+    /// before `finalize-pr`, which may itself commit.
+    #[test]
+    fn the_verified_head_is_recorded_before_finalize_pr() {
+        let yaml = default_workflow(DEFAULT_WORKFLOW).unwrap();
+        let wf = harness_dag::parse_workflow(yaml).expect("must parse");
+        let node = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("missing node `{id}`"))
+        };
+        assert_eq!(node("record-verified-head").depends_on, vec!["validate"]);
+        assert_eq!(
+            node("finalize-pr").depends_on,
+            vec!["record-verified-head"],
+            "finalize-pr must run after the sha is recorded, not beside it"
+        );
+    }
+
     #[test]
     fn bundled_gpt_review_uses_subscription_codex_namespace() {
         let yaml = default_workflow(DEFAULT_WORKFLOW).unwrap();

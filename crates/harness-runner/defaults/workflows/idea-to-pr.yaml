@@ -271,10 +271,35 @@ nodes:
     when: "$validate.output.passed != 'true'"
     cancel: "validation failed — refusing to open a PR. $validate.output.summary"
 
+  # Record the exact commit `validate` just certified, per repo, so the final
+  # gate can tell whether anything was actually pushed after it. Runs before
+  # finalize-pr, which may itself commit.
+  - id: record-verified-head
+    category: validation
+    bash: |
+      set -uo pipefail
+      OUT="$ARTIFACTS_DIR/.verified-heads"
+      : > "$OUT"
+      record() {
+        ( cd "$1" 2>/dev/null || exit 0
+          # Multi-repo roots aren't git repos — skip them cleanly.
+          git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+          echo "$1 $(git rev-parse HEAD)" )
+      }
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        while read -r folder; do
+          record "$folder" >> "$OUT"
+        done < <(echo "$HARNESS_REPOS" | jq -r '.[].folder')
+      else
+        record . >> "$OUT"
+      fi
+      cat "$OUT"
+    depends_on: [validate]
+
   - id: finalize-pr
     category: delivery
     command: finalize-pr
-    depends_on: [validate]
+    depends_on: [record-verified-head]
     when: "$validate.output.passed == 'true'"
     provider: pi
     model: kimi-code/kimi-for-coding
@@ -647,67 +672,82 @@ nodes:
       max_iterations: 3
       until: FINAL_VERIFY_CLEAN
       prompt: |
-        Final build gate — the last node that can touch code before the
-        run completes. Every fix-capable node upstream (implement, the
-        kimi self-review loop, gpt-review-fix, sonnet) has already pushed its
-        changes. CRITICAL: the `validate` node ran much EARLIER in the
-        pipeline, before those review fixes — so the branch HEAD may not
-        compile even though `validate` reported green. Re-verify the
-        FINAL state.
+        Final gate — the last node that can touch code before the run
+        completes. Every fix-capable node upstream (implement, the kimi
+        self-review loop, gpt-review-fix, sonnet) may have pushed changes since
+        `validate` ran, so verify the FINAL state of the branch.
 
-        ## Multi-repo
+        Know what `validate` did and did not do: it ran the project's **quick
+        pre-check** tier (format, lint, build/compile) and deliberately
+        **skipped the test suite**. Running the full suite is THIS node's job.
 
-        `cat $ARTIFACTS_DIR/.pr-list`. If it has more than one entry, this change
-        spans several repos — run Steps A–E **inside each repo's folder**
-        (`cd "$folder"`), using that entry's `base` wherever the steps say
-        `$BASE_BRANCH` and that repo's own verify chain (from its `CLAUDE.md` /
-        `AGENTS.md`). The web/cargo scoping below is an example for repos with
-        that layout — a repo of another stack uses its own chain. Only emit the
-        clean signal once **every** repo's authoritative chain is green and you
-        pushed nothing this iteration. Single-repo (one entry, `folder: "."`) →
-        the steps below as written.
+        This workflow does NOT know your project's commands. Every step below
+        reads them from the repo. Do not assume a toolchain.
 
-        ## Step A — see what landed
+        ## Step A — the repos, and what landed
 
-        `git log --oneline -8` — understand the fixes that landed after validate.
+        `cat $ARTIFACTS_DIR/.pr-list` — every PR this run opened, as JSON
+        `{folder, number, url, base, head}`. Run Steps B–E **inside each entry's
+        `folder`** (`cd "$folder"`), using that entry's `base` wherever a step
+        says `$BASE_BRANCH`, and that repo's OWN verify chain. One entry is the
+        common case; a multi-repo change has several, each possibly a different
+        stack. Only emit the clean signal once **every** entry is green and you
+        pushed nothing this iteration.
 
-        ## Step B — scope the chain to the diff
+        In each folder, `git log --oneline -8` to see what landed after validate.
 
-        Compute the changed set:
-        `git diff --name-only origin/$BASE_BRANCH...HEAD`
+        ## Step B — find that repo's verify chain
 
-        - **Web-only** (every path starts with `web/`): run **only**
-          `cd web && bunx tsc --noEmit && bunx vitest run && bunx vite build`.
-          Run **no cargo**. This is what turns a web-only PR from ~32 min to ~3 min.
-        - **Rust-touching** (any path under `crates/`, `Cargo.toml`, or `Cargo.lock`):
-          run the Rust full gate —
-          `RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets` then
-          `cargo nextest run --workspace`.
-        - **Mixed**: run both chains.
-        - **Empty diff or root-only files** (`Cargo.toml`, `Cargo.lock` with no
-          crate paths): treat as Rust+web full gate fallback — do not emit clean
-          blindly.
+        The authoritative commands live in the repo's `CLAUDE.md` / `AGENTS.md`
+        (auto-loaded into your context) — look for a "Build & verify" /
+        "Validation commands" section. If it documents two tiers (a quick
+        pre-check vs. a full gate), run the **full gate** tier; that is what this
+        node exists for.
 
-        ## Step C — iteration scoping
+        If the repo documents no chain, infer it from the manifest — format/lint,
+        type-check or compile, and the full test suite:
+        - `Cargo.toml` → clippy over all targets with warnings denied, then the
+          workspace test run
+        - `package.json` → the package manager named by the lockfile
+          (`pnpm-lock.yaml`→pnpm, `bun.lockb`→bun, `yarn.lock`→yarn, else npm),
+          then its type-check, lint, test and build scripts
+        - `pyproject.toml` / `uv.lock` → ruff, the type checker, pytest
+        - `*.sln` / `*.csproj` → `dotnet build`, then `dotnet test`
+        - Mixed → each ecosystem's chain, for the parts the change touched
 
-        This loop runs up to 3 iterations. The scoping rule depends on whether
-        this iteration is the authoritative pass or a fix re-check:
+        **Scope the chain to what the change touched.** Get the changed set with
+        `git diff --name-only origin/$BASE_BRANCH...HEAD` and run the narrowest
+        chain that still covers it — if the repo's docs say how to scope
+        (per-package, per-crate, per-app), follow that. A repo-wide run where a
+        scoped one covers the diff is waste, and it can trip on **pre-existing**
+        drift in files this PR never touched, which is not a failure of this
+        change. Never reformat unrelated files to make a repo-wide check pass. If
+        a repo's diff is empty, there is nothing to gate there — say so, move on.
 
-        - **First pass, or the pass that declares clean** → run the FULL chain
-          for the detected scope above (the authoritative gate).
+        **Don't redo what `validate` already proved.**
+        `cat $ARTIFACTS_DIR/.verified-heads` — lines of `<folder> <sha>`, the
+        commit validate certified per repo. If this repo's `git rev-parse HEAD`
+        still equals its recorded sha, nothing was pushed since, so the quick
+        pre-check tier is already green on this exact tree: run only the tier
+        validate skipped, the **test suite**. If HEAD differs, or the file or its
+        entry is missing, run the full gate.
+
+        ## Step C — iteration scoping and convergence
+
+        This loop runs up to 3 iterations.
+
+        - **First pass, or the pass that declares clean** → run the full chain
+          for the scope determined in Step B. This is the authoritative gate.
         - **A pass that runs only because the previous iteration pushed a fix**
-          → you may scope to the crates your fix touched to check it fast:
-          compute them from `git diff --name-only HEAD~1...HEAD`, map each
-          `crates/<name>/...` path to its crate, then run
-          `cargo nextest run -p <crate>` + `cargo clippy -p <crate>
-          --all-targets` for each. (Web-only fixes re-run only the bun chain.)
-          If the fix touched `Cargo.toml` or `Cargo.lock` with no single crate,
-          fall back to the full workspace gate for that iteration.
+          → you may narrow to what the fix touched, to check it fast: compute it
+          with `git diff --name-only HEAD~1...HEAD` and run the smallest unit the
+          repo defines (package, crate, app, project) for those paths. If the fix
+          touched a manifest or lockfile with no single owning unit, run the full
+          gate for that iteration instead.
         - **Convergence rule**: only emit `<promise>FINAL_VERIFY_CLEAN</promise>`
-          after a pass where you ran the FULL authoritative chain for the
-          detected scope AND it was clean AND you pushed nothing this iteration.
-          If your last action was a scoped re-check that passed, do one full
-          authoritative pass before emitting the signal.
+          after a pass where you ran the FULL chain for the determined scope AND
+          it was clean AND you pushed nothing this iteration. If your last action
+          was a narrowed re-check that passed, do one full pass first.
 
         ## Step D — on failure
 
