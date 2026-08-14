@@ -169,16 +169,10 @@ Inside the agent session, as Linear agent activities rather than plain comments:
 | When | Activity |
 |---|---|
 | Immediately on delegation | `thought` — "Picking up COR-12…" (Linear marks a session unresponsive without one inside **10 seconds**, so this is emitted before any slower work) |
-| As each workflow step **starts** | `action` — "Running the validate step (6 of 15) of workflow idea-to-pr". Every node of a parallel layer is named, and each is announced once |
-| As each workflow step **finishes** | `action` — "Finished the validate step (6 of 15) of workflow idea-to-pr". A failure or cancellation says so rather than claiming it finished |
+| As each workflow step **starts** | `action` — "Running the validate step (6 of 15, started 13:14 CEST) of workflow idea-to-pr". Every node of a parallel layer is named, and each is announced once |
+| As each workflow step **finishes** | `action` — "Finished the validate step (6 of 15, took 1m 46s) of workflow idea-to-pr". A failure or cancellation says so rather than claiming it finished, and still reports how long it ran first |
 | When the **poller** claims an issue | it opens a session of its own first, so a poller-claimed run reports into a thread rather than posting detached comments. Needs the app (OAuth) connection — a personal API key cannot open a session, so those runs still use plain comments |
 | Every ~10 minutes with nothing else posted | `thought` — "Still working — the `implement-tasks` step (4 of 15) has been running for 20 minutes". A fallback, not the main channel: with starts and finishes both reported, this only fires while a single long step is in flight |
-
-The `(6 of 15)` counter is the workflow's own numbering — the position in the DAG as
-authored, which is what the run's graph view shows — not the order nodes happened to
-execute in. The total counts every declared step, including any a `when:` condition
-will skip: how many steps a workflow *has* is knowable up front, how many will
-actually run is not.
 | Delegated, but not in the source status | `error` — names the status it's in and what to do |
 | Delegated, but no binding covers the team | `error` — asks for a binding |
 | Delegated while the binding is at **Max simultaneous tasks** | `response` — says what's running and that the issue is waiting (not an `error`: nothing failed) |
@@ -187,6 +181,30 @@ actually run is not.
 | Run completed | `response` — which also marks the session complete |
 | Run failed, budget spent | `error` |
 | Run failed, retrying | `thought` (not `error` — that would close the session before the retry) |
+
+### Reading the step lines
+
+A step reports the clock time it **started** and, when it ends, how long it **took**.
+Each number appears once, on the line where it's useful — between the two you have
+both, and neither is repeated.
+
+The `(6 of 15)` counter is the workflow's own numbering — the position in the DAG as
+authored, which is what the run's graph view shows — not the order nodes happened to
+execute in. The total counts every declared step, including any a `when:` condition
+will skip: how many steps a workflow *has* is knowable up front, how many will
+actually run is not.
+
+`took 1m 46s` is elapsed wall time between the step's start and end. For a `loop`
+node that covers every iteration, and for any step it includes time spent waiting on
+a dependency or queued behind the concurrency cap — so it is "how long you waited",
+not "how long the agent worked".
+
+`started 13:14 CEST` is Danish time (`Europe/Copenhagen`), and it follows summer time:
+the same code prints `CET` from late October to late March, with the abbreviation read
+off the zone so the label can't disagree with the number. Set `HARNESS_DISPLAY_TZ` to
+any IANA name (`America/New_York`, `UTC`, …) for a deployment elsewhere. Note this is
+deliberately **not** the server's system timezone — the container image sets no `TZ`,
+so relying on it would render UTC wherever that variable happens to be unset.
 
 A poller-claimed run has no session, so it still gets the plain issue comments it
 always did.

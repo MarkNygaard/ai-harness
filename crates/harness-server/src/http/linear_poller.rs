@@ -864,6 +864,88 @@ fn step_position(node_id: &str, detail: &harness_persist::RunDetail) -> Option<(
     Some((at + 1, total))
 }
 
+/// Timezone for the absolute times shown in Linear.
+///
+/// Danish time, because that is the wall clock the people reading these threads
+/// are looking at. `Europe/Copenhagen` rather than a fixed +01:00 "CET" offset so
+/// the CET/CEST switch is handled — a hardcoded offset would be an hour wrong from
+/// late March to late October. `HARNESS_DISPLAY_TZ` takes any IANA name for a
+/// deployment in another country.
+///
+/// Deliberately not `chrono::Local`: the image sets no `TZ`, so the host decides,
+/// and a container coming up without it would silently render UTC.
+fn display_tz() -> chrono_tz::Tz {
+    std::env::var("HARNESS_DISPLAY_TZ")
+        .ok()
+        .and_then(|name| name.parse().ok())
+        .unwrap_or(chrono_tz::Europe::Copenhagen)
+}
+
+/// A UTC instant as a wall-clock time in `tz`, with the zone named — "13:14 CEST".
+///
+/// The abbreviation comes from the zone rather than being hardcoded, so it reads
+/// `CET` in winter without anyone remembering to change it. Minutes, not seconds:
+/// this is for orienting yourself in a thread, and the duration on the matching
+/// "finished" line is where precision lives.
+///
+/// Takes `tz` explicitly so it is testable without touching process environment.
+fn format_local(at: chrono::DateTime<Utc>, tz: chrono_tz::Tz) -> String {
+    at.with_timezone(&tz).format("%H:%M %Z").to_string()
+}
+
+/// When a node started, on the reader's wall clock. `None` if no start is recorded.
+fn step_started_at(node_id: &str, detail: &harness_persist::RunDetail) -> Option<String> {
+    let node = detail.nodes.iter().find(|n| n.node_id == node_id)?;
+    Some(format_local(node.started_at?, display_tz()))
+}
+
+/// Wall time a node took, formatted for a human — `None` unless both timestamps
+/// are recorded and the interval is sane.
+///
+/// This is elapsed wall time, which for a loop node covers every iteration. It is
+/// not agent time: a node that queues behind the concurrency cap or waits on a
+/// dependency has that waiting counted in.
+fn step_duration(node_id: &str, detail: &harness_persist::RunDetail) -> Option<String> {
+    let node = detail.nodes.iter().find(|n| n.node_id == node_id)?;
+    let secs = node
+        .ended_at?
+        .signed_duration_since(node.started_at?)
+        .num_seconds();
+    // A skipped node has neither timestamp, and clock skew between a restart and
+    // the row's write can invert the pair. Report nothing rather than "-3s".
+    (secs >= 0).then(|| human_duration(secs))
+}
+
+/// `12s` / `5m` / `1m 46s` / `2h` / `1h 4m`.
+///
+/// Coarsens as it grows: seconds stop mattering once a step has run for an hour,
+/// and a step that took exactly five minutes should not read "5m 0s".
+fn human_duration(secs: i64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    match (h, m, s) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, 0) => format!("{m}m"),
+        (0, m, s) => format!("{m}m {s}s"),
+        (h, 0, _) => format!("{h}h"),
+        (h, m, _) => format!("{h}h {m}m"),
+    }
+}
+
+/// The parenthetical after a step's name: where it sits, and one timing phrase —
+/// `started 13:14 CEST` while running, `took 1m 46s` once finished. The phrase
+/// arrives complete so this stays the single place the brackets are assembled.
+///
+/// Either half can be absent, so this yields the four sensible shapes rather than
+/// ever emitting an empty `()`.
+fn step_note(position: Option<(usize, usize)>, timing: Option<&str>) -> String {
+    match (position, timing) {
+        (Some((n, total)), Some(t)) => format!(" ({n} of {total}, {t})"),
+        (Some((n, total)), None) => format!(" ({n} of {total})"),
+        (None, Some(t)) => format!(" ({t})"),
+        (None, None) => String::new(),
+    }
+}
+
 /// How a step reads in the session thread.
 ///
 /// Linear concatenates an action activity's `action` and `parameter` in the UI, and
@@ -874,11 +956,13 @@ fn step_position(node_id: &str, detail: &harness_persist::RunDetail) -> Option<(
 /// was a step and which a workflow.
 ///
 /// A failed or cancelled node is not "finished" — saying so was actively wrong.
-fn step_action(node_id: &str, status: &str, position: Option<(usize, usize)>) -> String {
-    let at = match position {
-        Some((n, total)) => format!(" ({n} of {total})"),
-        None => String::new(),
-    };
+fn step_action(
+    node_id: &str,
+    status: &str,
+    position: Option<(usize, usize)>,
+    timing: Option<&str>,
+) -> String {
+    let at = step_note(position, timing);
     match status {
         "running" => format!("Running the {node_id} step{at} of workflow"),
         "failed" => format!("The {node_id} step{at} failed in workflow"),
@@ -921,7 +1005,17 @@ async fn report_progress(
             client,
             claim,
             AgentActivity::Action {
-                action: step_action(&node_id, &status, step_position(&node_id, detail)),
+                action: step_action(
+                    &node_id,
+                    &status,
+                    step_position(&node_id, detail),
+                    // How long it took. The matching "Running" line already gave
+                    // the clock time it began, so repeating that here would be
+                    // noise — between the two you can read both.
+                    step_duration(&node_id, detail)
+                        .map(|d| format!("took {d}"))
+                        .as_deref(),
+                ),
                 parameter: claim.workflow.clone(),
                 // The action text now names the outcome, so repeating the raw
                 // status behind a disclosure arrow adds nothing.
@@ -943,7 +1037,17 @@ async fn report_progress(
             client,
             claim,
             AgentActivity::Action {
-                action: step_action(&node_id, "running", step_position(&node_id, detail)),
+                action: step_action(
+                    &node_id,
+                    "running",
+                    step_position(&node_id, detail),
+                    // The clock time it began. No elapsed time here — it just
+                    // started; the heartbeat covers a long-running one, and the
+                    // matching "Finished" line reports the total.
+                    step_started_at(&node_id, detail)
+                        .map(|t| format!("started {t}"))
+                        .as_deref(),
+                ),
                 parameter: claim.workflow.clone(),
                 result: None,
             },
@@ -1011,9 +1115,10 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_agent_session_preamble, step_action, step_position, task_for_issue,
-        unannounced_running_nodes, unreported_finished_nodes,
+        format_local, human_duration, is_agent_session_preamble, step_action, step_duration,
+        step_position, task_for_issue, unannounced_running_nodes, unreported_finished_nodes,
     };
+    use chrono::Utc;
     use harness_sources::linear::{Comment, Issue};
 
     fn node(node_id: &str, ordinal: i32, status: &str) -> harness_persist::PersistedNode {
@@ -1170,39 +1275,138 @@ mod tests {
     #[test]
     fn step_wording_names_the_step_its_position_and_the_workflow() {
         let at = Some((6, 15));
-        let rendered =
-            |node: &str, status: &str| format!("{} idea-to-pr", step_action(node, status, at));
+        let rendered = |node: &str, status: &str| {
+            format!(
+                "{} idea-to-pr",
+                step_action(node, status, at, Some("took 1m 46s"))
+            )
+        };
         assert_eq!(
             rendered("explore", "success"),
-            "Finished the explore step (6 of 15) of workflow idea-to-pr"
+            "Finished the explore step (6 of 15, took 1m 46s) of workflow idea-to-pr"
         );
-        assert_eq!(
-            rendered("create-plan", "running"),
-            "Running the create-plan step (6 of 15) of workflow idea-to-pr"
-        );
-        // A failed step did not "finish" — the old wording said it did.
+        // A failed step did not "finish" — the old wording said it did — and how
+        // long it ran before failing is the useful part.
         assert_eq!(
             rendered("validate", "failed"),
-            "The validate step (6 of 15) failed in workflow idea-to-pr"
+            "The validate step (6 of 15, took 1m 46s) failed in workflow idea-to-pr"
         );
         assert_eq!(
             rendered("finalize-pr", "cancelled"),
-            "The finalize-pr step (6 of 15) was cancelled in workflow idea-to-pr"
+            "The finalize-pr step (6 of 15, took 1m 46s) was cancelled in workflow idea-to-pr"
+        );
+        // A running step reports the clock time it began rather than a duration:
+        // across the two lines a reader gets both, with neither repeated.
+        assert_eq!(
+            format!(
+                "{} idea-to-pr",
+                step_action("create-plan", "running", at, Some("started 13:14 CEST"))
+            ),
+            "Running the create-plan step (6 of 15, started 13:14 CEST) of workflow idea-to-pr"
         );
     }
 
-    /// A run recorded before graphs were stored has no positions to report; the
-    /// counter is dropped rather than guessed at.
+    /// Denmark observes summer time, so a fixed +01:00 "CET" offset would be an
+    /// hour wrong from late March to late October. `Europe/Copenhagen` switches on
+    /// its own, and the abbreviation is read off the zone rather than hardcoded, so
+    /// the label can never disagree with the number beside it.
     #[test]
-    fn wording_omits_the_counter_when_the_position_is_unknown() {
+    fn danish_times_follow_summer_time() {
+        let cph = chrono_tz::Europe::Copenhagen;
+        let at = |m, d, h| chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, m, d, h, 14, 0).unwrap();
+
+        // Winter: UTC+1, labelled CET.
+        assert_eq!(format_local(at(1, 15, 12), cph), "13:14 CET");
+        // Summer: UTC+2, labelled CEST — the run this was built for.
+        assert_eq!(format_local(at(7, 15, 11), cph), "13:14 CEST");
+
+        // The transitions themselves, so a boundary bug can't hide between the
+        // two cases above. 2026: forward 29 Mar, back 25 Oct, both at 01:00 UTC.
+        assert_eq!(format_local(at(3, 29, 0), cph), "01:14 CET");
+        assert_eq!(format_local(at(3, 29, 1), cph), "03:14 CEST");
+        assert_eq!(format_local(at(10, 25, 0), cph), "02:14 CEST");
+        assert_eq!(format_local(at(10, 25, 1), cph), "02:14 CET");
+    }
+
+    /// The zone is a setting with a Danish default, not a hardcoded country.
+    #[test]
+    fn another_zone_renders_its_own_wall_clock() {
+        let at = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 7, 15, 11, 14, 0).unwrap();
+        assert_eq!(format_local(at, chrono_tz::UTC), "11:14 UTC");
         assert_eq!(
-            step_action("explore", "success", None),
+            format_local(at, "America/New_York".parse().unwrap()),
+            "07:14 EDT"
+        );
+    }
+
+    /// Either half of the parenthetical can be missing — a run recorded before
+    /// graphs were stored has no position, a skipped-then-resumed node no
+    /// timestamps. Neither may produce a stray "()".
+    #[test]
+    fn wording_omits_whichever_half_is_unknown() {
+        assert_eq!(
+            step_action("explore", "success", None, None),
             "Finished the explore step of workflow"
         );
         assert_eq!(
-            step_action("explore", "running", None),
-            "Running the explore step of workflow"
+            step_action("explore", "success", None, Some("took 12s")),
+            "Finished the explore step (took 12s) of workflow"
         );
+        assert_eq!(
+            step_action("explore", "success", Some((1, 4)), None),
+            "Finished the explore step (1 of 4) of workflow"
+        );
+    }
+
+    /// Coarsens as it grows: seconds stop mattering at hour scale, and an exact
+    /// five minutes should not read "5m 0s".
+    #[test]
+    fn durations_read_the_way_a_human_would_say_them() {
+        assert_eq!(human_duration(0), "0s");
+        assert_eq!(human_duration(9), "9s");
+        assert_eq!(human_duration(59), "59s");
+        assert_eq!(human_duration(60), "1m");
+        assert_eq!(human_duration(106), "1m 46s");
+        assert_eq!(human_duration(300), "5m");
+        assert_eq!(human_duration(3600), "1h");
+        assert_eq!(human_duration(3660), "1h 1m");
+        // Seconds are dropped past an hour rather than padding the string.
+        assert_eq!(human_duration(3859), "1h 4m");
+        assert_eq!(human_duration(7200), "2h");
+    }
+
+    /// Duration comes from the node's own timestamps, and anything unusable —
+    /// a missing timestamp, or an inverted pair from clock skew — reports nothing
+    /// rather than a negative or invented number.
+    #[test]
+    fn step_duration_needs_two_sane_timestamps() {
+        let start = chrono::Utc::now();
+        let mut finished = node("explore", 0, "success");
+        finished.started_at = Some(start);
+        finished.ended_at = Some(start + chrono::Duration::seconds(106));
+
+        let mut no_end = node("create-plan", 1, "running");
+        no_end.started_at = Some(start);
+
+        let mut inverted = node("validate", 2, "success");
+        inverted.started_at = Some(start);
+        inverted.ended_at = Some(start - chrono::Duration::seconds(3));
+
+        let detail = detail_with(vec![
+            finished,
+            no_end,
+            inverted,
+            node("skipped", 3, "skipped"),
+        ]);
+        assert_eq!(step_duration("explore", &detail).as_deref(), Some("1m 46s"));
+        // Still running: no end time yet.
+        assert_eq!(step_duration("create-plan", &detail), None);
+        // Clock skew must not yield "-3s".
+        assert_eq!(step_duration("validate", &detail), None);
+        // A skipped node has neither timestamp.
+        assert_eq!(step_duration("skipped", &detail), None);
+        // A node absent from the run entirely.
+        assert_eq!(step_duration("nope", &detail), None);
     }
 
     /// The position is the workflow's own numbering — what the DAG view shows —
