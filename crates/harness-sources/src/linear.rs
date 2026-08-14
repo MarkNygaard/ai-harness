@@ -228,12 +228,17 @@ mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
 // creates one for us; a poller-claimed run has none, and without a session there
 // is nowhere to stream progress — so it opens its own.
 //
-// `agentSessionCreate` over `agentSessionCreateOnIssue`: the former takes
-// `appUserId` explicitly, so the session is unambiguously ours rather than
-// inferred from whichever credential happens to be calling.
+// `agentSessionCreateOnIssue`, NOT `agentSessionCreate`. The latter takes an
+// explicit `appUserId`, which looked preferable — the session would be
+// unambiguously ours rather than inferred from the calling credential — but the
+// schema marks it `[Internal] Creates a new agent session on behalf of the
+// current user`, and Linear answers a third-party app with `Access denied`.
+// Naming an arbitrary app user is precisely the privilege it withholds.
+// `agentSessionCreateOnIssue` is the public mutation and infers the app from the
+// token, which is why `create_agent_session` requires an app-actor credential.
 const AGENT_SESSION_CREATE_MUTATION: &str = r#"
-mutation AgentSessionCreate($input: AgentSessionCreateInput!) {
-  agentSessionCreate(input: $input) { success agentSession { id } }
+mutation AgentSessionCreateOnIssue($input: AgentSessionCreateOnIssue!) {
+  agentSessionCreateOnIssue(input: $input) { success agentSession { id } }
 }"#;
 
 // Where a single issue sits — the team that maps it to a project binding, and the
@@ -924,14 +929,15 @@ impl LinearClient {
     /// failure is a new attempt, and reusing the previous session would mean
     /// posting into one that has already terminated (`complete`/`error`), which
     /// Linear does not document as accepted.
-    pub async fn create_agent_session(
-        &self,
-        issue_id: &str,
-        app_user_id: &str,
-    ) -> Result<String, LinearError> {
+    /// Requires an app-actor (OAuth) credential: the mutation attributes the
+    /// session to whoever is calling, so a personal API key would either be
+    /// refused or open a session belonging to that human. Refusing up front beats
+    /// a round-trip that fails, and the caller falls back to plain comments.
+    pub async fn create_agent_session(&self, issue_id: &str) -> Result<String, LinearError> {
+        session_auth_check(&self.auth)?;
         let body = serde_json::json!({
             "query": AGENT_SESSION_CREATE_MUTATION,
-            "variables": { "input": { "issueId": issue_id, "appUserId": app_user_id } },
+            "variables": { "input": { "issueId": issue_id } },
         });
         parse_created_session(&self.post(body).await?)
     }
@@ -1099,11 +1105,29 @@ fn parse_created_issue(json: &[u8]) -> Result<CreatedIssue, LinearError> {
         .ok_or_else(|| LinearError("issueCreate returned no issue".into()))
 }
 
-/// Parse an `agentSessionCreate` response into the new session's id.
+/// Whether a credential may open an agent session at all.
+///
+/// `agentSessionCreateOnIssue` attributes the session to the caller, so a
+/// personal API key would open one belonging to the human who minted it. Refusing
+/// here beats spending a round-trip to be told no, and the caller falls back to
+/// plain comments. Split out as a plain function so the rule is unit-testable
+/// without HTTP, like the parsers in this module.
+fn session_auth_check(auth: &LinearAuth) -> Result<(), LinearError> {
+    if auth.is_app_actor() {
+        return Ok(());
+    }
+    Err(LinearError(
+        "agent sessions need the workspace connected as an app (OAuth); \
+         a personal API key cannot open one"
+            .into(),
+    ))
+}
+
+/// Parse an `agentSessionCreateOnIssue` response into the new session's id.
 pub fn parse_created_session(json: &[u8]) -> Result<String, LinearError> {
     #[derive(Deserialize)]
     struct Data {
-        #[serde(rename = "agentSessionCreate")]
+        #[serde(rename = "agentSessionCreateOnIssue")]
         create: Payload,
     }
     #[derive(Deserialize)]
@@ -1445,7 +1469,7 @@ mod tests {
 
     #[test]
     fn parse_created_session_reads_the_id() {
-        let json = br#"{"data":{"agentSessionCreate":{"success":true,
+        let json = br#"{"data":{"agentSessionCreateOnIssue":{"success":true,
             "agentSession":{"id":"sess-abc"}}}}"#;
         assert_eq!(parse_created_session(json).unwrap(), "sess-abc");
     }
@@ -1453,11 +1477,11 @@ mod tests {
     #[test]
     fn parse_created_session_rejects_failure_and_missing_session() {
         assert!(parse_created_session(
-            br#"{"data":{"agentSessionCreate":{"success":false,"agentSession":null}}}"#
+            br#"{"data":{"agentSessionCreateOnIssue":{"success":false,"agentSession":null}}}"#
         )
         .is_err());
         assert!(parse_created_session(
-            br#"{"data":{"agentSessionCreate":{"success":true,"agentSession":null}}}"#
+            br#"{"data":{"agentSessionCreateOnIssue":{"success":true,"agentSession":null}}}"#
         )
         .is_err());
         // A GraphQL error — e.g. a credential without the agent scopes — surfaces
@@ -1467,12 +1491,27 @@ mod tests {
         assert!(err.0.contains("not authorized"));
     }
 
+    /// `agentSessionCreate` is `[Internal]` in Linear's schema and answers a
+    /// third-party app with `Access denied`, which cost a deploy to discover.
+    /// `agentSessionCreateOnIssue` is the public mutation; keep it that way.
     #[test]
-    fn session_create_mutation_names_the_app_user() {
-        // `appUserId` is what makes the session unambiguously ours, rather than
-        // inferred from whichever credential is calling.
-        assert!(AGENT_SESSION_CREATE_MUTATION.contains("AgentSessionCreateInput"));
+    fn session_create_uses_the_public_mutation_not_the_internal_one() {
+        assert!(AGENT_SESSION_CREATE_MUTATION.contains("agentSessionCreateOnIssue(input:"));
+        assert!(AGENT_SESSION_CREATE_MUTATION.contains("$input: AgentSessionCreateOnIssue!"));
         assert!(AGENT_SESSION_CREATE_MUTATION.contains("agentSession { id }"));
+        // The internal variant's input type must not creep back in — its
+        // `appUserId` is the privilege Linear withholds.
+        assert!(!AGENT_SESSION_CREATE_MUTATION.contains("AgentSessionCreateInput"));
+        assert!(!AGENT_SESSION_CREATE_MUTATION.contains("appUserId"));
+    }
+
+    /// A personal key would open a session belonging to the human who minted it,
+    /// so the client refuses before spending a round-trip.
+    #[test]
+    fn only_an_app_actor_can_open_a_session() {
+        assert!(session_auth_check(&LinearAuth::OauthToken("tok".into())).is_ok());
+        let err = session_auth_check(&LinearAuth::PersonalKey("lin_api_x".into())).unwrap_err();
+        assert!(err.0.contains("app (OAuth)"), "{}", err.0);
     }
 
     #[test]

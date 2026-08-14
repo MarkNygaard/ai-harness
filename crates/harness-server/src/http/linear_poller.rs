@@ -417,7 +417,7 @@ async fn claim_and_fire(
     // must bail before acknowledging it. After that the claim's session id makes
     // `already_handled` reject the echo on its own.
     let session = client
-        .create_agent_session(&issue.id, delegate_id)
+        .create_agent_session(&issue.id)
         .await
         .map_err(|e| {
             // Non-fatal: fall back to the plain comment rather than lose the run.
