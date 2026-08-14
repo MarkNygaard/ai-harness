@@ -270,20 +270,23 @@ nodes:
         The validation that just ran reported failures:
         $validate.output.summary
 
-        ## Scope the verify chain to the diff
+        ## Find the verify chain, then scope it to the diff
 
-        Compute the changed set:
-        `git diff --name-only origin/$BASE_BRANCH...HEAD`
+        This workflow does not know your project's commands — do not assume a
+        toolchain. The authoritative chain lives in the project's `CLAUDE.md` /
+        `AGENTS.md` (auto-loaded into your context), under a "Build & verify" /
+        "Validation commands" section; where it documents a quick pre-check and
+        a full gate, run the **full gate** tier here. If nothing is documented,
+        infer format/lint + type-check/compile + tests from the manifest
+        (`Cargo.toml`, `package.json` + its lockfile's package manager,
+        `pyproject.toml`/`uv.lock`, `*.sln`/`*.csproj`), and run each ecosystem's
+        chain in a mixed repo.
 
-        - **Web-only** (every path starts with `web/`): run only
-          `cd web && bunx tsc --noEmit && bunx vitest run && bunx vite build`.
-          Run no cargo.
-        - **Rust-touching** (any path under `crates/`, `Cargo.toml`, or `Cargo.lock`):
-          run the Rust full gate —
-          `RUSTFLAGS="-Dwarnings" cargo clippy --workspace --all-targets` then
-          `cargo nextest run --workspace`.
-        - **Mixed**: run both chains.
-        - **Empty diff or root-only files**: treat as Rust+web full gate fallback.
+        Then narrow it: `git diff --name-only origin/$BASE_BRANCH...HEAD` gives
+        the changed set — run the smallest scope (package, crate, app, project)
+        that still covers it, following the repo's own scoping guidance if it has
+        any. A repo-wide run where a scoped one covers the diff is waste, and it
+        can trip on pre-existing drift in files this change never touched.
 
         ## Fix or revert
 

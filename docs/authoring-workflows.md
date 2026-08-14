@@ -411,3 +411,9 @@ per provider at dispatch.
 - ❌ Bare `$BASE_BRANCH` in a worktree diff (see the worktree gotcha).
 - ❌ Tiny `max_iterations` on an open-ended loop — size it to the worst case.
 - ❌ Relying on `approval` nodes to pause a run today (not yet wired).
+- ❌ Naming a concrete build chain in a prompt (`cd web && bunx vitest run`,
+  `cargo nextest run --workspace`). A workflow runs against whatever project
+  triggers it; the harness already auto-loads each project's `CLAUDE.md` /
+  `AGENTS.md`, so tell the agent to read the chain from there. Branching on
+  paths (`starts with web/`, `under crates/`) has the same problem — the next
+  project's layout won't match, and the agent is left improvising.

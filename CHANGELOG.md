@@ -44,6 +44,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   naming was the privilege being withheld). Session creation now also requires the app
   (OAuth) connection up front instead of spending a round-trip to be refused: a
   personal API key would open a session belonging to the human who minted it.
+- **The bundled workflows' verify steps no longer assume ai-harness's own layout.**
+  `idea-to-pr`'s `final-verify-loop` branched on paths starting with `web/` or under
+  `crates/`, falling back to "run the Rust+web full gate". A pnpm monorepo whose
+  paths are `apps/web/…` matched no branch, so the run's final gate was told to run
+  `cargo` in a repo with no `Cargo.toml` and had to reverse-engineer the real chain
+  before it could verify anything. Worse, the one instruction that did the right
+  thing — "use that repo's own verify chain from its `CLAUDE.md`" — was gated on the
+  change spanning *more than one* repo, so a single-repo run was routed to the
+  hardcoded steps. Both nodes now read the chain from the project's `CLAUDE.md` /
+  `AGENTS.md` like every other node, and per-repo handling applies to every entry in
+  `.pr-list`. `architect`'s `fix-failures` had the same hardcoding and is fixed too.
+- **The final gate no longer re-runs the tier `validate` already proved.** A new
+  `record-verified-head` node stamps the commit `validate` certified; when nothing
+  has been pushed since, the gate runs only the test suite that `validate`
+  deliberately skips, instead of repeating format/lint/build on an identical tree.
 - **Delegation respects a binding's "Max simultaneous tasks".** The cap was enforced
   only by the poller, so delegating three issues to a binding set to 1 started three
   runs at once. A delegation that arrives while the binding is full now gets a
