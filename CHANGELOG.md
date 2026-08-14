@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Runs report progress into a Linear agent session.** A poller-claimed run now opens
-  a session of its own (`agentSessionCreate`), so retries report into a thread like a
+  a session of its own (`agentSessionCreateOnIssue`), so retries report into a thread like a
   delegated run instead of leaving detached comments.
 - **Delegated runs report progress into the Linear session.** An `action` as each
   workflow step finishes, plus a `thought` heartbeat if nothing has been posted for
@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A poller-claimed run can actually open its Linear agent session.** It called
+  `agentSessionCreate`, which the schema marks `[Internal] … on behalf of the current
+  user`; Linear answers a third-party app with `Access denied`. Every claimed run
+  therefore fell back to plain comments and showed no threaded progress — the very
+  thing the session was added for. Switched to the public `agentSessionCreateOnIssue`,
+  which infers the app from the token rather than naming an `appUserId` (that explicit
+  naming was the privilege being withheld). Session creation now also requires the app
+  (OAuth) connection up front instead of spending a round-trip to be refused: a
+  personal API key would open a session belonging to the human who minted it.
 - **Delegation respects a binding's "Max simultaneous tasks".** The cap was enforced
   only by the poller, so delegating three issues to a binding set to 1 started three
   runs at once. A delegation that arrives while the binding is full now gets a

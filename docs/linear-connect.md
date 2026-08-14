@@ -170,7 +170,7 @@ Inside the agent session, as Linear agent activities rather than plain comments:
 |---|---|
 | Immediately on delegation | `thought` — "Picking up COR-12…" (Linear marks a session unresponsive without one inside **10 seconds**, so this is emitted before any slower work) |
 | As each workflow step finishes | `action` — "Finished create-plan" (failures and cancellations are reported too) |
-| When the **poller** claims an issue | it opens a session of its own first, so a poller-claimed run reports into a thread rather than posting detached comments |
+| When the **poller** claims an issue | it opens a session of its own first, so a poller-claimed run reports into a thread rather than posting detached comments. Needs the app (OAuth) connection — a personal API key cannot open a session, so those runs still use plain comments |
 | Every ~10 minutes of silence | `thought` — "Still working — `implement-tasks` has been running for 20 minutes" |
 | Delegated, but not in the source status | `error` — names the status it's in and what to do |
 | Delegated, but no binding covers the team | `error` — asks for a binding |
@@ -326,6 +326,7 @@ in one step is possible if that ever becomes the preference.)
 | The project's Linear trigger button disappeared | The bindings dialog only appears once Linear is connected. Connect on the Credentials page. |
 | Delegating does nothing | Check the panel's two Delegation lines. Then check the OAuth app's webhook is enabled, subscribed to *Agent session events*, and pointed at the webhook URL shown. Server logs record every rejected delivery with the reason. |
 | Session shows "unresponsive" in Linear | The acknowledging `thought` didn't land within 10s — usually the webhook never arrived, or the Linear credential can't write. The log line is `failed to acknowledge session`. |
+| A poller-claimed run posts plain comments instead of a session thread | Session creation failed and the run fell back. The reason is logged as `could not open an agent session, falling back to comments: <reason>` — `Access denied` means the workspace is not connected as an app (reconnect on the Credentials page); the run itself is unaffected either way. |
 | Session shows "stopped responding" mid-run | Linear marks a session stale after **30 minutes** without an activity. Progress activities and a ~10-minute heartbeat now keep it alive; if it still goes stale, check the poller is running (it is what posts them) and the logs for `failed to report into session`. Sending any later activity recovers the session. |
 | "No enabled Linear trigger covers this issue’s team" | No **enabled** binding matches the issue’s team. Add one on the Projects page, or enable the existing one — a disabled binding is inert for delegation too. |
 | "This issue is in X, and `wf` only starts from…" | Working as intended: the binding's source status is the gate. Move the issue there. |
