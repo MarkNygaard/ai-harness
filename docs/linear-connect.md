@@ -107,6 +107,19 @@ With exactly one enabled binding overall, it is used regardless of team (the sta
 gate still applies). With none that match, the harness replies in the session saying
 so rather than guessing.
 
+### Max simultaneous tasks
+
+The binding's **Max simultaneous tasks** caps how many of its issues run at once,
+and it applies to delegation as well as the poller. Delegate three issues to a
+binding set to 1 and one starts; the other two get a session reply saying what's
+running, and stay put.
+
+"Stay put" is the point: a refused delegation is *not* moved out of the source
+status, so it is still delegated and still where the poller looks. A `live` binding
+therefore starts it by itself once a slot frees — nothing to re-delegate. A binding
+with `live` off has no poller coming back, so its reply asks you to delegate again
+later, and says so.
+
 ## Images pasted into an issue
 
 Screenshots and images in an issue's description or comments are **downloaded and
@@ -161,6 +174,7 @@ Inside the agent session, as Linear agent activities rather than plain comments:
 | Every ~10 minutes of silence | `thought` — "Still working — `implement-tasks` has been running for 20 minutes" |
 | Delegated, but not in the source status | `error` — names the status it's in and what to do |
 | Delegated, but no binding covers the team | `error` — asks for a binding |
+| Delegated while the binding is at **Max simultaneous tasks** | `response` — says what's running and that the issue is waiting (not an `error`: nothing failed) |
 | Run started | `action` — the workflow name, with a link to the run |
 | PR opened | `action` — moved to In Review |
 | Run completed | `response` — which also marks the session complete |
@@ -315,5 +329,6 @@ in one step is possible if that ever becomes the preference.)
 | Session shows "stopped responding" mid-run | Linear marks a session stale after **30 minutes** without an activity. Progress activities and a ~10-minute heartbeat now keep it alive; if it still goes stale, check the poller is running (it is what posts them) and the logs for `failed to report into session`. Sending any later activity recovers the session. |
 | "No enabled Linear trigger covers this issue’s team" | No **enabled** binding matches the issue’s team. Add one on the Projects page, or enable the existing one — a disabled binding is inert for delegation too. |
 | "This issue is in X, and `wf` only starts from…" | Working as intended: the binding's source status is the gate. Move the issue there. |
+| "Another task is already running for `wf`…" | The binding is at **Max simultaneous tasks**. Raise it on the binding if you want more in parallel; otherwise wait — a `live` binding starts the issue itself when a slot frees. |
 | Delegated an issue in the right column and nothing happened | The poller logs `app user id is unknown` if the install predates that being recorded — reconnect the workspace. Otherwise check the webhook (see above). |
 | Preview returns "app user id is unknown" | Same cause: reconnect. The preview mirrors the poller's gate, so it can't show delegated issues without knowing who the harness is. |

@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Delegation respects a binding's "Max simultaneous tasks".** The cap was enforced
+  only by the poller, so delegating three issues to a binding set to 1 started three
+  runs at once. A delegation that arrives while the binding is full now gets a
+  `response` (not an `error` — nothing failed) naming what is running, and the issue
+  is deliberately left in its source status: a `live` binding's poller starts it
+  automatically once a slot frees, so nothing has to be re-delegated.
 - **A disabled Linear binding no longer wins delegation.** `enabled` governed only
   the column poller, so unchecking it did not stop work arriving by delegation — and
   where two bindings shared a source status, the disabled one could shadow the one
