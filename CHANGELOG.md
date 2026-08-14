@@ -23,7 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   action activity's `action` and `parameter`. Now "Finished the validate step (6 of 15)
   of workflow idea-to-pr", so a reader can see how far through the run is. The counter
   is the workflow's authored numbering (what the graph view shows), not execution order,
-  and the total counts declared steps including any a `when:` will skip. A failed or cancelled step no longer claims to have finished, and the
+  and the total counts declared steps including any a `when:` will skip. A finished step
+  also reports how long it took — "(6 of 15, took 1m 46s)" — elapsed wall time from the
+  node's own timestamps, coarsening to `1h 4m` as it grows; a failure reports how long
+  it ran before failing. A failed or cancelled step no longer claims to have finished, and the
   poller's start activity drops the redundant issue identifier (the session is already
   on the issue) to match the delegated wording.
 - **Delegated runs report progress into the Linear session.** An `action` as each

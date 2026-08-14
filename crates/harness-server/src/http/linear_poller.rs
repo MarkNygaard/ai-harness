@@ -864,6 +864,50 @@ fn step_position(node_id: &str, detail: &harness_persist::RunDetail) -> Option<(
     Some((at + 1, total))
 }
 
+/// Wall time a node took, formatted for a human — `None` unless both timestamps
+/// are recorded and the interval is sane.
+///
+/// This is elapsed wall time, which for a loop node covers every iteration. It is
+/// not agent time: a node that queues behind the concurrency cap or waits on a
+/// dependency has that waiting counted in.
+fn step_duration(node_id: &str, detail: &harness_persist::RunDetail) -> Option<String> {
+    let node = detail.nodes.iter().find(|n| n.node_id == node_id)?;
+    let secs = node
+        .ended_at?
+        .signed_duration_since(node.started_at?)
+        .num_seconds();
+    // A skipped node has neither timestamp, and clock skew between a restart and
+    // the row's write can invert the pair. Report nothing rather than "-3s".
+    (secs >= 0).then(|| human_duration(secs))
+}
+
+/// `12s` / `5m` / `1m 46s` / `2h` / `1h 4m`.
+///
+/// Coarsens as it grows: seconds stop mattering once a step has run for an hour,
+/// and a step that took exactly five minutes should not read "5m 0s".
+fn human_duration(secs: i64) -> String {
+    let (h, m, s) = (secs / 3600, (secs % 3600) / 60, secs % 60);
+    match (h, m, s) {
+        (0, 0, s) => format!("{s}s"),
+        (0, m, 0) => format!("{m}m"),
+        (0, m, s) => format!("{m}m {s}s"),
+        (h, 0, _) => format!("{h}h"),
+        (h, m, _) => format!("{h}h {m}m"),
+    }
+}
+
+/// The parenthetical after a step's name: where it sits, and how long it took.
+/// Either half can be absent, so this yields the four sensible shapes rather than
+/// ever emitting an empty `()`.
+fn step_note(position: Option<(usize, usize)>, took: Option<&str>) -> String {
+    match (position, took) {
+        (Some((n, total)), Some(t)) => format!(" ({n} of {total}, took {t})"),
+        (Some((n, total)), None) => format!(" ({n} of {total})"),
+        (None, Some(t)) => format!(" (took {t})"),
+        (None, None) => String::new(),
+    }
+}
+
 /// How a step reads in the session thread.
 ///
 /// Linear concatenates an action activity's `action` and `parameter` in the UI, and
@@ -874,11 +918,13 @@ fn step_position(node_id: &str, detail: &harness_persist::RunDetail) -> Option<(
 /// was a step and which a workflow.
 ///
 /// A failed or cancelled node is not "finished" — saying so was actively wrong.
-fn step_action(node_id: &str, status: &str, position: Option<(usize, usize)>) -> String {
-    let at = match position {
-        Some((n, total)) => format!(" ({n} of {total})"),
-        None => String::new(),
-    };
+fn step_action(
+    node_id: &str,
+    status: &str,
+    position: Option<(usize, usize)>,
+    took: Option<&str>,
+) -> String {
+    let at = step_note(position, took);
     match status {
         "running" => format!("Running the {node_id} step{at} of workflow"),
         "failed" => format!("The {node_id} step{at} failed in workflow"),
@@ -921,7 +967,12 @@ async fn report_progress(
             client,
             claim,
             AgentActivity::Action {
-                action: step_action(&node_id, &status, step_position(&node_id, detail)),
+                action: step_action(
+                    &node_id,
+                    &status,
+                    step_position(&node_id, detail),
+                    step_duration(&node_id, detail).as_deref(),
+                ),
                 parameter: claim.workflow.clone(),
                 // The action text now names the outcome, so repeating the raw
                 // status behind a disclosure arrow adds nothing.
@@ -943,7 +994,14 @@ async fn report_progress(
             client,
             claim,
             AgentActivity::Action {
-                action: step_action(&node_id, "running", step_position(&node_id, detail)),
+                action: step_action(
+                    &node_id,
+                    "running",
+                    step_position(&node_id, detail),
+                    // A step that just started has no elapsed time worth
+                    // reporting; the heartbeat covers a long-running one.
+                    None,
+                ),
                 parameter: claim.workflow.clone(),
                 result: None,
             },
@@ -1011,8 +1069,8 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_agent_session_preamble, step_action, step_position, task_for_issue,
-        unannounced_running_nodes, unreported_finished_nodes,
+        human_duration, is_agent_session_preamble, step_action, step_duration, step_position,
+        task_for_issue, unannounced_running_nodes, unreported_finished_nodes,
     };
     use harness_sources::linear::{Comment, Issue};
 
@@ -1170,39 +1228,104 @@ mod tests {
     #[test]
     fn step_wording_names_the_step_its_position_and_the_workflow() {
         let at = Some((6, 15));
-        let rendered =
-            |node: &str, status: &str| format!("{} idea-to-pr", step_action(node, status, at));
+        let rendered = |node: &str, status: &str| {
+            format!(
+                "{} idea-to-pr",
+                step_action(node, status, at, Some("1m 46s"))
+            )
+        };
         assert_eq!(
             rendered("explore", "success"),
-            "Finished the explore step (6 of 15) of workflow idea-to-pr"
+            "Finished the explore step (6 of 15, took 1m 46s) of workflow idea-to-pr"
         );
-        assert_eq!(
-            rendered("create-plan", "running"),
-            "Running the create-plan step (6 of 15) of workflow idea-to-pr"
-        );
-        // A failed step did not "finish" — the old wording said it did.
+        // A failed step did not "finish" — the old wording said it did — and how
+        // long it ran before failing is the useful part.
         assert_eq!(
             rendered("validate", "failed"),
-            "The validate step (6 of 15) failed in workflow idea-to-pr"
+            "The validate step (6 of 15, took 1m 46s) failed in workflow idea-to-pr"
         );
         assert_eq!(
             rendered("finalize-pr", "cancelled"),
-            "The finalize-pr step (6 of 15) was cancelled in workflow idea-to-pr"
+            "The finalize-pr step (6 of 15, took 1m 46s) was cancelled in workflow idea-to-pr"
+        );
+        // A step that has only just started has no duration to report.
+        assert_eq!(
+            format!(
+                "{} idea-to-pr",
+                step_action("create-plan", "running", at, None)
+            ),
+            "Running the create-plan step (6 of 15) of workflow idea-to-pr"
         );
     }
 
-    /// A run recorded before graphs were stored has no positions to report; the
-    /// counter is dropped rather than guessed at.
+    /// Either half of the parenthetical can be missing — a run recorded before
+    /// graphs were stored has no position, a skipped-then-resumed node no
+    /// timestamps. Neither may produce a stray "()".
     #[test]
-    fn wording_omits_the_counter_when_the_position_is_unknown() {
+    fn wording_omits_whichever_half_is_unknown() {
         assert_eq!(
-            step_action("explore", "success", None),
+            step_action("explore", "success", None, None),
             "Finished the explore step of workflow"
         );
         assert_eq!(
-            step_action("explore", "running", None),
-            "Running the explore step of workflow"
+            step_action("explore", "success", None, Some("12s")),
+            "Finished the explore step (took 12s) of workflow"
         );
+        assert_eq!(
+            step_action("explore", "success", Some((1, 4)), None),
+            "Finished the explore step (1 of 4) of workflow"
+        );
+    }
+
+    /// Coarsens as it grows: seconds stop mattering at hour scale, and an exact
+    /// five minutes should not read "5m 0s".
+    #[test]
+    fn durations_read_the_way_a_human_would_say_them() {
+        assert_eq!(human_duration(0), "0s");
+        assert_eq!(human_duration(9), "9s");
+        assert_eq!(human_duration(59), "59s");
+        assert_eq!(human_duration(60), "1m");
+        assert_eq!(human_duration(106), "1m 46s");
+        assert_eq!(human_duration(300), "5m");
+        assert_eq!(human_duration(3600), "1h");
+        assert_eq!(human_duration(3660), "1h 1m");
+        // Seconds are dropped past an hour rather than padding the string.
+        assert_eq!(human_duration(3859), "1h 4m");
+        assert_eq!(human_duration(7200), "2h");
+    }
+
+    /// Duration comes from the node's own timestamps, and anything unusable —
+    /// a missing timestamp, or an inverted pair from clock skew — reports nothing
+    /// rather than a negative or invented number.
+    #[test]
+    fn step_duration_needs_two_sane_timestamps() {
+        let start = chrono::Utc::now();
+        let mut finished = node("explore", 0, "success");
+        finished.started_at = Some(start);
+        finished.ended_at = Some(start + chrono::Duration::seconds(106));
+
+        let mut no_end = node("create-plan", 1, "running");
+        no_end.started_at = Some(start);
+
+        let mut inverted = node("validate", 2, "success");
+        inverted.started_at = Some(start);
+        inverted.ended_at = Some(start - chrono::Duration::seconds(3));
+
+        let detail = detail_with(vec![
+            finished,
+            no_end,
+            inverted,
+            node("skipped", 3, "skipped"),
+        ]);
+        assert_eq!(step_duration("explore", &detail).as_deref(), Some("1m 46s"));
+        // Still running: no end time yet.
+        assert_eq!(step_duration("create-plan", &detail), None);
+        // Clock skew must not yield "-3s".
+        assert_eq!(step_duration("validate", &detail), None);
+        // A skipped node has neither timestamp.
+        assert_eq!(step_duration("skipped", &detail), None);
+        // A node absent from the run entirely.
+        assert_eq!(step_duration("nope", &detail), None);
     }
 
     /// The position is the workflow's own numbering — what the DAG view shows —
