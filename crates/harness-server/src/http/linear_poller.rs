@@ -286,9 +286,8 @@ async fn claim_and_fire(
     // `max_concurrent_runs` defaults to 1 (the original one-at-a-time behaviour);
     // a binding can raise it to run several issues in parallel. The poller still
     // claims at most one issue per tick, so it ramps up to the cap over ticks.
-    let cap = b.max_concurrent_runs.max(1) as i64;
     match claim_store.count_active(&b.project, &b.workflow).await {
-        Ok(active) if active >= cap => return,
+        Ok(active) if super::linear_agent::at_capacity(active, b.max_concurrent_runs) => return,
         Ok(_) => {}
         Err(e) => {
             tracing::warn!(

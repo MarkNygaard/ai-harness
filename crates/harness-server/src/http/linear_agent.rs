@@ -297,51 +297,76 @@ async fn start_delegated_run(
     client: LinearClient,
 ) {
     let session = event.session_id.clone();
-    let (project, workflow, base_branch, source_state_id, in_progress_state_id) =
-        match resolve_target(state, &event).await {
-            Target::Ready {
-                project,
-                workflow,
-                base_branch,
-                source_state_id,
-                in_progress_state_id,
-            } => (
-                project,
-                workflow,
-                base_branch,
-                source_state_id,
-                in_progress_state_id,
-            ),
-            Target::NoBinding => {
+    let binding = match resolve_target(state, &event).await {
+        Target::Ready { binding } => binding,
+        Target::NoBinding => {
+            let _ = client
+                .create_agent_activity(
+                    &session,
+                    &AgentActivity::Error {
+                        body: "No enabled Linear trigger covers this issue's team. Add one for \
+                               the project on the Projects page — or enable the existing one — \
+                               then delegate again."
+                            .into(),
+                    },
+                )
+                .await;
+            return;
+        }
+        // The configured source statuses are still the gate — say so plainly, and
+        // name the statuses that would have worked.
+        Target::WrongStatus {
+            current,
+            team_id,
+            triggers,
+        } => {
+            let body = wrong_status_message(&client, &current, team_id.as_deref(), &triggers).await;
+            let _ = client
+                .create_agent_activity(&session, &AgentActivity::Error { body })
+                .await;
+            return;
+        }
+    };
+
+    // Honour **Max simultaneous tasks** before touching anything. Checked here,
+    // ahead of the status move and the run start, so a refused delegation leaves the
+    // issue exactly where it was: still delegated, still in the source status — which
+    // is precisely what a live binding's poller looks for, so it starts by itself
+    // once a slot frees.
+    if let Ok(claims) = state.linear_claim_store().await {
+        match claims
+            .count_active(&binding.project, &binding.workflow)
+            .await
+        {
+            Ok(active) if at_capacity(active, binding.max_concurrent_runs) => {
+                tracing::info!(
+                    "linear webhook: {}/{} at capacity ({active} active) — leaving {} for the \
+                     poller",
+                    binding.project,
+                    binding.workflow,
+                    event.issue_identifier.as_deref().unwrap_or("(delegated)")
+                );
+                // A `response`, not an `error`: nothing failed, and it closes this
+                // session cleanly rather than leaving it open to go stale. The run
+                // that eventually starts opens a session of its own.
                 let _ = client
                     .create_agent_activity(
                         &session,
-                        &AgentActivity::Error {
-                            body:
-                                "No enabled Linear trigger covers this issue's team. Add one for \
-                               the project on the Projects page — or enable the existing one — \
-                               then delegate again."
-                                    .into(),
+                        &AgentActivity::Response {
+                            body: at_capacity_message(&binding),
                         },
                     )
                     .await;
                 return;
             }
-            // The configured source statuses are still the gate — say so plainly, and
-            // name the statuses that would have worked.
-            Target::WrongStatus {
-                current,
-                team_id,
-                triggers,
-            } => {
-                let body =
-                    wrong_status_message(&client, &current, team_id.as_deref(), &triggers).await;
-                let _ = client
-                    .create_agent_activity(&session, &AgentActivity::Error { body })
-                    .await;
-                return;
+            Ok(_) => {}
+            Err(e) => {
+                // Can't count — proceed rather than refuse work over a database
+                // hiccup. The poller's own cap still applies to its claims.
+                tracing::warn!("linear webhook: count_active failed, proceeding: {e}");
             }
-        };
+        }
+    }
 
     let title = match (&event.issue_identifier, &event.issue_title) {
         (Some(id), Some(t)) => Some(format!("{id} {t}")),
@@ -368,9 +393,10 @@ async fn start_delegated_run(
     // the source status, so the poller remains eligible to claim it — today only
     // `max_concurrent_runs` stops a second run, which stops nothing once a
     // binding raises that above 1.
-    if let (Some(issue_id), Some(in_progress)) =
-        (event.issue_id.as_deref(), in_progress_state_id.as_deref())
-    {
+    if let (Some(issue_id), Some(in_progress)) = (
+        event.issue_id.as_deref(),
+        binding.in_progress_state_id.as_deref(),
+    ) {
         if let Err(e) = client.set_issue_state(issue_id, in_progress).await {
             // Non-fatal: better to run the work than to refuse over a status move.
             tracing::warn!(
@@ -382,13 +408,13 @@ async fn start_delegated_run(
     }
 
     let req = CreateRunRequest {
-        workflow: workflow.clone(),
+        workflow: binding.workflow.clone(),
         title,
         description,
         args: String::new(),
         real: true,
-        base_branch: base_branch.clone(),
-        project: Some(project.clone()),
+        base_branch: binding.base_branch.clone(),
+        project: Some(binding.project.clone()),
         swap_from: None,
         swap_to: None,
         ab_pair_id: None,
@@ -404,11 +430,11 @@ async fn start_delegated_run(
                 if let Err(e) = claims
                     .record(
                         &run_id,
-                        &project,
-                        &workflow,
+                        &binding.project,
+                        &binding.workflow,
                         event.issue_id.as_deref().unwrap_or_default(),
                         event.issue_identifier.as_deref().unwrap_or("(delegated)"),
-                        &source_state_id,
+                        &binding.source_state_id,
                         Some(&session),
                     )
                     .await
@@ -425,7 +451,7 @@ async fn start_delegated_run(
                     &session,
                     &AgentActivity::Action {
                         action: "Started workflow".into(),
-                        parameter: workflow.clone(),
+                        parameter: binding.workflow.clone(),
                         result: run_link.clone(),
                     },
                 )
@@ -435,7 +461,9 @@ async fn start_delegated_run(
                 let _ = client.add_attachment(issue_id, url, "ai-harness run").await;
             }
             tracing::info!(
-                "linear webhook: session {session} → run {run_id} (`{workflow}` in `{project}`)"
+                "linear webhook: session {session} → run {run_id} (`{}` in `{}`)",
+                binding.workflow,
+                binding.project
             );
         }
         // `start_run` reports failures as (status, message).
@@ -448,7 +476,10 @@ async fn start_delegated_run(
                 .create_agent_activity(
                     &session,
                     &AgentActivity::Error {
-                        body: format!("Could not start the `{workflow}` workflow: {message}"),
+                        body: format!(
+                            "Could not start the `{}` workflow: {message}",
+                            binding.workflow
+                        ),
                     },
                 )
                 .await;
@@ -510,14 +541,16 @@ fn task_text(event: &AgentSessionEvent) -> String {
 /// What a delegated issue resolves to, or why it doesn't.
 enum Target {
     /// Startable: matched a binding, and the issue is in its source status.
-    Ready {
-        project: String,
-        workflow: String,
-        base_branch: Option<String>,
-        source_state_id: String,
-        /// Where to move the issue as work begins, when the binding maps one.
-        in_progress_state_id: Option<String>,
-    },
+    ///
+    /// Carries the whole binding rather than a copy of the fields it needs. Every
+    /// time delegation turned out to be missing something the poller does —
+    /// `enabled`, the in-progress move, the concurrency cap — the fix was another
+    /// field here. Handing over the row removes that as a recurring edit and makes
+    /// the two paths read from the same object.
+    ///
+    /// `workflow` is normalized before this is built, so callers need not repeat
+    /// the empty-name fallback.
+    Ready { binding: Box<LinearSource> },
     /// No Linear trigger binding covers the issue's team.
     NoBinding,
     /// The team has bindings, but none of them triggers from the status this
@@ -625,18 +658,52 @@ fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
         };
     };
 
+    let mut binding = (**chosen).clone();
+    // A binding names the workflow it fires; fall back to the conventional default
+    // only if the row somehow carries none. Normalized here so every caller sees a
+    // usable name.
+    if binding.workflow.is_empty() {
+        binding.workflow = DEFAULT_WORKFLOW.to_string();
+    }
     Target::Ready {
-        project: chosen.project.clone(),
-        // A binding names the workflow it fires; fall back to the conventional
-        // default only if the row somehow carries none.
-        workflow: if chosen.workflow.is_empty() {
-            DEFAULT_WORKFLOW.to_string()
-        } else {
-            chosen.workflow.clone()
-        },
-        base_branch: chosen.base_branch.clone(),
-        source_state_id: chosen.source_state_id.clone(),
-        in_progress_state_id: chosen.in_progress_state_id.clone(),
+        binding: Box::new(binding),
+    }
+}
+
+/// Whether a binding is already running as many claims as it allows.
+///
+/// The poller checks the same thing before claiming; delegation did not, so
+/// handing three issues to the harness at once started three runs regardless of
+/// **Max simultaneous tasks**.
+pub(crate) fn at_capacity(active: i64, max_concurrent_runs: i32) -> bool {
+    active >= max_concurrent_runs.max(1) as i64
+}
+
+/// What to say when a delegation arrives while the binding is already at capacity.
+///
+/// Deliberately not phrased as an error — nothing is wrong, the work is simply
+/// waiting. What is *true* about the wait depends on `live`: only a live binding
+/// has a poller that will come back for the issue. Promising a pickup that will
+/// never happen would be worse than saying nothing.
+fn at_capacity_message(binding: &LinearSource) -> String {
+    let limit = binding.max_concurrent_runs.max(1);
+    let running = if limit == 1 {
+        "Another task is already running".to_string()
+    } else {
+        format!("{limit} tasks are already running")
+    };
+    if binding.live {
+        format!(
+            "{running} for `{}`, which is its limit. I've left this issue where it is \
+             and will start it automatically once a slot frees.",
+            binding.workflow
+        )
+    } else {
+        format!(
+            "{running} for `{}`, which is its limit. I've left this issue where it is \
+             — delegate it again once the current work finishes.",
+            binding.workflow
+        )
     }
 }
 
@@ -852,13 +919,9 @@ mod tests {
             &bindings,
             &context("ecom", state_id, name),
         ) {
-            Target::Ready {
-                workflow,
-                source_state_id,
-                ..
-            } => {
-                assert_eq!(source_state_id, state_id);
-                workflow
+            Target::Ready { binding } => {
+                assert_eq!(binding.source_state_id, state_id);
+                binding.workflow
             }
             Target::WrongStatus { current, .. } => {
                 panic!("{name} should start something, got WrongStatus (current: {current})")
@@ -948,14 +1011,10 @@ mod tests {
     fn ready_carries_the_bindings_in_progress_status() {
         let bindings = vec![binding_with_status_map("ecom", "idea-to-pr", "todo")];
         match choose_target(&bindings, &context("ecom", "todo", "Todo")) {
-            Target::Ready {
-                in_progress_state_id,
-                source_state_id,
-                ..
-            } => {
-                assert_eq!(in_progress_state_id.as_deref(), Some("in-progress"));
+            Target::Ready { binding } => {
+                assert_eq!(binding.in_progress_state_id.as_deref(), Some("in-progress"));
                 // The source status is still reported, so a failure can roll back.
-                assert_eq!(source_state_id, "todo");
+                assert_eq!(binding.source_state_id, "todo");
             }
             other => panic!("expected Ready, got {}", target_name(&other)),
         }
@@ -963,10 +1022,7 @@ mod tests {
         // A binding with no in-progress status maps to None — the move is then
         // skipped rather than guessed at.
         match choose_target(&bindings_without_map(), &context("ecom", "todo", "Todo")) {
-            Target::Ready {
-                in_progress_state_id,
-                ..
-            } => assert_eq!(in_progress_state_id, None),
+            Target::Ready { binding } => assert_eq!(binding.in_progress_state_id, None),
             other => panic!("expected Ready, got {}", target_name(&other)),
         }
     }
@@ -987,8 +1043,8 @@ mod tests {
             binding("ecom", "image-vision-test", "todo"),
         ];
         match choose_target(&bindings, &context("ecom", "todo", "Todo")) {
-            Target::Ready { workflow, .. } => assert_eq!(
-                workflow, "image-vision-test",
+            Target::Ready { binding } => assert_eq!(
+                binding.workflow, "image-vision-test",
                 "the enabled binding must win over a disabled one that sorts first"
             ),
             other => panic!("expected Ready, got {}", target_name(&other)),
@@ -1018,7 +1074,7 @@ mod tests {
             binding("other", "only-live-one", "todo"),
         ];
         match choose_target(&bindings, &unknown_team) {
-            Target::Ready { workflow, .. } => assert_eq!(workflow, "only-live-one"),
+            Target::Ready { binding } => assert_eq!(binding.workflow, "only-live-one"),
             other => panic!("expected Ready, got {}", target_name(&other)),
         }
         // …but a lone *disabled* binding is not a fallback.
@@ -1048,7 +1104,7 @@ mod tests {
             binding("ecom", "zzz-second", "todo"),
         ];
         match choose_target(&bindings, &context("ecom", "todo", "Todo")) {
-            Target::Ready { workflow, .. } => assert_eq!(workflow, "aaa-first"),
+            Target::Ready { binding } => assert_eq!(binding.workflow, "aaa-first"),
             _ => panic!("expected Ready"),
         }
     }
@@ -1110,6 +1166,67 @@ mod tests {
             SessionGuard::acquire(session).is_some(),
             "a panicking handler must not wedge the session forever"
         );
+    }
+
+    /// The cap is a limit, not a threshold: at exactly `max_concurrent_runs`
+    /// there is no room left. Off-by-one here would let a 1-task binding run two.
+    #[test]
+    fn capacity_is_reached_at_the_limit_not_past_it() {
+        assert!(!at_capacity(0, 1));
+        assert!(at_capacity(1, 1));
+        assert!(at_capacity(2, 1));
+        assert!(!at_capacity(2, 3));
+        assert!(at_capacity(3, 3));
+    }
+
+    /// A binding stored with 0 (or a negative, from a hand-edited row) still allows
+    /// one run — the same `.max(1)` floor the poller applies, so neither path can
+    /// silently stop working.
+    #[test]
+    fn a_zero_limit_still_allows_one_run() {
+        assert!(!at_capacity(0, 0));
+        assert!(at_capacity(1, 0));
+        assert!(!at_capacity(0, -5));
+        assert!(at_capacity(1, -5));
+    }
+
+    /// Only a live binding has a poller that comes back for the issue, so only a
+    /// live binding may promise an automatic start.
+    #[test]
+    fn a_live_binding_promises_pickup_and_a_dry_one_does_not() {
+        let mut b = binding("ecom", "idea-to-pr", "todo");
+        b.live = true;
+        let live = at_capacity_message(&b);
+        assert!(live.contains("Another task is already running"), "{live}");
+        assert!(live.contains("automatically"), "{live}");
+        assert!(!live.contains("delegate it again"), "{live}");
+
+        b.live = false;
+        let dry = at_capacity_message(&b);
+        assert!(dry.contains("delegate it again"), "{dry}");
+        assert!(
+            !dry.contains("automatically"),
+            "a dry binding has no poller to keep that promise: {dry}"
+        );
+    }
+
+    /// Both wordings name the workflow and read as information, not failure.
+    #[test]
+    fn the_capacity_message_never_reads_as_an_error() {
+        let mut b = binding("ecom", "idea-to-pr", "todo");
+        b.max_concurrent_runs = 3;
+        for live in [true, false] {
+            b.live = live;
+            let msg = at_capacity_message(&b);
+            assert!(msg.contains("3 tasks are already running"), "{msg}");
+            assert!(msg.contains("idea-to-pr"), "{msg}");
+            for word in ["error", "fail", "cannot", "Unable"] {
+                assert!(
+                    !msg.to_lowercase().contains(&word.to_lowercase()),
+                    "capacity is not a failure, but the message says {word:?}: {msg}"
+                );
+            }
+        }
     }
 
     #[test]
