@@ -502,10 +502,20 @@ const CANNOT_STEER_REPLY: &str = "Noted — but I can't change course mid-run ye
                                   finish (or cancel it in the harness), then delegate again with \
                                   the updated ask.";
 
-/// How much of one artifact to inline when answering. `plan.md` runs to several
-/// thousand words; the head of it carries the summary and file list, which is what
-/// questions are usually about.
-const ARTIFACT_EXCERPT_CHARS: usize = 6000;
+/// Total characters of artifact text the prompt will carry.
+///
+/// **Artifacts are never truncated** — "what does the plan say about X?" is a
+/// question this path exists to answer, and half a plan answers it wrongly rather
+/// than partially. This is a runaway guard, not a size budget: whole artifacts are
+/// included until it is reached, and anything that would not fit is left out and
+/// logged rather than cut in half.
+///
+/// The realistic set is nowhere near it. A full `exploration.md` runs ~5KB and a
+/// `plan.md` ~15KB, so a typical run inlines ~20KB against a 1M-token context —
+/// roughly 0.5% of the window. 500K characters is ~125K tokens, still an eighth of
+/// the window, and exists only so a pathological artifact can't build a request
+/// that fails as a whole.
+const ARTIFACT_BUDGET_CHARS: usize = 500_000;
 
 /// A follow-up message on a session.
 ///
@@ -634,16 +644,8 @@ fn session_answer_prompt(question: &str, detail: &harness_persist::RunDetail) ->
     for node in &detail.nodes {
         out.push_str(&format!("- `{}` — {}\n", node.node_id, node.status));
     }
-    for node in &detail.nodes {
-        let Some(artifact) = node.artifact_content.as_deref() else {
-            continue;
-        };
-        if artifact.trim().is_empty() {
-            continue;
-        }
-        out.push_str(&format!("\n### Artifact from `{}`\n\n", node.node_id));
-        out.push_str(&excerpt(artifact, ARTIFACT_EXCERPT_CHARS));
-        out.push('\n');
+    for (node_id, artifact) in artifacts_within_budget(detail) {
+        out.push_str(&format!("\n### Artifact from `{node_id}`\n\n{artifact}\n"));
     }
     out.push_str(
         "\n## How to reply\n\nA short paragraph of plain prose. No headings, no bullet \
@@ -657,13 +659,40 @@ fn session_answer_prompt(question: &str, detail: &harness_persist::RunDetail) ->
     out
 }
 
-/// First `max` characters, on a character boundary, with a marker when cut.
-fn excerpt(text: &str, max: usize) -> String {
-    if text.chars().count() <= max {
-        return text.to_string();
+/// Every non-empty artifact, whole, in node order — as many as
+/// [`ARTIFACT_BUDGET_CHARS`] allows.
+///
+/// Selection runs **newest first** so that if the guard ever does bite, what
+/// survives is the most recent work. That ordering matters: `plan.md` is written
+/// after `exploration.md`, and a question about the plan is the common case. The
+/// result is then re-ordered chronologically, which reads better as context.
+///
+/// An artifact that doesn't fit is skipped whole and logged — never halved, since a
+/// half-read plan produces a confidently wrong answer rather than an incomplete one.
+fn artifacts_within_budget(detail: &harness_persist::RunDetail) -> Vec<(&str, &str)> {
+    let mut kept: Vec<(&str, &str)> = Vec::new();
+    let mut used = 0usize;
+    for node in detail.nodes.iter().rev() {
+        let Some(artifact) = node.artifact_content.as_deref() else {
+            continue;
+        };
+        if artifact.trim().is_empty() {
+            continue;
+        }
+        if used + artifact.len() > ARTIFACT_BUDGET_CHARS {
+            tracing::warn!(
+                "linear webhook: artifact from `{}` ({} bytes) left out of the answer context — \
+                 {used} of {ARTIFACT_BUDGET_CHARS} chars already used",
+                node.node_id,
+                artifact.len()
+            );
+            continue;
+        }
+        used += artifact.len();
+        kept.push((node.node_id.as_str(), artifact));
     }
-    let head: String = text.chars().take(max).collect();
-    format!("{head}\n\n…(truncated)")
+    kept.reverse();
+    kept
 }
 
 /// The task text handed to the workflow, with the follow-up prompt appended when
@@ -1484,23 +1513,61 @@ mod tests {
         assert!(p.contains("what is happening?"), "{p}");
     }
 
-    /// `plan.md` runs to thousands of words; the prompt has to stay bounded, and a
-    /// cut must be visible rather than silently truncating mid-sentence.
+    /// The whole point of this path is answering "what does the plan say about X?" —
+    /// so a realistic `plan.md` must arrive complete, including its later sections.
+    /// A half-read plan yields a confidently wrong answer, not a partial one.
     #[test]
-    fn a_long_artifact_is_excerpted_and_says_so() {
-        assert_eq!(excerpt("short", 10), "short");
-        // Exactly at the limit is not truncated.
-        assert_eq!(excerpt("0123456789", 10), "0123456789");
-        let long = "x".repeat(ARTIFACT_EXCERPT_CHARS + 500);
-        let cut = excerpt(&long, ARTIFACT_EXCERPT_CHARS);
-        assert!(cut.ends_with("…(truncated)"), "no marker: {}", &cut[..40]);
-        assert_eq!(
-            cut.chars().count(),
-            ARTIFACT_EXCERPT_CHARS + "\n\n…(truncated)".chars().count()
+    fn a_realistic_plan_is_inlined_whole() {
+        // ~24KB: larger than any plan this has produced so far.
+        let plan = format!(
+            "# Plan\n\n## Summary\n\n{}\n\n## Testing strategy\n\nRun the vitest suite.\n",
+            "Detail line.\n".repeat(1800)
         );
-        // Multi-byte input must not panic on a byte boundary.
-        let danish = "æøå".repeat(20);
-        assert!(excerpt(&danish, 5).starts_with("æøå"));
+        assert!(plan.len() > 20_000, "fixture should be plan-sized");
+
+        let mut detail = run_detail_for_answering();
+        detail.nodes[1].artifact_content = Some(plan.clone());
+        let p = session_answer_prompt("what does the plan say about testing?", &detail);
+
+        assert!(p.contains(&plan), "the plan must be present verbatim");
+        // The section a 6000-char cap would have cut off.
+        assert!(p.contains("Run the vitest suite."), "tail section missing");
+        assert!(!p.contains("truncated"), "nothing should be truncated");
+    }
+
+    /// The guard drops whole artifacts rather than halving one, and drops the
+    /// *oldest* — a question is almost always about the most recent work.
+    #[test]
+    fn the_runaway_guard_drops_whole_artifacts_oldest_first() {
+        let big = "y".repeat(ARTIFACT_BUDGET_CHARS - 10);
+        let mut detail = run_detail_for_answering();
+        detail.nodes[0].artifact_content = Some("# Exploration\n\nthe older one".into());
+        detail.nodes[1].artifact_content = Some(big.clone());
+
+        let kept = artifacts_within_budget(&detail);
+        // Only the newest fits; it is whole, and the older one is gone entirely.
+        assert_eq!(kept.len(), 1, "one artifact should fit");
+        assert_eq!(kept[0].0, "create-plan");
+        assert_eq!(kept[0].1, big, "the kept artifact must not be cut");
+
+        // Within budget, everything is kept — in chronological order, which reads
+        // better than the newest-first order selection walks.
+        let detail = run_detail_for_answering();
+        let kept = artifacts_within_budget(&detail);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, "explore");
+    }
+
+    /// An artifact that is only whitespace is not worth a heading.
+    #[test]
+    fn blank_artifacts_are_skipped() {
+        let mut detail = run_detail_for_answering();
+        detail.nodes[1].artifact_content = Some("   \n\n".into());
+        let kept = artifacts_within_budget(&detail);
+        assert!(
+            kept.iter().all(|(id, _)| *id != "create-plan"),
+            "a whitespace-only artifact should not be inlined"
+        );
     }
 
     #[test]
