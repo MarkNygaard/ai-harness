@@ -229,6 +229,11 @@ always did.
 
 ## Asking the agent something mid-run
 
+Typing while a run is going shows the message as **Queued** — that's the composer
+staging it. Press **Send** and it is delivered and answered straight away; the run
+carries on undisturbed.
+
+
 Write in the session ("Tell AI Harness what to do next…") and the harness answers
 from the run's own state — which step it's on, what finished, and the contents of the
 `exploration.md` / `plan.md` artifacts. So "what are you doing?", "where did you find
