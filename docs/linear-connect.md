@@ -227,8 +227,24 @@ another group. Twenty minutes leaves one group in the common case.
 A poller-claimed run has no session, so it still gets the plain issue comments it
 always did.
 
-Follow-up messages in a session are acknowledged honestly: the harness cannot
-change course mid-run yet, so it says so rather than silently ignoring you.
+## Asking the agent something mid-run
+
+Write in the session ("Tell AI Harness what to do next…") and the harness answers
+from the run's own state — which step it's on, what finished, and the contents of the
+`exploration.md` / `plan.md` artifacts. So "what are you doing?", "where did you find
+the bug?" or "what's the plan?" get real answers while the run is still going.
+
+Two things worth knowing about how that works:
+
+- **It cannot touch the run.** The answer is produced from what's already in the
+  database, with no repo access and no tools, so asking is always safe. Ask it to do
+  something *differently* and it will say plainly that it can't change course mid-run
+  — finish or cancel the run, then delegate again with the updated ask.
+- **The reply is a `thought`, not a `response`.** Linear treats a response as the
+  agent's final word and marks the session complete, which would close the thread
+  while the run was still working.
+
+Steering a run in flight, and human-in-the-loop approval gates, are not built yet.
 
 ## Tokens
 

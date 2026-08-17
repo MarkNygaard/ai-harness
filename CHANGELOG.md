@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The harness answers questions asked in a Linear agent session.** Writing in the
+  session mid-run previously got a fixed "I can't change course" reply whatever you
+  asked. A follow-up is now answered from the run's own state — step statuses plus the
+  `exploration.md` / `plan.md` artifacts, all already in Postgres — so "what are you
+  doing?" or "where's the bug?" get real answers while the run is going. Nothing
+  touches the run: no repo access, no tools, no worktree, so asking is always safe,
+  and an instruction to work differently still gets the honest refusal. The reply is a
+  `thought` rather than a `response`, because Linear treats a response as the agent's
+  final word and would mark the session complete mid-run.
 - **Runs report progress into a Linear agent session.** A poller-claimed run now opens
   a session of its own (`agentSessionCreateOnIssue`), so retries report into a thread like a
   delegated run instead of leaving detached comments.

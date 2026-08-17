@@ -306,6 +306,12 @@ impl RunsState {
             .cloned()
     }
 
+    /// The agent registry, for a one-off agent call outside a workflow run (see
+    /// [`super::linear_agent`], which uses it to answer a question in a session).
+    pub(crate) fn agent_registry(&self) -> &Arc<AgentRegistry> {
+        &self.agent_registry
+    }
+
     /// Lazily connect (and migrate) the persistence store.
     pub(crate) async fn store(&self) -> Result<&RunStore, String> {
         let url = self
