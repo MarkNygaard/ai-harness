@@ -251,7 +251,10 @@ mod tests {
 
         assert_eq!(
             node("explore").when.as_deref(),
-            Some("$gather-feedback.output.has_feedback == 'true'")
+            Some(
+                "$gather-feedback.output.has_github_feedback == 'true' || \
+                 $gather-feedback.output.has_linear_feedback == 'true'"
+            )
         );
         assert_eq!(deps("final-validate"), vec!["sonnet-review-fix"]);
         assert!(
@@ -268,6 +271,58 @@ mod tests {
             node("summary").when.as_deref(),
             Some("$final-validate.output.passed == 'true'")
         );
+    }
+
+    /// A card moved to "Changes requested" by mistake must cancel, not revise.
+    ///
+    /// It didn't, once: `gather-feedback` reported a single `has_feedback`, and the
+    /// issue's own bug report — which `task_for_issue` puts in `$ARGUMENTS` on every
+    /// run — passed as a tester saying the fix had failed. So the run planned and
+    /// pushed a second speculative fix to a PR nobody had complained about. The two
+    /// booleans exist so the model must attribute feedback to a source, and the
+    /// Linear one is a question about a string's presence rather than a judgement.
+    #[test]
+    fn revise_pr_aborts_when_neither_feedback_source_has_anything() {
+        let yaml = default_workflow("revise-pr").expect("revise-pr bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("revise-pr must parse");
+        let gather = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "gather-feedback")
+            .expect("gather-feedback exists");
+        let schema = gather
+            .output_format
+            .as_ref()
+            .expect("gather-feedback is structured")
+            .to_string();
+        for field in ["has_github_feedback", "has_linear_feedback"] {
+            assert!(schema.contains(field), "{field} missing from {schema}");
+        }
+        assert!(
+            !schema.contains("\"has_feedback\""),
+            "the single conflated boolean is back: {schema}"
+        );
+
+        let abort = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "abort-no-feedback")
+            .expect("abort-no-feedback exists");
+        assert_eq!(
+            abort.when.as_deref(),
+            Some(
+                "$gather-feedback.output.has_github_feedback != 'true' && \
+                 $gather-feedback.output.has_linear_feedback != 'true'"
+            )
+        );
+
+        // The prompt has to say that the text before the Linear heading is the
+        // original report, or the same conflation is one paraphrase away.
+        let harness_dag::NodeKind::Prompt(prompt) = &gather.kind else {
+            panic!("gather-feedback is an inline prompt");
+        };
+        assert!(prompt.contains("If that heading is absent there is no Linear feedback"));
+        assert!(prompt.contains("ORIGINAL bug report"));
     }
 
     #[test]
