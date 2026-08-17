@@ -650,7 +650,7 @@ fn default_codex_cloud_cache_ttl_hours() -> u64 {
 }
 
 fn default_codex_model() -> String {
-    "gpt-5.4".to_string()
+    "gpt-5.6-sol".to_string()
 }
 
 fn default_codex_reasoning_effort() -> String {
@@ -676,15 +676,26 @@ pub struct AnthropicApiConfig {
     pub max_tokens: u32,
 }
 
+/// Output budget for a direct Messages API call.
+///
+/// This caps thinking **and** response text together, and on Sonnet 5 / Opus 5
+/// adaptive thinking is on whenever the request omits a `thinking` field — which
+/// this adapter does. The previous 4096 was sized for models where omitting the
+/// field meant no thinking at all, so it would now spend much of the budget
+/// reasoning and truncate the answer.
+///
+/// 16000 is the recommended ceiling for a non-streaming request: high enough to
+/// leave room for both, low enough to stay under the SDK's HTTP timeout (above
+/// ~16K the call should stream instead).
 fn default_anthropic_api_max_tokens() -> u32 {
-    4096
+    16_000
 }
 
 impl Default for AnthropicApiConfig {
     fn default() -> Self {
         Self {
             base_url: "https://api.anthropic.com".to_string(),
-            default_model: "claude-sonnet-4-6".to_string(),
+            default_model: "claude-sonnet-5".to_string(),
             max_tokens: default_anthropic_api_max_tokens(),
         }
     }
