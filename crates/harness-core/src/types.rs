@@ -728,10 +728,10 @@ fn default_validation_tier() -> BudgetTier {
     BudgetTier::XHigh
 }
 fn default_xhigh_model() -> String {
-    "claude-opus-4-6".to_string()
+    "claude-opus-5".to_string()
 }
 fn default_high_model() -> String {
-    "claude-sonnet-4-6".to_string()
+    "claude-sonnet-5".to_string()
 }
 fn default_medium_model() -> String {
     "claude-haiku-4-5-20251001".to_string()
@@ -908,16 +908,16 @@ mod tests {
         // Planning and Validation use XHigh → opus
         assert_eq!(
             budget.model_for_phase(ExecutionPhase::Planning),
-            "claude-opus-4-6"
+            "claude-opus-5"
         );
         assert_eq!(
             budget.model_for_phase(ExecutionPhase::Validation),
-            "claude-opus-4-6"
+            "claude-opus-5"
         );
         // Execution uses High → sonnet
         assert_eq!(
             budget.model_for_phase(ExecutionPhase::Execution),
-            "claude-sonnet-4-6"
+            "claude-sonnet-5"
         );
     }
 

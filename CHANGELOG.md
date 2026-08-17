@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Default Claude models moved to the 5 series.** `claude-sonnet-4-6` → `claude-sonnet-5`
+  and `claude-opus-4-6` → `claude-opus-5`, across the Claude Code CLI default, the
+  Anthropic API adapter, and the reasoning-budget tiers (`xhigh` → Opus, `high` →
+  Sonnet). Only pinned ids changed: the bundled workflows use the `sonnet`/`opus`
+  aliases, which the CLI resolves to the current model on its own, and the cost table
+  matches on family substrings, so per-token rates were already right (Sonnet 5 is
+  $3/$15 like 4.6; Opus 5 is $5/$25 like 4.6).
+- **The Anthropic API adapter's default `max_tokens` is 16000, up from 4096.** That
+  budget caps thinking *and* response text together, and on the 5 series adaptive
+  thinking is on whenever a request omits a `thinking` field — which this adapter
+  does. At 4096 it would have spent much of the budget reasoning and truncated the
+  answer. 16000 is the recommended ceiling for a non-streaming request.
+
 ### Added
 
 - **Runs report progress into a Linear agent session.** A poller-claimed run now opens

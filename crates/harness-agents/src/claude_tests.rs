@@ -190,9 +190,9 @@ fn resolve_model_uses_phase_when_budget_configured() {
     };
     let req_no_phase = AgentRequest::default();
 
-    assert_eq!(agent.resolve_model(&req_planning), "claude-opus-4-6");
-    assert_eq!(agent.resolve_model(&req_execution), "claude-sonnet-4-6");
-    assert_eq!(agent.resolve_model(&req_validation), "claude-opus-4-6");
+    assert_eq!(agent.resolve_model(&req_planning), "claude-opus-5");
+    assert_eq!(agent.resolve_model(&req_execution), "claude-sonnet-5");
+    assert_eq!(agent.resolve_model(&req_validation), "claude-opus-5");
     // No phase → falls back to default_model
     assert_eq!(agent.resolve_model(&req_no_phase), "default-model");
 }

@@ -18,7 +18,7 @@ fn harness_config_toml(data_dir: &str, workspace_section: &str) -> String {
         cli_path = "codex"
         [agents.anthropic_api]
         base_url = "https://api.anthropic.com"
-        default_model = "claude-sonnet-4-6"
+        default_model = "claude-sonnet-5"
 
         [gc]
         max_drafts_per_run = 5
@@ -153,7 +153,7 @@ fn agents_config_includes_review() {
         cli_path = "codex"
         [anthropic_api]
         base_url = "https://api.anthropic.com"
-        default_model = "claude-sonnet-4-6"
+        default_model = "claude-sonnet-5"
         [review]
         enabled = true
         reviewer_agent = "codex"
@@ -170,7 +170,7 @@ fn agents_config_includes_review() {
 fn anthropic_api_config_deserializes_configured_max_tokens() {
     let toml_str = r#"
         base_url = "https://api.anthropic.com"
-        default_model = "claude-sonnet-4-6"
+        default_model = "claude-sonnet-5"
         max_tokens = 8192
     "#;
     let config: AnthropicApiConfig = toml::from_str(toml_str).unwrap();
@@ -201,7 +201,7 @@ fn approval_policy_deserializes_from_toml() {
         cli_path = "codex"
         [anthropic_api]
         base_url = "https://api.anthropic.com"
-        default_model = "claude-sonnet-4-6"
+        default_model = "claude-sonnet-5"
     "#;
     let config: AgentsConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(config.approval_policy, ApprovalPolicy::FullAuto);
@@ -219,7 +219,7 @@ fn sandbox_mode_deserializes_from_toml() {
         cli_path = "codex"
         [anthropic_api]
         base_url = "https://api.anthropic.com"
-        default_model = "claude-sonnet-4-6"
+        default_model = "claude-sonnet-5"
     "#;
     let config: AgentsConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(config.sandbox_mode, SandboxMode::DangerFullAccess);
@@ -229,10 +229,12 @@ fn sandbox_mode_deserializes_from_toml() {
 fn anthropic_api_config_defaults_max_tokens_when_missing() {
     let toml_str = r#"
         base_url = "https://api.anthropic.com"
-        default_model = "claude-sonnet-4-6"
+        default_model = "claude-sonnet-5"
     "#;
     let config: AnthropicApiConfig = toml::from_str(toml_str).unwrap();
-    assert_eq!(config.max_tokens, 4096);
+    // Must leave room for adaptive thinking as well as the answer — the request
+    // omits `thinking`, which on Sonnet 5 / Opus 5 means thinking is on.
+    assert_eq!(config.max_tokens, 16_000);
 }
 
 #[test]
@@ -308,7 +310,7 @@ fn harness_config_deserializes_otel_section() {
         cli_path = "codex"
         [agents.anthropic_api]
         base_url = "https://api.anthropic.com"
-        default_model = "claude-sonnet-4-6"
+        default_model = "claude-sonnet-5"
 
         [gc]
         max_drafts_per_run = 5
