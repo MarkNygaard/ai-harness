@@ -46,7 +46,7 @@ pub(crate) fn lane_for_model(model: &str) -> &'static str {
 }
 
 /// Notional per-MTok price table, matched by substring on the (lowercased) model
-/// id so id variants resolve to a family (`claude-opus-4-8`, `openai-codex/gpt-5.5`,
+/// id so id variants resolve to a family (`claude-opus-5`, `openai-codex/gpt-5.6-sol`,
 /// `kimi-for-coding`, …). Notional cost basis — comparable across subscription and
 /// API-billed runs, NOT an invoice. Unknown models fall back to Sonnet-tier.
 pub(crate) fn rates_for_model(model: &str) -> ModelRates {

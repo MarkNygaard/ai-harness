@@ -47,7 +47,7 @@ impl CodexAgent {
     ) -> Self {
         Self {
             cli_path,
-            default_model: "gpt-5.4".to_string(),
+            default_model: "gpt-5.6-sol".to_string(),
             reasoning_effort: "high".to_string(),
             cloud,
             sandbox_mode,
