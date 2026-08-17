@@ -38,7 +38,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can comment on the issue. Asking is always safe,
   and an instruction to work differently still gets the honest refusal. The reply is a
   `thought` rather than a `response`, because Linear treats a response as the agent's
-  final word and would mark the session complete mid-run.
+  final word and would mark the session complete mid-run. It answers the question that
+  was asked, leading with the answer: the first live use asked for a summary of the plan
+  and got back which step was running, with the plan folded into a subordinate clause
+  that Linear then clipped mid-word. The context had been read correctly — the reply
+  named symbols that appear only in `plan.md` — but the prompt opens with a step-status
+  table, which reads as the headline unless something says otherwise. Two or three
+  sentences, no headings, and an admitted gap in preference to a nearby question it
+  happens to be able to answer.
 - **Runs report progress into a Linear agent session.** A poller-claimed run now opens
   a session of its own (`agentSessionCreateOnIssue`), so retries report into a thread like a
   delegated run instead of leaving detached comments.
