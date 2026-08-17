@@ -15,7 +15,12 @@ description: |
   - **GitHub PR reviews / inline comments** are read inside the workflow via
     `gh` (the token is available in the worktree).
   - **Linear tester comments** are injected by the poller into `$ARGUMENTS`
-    under a "## Reviewer comments (Linear)" section.
+    under a "## Reviewer comments (Linear)" section. That section is the *only*
+    Linear feedback: `$ARGUMENTS` always also carries the issue's own
+    description, which is the original report the PR was written to fix, not a
+    reviewer saying it failed. With neither source producing anything the run
+    cancels at `abort-no-feedback` and asks a human to move the card back —
+    moving a card by mistake must not trigger a speculative second fix.
 
   On completion the poller returns the Linear card to the review column; on
   failure it routes back to the source column under the existing retry cap.
@@ -114,9 +119,24 @@ nodes:
         because its `submittedAt` is after the watermark.
 
       ## 2. Linear tester / reviewer comments (functionality feedback)
-      These are injected fresh for this trigger — look for the section
-      "## Reviewer comments (Linear)" in $ARGUMENTS. If present, include them
-      (they are already scoped to this run; no time filtering needed).
+      Linear feedback is ONLY what appears under the literal heading
+      "## Reviewer comments (Linear)" in $ARGUMENTS. If present, include it (it
+      is already scoped to this run; no time filtering needed).
+
+      **If that heading is absent there is no Linear feedback.** Everything
+      before it — the issue title, its URL, the PR-title instruction, and the
+      issue's own description with its Steps / Actual result / Expected result —
+      is the ORIGINAL bug report. It is what the PR under review was written to
+      fix, not a report that the fix failed. It is present in $ARGUMENTS on every
+      run, so treating it as feedback would make this node incapable of ever
+      reporting "nothing to do".
+
+      Do not infer feedback that nobody wrote. In particular, an issue sitting in
+      "Changes requested" is NOT itself evidence that the bug still reproduces —
+      a human moves cards by hand and can do so by mistake, which is exactly what
+      the "no feedback" verdict below exists to catch. If a tester re-tested and it
+      still failed, they said so in a comment or a GitHub review, and you will have
+      found it above.
 
       For each remaining actionable item include:
       - reviewer name
@@ -124,26 +144,48 @@ nodes:
       - body text
       - for inline comments: `path:line`
 
-      Emit ONLY JSON. If nothing is new since `last_complete_at`, set
-      `has_feedback` to false.
+      ## 3. Report each source separately
+      Two booleans, each answering a narrow question about what you actually saw.
+      Answer them independently — do not set one because the other is true, and do
+      not set either because the card is in "Changes requested".
+
+      - `has_github_feedback` — after the section-1 exclusions, do you still hold at
+        least one GitHub review, top-level comment, or inline comment written by a
+        person?
+      - `has_linear_feedback` — does the literal heading
+        "## Reviewer comments (Linear)" appear in $ARGUMENTS? That is the whole
+        question: a string is either there or it is not. The issue description is
+        not that heading.
+
+      Both false is a correct, expected outcome, not a failure to search hard
+      enough — set `feedback` to "" and stop. The run cancels cleanly and a human is
+      told to move the card back. Claiming feedback with nothing real behind it is
+      far worse: it sends a second speculative fix to a PR that nobody has
+      complained about.
     output_format:
       type: object
       properties:
         feedback:
           type: string
           description: "markdown digest of all PR feedback (GitHub + Linear), or empty string if none"
-        has_feedback:
+        has_github_feedback:
           type: boolean
-          description: "true if there is at least one actionable feedback item from GitHub OR Linear"
-      required: [feedback, has_feedback]
+          description: "true if at least one person-authored GitHub review or comment survives the exclusions"
+        has_linear_feedback:
+          type: boolean
+          description: "true only if the literal heading \"## Reviewer comments (Linear)\" is present in the input"
+      required: [feedback, has_github_feedback, has_linear_feedback]
 
-  # 4. Fail the run if no actionable feedback was gathered — there should be
-  #    something to revise. This guards against a misconfigured trigger state.
+  # 4. Cancel when neither source produced anything — there should be something to
+  #    revise. This is the guard for a card moved to the trigger state by mistake,
+  #    which is why `gather-feedback` reports the two sources separately: a single
+  #    "is there feedback?" boolean let the issue's own bug report — present in
+  #    $ARGUMENTS on every run — pass as a tester saying the fix had failed.
   - id: abort-no-feedback
     category: planning
     depends_on: [gather-feedback]
-    when: "$gather-feedback.output.has_feedback != 'true'"
-    cancel: "No actionable feedback found for PR #$resolve-pr.output.pr. If this issue was moved to 'Changes requested' by mistake, move it back to the source column."
+    when: "$gather-feedback.output.has_github_feedback != 'true' && $gather-feedback.output.has_linear_feedback != 'true'"
+    cancel: "No actionable feedback found for PR #$resolve-pr.output.pr — no new GitHub reviews or comments, and no Linear reviewer comments. If this issue was moved to 'Changes requested' by mistake, move it back to the source column. If the bug does still reproduce, say so in a comment on the issue or the PR and move it across again."
 
   # 5. Explore the code the feedback touches before planning the fix.
   - id: explore
@@ -153,7 +195,7 @@ nodes:
     model: sonnet
     context: fresh
     depends_on: [gather-feedback]
-    when: "$gather-feedback.output.has_feedback == 'true'"
+    when: "$gather-feedback.output.has_github_feedback == 'true' || $gather-feedback.output.has_linear_feedback == 'true'"
     prompt: |
       You are a codebase explorer for a PR REVISION. The PR already exists;
       reviewers asked for changes. Map the parts of the codebase the feedback
@@ -168,8 +210,10 @@ nodes:
       ## The feedback to address
       a) GitHub PR reviews / inline comments:
          $gather-feedback.output.feedback
-      b) Linear tester / reviewer comments (functionality feedback) — look under
-         "## Reviewer comments (Linear)":
+      b) Linear tester / reviewer comments (functionality feedback) — ONLY what is
+         under the literal heading "## Reviewer comments (Linear)"; if that heading
+         is absent there is none. The text before it is the original bug report
+         that this PR already addresses, not a reviewer saying the fix failed:
          $ARGUMENTS
 
       ## Capture (facts only)
@@ -203,8 +247,9 @@ nodes:
       ## Feedback to address
       a) GitHub PR reviews / inline comments:
          $gather-feedback.output.feedback
-      b) Linear tester / reviewer comments — look under
-         "## Reviewer comments (Linear)":
+      b) Linear tester / reviewer comments — ONLY what is under the literal heading
+         "## Reviewer comments (Linear)"; if that heading is absent there is none,
+         and the original bug report before it is not a substitute for it:
          $ARGUMENTS
 
       ## Exploration
@@ -263,8 +308,9 @@ nodes:
            Implement EVERY item in the plan's feedback checklist. The feedback
            sources behind the plan are:
            a) GitHub PR reviews / inline comments: $gather-feedback.output.feedback
-           b) Linear tester / reviewer comments (look under
-              "## Reviewer comments (Linear)"): $ARGUMENTS
+           b) Linear tester / reviewer comments — ONLY what is under the literal
+              heading "## Reviewer comments (Linear)"; if absent there is none, and
+              the original bug report before it is not a stand-in: $ARGUMENTS
 
         3. Make the code changes. Run the project's **scoped verify chain**
            (commands live in CLAUDE.md / AGENTS.md; use the narrowest scope

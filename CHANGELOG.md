@@ -85,6 +85,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`revise-pr` cancels when nobody actually asked for changes.** A card moved to
+  "Changes requested" by hand, with no comment on the issue or the PR, made the harness
+  plan and push a second speculative fix to a PR nobody had complained about. The guard
+  for exactly this exists — `abort-no-feedback`, whose message says "if this issue was
+  moved to 'Changes requested' by mistake, move it back" — but it never fired:
+  `gather-feedback` reported one `has_feedback` boolean, and the issue's *own bug report*,
+  which the poller puts in `$ARGUMENTS` on every run, passed as a tester saying the fix
+  had failed. The node found 0 GitHub reviews and 0 comments, said so, and still returned
+  true; the planner then invented a root cause ("the tester's repro ends in a failed
+  server action") that no one had reported. Now the two sources are reported separately —
+  `has_github_feedback` and `has_linear_feedback` — so feedback must be attributed before
+  the gate opens, and the Linear one is a question about a string's presence ("does the
+  `## Reviewer comments (Linear)` heading appear?") rather than a judgement about
+  relevance. The prompts for `gather-feedback`, `explore`, `create-plan` and `implement`
+  now all state that the text before that heading is the original report the PR already
+  addresses. Projects with their own saved `.harness/workflows/revise-pr.yaml` shadow the
+  bundled copy and need re-saving to pick this up.
 - **A poller-claimed run can actually open its Linear agent session.** It called
   `agentSessionCreate`, which the schema marks `[Internal] … on behalf of the current
   user`; Linear answers a third-party app with `Access denied`. Every claimed run
