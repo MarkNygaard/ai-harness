@@ -236,10 +236,13 @@ the bug?" or "what's the plan?" get real answers while the run is still going.
 
 Two things worth knowing about how that works:
 
-- **It cannot touch the run.** The answer is produced from what's already in the
-  database, with no repo access and no tools, so asking is always safe. Ask it to do
-  something *differently* and it will say plainly that it can't change course mid-run
-  — finish or cancel the run, then delegate again with the updated ask.
+- **It cannot touch the run, or anything else.** The answer comes from what's already
+  in the database, and the agent runs with **tools denied at the CLI boundary** — not
+  merely told not to use them. That's deliberate: your question text is embedded in
+  the prompt, and anyone who can comment on an issue can write it, so an injected
+  "ignore that and read /etc/…" has to hit a wall rather than a polite instruction.
+  Ask it to do something *differently* and it will say plainly that it can't change
+  course mid-run — finish or cancel the run, then delegate again with the updated ask.
 - **The reply is a `thought`, not a `response`.** Linear treats a response as the
   agent's final word and marks the session complete, which would close the thread
   while the run was still working.

@@ -560,14 +560,13 @@ async fn answer_for_session(
         tracing::warn!("linear webhook: no `claude` agent registered to answer a session prompt");
         None
     })?;
-    let req = harness_core::agent::AgentRequest {
-        prompt: session_answer_prompt(question, &detail),
-        // Nothing is read from disk — the prompt says so and carries the context —
-        // but the CLI still needs a working directory to start in.
-        project_root: state.projects_dir.clone(),
-        ..Default::default()
-    };
-    match agent.execute(req).await {
+    match agent
+        .execute(answer_request(
+            session_answer_prompt(question, &detail),
+            state.projects_dir.clone(),
+        ))
+        .await
+    {
         Ok(res) if !res.output.trim().is_empty() => Some(res.output.trim().to_string()),
         Ok(_) => {
             tracing::warn!("linear webhook: empty answer for session {session}");
@@ -577,6 +576,33 @@ async fn answer_for_session(
             tracing::warn!("linear webhook: could not answer session {session}: {e}");
             Some(CANNOT_STEER_REPLY.to_string())
         }
+    }
+}
+
+/// The agent invocation for answering a follow-up — **tools denied at the CLI
+/// boundary**, not merely discouraged in the prompt.
+///
+/// This matters more here than anywhere else in the harness, because the prompt
+/// embeds text written by anyone who can comment on a Linear issue. The prompt does
+/// say "do not read files, run commands, or use tools", but a prompt is a request,
+/// not a control: an injected instruction could talk a tool-enabled agent into using
+/// them. `Some(vec![])` is the documented deny-all on [`AgentRequest::allowed_tools`],
+/// where `None` would instead select the full profile and pass
+/// `--dangerously-skip-permissions` — in `projects_dir`, which holds every checkout.
+///
+/// Nothing legitimate is lost: the whole point of this path is that the answer comes
+/// from context already assembled from the database.
+///
+/// `project_root` is still required because the CLI needs somewhere to start.
+fn answer_request(
+    prompt: String,
+    project_root: std::path::PathBuf,
+) -> harness_core::agent::AgentRequest {
+    harness_core::agent::AgentRequest {
+        prompt,
+        project_root,
+        allowed_tools: Some(Vec::new()),
+        ..Default::default()
     }
 }
 
@@ -1433,6 +1459,21 @@ mod tests {
         // And the standing instructions that keep it read-only and on-format.
         assert!(p.contains("do NOT read files"), "{p}");
         assert!(p.contains(CANNOT_STEER_REPLY), "{p}");
+    }
+
+    /// The question text comes from anyone who can comment on a Linear issue, so the
+    /// prompt's "do not use tools" line cannot be the only control — an injected
+    /// instruction could talk a tool-enabled agent past it. `None` here would select
+    /// the full profile and pass `--dangerously-skip-permissions` in the directory
+    /// holding every project checkout.
+    #[test]
+    fn answering_denies_tools_at_the_cli_boundary() {
+        let req = answer_request("q".into(), std::path::PathBuf::from("/projects"));
+        assert_eq!(
+            req.allowed_tools,
+            Some(Vec::new()),
+            "must be the explicit deny-all, never None (which means full permissions)"
+        );
     }
 
     /// An empty prompt body is the "@mention with no text" case; it must still ask

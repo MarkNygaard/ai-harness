@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asked. A follow-up is now answered from the run's own state — step statuses plus the
   `exploration.md` / `plan.md` artifacts, all already in Postgres — so "what are you
   doing?" or "where's the bug?" get real answers while the run is going. Nothing
-  touches the run: no repo access, no tools, no worktree, so asking is always safe,
+  touches the run: no worktree, and tools are denied at the CLI boundary rather than
+  merely discouraged in the prompt, since the question text is written by anyone who
+  can comment on the issue. Asking is always safe,
   and an instruction to work differently still gets the honest refusal. The reply is a
   `thought` rather than a `response`, because Linear treats a response as the agent's
   final word and would mark the session complete mid-run.
