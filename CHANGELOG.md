@@ -32,12 +32,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `HARNESS_DISPLAY_TZ`. A failed or cancelled step no longer claims to have finished, and the
   poller's start activity drops the redundant issue identifier (the session is already
   on the issue) to match the delegated wording.
+- **The Linear keep-alive heartbeat fires after 20 minutes of silence, not 10.** Now
+  that starts and finishes are both reported, the only silence left is a single step
+  in flight, so the old threshold fired for every ordinary long step — four times in
+  one 16-step run, none needed, its longest step being 18m 7s. Each one also cost
+  thread structure: Linear bundles consecutive `action` activities into one
+  collapsible "Used N tools" group and a `thought` closes the bundle, so every
+  heartbeat split the step list into another group. Twenty minutes still leaves 10
+  minutes of slack under Linear's 30-minute stale window.
 - **Delegated runs report progress into the Linear session.** An `action` as each
-  workflow step finishes, plus a `thought` heartbeat if nothing has been posted for
-  ~10 minutes. Previously two activities were posted at the start and nothing until
-  the run ended, so Linear marked the session stale after its 30-minute limit and
-  showed "stopped responding" for most of a long run while the harness worked
-  normally.
+  workflow step finishes, plus the keep-alive above. Previously two activities were
+  posted at the start and nothing until the run ended, so Linear marked the session
+  stale after its 30-minute limit and showed "stopped responding" for most of a long
+  run while the harness worked normally.
 
 ### Fixed
 

@@ -790,15 +790,37 @@ async fn report_to_session(
     true
 }
 
-/// True once any `delivery`-category node in the run has succeeded (the PR step).
-/// Linear considers an agent session **stale** after 30 minutes without an
-/// activity. Heartbeat at a third of that so a missed tick, a slow Linear call or
-/// a brief restart can't cross the line — and so the margin is obvious rather
-/// than incidental.
-const SESSION_HEARTBEAT_MINS: i64 = 10;
+/// How long Linear tolerates a session with no activity before marking it `stale`
+/// (and showing "stopped responding" on the issue).
+const LINEAR_STALE_MINS: i64 = 30;
 
-// Keep at least a 3x margin under Linear's 30-minute stale window.
-const _: () = assert!(SESSION_HEARTBEAT_MINS > 0 && SESSION_HEARTBEAT_MINS * 3 <= 30);
+/// Minutes of silence before the session gets a keep-alive `thought`.
+///
+/// This exists only to stay inside [`LINEAR_STALE_MINS`] — it is not a progress
+/// channel.
+/// Starts and finishes are both reported now, so the only silence left is a single
+/// step in flight, and anything shorter than this never needs a heartbeat at all.
+///
+/// It was 10, sized when finishes were the only signal and a long step therefore
+/// meant genuine silence. That fired for every step over ten minutes — four times
+/// in one 16-step run, none of them needed, since the longest step there ran 18
+/// minutes. Each one also cost thread structure: Linear bundles consecutive
+/// `action` activities under one "Used N tools" accordion, and a `thought` closes
+/// the bundle, so every heartbeat split the step list into another group.
+const SESSION_HEARTBEAT_MINS: i64 = 20;
+
+// Bounded from both sides, because either direction is a real failure.
+//
+// Too late and the session goes stale: it must stay far enough under the window that
+// a missed tick, a slow Linear call or a brief restart cannot cross it. Stated as the
+// slack itself rather than as a ratio, because the ratio is what went stale in the
+// reasoning last time.
+//
+// Too early and it fires for ordinary long steps, fragmenting the thread for nothing
+// — 18m 7s was the longest step in the run that prompted this, and it must stay
+// silent for one.
+const _: () =
+    assert!(SESSION_HEARTBEAT_MINS > 18 && SESSION_HEARTBEAT_MINS + 10 <= LINEAR_STALE_MINS);
 
 /// Nodes that have finished but not yet been reported into the session, in graph
 /// order, as `(node_id, status)`.
@@ -1028,10 +1050,9 @@ async fn report_progress(
 
     // Say what has *started*, not only what ended. A step can run for many
     // minutes — `create-plan` and `implement-tasks` routinely do — and a thread
-    // whose last line is "Finished explore" reads as stalled for all of it. The
-    // heartbeat below eventually names the node in flight, but only after
-    // SESSION_HEARTBEAT_MINS of silence, which is too late to be the answer to
-    // "what is it doing now".
+    // whose last line is "Finished explore" reads as stalled for all of it. This
+    // is also what lets the heartbeat below be rare: with a start line carrying
+    // the clock time it began, "still going" is readable without one.
     for node_id in unannounced_running_nodes(claim, detail) {
         report_to_session(
             client,
@@ -1100,6 +1121,7 @@ async fn report_progress(
     }
 }
 
+/// True once any `delivery`-category node in the run has succeeded (the PR step).
 fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
     let delivery: HashSet<&str> = detail
         .graph

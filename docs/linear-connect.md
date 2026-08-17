@@ -172,7 +172,7 @@ Inside the agent session, as Linear agent activities rather than plain comments:
 | As each workflow step **starts** | `action` — "Running the validate step (6 of 15, started 13:14 CEST) of workflow idea-to-pr". Every node of a parallel layer is named, and each is announced once |
 | As each workflow step **finishes** | `action` — "Finished the validate step (6 of 15, took 1m 46s) of workflow idea-to-pr". A failure or cancellation says so rather than claiming it finished, and still reports how long it ran first |
 | When the **poller** claims an issue | it opens a session of its own first, so a poller-claimed run reports into a thread rather than posting detached comments. Needs the app (OAuth) connection — a personal API key cannot open a session, so those runs still use plain comments |
-| Every ~10 minutes with nothing else posted | `thought` — "Still working — the `implement-tasks` step (4 of 15) has been running for 20 minutes". A fallback, not the main channel: with starts and finishes both reported, this only fires while a single long step is in flight |
+| Only after ~20 minutes with nothing else posted | `thought` — "Still working — the `implement-tasks` step (4 of 16) has been running for 22 minutes". Purely a keep-alive, not a progress channel — see below |
 | Delegated, but not in the source status | `error` — names the status it's in and what to do |
 | Delegated, but no binding covers the team | `error` — asks for a binding |
 | Delegated while the binding is at **Max simultaneous tasks** | `response` — says what's running and that the issue is waiting (not an `error`: nothing failed) |
@@ -205,6 +205,24 @@ off the zone so the label can't disagree with the number. Set `HARNESS_DISPLAY_T
 any IANA name (`America/New_York`, `UTC`, …) for a deployment elsewhere. Note this is
 deliberately **not** the server's system timezone — the container image sets no `TZ`,
 so relying on it would render UTC wherever that variable happens to be unset.
+
+### Why the heartbeat is rare
+
+Linear marks a session **stale** after 30 minutes with no activity and shows
+"stopped responding" on the issue. The heartbeat exists only to stay under that
+line; it is not how you find out what a run is doing.
+
+It fires after 20 minutes of silence, which leaves 10 minutes of slack for a missed
+poll tick or a restart. Because starts *and* finishes are both reported, the only
+silence left is a single step in flight — so a run whose steps each finish inside 20
+minutes never emits one.
+
+That threshold used to be 10 minutes, from when finishes were the only signal and a
+long step therefore meant genuine silence. It cost more than it gave: Linear bundles
+consecutive `action` activities into one collapsible "Used N tools" group, and a
+`thought` closes the bundle. A 16-step run fired four heartbeats — none of them
+needed, its longest step being 18m 7s — and each one split the step list into
+another group. Twenty minutes leaves one group in the common case.
 
 A poller-claimed run has no session, so it still gets the plain issue comments it
 always did.
