@@ -491,13 +491,54 @@ async fn start_delegated_run(
 ///
 /// The harness has no mid-run steering channel yet, so this is acknowledged
 /// honestly rather than silently dropped.
+/// What to say when there is no run to talk about — an @-mention on an issue nobody
+/// delegated, or a session whose claim has been cleared by a Rerun.
+const NO_RUN_REPLY: &str = "I don't have a run for this issue, so there's nothing for me to \
+                            report on. Delegate the issue to me while it's in a trigger's source \
+                            status and I'll pick it up.";
+
+/// What to say when a run exists but the message asks for a change of course.
+const CANNOT_STEER_REPLY: &str = "Noted — but I can't change course mid-run yet. Let this run \
+                                  finish (or cancel it in the harness), then delegate again with \
+                                  the updated ask.";
+
+/// Total characters of artifact text the prompt will carry.
+///
+/// **Artifacts are never truncated** — "what does the plan say about X?" is a
+/// question this path exists to answer, and half a plan answers it wrongly rather
+/// than partially. This is a runaway guard, not a size budget: whole artifacts are
+/// included until it is reached, and anything that would not fit is left out and
+/// logged rather than cut in half.
+///
+/// The realistic set is nowhere near it. A full `exploration.md` runs ~5KB and a
+/// `plan.md` ~15KB, so a typical run inlines ~20KB against a 1M-token context —
+/// roughly 0.5% of the window. 500K characters is ~125K tokens, still an eighth of
+/// the window, and exists only so a pathological artifact can't build a request
+/// that fails as a whole.
+const ARTIFACT_BUDGET_CHARS: usize = 500_000;
+
+/// A follow-up message on a session.
+///
+/// Answering "what are you doing?" needs no access to the repo and must not touch
+/// the run — everything a question about progress can want is already in Postgres
+/// (node statuses, timings, and the exploration/plan artifacts). So this builds the
+/// whole context inline and asks a model to answer from it, rather than starting a
+/// run or opening a worktree.
+///
+/// Steering is a separate problem and still refused, honestly: nothing here edits
+/// the DAG in flight.
 async fn handle_prompted(state: &Arc<RunsState>, event: AgentSessionEvent) {
     let Ok(client) = linear_client(state).await else {
         return;
     };
-    let body = "Noted — but I can't change course mid-run yet. Let this run finish (or cancel it \
-                in the harness), then delegate again with the updated ask."
-        .to_string();
+    let question = event.prompt_body.clone().unwrap_or_default();
+    let body = match answer_for_session(state, &event.session_id, &question).await {
+        Some(answer) => answer,
+        None => NO_RUN_REPLY.to_string(),
+    };
+    // A `thought`, never a `response`: Linear treats a response as the agent's final
+    // word and marks the session complete, which would end the thread while the run
+    // is still going.
     if let Err(e) = client
         .create_agent_activity(&event.session_id, &AgentActivity::Thought { body })
         .await
@@ -508,6 +549,150 @@ async fn handle_prompted(state: &Arc<RunsState>, event: AgentSessionEvent) {
             e.0
         );
     }
+}
+
+/// Answer a question about the run behind `session`. `None` when there is no run.
+///
+/// Every failure below the "is there a run" check degrades to the honest refusal
+/// rather than silence: a database hiccup or an agent that won't start is not a
+/// reason to leave someone's question unanswered in a thread.
+async fn answer_for_session(
+    state: &Arc<RunsState>,
+    session: &str,
+    question: &str,
+) -> Option<String> {
+    let claims = state.linear_claim_store().await.ok()?;
+    let claim = claims.claim_for_session(session).await.ok()??;
+    let store = state.store().await.ok()?;
+    let detail = store.get_run(&claim.run_id).await.ok()??;
+
+    let agent = state.agent_registry().get("claude").or_else(|| {
+        tracing::warn!("linear webhook: no `claude` agent registered to answer a session prompt");
+        None
+    })?;
+    match agent
+        .execute(answer_request(
+            session_answer_prompt(question, &detail),
+            state.projects_dir.clone(),
+        ))
+        .await
+    {
+        Ok(res) if !res.output.trim().is_empty() => Some(res.output.trim().to_string()),
+        Ok(_) => {
+            tracing::warn!("linear webhook: empty answer for session {session}");
+            Some(CANNOT_STEER_REPLY.to_string())
+        }
+        Err(e) => {
+            tracing::warn!("linear webhook: could not answer session {session}: {e}");
+            Some(CANNOT_STEER_REPLY.to_string())
+        }
+    }
+}
+
+/// The agent invocation for answering a follow-up — **tools denied at the CLI
+/// boundary**, not merely discouraged in the prompt.
+///
+/// This matters more here than anywhere else in the harness, because the prompt
+/// embeds text written by anyone who can comment on a Linear issue. The prompt does
+/// say "do not read files, run commands, or use tools", but a prompt is a request,
+/// not a control: an injected instruction could talk a tool-enabled agent into using
+/// them. `Some(vec![])` is the documented deny-all on [`AgentRequest::allowed_tools`],
+/// where `None` would instead select the full profile and pass
+/// `--dangerously-skip-permissions` — in `projects_dir`, which holds every checkout.
+///
+/// Nothing legitimate is lost: the whole point of this path is that the answer comes
+/// from context already assembled from the database.
+///
+/// `project_root` is still required because the CLI needs somewhere to start.
+fn answer_request(
+    prompt: String,
+    project_root: std::path::PathBuf,
+) -> harness_core::agent::AgentRequest {
+    harness_core::agent::AgentRequest {
+        prompt,
+        project_root,
+        allowed_tools: Some(Vec::new()),
+        ..Default::default()
+    }
+}
+
+/// The prompt for answering a follow-up, with the run's state inlined.
+///
+/// Pure so the context assembly is unit-tested without an agent, matching how the
+/// rest of this module is tested.
+fn session_answer_prompt(question: &str, detail: &harness_persist::RunDetail) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "You are the ai-harness agent, answering a question in a Linear thread about a run \
+         you are executing. Everything you know is below — do NOT read files, run commands, \
+         or use tools, and do NOT try to change the run.\n\n",
+    );
+    out.push_str("## The message\n\n");
+    out.push_str(if question.trim().is_empty() {
+        "(no text — treat it as \"what is happening?\")"
+    } else {
+        question.trim()
+    });
+    out.push_str("\n\n## The run\n\n");
+    out.push_str(&format!(
+        "- workflow: `{}`\n- status: {}\n- steps declared: {}\n",
+        detail.run.workflow_name,
+        detail.run.status,
+        detail.graph.len()
+    ));
+    out.push_str("\n### Steps so far\n\n");
+    for node in &detail.nodes {
+        out.push_str(&format!("- `{}` — {}\n", node.node_id, node.status));
+    }
+    for (node_id, artifact) in artifacts_within_budget(detail) {
+        out.push_str(&format!("\n### Artifact from `{node_id}`\n\n{artifact}\n"));
+    }
+    out.push_str(
+        "\n## How to reply\n\nA short paragraph of plain prose. No headings, no bullet \
+         lists, no preamble — this goes straight into an issue thread.\n\nIf the message is a \
+         question, answer it from the context above and say plainly when the context doesn't \
+         cover it. If it is an instruction to do something differently, reply with exactly \
+         this and nothing else:\n\n",
+    );
+    out.push_str(CANNOT_STEER_REPLY);
+    out.push('\n');
+    out
+}
+
+/// Every non-empty artifact, whole, in node order — as many as
+/// [`ARTIFACT_BUDGET_CHARS`] allows.
+///
+/// Selection runs **newest first** so that if the guard ever does bite, what
+/// survives is the most recent work. That ordering matters: `plan.md` is written
+/// after `exploration.md`, and a question about the plan is the common case. The
+/// result is then re-ordered chronologically, which reads better as context.
+///
+/// An artifact that doesn't fit is skipped whole and logged — never halved, since a
+/// half-read plan produces a confidently wrong answer rather than an incomplete one.
+fn artifacts_within_budget(detail: &harness_persist::RunDetail) -> Vec<(&str, &str)> {
+    let mut kept: Vec<(&str, &str)> = Vec::new();
+    let mut used = 0usize;
+    for node in detail.nodes.iter().rev() {
+        let Some(artifact) = node.artifact_content.as_deref() else {
+            continue;
+        };
+        if artifact.trim().is_empty() {
+            continue;
+        }
+        if used + artifact.len() > ARTIFACT_BUDGET_CHARS {
+            tracing::warn!(
+                "linear webhook: artifact from `{}` ({} bytes) left out of the answer context — \
+                 {used} of {ARTIFACT_BUDGET_CHARS} chars already used",
+                node.node_id,
+                artifact.len()
+            );
+            continue;
+        }
+        used += artifact.len();
+        kept.push((node.node_id.as_str(), artifact));
+    }
+    kept.reverse();
+    kept
 }
 
 /// The task text handed to the workflow, with the follow-up prompt appended when
@@ -1227,6 +1412,162 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn run_detail_for_answering() -> harness_persist::RunDetail {
+        let node =
+            |id: &str, status: &str, artifact: Option<&str>| harness_persist::PersistedNode {
+                node_id: id.into(),
+                ordinal: 0,
+                status: status.into(),
+                provider: None,
+                model: None,
+                output: String::new(),
+                iterations: 1,
+                converged: None,
+                note: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read: None,
+                cache_write: None,
+                started_at: None,
+                ended_at: None,
+                artifact_content: artifact.map(str::to_string),
+            };
+        let meta = |id: &str| harness_dag::NodeMeta {
+            id: id.into(),
+            depends_on: vec![],
+            category: None,
+            artifact: None,
+        };
+        harness_persist::RunDetail {
+            run: harness_persist::RunSummary {
+                id: "r1".into(),
+                workflow_name: "idea-to-pr".into(),
+                title: None,
+                description: Some(String::new()),
+                status: "running".into(),
+                node_count: 3,
+                started_at: None,
+                ended_at: None,
+                recorded_at: chrono::Utc::now(),
+                project: Some("dilling-ecom".into()),
+                ab_pair_id: None,
+                ab_arm: None,
+                ab_label: None,
+            },
+            nodes: vec![
+                node(
+                    "explore",
+                    "success",
+                    Some("# Exploration\n\nRoot cause is in RangeFacet."),
+                ),
+                node("create-plan", "running", None),
+            ],
+            graph: ["explore", "create-plan", "install-deps"]
+                .into_iter()
+                .map(meta)
+                .collect(),
+        }
+    }
+
+    /// The whole point of answering from Postgres: the prompt must carry the run's
+    /// state and artifacts, because the agent is told not to read anything.
+    #[test]
+    fn the_answer_prompt_carries_the_run_state_and_artifacts() {
+        let p = session_answer_prompt("which file is the bug in?", &run_detail_for_answering());
+        assert!(p.contains("which file is the bug in?"), "{p}");
+        // Workflow, status and the declared-step count come from the run.
+        assert!(p.contains("`idea-to-pr`"), "{p}");
+        assert!(p.contains("steps declared: 3"), "{p}");
+        // Per-step status, so "what are you doing" is answerable.
+        assert!(p.contains("`explore` — success"), "{p}");
+        assert!(p.contains("`create-plan` — running"), "{p}");
+        // The artifact body, which is what a question about the work needs.
+        assert!(p.contains("Root cause is in RangeFacet."), "{p}");
+        // And the standing instructions that keep it read-only and on-format.
+        assert!(p.contains("do NOT read files"), "{p}");
+        assert!(p.contains(CANNOT_STEER_REPLY), "{p}");
+    }
+
+    /// The question text comes from anyone who can comment on a Linear issue, so the
+    /// prompt's "do not use tools" line cannot be the only control — an injected
+    /// instruction could talk a tool-enabled agent past it. `None` here would select
+    /// the full profile and pass `--dangerously-skip-permissions` in the directory
+    /// holding every project checkout.
+    #[test]
+    fn answering_denies_tools_at_the_cli_boundary() {
+        let req = answer_request("q".into(), std::path::PathBuf::from("/projects"));
+        assert_eq!(
+            req.allowed_tools,
+            Some(Vec::new()),
+            "must be the explicit deny-all, never None (which means full permissions)"
+        );
+    }
+
+    /// An empty prompt body is the "@mention with no text" case; it must still ask
+    /// something answerable rather than sending the model a blank question.
+    #[test]
+    fn an_empty_message_is_read_as_asking_what_is_happening() {
+        let p = session_answer_prompt("   ", &run_detail_for_answering());
+        assert!(p.contains("what is happening?"), "{p}");
+    }
+
+    /// The whole point of this path is answering "what does the plan say about X?" —
+    /// so a realistic `plan.md` must arrive complete, including its later sections.
+    /// A half-read plan yields a confidently wrong answer, not a partial one.
+    #[test]
+    fn a_realistic_plan_is_inlined_whole() {
+        // ~24KB: larger than any plan this has produced so far.
+        let plan = format!(
+            "# Plan\n\n## Summary\n\n{}\n\n## Testing strategy\n\nRun the vitest suite.\n",
+            "Detail line.\n".repeat(1800)
+        );
+        assert!(plan.len() > 20_000, "fixture should be plan-sized");
+
+        let mut detail = run_detail_for_answering();
+        detail.nodes[1].artifact_content = Some(plan.clone());
+        let p = session_answer_prompt("what does the plan say about testing?", &detail);
+
+        assert!(p.contains(&plan), "the plan must be present verbatim");
+        // The section a 6000-char cap would have cut off.
+        assert!(p.contains("Run the vitest suite."), "tail section missing");
+        assert!(!p.contains("truncated"), "nothing should be truncated");
+    }
+
+    /// The guard drops whole artifacts rather than halving one, and drops the
+    /// *oldest* — a question is almost always about the most recent work.
+    #[test]
+    fn the_runaway_guard_drops_whole_artifacts_oldest_first() {
+        let big = "y".repeat(ARTIFACT_BUDGET_CHARS - 10);
+        let mut detail = run_detail_for_answering();
+        detail.nodes[0].artifact_content = Some("# Exploration\n\nthe older one".into());
+        detail.nodes[1].artifact_content = Some(big.clone());
+
+        let kept = artifacts_within_budget(&detail);
+        // Only the newest fits; it is whole, and the older one is gone entirely.
+        assert_eq!(kept.len(), 1, "one artifact should fit");
+        assert_eq!(kept[0].0, "create-plan");
+        assert_eq!(kept[0].1, big, "the kept artifact must not be cut");
+
+        // Within budget, everything is kept — in chronological order, which reads
+        // better than the newest-first order selection walks.
+        let detail = run_detail_for_answering();
+        let kept = artifacts_within_budget(&detail);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, "explore");
+    }
+
+    /// An artifact that is only whitespace is not worth a heading.
+    #[test]
+    fn blank_artifacts_are_skipped() {
+        let mut detail = run_detail_for_answering();
+        detail.nodes[1].artifact_content = Some("   \n\n".into());
+        let kept = artifacts_within_budget(&detail);
+        assert!(
+            kept.iter().all(|(id, _)| *id != "create-plan"),
+            "a whitespace-only artifact should not be inlined"
+        );
     }
 
     #[test]

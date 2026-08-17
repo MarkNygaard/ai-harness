@@ -253,6 +253,31 @@ impl LinearClaimStore {
         Ok(row)
     }
 
+    /// The claim behind an agent session, if any — the inverse of
+    /// [`Self::claim_for_run`], for answering a follow-up that arrives on a session
+    /// rather than against a known run.
+    ///
+    /// Newest first, because a Rerun deliberately records the same session against a
+    /// new `run_id` (see [`Self::claim_exists_for_session`]) and a question asked now
+    /// is about the attempt running now.
+    pub async fn claim_for_session(
+        &self,
+        agent_session_id: &str,
+    ) -> Result<Option<LinearClaim>, PersistError> {
+        let row = sqlx::query_as::<_, LinearClaim>(
+            "SELECT run_id, project, workflow, issue_id, identifier, original_state_id,
+                    phase, agent_session_id, reported_nodes, last_activity_at, created_at
+             FROM harness_linear_claims
+             WHERE agent_session_id = $1
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )
+        .bind(agent_session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
     /// Delete every claim for `(issue, workflow)` — resets the attempt counter so
     /// the issue is fully re-armed (used by the Rerun button). Returns the number
     /// of rows removed.
