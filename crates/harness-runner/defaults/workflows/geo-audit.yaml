@@ -12,8 +12,9 @@ description: |
   price, no reviews — auditing only it reports the same non-findings for every
   shop. `discover` fetches the entry URL plus robots.txt / llms.txt /
   llms-full.txt / sitemap.xml / `.well-known/ucp`; `pick-pages` chooses a real
-  product page and a category page from the sitemap; `fetch-pages` retrieves
-  them. All fetches are deliberately **without JavaScript** — that is what an AI
+  product page and a category page, preferring the curated `llms.txt` listing
+  where the site publishes one and falling back to the sitemap, the homepage nav,
+  and finally a product link off the category page; `fetch-pages` retrieves them. All fetches are deliberately **without JavaScript** — that is what an AI
   crawler sees — and each page is reduced to visible text so scoring isn't
   diluted by nav and footer chrome.
 
@@ -231,9 +232,27 @@ nodes:
       Pick one representative **product page (PDP)** and one **category /
       listing page (PLP)** from this store, for a GEO audit of $EXTERNAL_URL.
 
-      Read `$ARTIFACTS_DIR/sitemap-urls.txt` (may be empty). If it is empty or
-      has no usable candidates, fall back to the links in
-      `$ARTIFACTS_DIR/page.html`.
+      Work down these sources in order, stopping as soon as you have a confident
+      pick for each of the two. Any of them may be missing or empty.
+
+      1. **`$ARTIFACTS_DIR/llms.txt` and `llms-full.txt`.** Best source when they
+         exist: a curated list of the pages the site itself considers important,
+         each with a description, so a category or guide is identifiable without
+         guessing from a URL shape. Expect categories, size guides and material
+         pages rather than individual products — a store rarely enumerates its
+         catalogue here, so take the **category** from this if you can, and treat
+         any single product it features as a strong PDP candidate.
+      2. **`$ARTIFACTS_DIR/sitemap-urls.txt`.** Where individual products
+         actually live. Use it for the PDP, and for the category if llms.txt gave
+         nothing.
+      3. **Links in `$ARTIFACTS_DIR/page.html`.** The homepage's own navigation.
+      4. **One targeted fetch, only if you still have no PDP.** Fetch the
+         category page you settled on and take a product link from its listing.
+         This is the reliable fallback on a store whose product URLs are absent
+         from the sitemap. One fetch — do not crawl.
+
+      Say in `rationale` which source each URL came from, so a reader of the
+      report knows whether the audit looked at a curated page or a sampled one.
 
       Rules:
       - Return **absolute** `https://` URLs on the same host as $EXTERNAL_URL.

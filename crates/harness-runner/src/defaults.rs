@@ -432,6 +432,27 @@ mod tests {
             .expect("pick-pages node exists");
         assert_eq!(pick.depends_on, vec!["discover".to_string()]);
         assert!(pick.output_format.is_some(), "pick-pages returns two URLs");
+        // Source order matters: llms.txt is curated and carries descriptions, so
+        // it identifies a category without guessing at URL shapes; the sitemap is
+        // where individual products actually live; a product link off the category
+        // page is the fallback for a store whose PDPs aren't in the sitemap.
+        let pick_prompt = match &pick.kind {
+            harness_dag::NodeKind::Prompt(p) => p.as_str(),
+            other => panic!("pick-pages is not an inline prompt: {other:?}"),
+        };
+        let order = [
+            "llms.txt",
+            "sitemap-urls.txt",
+            "page.html",
+            "One targeted fetch",
+        ];
+        let mut at = 0usize;
+        for source in order {
+            let found = pick_prompt[at..]
+                .find(source)
+                .unwrap_or_else(|| panic!("pick-pages lost source `{source}` (or its order)"));
+            at += found + source.len();
+        }
         let fetch = wf
             .nodes
             .iter()

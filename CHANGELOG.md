@@ -90,8 +90,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   availability and no reviews — so it reported the same non-findings for every shop
   and could not see the markup that decides whether an AI shopping surface can quote
   a price. It now samples the catalogue: `pick-pages` chooses a real product and
-  category page from the sitemap (following one level of sitemap index, falling back
-  to homepage links), `fetch-pages` retrieves them without JavaScript, and each page
+  category page, preferring the site's own `llms.txt` / `llms-full.txt` listing where
+  it exists (curated, and each entry carries a description, so a category is
+  identifiable without inferring URL shapes), then the sitemap — following one level
+  of sitemap index — where individual products actually live, then the homepage nav,
+  and finally a product link taken off the chosen category page for a store whose
+  PDPs never reach the sitemap. `fetch-pages` retrieves them without JavaScript, and each page
   is reduced to visible text so citability isn't scored against nav and footer
   chrome. Five dimensions replace four — `schema` is now the heaviest at 25% and
   scores Product/Offer against Google's merchant-listing ladder (`aggregateRating` →
