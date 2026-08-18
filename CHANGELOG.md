@@ -83,8 +83,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stale after its 30-minute limit and showed "stopped responding" for most of a long
   run while the harness worked normally.
 
+### Changed
+
+- **The GEO audit is built for ecommerce, and audits a product page.** It only ever
+  fetched the entry URL — where a store has no `Product` schema, no price, no
+  availability and no reviews — so it reported the same non-findings for every shop
+  and could not see the markup that decides whether an AI shopping surface can quote
+  a price. It now samples the catalogue: `pick-pages` chooses a real product and
+  category page from the sitemap (following one level of sitemap index, falling back
+  to homepage links), `fetch-pages` retrieves them without JavaScript, and each page
+  is reduced to visible text so citability isn't scored against nav and footer
+  chrome. Five dimensions replace four — `schema` is now the heaviest at 25% and
+  scores Product/Offer against Google's merchant-listing ladder (`aggregateRating` →
+  identifiers → `shippingDetails` → `hasMerchantReturnPolicy` → reviews) plus the
+  validation errors that void a listing (`"249,00 kr"` in `price`, a bare `InStock`,
+  an expired `priceValidUntil`, variants as duplicate `Product` blocks); a new
+  `entity` dimension (15%) looks off-site, where brand mentions correlate with AI
+  citation roughly 3x more strongly than backlinks and ChatGPT/Perplexity draw on
+  Wikipedia and Reddit. `content` gained measurable citability anchors instead of
+  "fact-dense paragraphs", plus PDP-specific checks — unique copy rather than
+  manufacturer boilerplate, specs tables, size and fit in text, on-page reviews,
+  imagery and `alt`. The report now breaks readiness down per platform (AI Overviews,
+  AI Mode, ChatGPT, Perplexity, shopping agents), separates codebase fixes from
+  off-site ones so nobody files a PR to obtain a Wikipedia article, and states that
+  the scores are heuristics over public signals rather than Google-internal ranking
+  data. Prompted by reading `AgriciDaniel/claude-seo` (MIT), whose GEO skill carries
+  sourced figures for most of the above.
+- **The GEO audit no longer scores a page it failed to fetch.** `discover` treated a
+  failed homepage fetch as a note and carried on, so a site that was down or blocking
+  our user-agent produced a confident four-dimension audit of a missing file. It now
+  fails the run with a message saying not to read a score into it.
+- **The GEO audit grades AI crawlers by purpose.** It listed eleven bots and called a
+  `Disallow` reaching any of them critical. Blocking a *training* crawler (CCBot,
+  anthropic-ai, Google-Extended, Bytespider) is a deliberate choice thousands of
+  brands make, and reporting it as a defect invited a PR to undo a policy decision;
+  meanwhile ChatGPT-User and Google-Agent ignore robots.txt by design, so advice
+  about them was inert. Blocking is critical only for the citation crawlers (GPTBot,
+  OAI-SearchBot, ClaudeBot, PerplexityBot); training opt-outs are reported as
+  informational; user-triggered fetchers are pointed at edge controls. Live status
+  probes now cover all four citation crawlers rather than GPTBot alone, so a CDN that
+  answers a browser with 200 and a bot with 403 is caught per bot.
+- `llms.txt` / `llms-full.txt` remain a priority quick win in the GEO audit by
+  choice, but the finding now has to state the basis honestly: Google's AI
+  optimization guide says Google Search ignores these files and no major AI search
+  provider has documented consuming a third-party one, so we ship them for non-Google
+  surfaces, AI coding and shopping agents, and cheap optionality — not as a Google
+  citation lever. The audit also checks `.well-known/ucp`, the Universal Commerce
+  Protocol profile an AI shopping agent looks for, reported as an opportunity rather
+  than a defect.
+
 ### Fixed
 
+- **Two silent shell bugs in the GEO audit's measured signals.** `grep -c` counts
+  matching *lines*, and both minified store HTML and the audit's own extracted text
+  are a single line — so "12 images, 3 with usable alt" was reported as "1, 1", and
+  every schema-field count capped at 1. And the sitemap-index preference for a
+  product child matched on `item`, which is a substring of "sitemap", so it matched
+  every child and never ranked anything. Both yielded a plausible number instead of
+  an error, which is why they survived; both are now pinned by a test.
 - **`revise-pr` cancels when nobody actually asked for changes.** A card moved to
   "Changes requested" by hand, with no comment on the issue or the PR, made the harness
   plan and push a second speculative fix to a PR nobody had complained about. The guard

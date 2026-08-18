@@ -1,18 +1,32 @@
 name: geo-audit
 description: |
-  Audit a project's live site for GEO (Generative Engine Optimization) — how
-  ready the page is to be CITED by AI search engines (ChatGPT, Claude,
-  Perplexity, Gemini, Google AI Overviews), with traditional SEO as the
-  supporting foundation.
+  Audit a live **ecommerce** site for GEO (Generative Engine Optimization) — how
+  ready it is to be CITED and RECOMMENDED by AI search (ChatGPT, Claude,
+  Perplexity, Gemini, Google AI Overviews / AI Mode), with traditional SEO as
+  the foundation Google says it still is.
 
   Runs against the project's `external_url` (set it on the Projects page; it's
-  exposed as `$EXTERNAL_URL`). A `discover` step fetches the page + robots.txt +
-  llms.txt / llms-full.txt + sitemap.xml + headers (deliberately WITHOUT
-  JavaScript — that's what an AI crawler sees); four analysis steps then score
-  dimensions in parallel — **technical**, **crawlers** (access + llms.txt +
-  sitemap), **schema**, **content** — and a `synthesize` step combines them
-  into a 0–100 composite, writes `geo-report.md`, and emits the structured
+  exposed as `$EXTERNAL_URL`).
+
+  **Three pages, not one.** A store's homepage carries no `Product` schema, no
+  price, no reviews — auditing only it reports the same non-findings for every
+  shop. `discover` fetches the entry URL plus robots.txt / llms.txt /
+  llms-full.txt / sitemap.xml / `.well-known/ucp`; `pick-pages` chooses a real
+  product page and a category page from the sitemap; `fetch-pages` retrieves
+  them. All fetches are deliberately **without JavaScript** — that is what an AI
+  crawler sees — and each page is reduced to visible text so scoring isn't
+  diluted by nav and footer chrome.
+
+  Five dimensions then score in parallel — **technical**, **crawlers**,
+  **schema** (ecommerce-weighted: Product/Offer/merchant fields),
+  **content** (citability + PDP quality + imagery), **entity** (off-site brand
+  presence, which correlates with AI citation far more strongly than backlinks)
+  — and `synthesize` combines them into a 0–100 composite, writes
+  `geo-report.md` with a per-platform breakdown, and emits the structured
   verdict (severity-tagged findings whose `fix` is phrased for `idea-to-pr`).
+
+  Scores are heuristics over public signals, not Google-internal ranking data —
+  the report says so.
 
   NOT for: code changes (it only reads), or sites without an `external_url`.
 
@@ -30,6 +44,8 @@ ui:
     actions: [build, issue, ignore]
 
 nodes:
+  # 1. Site-level fetches. Everything here is what an AI crawler can reach
+  #    without running a line of JavaScript.
   - id: discover
     category: setup
     bash: |
@@ -41,40 +57,287 @@ nodes:
       fi
       mkdir -p "$ARTIFACTS_DIR"
       root="$(printf '%s' "$url" | sed -E 's#(https?://[^/]+).*#\1#')"
-      echo "Auditing $url (root $root)"
-      # Raw homepage HTML with a browser UA — preserves <head> and is NOT
-      # JS-rendered, matching what an AI crawler actually sees.
+      echo "url=$url root=$root"
+
+      # HTML → visible text. Used for citability scoring (chrome dilutes it) and
+      # to measure how much of the page survives without JavaScript. Best-effort:
+      # only semantic nav/header/footer are dropped, so a div-based layout keeps
+      # some chrome — the content prompt is told to expect that.
+      cat > "$ARTIFACTS_DIR/strip.awk" <<'AWK'
+      # Accumulate the whole file (portable — no RS tricks), then strip.
+      { buf = buf $0 " " }
+
+      # `close` and `index` are awk built-ins, so the parameters are named
+      # open_tag / close_tag — a parameter called `close` is a syntax error.
+      function strip_between(s, open_tag, close_tag,    lo, hi, rest, lower) {
+          while (1) {
+              lower = tolower(s)
+              lo = index(lower, open_tag)
+              if (lo == 0) break
+              rest = substr(lower, lo)
+              hi = index(rest, close_tag)
+              if (hi == 0) { s = substr(s, 1, lo - 1); break }
+              s = substr(s, 1, lo - 1) " " substr(s, lo + hi + length(close_tag) - 1)
+          }
+          return s
+      }
+
+      END {
+          s = buf
+          s = strip_between(s, "<!--", "-->")
+          s = strip_between(s, "<script", "</script>")
+          s = strip_between(s, "<style", "</style>")
+          s = strip_between(s, "<noscript", "</noscript>")
+          s = strip_between(s, "<svg", "</svg>")
+          s = strip_between(s, "<nav", "</nav>")
+          s = strip_between(s, "<header", "</header>")
+          s = strip_between(s, "<footer", "</footer>")
+          gsub(/<[^>]*>/, " ", s)
+          gsub(/&nbsp;/, " ", s)
+          gsub(/&amp;/, "\\&", s)
+          gsub(/&quot;/, "\"", s)
+          gsub(/&#39;|&apos;|&rsquo;|&lsquo;/, "'", s)
+          gsub(/&ldquo;|&rdquo;/, "\"", s)
+          gsub(/&lt;/, "<", s)
+          gsub(/&gt;/, ">", s)
+          # Named entities common in Nordic / Western European store copy, so the
+          # extracted text reads as words rather than "uldtr&oslash;je". Numeric
+          # entities are left alone: decoding them portably needs multi-byte
+          # sprintf("%c") behaviour that differs between gawk and mawk, and the
+          # reader here is a language model that handles a stray entity fine.
+          gsub(/&aelig;/, "æ", s); gsub(/&AElig;/, "Æ", s)
+          gsub(/&oslash;/, "ø", s); gsub(/&Oslash;/, "Ø", s)
+          gsub(/&aring;/, "å", s); gsub(/&Aring;/, "Å", s)
+          gsub(/&auml;/, "ä", s); gsub(/&ouml;/, "ö", s); gsub(/&uuml;/, "ü", s)
+          gsub(/&eacute;/, "é", s); gsub(/&egrave;/, "è", s)
+          gsub(/&ccedil;/, "ç", s); gsub(/&szlig;/, "ß", s)
+          gsub(/&ndash;/, "-", s); gsub(/&mdash;/, "-", s)
+          gsub(/&hellip;/, "...", s)
+          gsub(/&deg;/, "°", s); gsub(/&euro;/, "€", s); gsub(/&pound;/, "£", s)
+          gsub(/&copy;/, "", s); gsub(/&reg;/, "", s); gsub(/&trade;/, "", s)
+          gsub(/[ \t\r\n]+/, " ", s)
+          print s
+      }
+      AWK
+
+      # Entry page, browser UA, no JS.
       curl -fsSL --max-time 30 -A "Mozilla/5.0 (compatible; harness-geo-audit)" \
-        "$url" -o "$ARTIFACTS_DIR/page.html" || echo "(homepage fetch failed)"
-      # robots.txt — AI-crawler access rules.
+        "$url" -o "$ARTIFACTS_DIR/page.html" || true
+      if [ ! -s "$ARTIFACTS_DIR/page.html" ]; then
+        echo "Could not fetch $url — no HTML to audit. Check the URL is reachable" >&2
+        echo "and that the edge isn't blocking us; do NOT read a score into this." >&2
+        exit 1
+      fi
+      awk -f "$ARTIFACTS_DIR/strip.awk" "$ARTIFACTS_DIR/page.html" \
+        > "$ARTIFACTS_DIR/page-text.txt" || true
+
+      # robots.txt — crawler access rules.
       curl -fsSL --max-time 15 "$root/robots.txt" \
-        -o "$ARTIFACTS_DIR/robots.txt" || echo "(no robots.txt)"
-      # llms.txt / llms-full.txt — the emerging AI-guidance standard. A strong
-      # GEO signal and an easy fix (just add the file). -f → no output on 404.
+        -o "$ARTIFACTS_DIR/robots.txt" || true
+      # llms.txt / llms-full.txt — AI-guidance files.
       curl -fsSL --max-time 15 "$root/llms.txt" \
-        -o "$ARTIFACTS_DIR/llms.txt" || echo "(no llms.txt)"
+        -o "$ARTIFACTS_DIR/llms.txt" || true
       curl -fsSL --max-time 15 "$root/llms-full.txt" \
-        -o "$ARTIFACTS_DIR/llms-full.txt" || echo "(no llms-full.txt)"
-      # sitemap.xml — page discovery for crawlers (robots.txt may also point to
-      # one via a Sitemap: line, which the crawlers step checks).
-      curl -fsSL --max-time 15 "$root/sitemap.xml" \
-        -o "$ARTIFACTS_DIR/sitemap.xml" || echo "(no sitemap.xml)"
-      # Status as an AI bot vs a browser — a 403 for the bot but 200 for the
-      # browser = AI crawlers silently blocked.
-      curl -sS -o /dev/null -D "$ARTIFACTS_DIR/headers-gptbot.txt" \
-        -w "gptbot_status=%{http_code}\n" --max-time 20 \
-        -A "Mozilla/5.0 (compatible; GPTBot/1.0; +https://openai.com/gptbot)" "$url" || true
-      curl -sS -o /dev/null -D "$ARTIFACTS_DIR/headers-browser.txt" \
-        -w "browser_status=%{http_code}\n" --max-time 20 -A "Mozilla/5.0" "$url" || true
-      echo "page.html: $(wc -c < "$ARTIFACTS_DIR/page.html" 2>/dev/null || echo 0) bytes"
-      for f in robots.txt llms.txt llms-full.txt sitemap.xml; do
+        -o "$ARTIFACTS_DIR/llms-full.txt" || true
+      # UCP profile — how an AI shopping agent discovers that this store can
+      # transact. Absence is an opportunity, not a defect.
+      curl -fsSL --max-time 15 "$root/.well-known/ucp" \
+        -o "$ARTIFACTS_DIR/ucp.json" || true
+      # sitemap.xml, following one level of sitemap-index so a store's product
+      # sitemap is reached rather than the index that points at it.
+      curl -fsSL --max-time 20 "$root/sitemap.xml" \
+        -o "$ARTIFACTS_DIR/sitemap.xml" || true
+      : > "$ARTIFACTS_DIR/sitemap-urls.txt"
+      if [ -s "$ARTIFACTS_DIR/sitemap.xml" ]; then
+        if grep -qi "<sitemapindex" "$ARTIFACTS_DIR/sitemap.xml"; then
+          echo "sitemap.xml is an index; following its children"
+          # Prefer a child whose name hints at products, else take the first few.
+          # NB: do not add `item` to this pattern — "sitemap" contains "item", so
+          # it matches every child and the preference silently stops working.
+          children="$(grep -oE '<loc>[^<]+</loc>' "$ARTIFACTS_DIR/sitemap.xml" \
+            | sed -E 's#</?loc>##g' | head -20)"
+          ranked="$(printf '%s\n' "$children" \
+            | grep -iE 'produkt|product|catalog|vare|shop' || true)"
+          [ -n "$ranked" ] || ranked="$children"
+          printf '%s\n' "$ranked" | head -3 | while read -r child; do
+            [ -n "$child" ] || continue
+            curl -fsSL --max-time 20 "$child" -o "$ARTIFACTS_DIR/child.xml" || continue
+            grep -oE '<loc>[^<]+</loc>' "$ARTIFACTS_DIR/child.xml" \
+              | sed -E 's#</?loc>##g' >> "$ARTIFACTS_DIR/sitemap-urls.txt" || true
+          done
+          rm -f "$ARTIFACTS_DIR/child.xml"
+        else
+          grep -oE '<loc>[^<]+</loc>' "$ARTIFACTS_DIR/sitemap.xml" \
+            | sed -E 's#</?loc>##g' >> "$ARTIFACTS_DIR/sitemap-urls.txt" || true
+        fi
+      fi
+      # Cap the list the picker reads — a store sitemap can hold 100k URLs.
+      if [ -s "$ARTIFACTS_DIR/sitemap-urls.txt" ]; then
+        head -400 "$ARTIFACTS_DIR/sitemap-urls.txt" > "$ARTIFACTS_DIR/urls.head" \
+          && mv "$ARTIFACTS_DIR/urls.head" "$ARTIFACTS_DIR/sitemap-urls.txt"
+      fi
+
+      # Live access per crawler. A 200 for the browser and a 403 for a citation
+      # bot means the block is at the CDN/edge, where robots.txt can't show it.
+      # `probe` reads named variables rather than positional parameters: `$1` is a
+      # harness template token for command-triggered runs, so a bash function
+      # using it would break the day this workflow is given arguments.
+      : > "$ARTIFACTS_DIR/crawler-status.txt"
+      probe() {
+        probe_code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 \
+          -A "$probe_ua" "$url" || echo 000)"
+        echo "$probe_label=$probe_code" >> "$ARTIFACTS_DIR/crawler-status.txt"
+      }
+      probe_label=browser
+      probe_ua="Mozilla/5.0"
+      probe
+      probe_label=GPTBot
+      probe_ua="Mozilla/5.0 (compatible; GPTBot/1.0; +https://openai.com/gptbot)"
+      probe
+      probe_label=OAI-SearchBot
+      probe_ua="Mozilla/5.0 (compatible; OAI-SearchBot/1.0; +https://openai.com/searchbot)"
+      probe
+      probe_label=ClaudeBot
+      probe_ua="Mozilla/5.0 (compatible; ClaudeBot/1.0; +claudebot@anthropic.com)"
+      probe
+      probe_label=PerplexityBot
+      probe_ua="Mozilla/5.0 (compatible; PerplexityBot/1.0; +https://perplexity.ai/perplexitybot)"
+      probe
+
+      echo "page.html: $(wc -c < "$ARTIFACTS_DIR/page.html") bytes"
+      echo "page-text.txt: $(wc -w < "$ARTIFACTS_DIR/page-text.txt" 2>/dev/null || echo 0) words visible without JS"
+      for f in robots.txt llms.txt llms-full.txt sitemap.xml ucp.json; do
         if [ -s "$ARTIFACTS_DIR/$f" ]; then
           echo "$f: present ($(wc -c < "$ARTIFACTS_DIR/$f") bytes)"
         else
           echo "$f: absent"
         fi
       done
+      echo "sitemap URLs extracted: $(wc -l < "$ARTIFACTS_DIR/sitemap-urls.txt" 2>/dev/null || echo 0)"
+      cat "$ARTIFACTS_DIR/crawler-status.txt"
       echo "DISCOVER-DONE"
+    timeout: 180000
+
+  # 2. Choose the two pages that actually carry ecommerce signals. Product
+  #    schema, price, availability and reviews live on a PDP; ItemList and
+  #    faceted navigation on a category page. Neither exists on a homepage.
+  - id: pick-pages
+    category: setup
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [discover]
+    prompt: |
+      Pick one representative **product page (PDP)** and one **category /
+      listing page (PLP)** from this store, for a GEO audit of $EXTERNAL_URL.
+
+      Read `$ARTIFACTS_DIR/sitemap-urls.txt` (may be empty). If it is empty or
+      has no usable candidates, fall back to the links in
+      `$ARTIFACTS_DIR/page.html`.
+
+      Rules:
+      - Return **absolute** `https://` URLs on the same host as $EXTERNAL_URL.
+      - The PDP must be a single sellable product, not a landing or campaign
+        page. Prefer a mainstream in-stock product over an edge case; avoid gift
+        cards, sale/clearance pages and out-of-stock items where you can tell.
+      - The PLP must be a real category listing, not search results and not a
+        URL carrying filter/facet query parameters.
+      - Pick a language/region variant matching $EXTERNAL_URL where the site has
+        several.
+      - Return "" for either field if you genuinely cannot identify one. Do not
+        invent a URL or guess a path pattern — an invented URL fetches a 404 and
+        the audit then scores an error page.
+
+      Emit ONLY the JSON.
+    output_format:
+      type: object
+      properties:
+        product_url:
+          type: string
+          description: "Absolute URL of a representative product page, or \"\"."
+        category_url:
+          type: string
+          description: "Absolute URL of a representative category page, or \"\"."
+        rationale:
+          type: string
+          description: "One sentence on why these two are representative."
+      required: [product_url, category_url]
+
+  # 3. Fetch the two chosen pages the way a crawler would, and record the hard
+  #    signals a model shouldn't have to eyeball out of raw HTML.
+  - id: fetch-pages
+    category: setup
+    depends_on: [pick-pages]
+    bash: |
+      set -uo pipefail
+      product="$pick-pages.output.product_url"
+      category="$pick-pages.output.category_url"
+
+      # Named variables, not `$1`/`$2` — those are harness template tokens for a
+      # command-triggered run and would be substituted out from under the function.
+      fetch() {
+        label="$fetch_label"; target="$fetch_url"
+        if [ -z "$target" ]; then
+          echo "$label: not identified"
+          return 0
+        fi
+        # The URL was chosen by a model reading a sitemap and is interpolated into
+        # this script, so allow only a plain http(s) URL built from characters that
+        # cannot carry shell syntax.
+        case "$target" in
+          http://*|https://*) ;;
+          *) echo "$label: rejected (not an http(s) URL)"; return 0 ;;
+        esac
+        case "$target" in
+          *[!A-Za-z0-9._~:/?"&"=%+-]*)
+            echo "$label: rejected (unsafe characters in URL)"; return 0 ;;
+        esac
+        curl -fsSL --max-time 30 -A "Mozilla/5.0 (compatible; harness-geo-audit)" \
+          "$target" -o "$ARTIFACTS_DIR/$label.html" || true
+        if [ ! -s "$ARTIFACTS_DIR/$label.html" ]; then
+          echo "$label: fetch failed ($target)"
+          return 0
+        fi
+        awk -f "$ARTIFACTS_DIR/strip.awk" "$ARTIFACTS_DIR/$label.html" \
+          > "$ARTIFACTS_DIR/$label-text.txt" || true
+        echo "$label: $target"
+        echo "$label bytes: $(wc -c < "$ARTIFACTS_DIR/$label.html")"
+        echo "$label words visible without JS: $(wc -w < "$ARTIFACTS_DIR/$label-text.txt" 2>/dev/null || echo 0)"
+        # Server-rendered commerce signals. Each of these missing from the raw
+        # HTML means an AI crawler never sees it, whatever the browser shows.
+        #
+        # Every count pipes `grep -o` into `wc -l` rather than using `grep -c`:
+        # `-c` counts matching *lines*, and both minified store HTML and the
+        # stripper's output are a single line, so `-c` would cap every figure at 1.
+        count_matches() {
+          grep -Eoi "$cm_pattern" "$cm_file" 2>/dev/null | wc -l | tr -d ' '
+        }
+        cm_file="$ARTIFACTS_DIR/$label.html"
+        cm_pattern='application/ld\+json'
+        echo "$label json-ld blocks: $(count_matches)"
+        for needle in '"@type"[[:space:]]*:[[:space:]]*"Product"' '"@type"[[:space:]]*:[[:space:]]*"Offer"' '"price"' '"availability"' '"aggregateRating"' '"hasMerchantReturnPolicy"' '"shippingDetails"' '"@type"[[:space:]]*:[[:space:]]*"BreadcrumbList"' '"@type"[[:space:]]*:[[:space:]]*"ItemList"' '"@type"[[:space:]]*:[[:space:]]*"ProductGroup"'; do
+          cm_pattern="$needle"
+          echo "$label has ${needle}: $(count_matches)"
+        done
+        cm_pattern='<img'
+        img="$(count_matches)"
+        cm_pattern='alt="[^"]{3,}"'
+        alt="$(count_matches)"
+        echo "$label img tags: $img, img with non-trivial alt: $alt"
+        # Price visible in the server-rendered text at all (any currency), which is
+        # what an AI shopping surface can quote.
+        cm_file="$ARTIFACTS_DIR/$label-text.txt"
+        cm_pattern='([0-9][0-9.,]*[[:space:]]*(kr|dkk|sek|nok|eur|usd|gbp|€|\$|£))|((kr|dkk|sek|nok|eur|usd|gbp|€|\$|£)[[:space:]]*[0-9])'
+        echo "$label price-like strings in no-JS text: $(count_matches)"
+      }
+
+      fetch_label=product
+      fetch_url="$product"
+      fetch
+      fetch_label=category
+      fetch_url="$category"
+      fetch
+      echo "FETCH-PAGES-DONE"
     timeout: 120000
 
   - id: technical
@@ -82,21 +345,49 @@ nodes:
     provider: claude
     model: sonnet
     context: fresh
-    depends_on: [discover]
+    depends_on: [fetch-pages]
     prompt: |
-      Score the **technical** GEO foundation of $EXTERNAL_URL (0–100), set
-      `key` to "technical". Read `$ARTIFACTS_DIR/page.html` and the
-      `headers-*.txt` files. Assess: server-rendered vs client-only (AI crawlers
-      run NO JavaScript — a near-empty/CSR `<body>` is CRITICAL, it's invisible
-      to them), `<title>` / meta description / canonical, Open Graph, HTTPS,
-      security headers. You MAY read the project's source to point a finding at
-      the file that needs changing. Emit ONLY the JSON.
+      Score the **technical** GEO foundation of the store at $EXTERNAL_URL
+      (0–100), set `key` to "technical".
+
+      Read `$ARTIFACTS_DIR/page.html` plus, when they exist,
+      `product.html` and `category.html` (the product/category pages picked for
+      this audit — `$pick-pages.output.rationale`). The `fetch-pages` node
+      output above lists the measured signals per page; use those numbers rather
+      than re-counting by eye. Note in your summary which pages you had: if the
+      product page is missing, say so and score the rest.
+
+      **AI crawlers execute no JavaScript.** Everything below is about what
+      survives in the raw HTML.
+
+      Assess:
+      - **Server rendering.** Compare the page's byte size with the words of
+        visible no-JS text. A page of 400KB HTML yielding 30 words is a
+        hydration shell — invisible to every citing crawler. CRITICAL.
+      - **Price and availability on the PDP.** If the product page's no-JS text
+        holds no price-like string, or the JSON-LD has no `price` /
+        `availability`, then an AI shopping surface cannot state what this
+        product costs or whether it's in stock. For a store this is the single
+        most damaging technical defect — CRITICAL, even when the browser shows
+        the price fine.
+      - `<title>`, meta description, canonical, `<html lang>`, hreflang if the
+        store is multi-region. On the PDP: is the canonical self-referential
+        rather than pointing at a variant or a facet URL?
+      - **Faceted navigation.** Do filter/sort parameters generate crawlable
+        links (and do they leak into the sitemap)? Crawl budget spent on facets
+        is crawl budget not spent on products.
+      - Open Graph / Twitter card tags, HTTPS, redirect hygiene, security
+        headers.
+
+      You MAY read the project's source to point a finding at the file or
+      template that needs changing — say which template (PDP, PLP, layout).
+      Emit ONLY the JSON.
     output_format: &dim_schema
       type: object
       properties:
         key:
           type: string
-          description: "Dimension key (technical | crawlers | schema | content)."
+          description: "Dimension key (technical | crawlers | schema | content | entity)."
         score:
           type: integer
           description: "0–100 for this dimension."
@@ -118,7 +409,9 @@ nodes:
                 type: string
               fix:
                 type: string
-                description: "Concrete change, phrased as a task for idea-to-pr."
+                description: >
+                  Concrete change, phrased as a standalone task for idea-to-pr.
+                  Name the page or template it applies to (homepage, PDP, PLP).
               effort:
                 type: string
                 enum: [quick, medium, strategic]
@@ -130,31 +423,75 @@ nodes:
     provider: claude
     model: sonnet
     context: fresh
-    depends_on: [discover]
+    depends_on: [fetch-pages]
     prompt: |
       Score **AI-crawler access & guidance** for $EXTERNAL_URL (0–100), set
       `key` to "crawlers". Read `$ARTIFACTS_DIR/robots.txt`,
-      `headers-gptbot.txt` / `headers-browser.txt`, and
-      `$ARTIFACTS_DIR/llms.txt`, `llms-full.txt`, `sitemap.xml`. Any of those
-      files may be missing or empty — that means the resource is absent. If a
-      file contains an HTML page instead of its expected format (a soft-404),
-      also treat it as absent.
+      `crawler-status.txt`, `llms.txt`, `llms-full.txt`, `sitemap.xml`,
+      `sitemap-urls.txt` and `ucp.json`. Any of those may be missing or empty —
+      that means the resource is absent. A file containing an HTML page instead
+      of its expected format is a soft-404: also absent.
 
-      Assess:
-      - **robots.txt** — are the AI crawlers allowed? Check GPTBot,
-        OAI-SearchBot, ChatGPT-User, ClaudeBot, anthropic-ai, PerplexityBot,
-        Google-Extended, CCBot, Bytespider, Applebot-Extended, Amazonbot. A
-        blanket `Disallow: /` (explicit, or inherited from `User-agent: *`) for
-        a citing crawler is CRITICAL.
-      - **Edge blocking** — does the bot UA get a 403/blocked status while the
-        browser gets 200 (= silently blocked at the CDN/edge — CRITICAL)?
-      - **llms.txt** — present and valid (markdown headings, links to key
-        content)? Absent = high-severity quick win (add `/llms.txt`); present
-        but malformed = medium; comprehensive plus `/llms-full.txt` = full
-        marks for this part.
-      - **sitemap.xml** — present, and referenced via a `Sitemap:` line in
-        robots.txt? A missing sitemap, or one not referenced from robots.txt,
-        is a medium finding.
+      ## robots.txt — three kinds of bot, three different verdicts
+      Do not treat every AI user-agent alike. Blocking a training crawler is a
+      legitimate business decision that thousands of brands make deliberately;
+      reporting it as a defect is a false positive that costs the audit its
+      credibility.
+
+      - **Citation crawlers — GPTBot, OAI-SearchBot, ClaudeBot, PerplexityBot.**
+        These are how the AI surfaces read pages they cite. A `Disallow: /`
+        reaching one of these (explicitly, or inherited from `User-agent: *`) is
+        CRITICAL: the store cannot be recommended by that assistant.
+      - **Training / grounding opt-outs — CCBot, anthropic-ai, cohere-ai,
+        Google-Extended, Bytespider, Applebot-Extended, Amazonbot.** Report the
+        state as **informational**. If they are blocked, say what that trades
+        away (no training/grounding inclusion) and leave the decision with the
+        owner. Never file it as a defect and never propose "fixing" it.
+      - **User-triggered fetchers — ChatGPT-User, Google-Agent,
+        Google-NotebookLM.** These ignore robots.txt by design, so a robots.txt
+        finding about them is meaningless. If they need controlling, that is
+        server- or edge-side.
+
+      ## Edge blocking
+      `crawler-status.txt` holds a live status code per user-agent. A 200 for
+      `browser` alongside a 403/429/503 for a citation bot means the block sits
+      at the CDN or WAF, where robots.txt cannot reveal it — CRITICAL, and the
+      fix is an allow-list rule at the edge, not a robots.txt edit. Bot
+      management on ecommerce CDNs blocks these by default surprisingly often,
+      so check this even when robots.txt looks perfect.
+
+      ## llms.txt and llms-full.txt
+      This project treats both as a **priority quick win**: absent is a
+      high-severity finding, present-but-malformed medium, and a comprehensive
+      `/llms.txt` plus `/llms-full.txt` full marks for this part. Valid means
+      markdown — an `# H1` title, a `>` summary line, `##` sections of
+      `[title](url): description` links — pointing at the pages that matter
+      (top categories, size/fit and materials guides, shipping and returns,
+      about/contact).
+
+      State the rationale accurately in the finding `detail`, because a reader
+      will otherwise assume a Google benefit that does not exist: Google's AI
+      optimization guide says Google Search **ignores** these files, and no
+      major AI search provider has documented consuming a third-party
+      `llms.txt`. We ship it for non-Google AI surfaces, for AI coding and
+      shopping agents that do read it, and for cheap optionality — not as a
+      Google ranking or citation lever. Do not claim a measured citation effect.
+
+      ## sitemap.xml
+      Present, valid, and referenced by a `Sitemap:` line in robots.txt? For a
+      store also check: is it a sitemap index with product and category children
+      (expected above a few thousand URLs); do product URLs actually appear in
+      `sitemap-urls.txt`; are facet/filter or session-parameter URLs polluting
+      it; do `<lastmod>` values look maintained rather than all-identical? A
+      missing sitemap, or one not referenced from robots.txt, is medium.
+
+      ## UCP profile (`.well-known/ucp`)
+      The Universal Commerce Protocol is how an AI agent discovers that a store
+      can be transacted with — Google has a reference implementation for
+      conversational buying in AI Mode. Absent is an **opportunity** (low/medium,
+      strategic effort), never a failure. If present, check it parses, declares
+      capabilities, and that its version is a date (e.g. `2026-04-08`) — a
+      literal `"1.0"` is invalid, UCP uses date-based versioning.
 
       Emit ONLY the JSON.
     output_format: *dim_schema
@@ -164,14 +501,68 @@ nodes:
     provider: claude
     model: sonnet
     context: fresh
-    depends_on: [discover]
+    depends_on: [fetch-pages]
     prompt: |
-      Score **structured data** for $EXTERNAL_URL (0–100), set `key` to "schema".
-      Read `$ARTIFACTS_DIR/page.html` and find the JSON-LD blocks
-      (`<script type="application/ld+json">`). Assess presence + validity +
-      usefulness of Organization, Article, Person/author, and `sameAs` links
-      (Wikipedia/LinkedIn/etc.). Note deprecated types. You MAY read the source
-      to point at where `<head>` / schema is rendered. Emit ONLY the JSON.
+      Score **structured data** for the store at $EXTERNAL_URL (0–100), set
+      `key` to "schema". This is the heaviest dimension for an ecommerce audit,
+      because Product markup is what makes a page eligible for merchant listings
+      and quotable by an AI shopping surface.
+
+      Read the JSON-LD (`<script type="application/ld+json">`) and any microdata
+      in `$ARTIFACTS_DIR/product.html`, `category.html` and `page.html`. The
+      `fetch-pages` output above counts the blocks and key fields per page. If
+      `product.html` is missing, say so plainly and cap your confidence — you
+      cannot score Product markup from a homepage.
+
+      ## Product page — required, then the ladder
+      Google's confirmed required fields are `name`, `image`, `offers`, and
+      merchant listings need `Offer` rather than `AggregateOffer`. Score the PDP
+      against this ladder, adjusting for the validation errors below:
+
+      | Present | Anchor |
+      |---|---|
+      | required fields only | 50 |
+      | + `aggregateRating` | 65 |
+      | + `sku` / `gtin13`/`gtin14` / `mpn` | 75 |
+      | + `shippingDetails` | 85 |
+      | + `hasMerchantReturnPolicy` | 90 |
+      | + 3 or more `review` entries | 100 |
+
+      Validation errors to check, each a finding in its own right:
+      - `price` must be a bare number string — `"249.00"`, never `"249,00 kr"`
+        or `"$249"`.
+      - `availability` must be the full enum URL (`https://schema.org/InStock`).
+      - `priceCurrency` must be ISO 4217 (`DKK`, `EUR`, `GBP`).
+      - `brand.name` present and not empty or `"N/A"`.
+      - `priceValidUntil` in ISO 8601, and not in the past — an expired date
+        drops the listing.
+      - `aggregateRating` requires both `ratingValue` and `reviewCount`.
+      - `image` an array of at least one high-resolution URL.
+      - Variants modelled as `ProductGroup` with `hasVariant`, not as duplicate
+        `Product` blocks fighting over the same canonical.
+      - `hasAdultConsideration` where the catalogue needs it.
+
+      ## The other pages
+      - **PDP**: `BreadcrumbList` matching the visible breadcrumb trail.
+      - **Category**: `ItemList` (or `CollectionPage`) enumerating the products;
+        `BreadcrumbList`.
+      - **Homepage**: `Organization` with `name`, `logo`, `url`, contact, and
+        `sameAs` links to the brand's real profiles (Wikipedia/Wikidata,
+        LinkedIn, YouTube, Instagram, Trustpilot). `sameAs` is how an assistant
+        ties this domain to the entity it already knows.
+      - Flag deprecated or invented types, and JSON-LD that fails to parse
+        (a single malformed block can void the whole page's markup).
+
+      ## Framing, so the report stays honest
+      Google's own guidance warns against over-investing in structured data
+      *specifically to influence AI features*: markup earns **eligibility** for
+      merchant listings and rich results, and gives an assistant unambiguous
+      facts to quote. It is not a citation lever on its own. Phrase fixes as
+      eligibility and correctness, not as "this will get you cited".
+
+      You MAY read the project's source to point at where `<head>` or the
+      JSON-LD is rendered, and name the template each fix belongs to.
+      Emit ONLY the JSON.
     output_format: *dim_schema
 
   - id: content
@@ -179,13 +570,117 @@ nodes:
     provider: claude
     model: sonnet
     context: fresh
-    depends_on: [discover]
+    depends_on: [fetch-pages]
     prompt: |
-      Score **content citability** for $EXTERNAL_URL (0–100), set `key` to
-      "content". Read `$ARTIFACTS_DIR/page.html` (the visible text). Assess:
-      clear question-answering passages, self-contained fact-dense paragraphs an
-      AI can quote, author / E-E-A-T trust signals (named author, credentials,
-      about/contact, dates), and freshness. Emit ONLY the JSON.
+      Score **content citability** for the store at $EXTERNAL_URL (0–100), set
+      `key` to "content".
+
+      Read the extracted visible text — `$ARTIFACTS_DIR/page-text.txt`,
+      `product-text.txt`, `category-text.txt` — which is what a crawler can read
+      without JavaScript, with scripts, styles and semantic nav/header/footer
+      removed. The stripping is best-effort: a div-based layout leaves some menu
+      and footer runs behind, so ignore residual chrome rather than scoring it.
+      Read the `.html` files only when you need markup structure (headings,
+      `alt`, tables).
+
+      ## Citability
+      These are third-party correlations, useful as scoring anchors:
+      - Self-contained passages of roughly **134–167 words** are cited most.
+      - The **direct answer in the first 40–60 words** of a section.
+      - About **44%** of AI citations come from the **first 30%** of a page, so
+        buried answers are wasted.
+      - Question-shaped `H2`/`H3`, short paragraphs, comparison tables, real
+        FAQ blocks.
+      - Specific figures with attribution beat adjectives.
+
+      Score the text against these; do **not** turn them into instructions to
+      authors. Google explicitly warns against writing to a target word count,
+      so phrase every fix as structure and substance — "open the care section
+      with a one-sentence answer, then the detail" — never "make this 150 words".
+
+      ## Product page quality
+      - Is the description **unique**, or manufacturer boilerplate that a
+        hundred retailers also publish? Commodity copy is the single strongest
+        reason an assistant quotes a competitor instead.
+      - A specs/attributes table, not only prose: materials, dimensions, care,
+        origin, certifications.
+      - **Size and fit** guidance, in text — for apparel this is the question
+        assistants are actually asked.
+      - On-page customer reviews as real text (UGC), not a JS-only widget.
+      - Shipping, returns and delivery time stated in words on or one click from
+        the PDP, since these decide shopping recommendations.
+      - First-hand, non-commodity material — Google's stated quality bar.
+
+      ## Category page
+      Does it carry genuine introductory copy answering what the category is and
+      how to choose, or is it a bare grid? A grid is uncitable.
+
+      ## Imagery and multi-modal
+      Content carrying images/video is selected notably more often. Check: at
+      least 3 product images; `alt` text naming the product and its
+      distinguishing feature rather than `""` or `IMG_1234`; descriptive file
+      names; images large enough for merchant listings (~800px+); video or
+      size-guide diagrams where useful. The `fetch-pages` output counts `<img>`
+      tags versus those with non-trivial `alt`.
+
+      ## Trust and freshness
+      Named author or expert where advice is given, about/contact reachable,
+      publication and updated dates. Recency matters — pages under ~3 months old
+      are markedly likelier to be cited, and content stale beyond ~6 months
+      loses eligibility, so an unmaintained buying guide is a finding. Apply
+      Google's Who / How / Why test.
+
+      Emit ONLY the JSON.
+    output_format: *dim_schema
+
+  - id: entity
+    category: validation
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [fetch-pages]
+    prompt: |
+      Score **off-site brand & entity presence** for the store at $EXTERNAL_URL
+      (0–100), set `key` to "entity". This dimension is the one an on-page audit
+      cannot see, and it is why a technically perfect store can still be absent
+      from every AI shopping answer.
+
+      Use WebSearch and WebFetch. First establish the brand name and market from
+      `$ARTIFACTS_DIR/page.html` / `page-text.txt`.
+
+      ## Why this dimension exists
+      Brand mentions correlate with AI visibility roughly **3x more strongly
+      than backlinks** (Ahrefs, 75k brands, Dec 2025) — YouTube mentions ~0.737,
+      Domain Rating ~0.266. Assistants lean on different sources: ChatGPT's
+      citations skew Wikipedia (~47.9%) and Reddit (~11.3%); Perplexity's skew
+      Reddit (~46.7%). Only ~11% of domains are cited by both ChatGPT and Google
+      AI Overviews for the same query.
+
+      ## Check
+      - **Entity**: a Wikipedia article and/or Wikidata item for the brand? Does
+        the site's `Organization.sameAs` point at them?
+      - **Community**: is the brand discussed on Reddit (which subs, positive or
+        negative, recent or stale)? Any YouTube coverage — reviews, hauls,
+        comparisons? These are the sources ChatGPT and Perplexity quote.
+      - **Review platforms**: Trustpilot and the market's equivalents — profile
+        claimed, volume, rating, recency. For a retailer these are what an
+        assistant cites when asked "is X trustworthy?".
+      - **Retail presence**: does the brand appear in marketplaces, comparison
+        sites or "best X" listicles for its category? Those listicles are what
+        assistants summarise for shopping queries.
+      - **Live visibility**: search two or three buying-intent queries a
+        customer would actually ask for this category and see whether this brand
+        appears at all, and how it is characterised. Report what you found
+        verbatim enough to be checkable.
+
+      Findings here are mostly `strategic` effort and often not code at all —
+      say so. A fix like "get a Wikipedia article" is not an `idea-to-pr` task;
+      phrase such items as marketing actions and reserve `quick`/`medium` for
+      things the codebase can do (add `sameAs`, surface review content, publish
+      original data worth citing). Where you found nothing, score low and say
+      you found nothing — do not pad with plausible guesses about the brand.
+
+      Emit ONLY the JSON.
     output_format: *dim_schema
 
   - id: synthesize
@@ -195,27 +690,54 @@ nodes:
     effort: high
     context: fresh
     artifact: geo-report.md
-    depends_on: [technical, crawlers, schema, content]
+    depends_on: [technical, crawlers, schema, content, entity]
     prompt: |
-      Combine the four dimension analyses of $EXTERNAL_URL into one GEO verdict.
+      Combine five dimension analyses of the store at $EXTERNAL_URL into one GEO
+      verdict. Pages audited: entry URL, plus product/category where
+      `pick-pages` found them ($pick-pages.output.rationale).
 
       Dimension results (each `{ key, score, summary, findings }`):
       - technical: $technical.output
       - crawlers:  $crawlers.output
       - schema:    $schema.output
       - content:   $content.output
+      - entity:    $entity.output
 
-      Composite score (0–100) = technical×0.30 + crawlers×0.25 + schema×0.20 +
-      content×0.25. Rating: 90–100 excellent · 75–89 good · 60–74 fair ·
-      40–59 poor · 0–39 critical.
+      Composite score (0–100) = technical×0.20 + crawlers×0.20 + schema×0.25 +
+      content×0.20 + entity×0.15. Schema carries the most weight because
+      merchant-listing eligibility gates everything downstream for a store.
+      Rating: 90–100 excellent · 75–89 good · 60–74 fair · 40–59 poor ·
+      0–39 critical.
 
-      Build the `categories` array from the four dimensions (key, weight, score,
-      summary). Merge all findings, dedupe near-duplicates, and keep each
-      finding's `fix` phrased as a standalone task for an implementer.
+      Build the `categories` array from the five dimensions (key, weight, score,
+      summary). Merge all findings, dedupe near-duplicates across dimensions,
+      and keep each `fix` a standalone task naming the page or template.
 
-      Write a human-readable report to `$ARTIFACTS_DIR/geo-report.md`: executive
-      summary + composite score, the per-dimension scores, findings grouped by
-      severity, and a prioritized action plan (quick wins first).
+      Write the human-readable report to `$ARTIFACTS_DIR/geo-report.md`:
+
+      1. Executive summary and composite score, and **which pages were
+         audited** — if the product page could not be identified, say that at
+         the top, because it caps what the schema and content scores can mean.
+      2. Per-dimension scores with weights.
+      3. **Per-platform readiness**, since one composite hides which surface is
+         failing. Score and justify each in a sentence:
+         - **Google AI Overviews** — closely tied to classic ranking; driven by
+           indexability, snippet eligibility, schema.
+         - **Google AI Mode** — a separate citation engine (it agrees with AI
+           Overviews on conclusions ~86% of the time but cites the same URLs
+           only ~13.7%); rewards freshness and entity authority beyond position.
+         - **ChatGPT** — Wikipedia and Reddit heavy; entity presence dominates.
+         - **Perplexity** — Reddit and community heavy.
+         - **AI shopping agents** — Product/Offer correctness, server-rendered
+           price and availability, UCP.
+      4. Findings grouped by severity.
+      5. A prioritised action plan: quick wins first, then medium, then
+         strategic — and separate the items the **codebase** can fix from the
+         **off-site/marketing** ones, so nobody files a PR to get a Wikipedia
+         article.
+      6. A closing note that these scores are heuristics over public signals,
+         not Google-internal ranking data, and that no tool can promise
+         rankings.
 
       Then emit ONLY the JSON verdict matching the schema — no prose.
     output_format:
@@ -260,7 +782,9 @@ nodes:
                 type: string
               fix:
                 type: string
-                description: "The concrete change, phrased as a task for idea-to-pr."
+                description: >
+                  The concrete change, phrased as a task for idea-to-pr, naming
+                  the page or template. Off-site actions are marked as such.
               effort:
                 type: string
                 enum: [quick, medium, strategic]
