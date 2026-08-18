@@ -422,33 +422,227 @@ mod tests {
             .find(|n| n.id == "discover")
             .expect("discover node exists");
         assert!(matches!(discover.kind, harness_dag::NodeKind::Bash(_)));
-        // Four dimension analyses fan out from discover (parallel), each scoring
-        // one dimension; they share an output schema (a YAML anchor).
-        for dim in ["technical", "crawlers", "schema", "content"] {
+        // A store's homepage carries no Product schema, no price and no reviews,
+        // so the audit samples a real PDP and PLP before scoring anything: the
+        // picker reads the sitemap, then a deterministic node fetches its choices.
+        let pick = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "pick-pages")
+            .expect("pick-pages node exists");
+        assert_eq!(pick.depends_on, vec!["discover".to_string()]);
+        assert!(pick.output_format.is_some(), "pick-pages returns two URLs");
+        // Source order matters: llms.txt is curated and carries descriptions, so
+        // it identifies a category without guessing at URL shapes; the sitemap is
+        // where individual products actually live; a product link off the category
+        // page is the fallback for a store whose PDPs aren't in the sitemap.
+        let pick_prompt = match &pick.kind {
+            harness_dag::NodeKind::Prompt(p) => p.as_str(),
+            other => panic!("pick-pages is not an inline prompt: {other:?}"),
+        };
+        let order = [
+            "llms.txt",
+            "sitemap-urls.txt",
+            "page.html",
+            "One targeted fetch",
+        ];
+        let mut at = 0usize;
+        for source in order {
+            let found = pick_prompt[at..]
+                .find(source)
+                .unwrap_or_else(|| panic!("pick-pages lost source `{source}` (or its order)"));
+            at += found + source.len();
+        }
+        let fetch = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "fetch-pages")
+            .expect("fetch-pages node exists");
+        assert_eq!(fetch.depends_on, vec!["pick-pages".to_string()]);
+        assert!(matches!(fetch.kind, harness_dag::NodeKind::Bash(_)));
+
+        // Five dimension analyses fan out from the sampled pages (parallel), each
+        // scoring one dimension; they share an output schema (a YAML anchor).
+        let dims = ["technical", "crawlers", "schema", "content", "entity"];
+        for dim in dims {
             let n = wf
                 .nodes
                 .iter()
                 .find(|n| n.id == dim)
                 .unwrap_or_else(|| panic!("dimension node `{dim}` exists"));
-            assert_eq!(n.depends_on, vec!["discover".to_string()]);
+            assert_eq!(n.depends_on, vec!["fetch-pages".to_string()]);
             assert!(
                 n.output_format.is_some(),
                 "{dim} must emit a structured score"
             );
         }
-        // Synthesis joins all four and emits the composite verdict.
+        // Synthesis joins all five and emits the composite verdict.
         let synth = wf
             .nodes
             .iter()
             .find(|n| n.id == "synthesize")
             .expect("synthesize node exists");
-        assert_eq!(
-            synth.depends_on,
-            vec!["technical", "crawlers", "schema", "content"]
-        );
+        assert_eq!(synth.depends_on, dims);
         assert!(
             synth.output_format.is_some(),
             "synthesize must emit the structured GEO verdict"
+        );
+    }
+
+    /// The GEO audit is scored for ecommerce, and two of its prompts carry
+    /// corrections that a well-meaning reword would quietly undo.
+    #[test]
+    fn geo_audit_is_ecommerce_scored_and_grades_crawlers_by_purpose() {
+        let yaml = default_workflow("geo-audit").expect("geo-audit bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("geo-audit must parse");
+        let prompt = |id: &str| match &wf
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("node `{id}`"))
+            .kind
+        {
+            harness_dag::NodeKind::Prompt(p) => p.clone(),
+            other => panic!("node `{id}` is not an inline prompt: {other:?}"),
+        };
+
+        // Blocking a training crawler is a business decision, not a defect. The
+        // audit used to call any AI-bot Disallow critical, which turned a
+        // deliberate opt-out into a finding somebody would "fix".
+        let crawlers = prompt("crawlers");
+        for needle in [
+            "Citation crawlers",
+            "Training / grounding opt-outs",
+            "User-triggered fetchers",
+            "ignore robots.txt by design",
+            "never propose \"fixing\" it",
+        ] {
+            assert!(crawlers.contains(needle), "crawlers prompt lost: {needle}");
+        }
+        // llms.txt stays a priority here by choice — but the report has to say why
+        // honestly, since Google Search documents that it ignores the file.
+        assert!(crawlers.contains("priority quick win"));
+        assert!(crawlers.contains("Google Search **ignores** these files"));
+        assert!(crawlers.contains("Do not claim a measured citation effect"));
+
+        // "Build this" hands a finding straight to idea-to-pr, so a finding has to
+        // carry where it was seen and whether code can fix it. Without `page`, a
+        // PDP defect is attributed to the entry URL and the implementer is sent to
+        // a page where it does not reproduce; without `offsite`, "earn a Wikipedia
+        // entity" becomes a build task with nothing to build.
+        for dim in ["technical", "crawlers", "schema", "content", "entity"] {
+            let schema = wf
+                .nodes
+                .iter()
+                .find(|n| n.id == dim)
+                .and_then(|n| n.output_format.as_ref())
+                .unwrap_or_else(|| panic!("`{dim}` is structured"))
+                .to_string();
+            for field in ["page", "location", "offsite", "effort"] {
+                assert!(schema.contains(field), "`{dim}` finding lost `{field}`");
+            }
+        }
+        let synth_schema = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "synthesize")
+            .and_then(|n| n.output_format.as_ref())
+            .expect("synthesize is structured")
+            .to_string();
+        for field in ["page", "location", "offsite", "effort"] {
+            assert!(
+                synth_schema.contains(field),
+                "the merged verdict drops `{field}`"
+            );
+        }
+        assert!(
+            prompt("synthesize").contains("through **unchanged**"),
+            "synthesize must be told to carry the handoff fields, not re-derive them"
+        );
+        assert!(
+            prompt("entity").contains("offsite: true"),
+            "the off-site dimension must mark its findings unbuildable"
+        );
+
+        // The commerce signals that only exist on a product page.
+        let schema = prompt("schema");
+        for needle in [
+            "`name`, `image`, `offers`",
+            "AggregateOffer",
+            "ProductGroup",
+        ] {
+            assert!(schema.contains(needle), "schema prompt lost: {needle}");
+        }
+        // Citability anchors, and the guard against turning them into a word count.
+        let content = prompt("content");
+        assert!(content.contains("134–167 words"));
+        assert!(content.contains("never \"make this 150 words\""));
+
+        // Weights must cover the five dimensions and sum to 1.0. Asserted per
+        // token, because the prompt is a YAML block scalar and any reflow moves
+        // the line breaks.
+        let synth = prompt("synthesize");
+        let weights = [
+            ("technical", 0.20),
+            ("crawlers", 0.20),
+            ("schema", 0.25),
+            ("content", 0.20),
+            ("entity", 0.15),
+        ];
+        for (dim, w) in weights {
+            let token = format!("{dim}×{w:.2}");
+            assert!(synth.contains(&token), "synthesize prompt lost: {token}");
+        }
+        let total: f64 = weights.iter().map(|(_, w)| w).sum();
+        assert!(
+            (total - 1.0).abs() < 1e-9,
+            "weights sum to {total}, not 1.0"
+        );
+        // Per-platform readiness, because one composite hides which surface fails.
+        for surface in ["AI Overviews", "AI Mode", "ChatGPT", "Perplexity"] {
+            assert!(synth.contains(surface), "synthesize prompt lost: {surface}");
+        }
+    }
+
+    /// Two shell traps the GEO audit's measured signals died on once. Both are
+    /// silent — they yield a plausible number rather than an error, so the audit
+    /// would keep scoring confidently off a figure capped at 1 or a preference
+    /// that never applied.
+    #[test]
+    fn geo_audit_measurements_survive_minified_html() {
+        let yaml = default_workflow("geo-audit").expect("geo-audit bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("geo-audit must parse");
+        let bash: String = wf
+            .nodes
+            .iter()
+            .filter_map(|n| match &n.kind {
+                harness_dag::NodeKind::Bash(b) => Some(b.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // `grep -c` counts matching LINES. Minified store HTML and this
+        // workflow's own extracted text are each a single line, so every count
+        // would cap at 1 — silently turning "12 images, 3 with alt" into "1, 1".
+        for banned in ["grep -Eoc", "grep -ci", "grep -oc", "grep -co"] {
+            assert!(
+                !bash.contains(banned),
+                "`{banned}` counts lines, not matches — pipe `grep -Eo` into `wc -l`"
+            );
+        }
+        assert!(bash.contains("| wc -l"), "counts must come from wc -l");
+
+        // The sitemap-index preference ranks product children first. The word
+        // "sitemap" contains the substring "item", so an `item` alternative
+        // matches every child and the ranking quietly becomes a no-op.
+        let ranking = bash
+            .lines()
+            .find(|l| l.contains("produkt|product"))
+            .expect("sitemap child ranking exists");
+        assert!(
+            !ranking.contains("item"),
+            "`item` matches every sitemap URL: {ranking}"
         );
     }
 }
