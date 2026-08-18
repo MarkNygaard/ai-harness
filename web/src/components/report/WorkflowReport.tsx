@@ -432,7 +432,11 @@ function FindingRow({
     action === "issued" ||
     action === "checked" ||
     action === "passed";
-  const hasFixActions = canBuild || canIssue || canIgnore;
+  // An off-site finding ("earn a Wikipedia entity") has no code change behind it,
+  // so `idea-to-pr` would have nothing to implement. It stays filable as an issue
+  // for a human, which is what such an item actually needs.
+  const buildable = canBuild && !finding.offsite;
+  const hasFixActions = buildable || canIssue || canIgnore;
   const title = finding.title ?? finding.summary ?? "(untitled finding)";
   return (
     <div
@@ -568,7 +572,10 @@ function FindingRow({
                     {busy ? "Working…" : "Create issue"}
                   </Button>
                 )}
-                {canBuild && (
+                {/* An off-site finding ("earn a Wikipedia entity") has no code
+                    change behind it, so idea-to-pr would have nothing to
+                    implement. It can still be filed as an issue for a human. */}
+                {buildable && (
                   <Button
                     type="button"
                     size="sm"

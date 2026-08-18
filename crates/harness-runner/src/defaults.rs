@@ -525,6 +525,45 @@ mod tests {
         assert!(crawlers.contains("Google Search **ignores** these files"));
         assert!(crawlers.contains("Do not claim a measured citation effect"));
 
+        // "Build this" hands a finding straight to idea-to-pr, so a finding has to
+        // carry where it was seen and whether code can fix it. Without `page`, a
+        // PDP defect is attributed to the entry URL and the implementer is sent to
+        // a page where it does not reproduce; without `offsite`, "earn a Wikipedia
+        // entity" becomes a build task with nothing to build.
+        for dim in ["technical", "crawlers", "schema", "content", "entity"] {
+            let schema = wf
+                .nodes
+                .iter()
+                .find(|n| n.id == dim)
+                .and_then(|n| n.output_format.as_ref())
+                .unwrap_or_else(|| panic!("`{dim}` is structured"))
+                .to_string();
+            for field in ["page", "location", "offsite", "effort"] {
+                assert!(schema.contains(field), "`{dim}` finding lost `{field}`");
+            }
+        }
+        let synth_schema = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "synthesize")
+            .and_then(|n| n.output_format.as_ref())
+            .expect("synthesize is structured")
+            .to_string();
+        for field in ["page", "location", "offsite", "effort"] {
+            assert!(
+                synth_schema.contains(field),
+                "the merged verdict drops `{field}`"
+            );
+        }
+        assert!(
+            prompt("synthesize").contains("through **unchanged**"),
+            "synthesize must be told to carry the handoff fields, not re-derive them"
+        );
+        assert!(
+            prompt("entity").contains("offsite: true"),
+            "the off-site dimension must mark its findings unbuildable"
+        );
+
         // The commerce signals that only exist on a product page.
         let schema = prompt("schema");
         for needle in [

@@ -138,6 +138,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A finding handed to `idea-to-pr` now says which page it was seen on.** The report's
+  "Build this" action turns a finding into a task, and the task description named the
+  project's entry URL as the live site — fine when the audit only looked at the
+  homepage, wrong the moment it samples a product and a category page too, because a
+  missing `aggregateRating` is a fact about the *product* page and an implementer sent
+  to the site root would correctly report that the homepage has no Product markup and
+  change nothing useful. Findings now carry `page` (observed on), `location`
+  (template/component, only when confirmed in the source) and `offsite`, all carried
+  through the merge unchanged; the description leads with the observed page and labels
+  the entry URL as the site root. The closing instruction is assembled from what the
+  finding actually holds — it previously told every implementer to "make the change in
+  the repo/folder named in the location above" even though `location` was a field no
+  workflow but `review-area` ever set, so for every GEO finding that sentence pointed
+  at nothing. `effort` is included, so a `strategic` item doesn't arrive looking like a
+  quick fix. Off-site findings ("earn a Wikipedia entity") are excluded from the build
+  path altogether — they stay filable as an issue for a human, and the description
+  tells the agent not to invent a source change to satisfy one.
 - **Two silent shell bugs in the GEO audit's measured signals.** `grep -c` counts
   matching *lines*, and both minified store HTML and the audit's own extracted text
   are a single line — so "12 images, 3 with usable alt" was reported as "1, 1", and
