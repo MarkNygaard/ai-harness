@@ -253,6 +253,10 @@ pub async fn delete_project(
 }
 
 /// `Err(Response)` (409) when a run is active for `project`, else `Ok(())`.
+// The `Err` here IS the finished HTTP response, handed straight back to axum.
+// Boxing it to satisfy `result_large_err` would add an allocation, plus an
+// unwrap at every call site, to avoid a move axum makes anyway.
+#[allow(clippy::result_large_err)]
 async fn ensure_idle(state: &RunsState, project: &str) -> Result<(), Response> {
     if state.has_live_run_for_project(project).await {
         return Err(err(

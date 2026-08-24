@@ -30,6 +30,10 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 /// Build a Linear client from the stored credential, or a 4xx response.
 /// Attribution and token freshness are decided in
 /// [`linear_client`](super::linear_oauth::linear_client).
+// The `Err` here IS the finished HTTP response, handed straight back to axum.
+// Boxing it to satisfy `result_large_err` would add an allocation, plus an
+// unwrap at every call site, to avoid a move axum makes anyway.
+#[allow(clippy::result_large_err)]
 async fn client(state: &Arc<RunsState>) -> Result<LinearClient, Response> {
     super::linear_oauth::linear_client(state)
         .await
