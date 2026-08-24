@@ -14,9 +14,13 @@ description: |
   llms-full.txt / sitemap.xml / `.well-known/ucp`; `pick-pages` chooses a real
   product page and a category page, preferring the curated `llms.txt` listing
   where the site publishes one and falling back to the sitemap, the homepage nav,
-  and finally a product link off the category page; `fetch-pages` retrieves them. All fetches are deliberately **without JavaScript** — that is what an AI
+  and finally a product link off the category page; `fetch-pages` retrieves them,
+  walking several candidates because a sitemap entry can be a stale slug that
+  404s. All fetches are deliberately **without JavaScript** — that is what an AI
   crawler sees — and each page is reduced to visible text so scoring isn't
-  diluted by nav and footer chrome.
+  diluted by nav and footer chrome. `discover` also samples the sitemap's own URLs
+  for liveness, since a store that lists dead products wastes the crawl budget AI
+  crawlers use to find the live ones.
 
   Five dimensions then score in parallel — **technical**, **crawlers**,
   **schema** (ecommerce-weighted: Product/Offer/merchant fields),
@@ -149,33 +153,79 @@ nodes:
       curl -fsSL --max-time 20 "$root/sitemap.xml" \
         -o "$ARTIFACTS_DIR/sitemap.xml" || true
       : > "$ARTIFACTS_DIR/sitemap-urls.txt"
+      # Append one child sitemap's URLs, capped. The cap is PER CHILD on purpose:
+      # appending whole children and truncating at the end lets the first kind fill
+      # the entire quota. A run against a real store did exactly that — 400 product
+      # URLs and not one category or article URL — so the picker had to guess a
+      # category from the homepage nav, and a dimension reported the site's guides
+      # as missing from the sitemap when they sat in a child nobody had read.
+      take_child() {
+        curl -fsSL --max-time 25 "$take_url" -o "$ARTIFACTS_DIR/child.xml" || return 0
+        grep -oE '<loc>[^<]+</loc>' "$ARTIFACTS_DIR/child.xml" \
+          | sed -E 's#</?loc>##g' | head -"$take_max" \
+          >> "$ARTIFACTS_DIR/sitemap-urls.txt" || true
+        rm -f "$ARTIFACTS_DIR/child.xml"
+      }
       if [ -s "$ARTIFACTS_DIR/sitemap.xml" ]; then
         if grep -qi "<sitemapindex" "$ARTIFACTS_DIR/sitemap.xml"; then
           echo "sitemap.xml is an index; following its children"
-          # Prefer a child whose name hints at products, else take the first few.
-          # NB: do not add `item` to this pattern — "sitemap" contains "item", so
-          # it matches every child and the preference silently stops working.
-          children="$(grep -oE '<loc>[^<]+</loc>' "$ARTIFACTS_DIR/sitemap.xml" \
-            | sed -E 's#</?loc>##g' | head -20)"
-          ranked="$(printf '%s\n' "$children" \
-            | grep -iE 'produkt|product|catalog|vare|shop' || true)"
-          [ -n "$ranked" ] || ranked="$children"
-          printf '%s\n' "$ranked" | head -3 | while read -r child; do
-            [ -n "$child" ] || continue
-            curl -fsSL --max-time 20 "$child" -o "$ARTIFACTS_DIR/child.xml" || continue
-            grep -oE '<loc>[^<]+</loc>' "$ARTIFACTS_DIR/child.xml" \
-              | sed -E 's#</?loc>##g' >> "$ARTIFACTS_DIR/sitemap-urls.txt" || true
+          grep -oE '<loc>[^<]+</loc>' "$ARTIFACTS_DIR/sitemap.xml" \
+            | sed -E 's#</?loc>##g' | head -40 > "$ARTIFACTS_DIR/children.txt"
+          # One pass per kind, so products never crowd out categories or editorial.
+          # NB: keep `item` out of these patterns — "sitemap" contains "item", so it
+          # would match every child and the selection stops discriminating silently.
+          for kind in 'produkt|product|vare' 'categor|kategori|collection' 'article|blog|guide|faq|page'; do
+            printf '%s\n' "$(grep -iE "$kind" "$ARTIFACTS_DIR/children.txt" || true)" \
+              | head -2 | while read -r child; do
+                [ -n "$child" ] || continue
+                take_url="$child"
+                take_max=150
+                take_child
+              done
           done
-          rm -f "$ARTIFACTS_DIR/child.xml"
+          # No child matched any kind — take the first few as they come.
+          if [ ! -s "$ARTIFACTS_DIR/sitemap-urls.txt" ]; then
+            head -3 "$ARTIFACTS_DIR/children.txt" | while read -r child; do
+              [ -n "$child" ] || continue
+              take_url="$child"
+              take_max=150
+              take_child
+            done
+          fi
         else
           grep -oE '<loc>[^<]+</loc>' "$ARTIFACTS_DIR/sitemap.xml" \
-            | sed -E 's#</?loc>##g' >> "$ARTIFACTS_DIR/sitemap-urls.txt" || true
+            | sed -E 's#</?loc>##g' | head -400 \
+            >> "$ARTIFACTS_DIR/sitemap-urls.txt" || true
         fi
       fi
-      # Cap the list the picker reads — a store sitemap can hold 100k URLs.
-      if [ -s "$ARTIFACTS_DIR/sitemap-urls.txt" ]; then
-        head -400 "$ARTIFACTS_DIR/sitemap-urls.txt" > "$ARTIFACTS_DIR/urls.head" \
-          && mv "$ARTIFACTS_DIR/urls.head" "$ARTIFACTS_DIR/sitemap-urls.txt"
+
+      # Is the sitemap telling the truth? A store that lists dead URLs spends the
+      # crawl budget AI crawlers use for discovery on nothing, and an assistant that
+      # cites one sends a reader to a 404. Sample evenly rather than from the top:
+      # stale slugs cluster, so the first entries alone give a badly biased rate.
+      : > "$ARTIFACTS_DIR/sitemap-health.txt"
+      urls_total=$(wc -l < "$ARTIFACTS_DIR/sitemap-urls.txt" 2>/dev/null || echo 0)
+      if [ "$urls_total" -gt 0 ]; then
+        step=$(( urls_total / 12 ))
+        [ "$step" -gt 0 ] || step=1
+        probed=0
+        dead=0
+        i=1
+        while [ "$i" -le "$urls_total" ] && [ "$probed" -lt 12 ]; do
+          probe_target=$(sed -n "${i}p" "$ARTIFACTS_DIR/sitemap-urls.txt")
+          i=$(( i + step ))
+          [ -n "$probe_target" ] || continue
+          probe_status=$(curl -sS -o /dev/null -w '%{http_code}' -L --max-time 15 \
+            -A "Mozilla/5.0 (compatible; harness-geo-audit)" "$probe_target" || echo 000)
+          probed=$(( probed + 1 ))
+          if [ "$probe_status" != "200" ]; then
+            dead=$(( dead + 1 ))
+            echo "$probe_status $probe_target" >> "$ARTIFACTS_DIR/sitemap-health.txt"
+          fi
+        done
+        echo "sitemap sample: probed=$probed dead=$dead" \
+          >> "$ARTIFACTS_DIR/sitemap-health.txt"
+        echo "sitemap sample: probed=$probed dead=$dead"
       fi
 
       # Live access per crawler. A 200 for the browser and a 403 for a citation
@@ -217,7 +267,7 @@ nodes:
       echo "sitemap URLs extracted: $(wc -l < "$ARTIFACTS_DIR/sitemap-urls.txt" 2>/dev/null || echo 0)"
       cat "$ARTIFACTS_DIR/crawler-status.txt"
       echo "DISCOVER-DONE"
-    timeout: 180000
+    timeout: 300000
 
   # 2. Choose the two pages that actually carry ecommerce signals. Product
   #    schema, price, availability and reviews live on a PDP; ItemList and
@@ -253,6 +303,25 @@ nodes:
 
       Say in `rationale` which source each URL came from, so a reader of the
       report knows whether the audit looked at a curated page or a sampled one.
+
+      ## Write a candidate list, not a single pick
+      Write `$ARTIFACTS_DIR/page-candidates.txt` — one `kind<TAB>url` per line,
+      best first, up to 4 `product` lines and 2 `category` lines:
+
+          product<TAB>https://…
+          product<TAB>https://…
+          category<TAB>https://…
+
+      Several, because a sitemap entry can be a lie. On a real store the first
+      product in the sitemap was a stale slug that 404'd, and with one candidate the
+      whole audit went on to score the shop having never seen a product page. So
+      pick candidates unlikely to fail together: different categories rather than
+      four variants of one garment, and prefer slugs whose *shape* matches the
+      product links you can actually see in `page.html` over shapes that appear only
+      in the sitemap — a sitemap left behind by a slug rename is the usual cause of
+      a dead entry.
+
+      Set `product_url` / `category_url` in the JSON to your first choice as well.
 
       Rules:
       - Return **absolute** `https://` URLs on the same host as $EXTERNAL_URL.
@@ -298,24 +367,25 @@ nodes:
         label="$fetch_label"; target="$fetch_url"
         if [ -z "$target" ]; then
           echo "$label: not identified"
-          return 0
+          return 1
         fi
         # The URL was chosen by a model reading a sitemap and is interpolated into
         # this script, so allow only a plain http(s) URL built from characters that
         # cannot carry shell syntax.
         case "$target" in
           http://*|https://*) ;;
-          *) echo "$label: rejected (not an http(s) URL)"; return 0 ;;
+          *) echo "$label: rejected (not an http(s) URL)"; return 1 ;;
         esac
         case "$target" in
           *[!A-Za-z0-9._~:/?"&"=%+-]*)
-            echo "$label: rejected (unsafe characters in URL)"; return 0 ;;
+            echo "$label: rejected (unsafe characters in URL)"; return 1 ;;
         esac
         curl -fsSL --max-time 30 -A "Mozilla/5.0 (compatible; harness-geo-audit)" \
           "$target" -o "$ARTIFACTS_DIR/$label.html" || true
         if [ ! -s "$ARTIFACTS_DIR/$label.html" ]; then
           echo "$label: fetch failed ($target)"
-          return 0
+          rm -f "$ARTIFACTS_DIR/$label.html"
+          return 1
         fi
         awk -f "$ARTIFACTS_DIR/strip.awk" "$ARTIFACTS_DIR/$label.html" \
           > "$ARTIFACTS_DIR/$label-text.txt" || true
@@ -350,14 +420,36 @@ nodes:
         echo "$label price-like strings in no-JS text: $(count_matches)"
       }
 
-      fetch_label=product
-      fetch_url="$product"
-      fetch
-      fetch_label=category
-      fetch_url="$category"
-      fetch
+      # Walk the candidates for one kind until a page actually comes back.
+      #
+      # A single candidate is not enough. On a real store the picker took the first
+      # product in the sitemap, that URL 404'd (a stale slug the site never removed),
+      # and the audit went on to score the whole shop without ever seeing a product
+      # page — the heaviest-weighted dimension reduced to reading template source.
+      try_kind() {
+        if [ -s "$ARTIFACTS_DIR/page-candidates.txt" ]; then
+          while IFS="$(printf '\t')" read -r cand_kind cand_url; do
+            [ "$cand_kind" = "$try_label" ] || continue
+            fetch_label="$try_label"
+            fetch_url="$cand_url"
+            fetch && return 0
+          done < "$ARTIFACTS_DIR/page-candidates.txt"
+        fi
+        # No candidates file, or every candidate in it failed: the JSON pick.
+        fetch_label="$try_label"
+        fetch_url="$try_fallback"
+        fetch && return 0
+        echo "$try_label: no candidate could be fetched — the dimensions are told this page is missing"
+        return 1
+      }
+      try_label=product
+      try_fallback="$product"
+      try_kind || true
+      try_label=category
+      try_fallback="$category"
+      try_kind || true
       echo "FETCH-PAGES-DONE"
-    timeout: 120000
+    timeout: 240000
 
   - id: technical
     category: validation
@@ -527,6 +619,17 @@ nodes:
       Google ranking or citation lever. Do not claim a measured citation effect.
 
       ## sitemap.xml
+      `$ARTIFACTS_DIR/sitemap-health.txt` holds a sampled liveness probe of the
+      sitemap's own URLs: a line per non-200 found, then a `probed=N dead=M` line.
+      A sitemap listing dead URLs spends the crawl budget AI crawlers use for
+      discovery on nothing, and an assistant that cites one sends a reader to a
+      404 — so report a finding whenever `dead` is non-zero, high severity above
+      roughly one in ten. Quote the sampled figures (`M of N sampled`) rather than
+      extrapolating to a catalogue-wide total you did not measure, and look at the
+      dead URLs for a shared pattern: an old slug scheme left behind by a rename is
+      the usual cause, in which case the fix is both to stop emitting the old
+      shape and to redirect it rather than 404.
+
       Present, valid, and referenced by a `Sitemap:` line in robots.txt? For a
       store also check: is it a sitemap index with product and category children
       (expected above a few thousand URLs); do product URLs actually appear in

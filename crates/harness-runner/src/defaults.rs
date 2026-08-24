@@ -645,4 +645,87 @@ mod tests {
             "`item` matches every sitemap URL: {ranking}"
         );
     }
+
+    /// What a real run against a real store broke on.
+    ///
+    /// The picker took the first product in the sitemap; that URL 404'd — a stale
+    /// slug the store never removed — and `fetch-pages` gave up after one attempt,
+    /// so the audit scored the whole shop having never seen a product page and the
+    /// heaviest-weighted dimension fell back to reading template source. The dead
+    /// URL itself went unreported, though the audit had tripped over it. And the
+    /// child-sitemap selection kept only product children, so the URL list held no
+    /// category or article URLs at all — which produced a false high finding that
+    /// the site's guides were missing from its sitemap when they sat in a child
+    /// nobody had read.
+    #[test]
+    fn geo_audit_survives_a_dead_sitemap_entry() {
+        let yaml = default_workflow("geo-audit").expect("geo-audit bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("geo-audit must parse");
+        let bash = |id: &str| match &wf
+            .nodes
+            .iter()
+            .find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("node `{id}`"))
+            .kind
+        {
+            harness_dag::NodeKind::Bash(b) => b.clone(),
+            other => panic!("node `{id}` is not bash: {other:?}"),
+        };
+
+        // One candidate is not enough, so the picker writes a list and the fetcher
+        // walks it. `fetch` must report failure for the walk to advance at all —
+        // it used to `return 0` on every path, including a 404.
+        let fetch = bash("fetch-pages");
+        assert!(fetch.contains("page-candidates.txt"), "no candidate walk");
+        assert!(
+            fetch.contains("fetch && return 0"),
+            "the walk must stop at the first candidate that succeeds"
+        );
+        assert!(
+            fetch.matches("return 1").count() >= 4,
+            "every `fetch` failure path must return non-zero, or the walk cannot \
+             advance past a dead URL: {fetch}"
+        );
+
+        // Tripping over a dead sitemap URL is itself a finding worth reporting.
+        let discover = bash("discover");
+        assert!(discover.contains("sitemap-health.txt"), "no liveness probe");
+        assert!(
+            discover.contains("probed=$probed dead=$dead"),
+            "the probe must report a sampled rate the prompt can quote"
+        );
+        let crawlers = match &wf.nodes.iter().find(|n| n.id == "crawlers").unwrap().kind {
+            harness_dag::NodeKind::Prompt(p) => p.clone(),
+            other => panic!("crawlers is not a prompt: {other:?}"),
+        };
+        assert!(
+            crawlers.contains("sitemap-health.txt"),
+            "the crawlers dimension must consume the probe, or it is dead weight"
+        );
+
+        // Per-child caps, so products cannot fill the whole quota and starve the
+        // categories and articles a dimension will be asked about.
+        assert!(
+            discover.contains("take_max"),
+            "the child cap must be applied per child, not to the concatenated list"
+        );
+        assert!(
+            !discover.contains("head -400 \"$ARTIFACTS_DIR/sitemap-urls.txt\""),
+            "capping the combined list lets the first kind crowd out the rest"
+        );
+        for kind in ["categor|kategori|collection", "article|blog|guide|faq|page"] {
+            assert!(
+                discover.contains(kind),
+                "child selection lost the `{kind}` pass"
+            );
+        }
+
+        // And the picker has to be told to produce more than one candidate.
+        let pick = match &wf.nodes.iter().find(|n| n.id == "pick-pages").unwrap().kind {
+            harness_dag::NodeKind::Prompt(p) => p.clone(),
+            other => panic!("pick-pages is not a prompt: {other:?}"),
+        };
+        assert!(pick.contains("page-candidates.txt"));
+        assert!(pick.contains("up to 4 `product` lines"));
+    }
 }

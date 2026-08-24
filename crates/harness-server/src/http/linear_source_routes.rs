@@ -21,6 +21,10 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 }
 
 /// Verify the project exists, or return a 4xx/5xx response.
+// The `Err` here IS the finished HTTP response, handed straight back to axum.
+// Boxing it to satisfy `result_large_err` would add an allocation, plus an
+// unwrap at every call site, to avoid a move axum makes anyway.
+#[allow(clippy::result_large_err)]
 async fn ensure_project(state: &Arc<RunsState>, project: &str) -> Result<(), Response> {
     let store = state
         .project_store()
