@@ -208,6 +208,39 @@ export function findingTaskDescription(
     .trim();
 }
 
+/**
+ * Why a report's "Create issue" action cannot be used, or `null` when it can.
+ *
+ * Both prerequisites mirror what the server enforces when the issue is filed: it
+ * needs Linear connected, and a trigger binding for `ideaWorkflow` on this
+ * project, because the binding is what supplies the team and the status to create
+ * the issue in.
+ *
+ * `linearMode` comes from the **global** Linear OAuth status
+ * (`app` | `personal_key` | `none`) — not from per-project credentials. Linear is
+ * configured once for the whole harness, since the identity being connected is the
+ * app rather than a person, so a per-project `linear` credential does not exist
+ * and asking for one always answers "not configured". That is exactly the bug this
+ * helper replaced: the report asked the per-project endpoint, got a permanent no,
+ * and hid the button on every report of every project without saying why.
+ *
+ * `undefined` (the status still loading) counts as not connected: the action stays
+ * disabled for that moment rather than flickering into a state that might fail.
+ */
+export function issueActionBlocked(
+  linearMode: string | undefined,
+  hasIdeaBinding: boolean,
+  ideaWorkflow: string,
+): string | null {
+  if (!linearMode || linearMode === "none") {
+    return "Linear is not connected — connect the workspace on the Credentials page";
+  }
+  if (!hasIdeaBinding) {
+    return `No Linear trigger binding for ${ideaWorkflow} on this project — add one in the project's Linear settings`;
+  }
+  return null;
+}
+
 /** One report's score at a point in time, for the score-history sparkline. */
 export interface ScorePoint {
   runId: string;

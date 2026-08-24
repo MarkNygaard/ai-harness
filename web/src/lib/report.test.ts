@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   findingKey,
   findingTaskDescription,
+  issueActionBlocked,
   type WorkflowFinding,
 } from "./report";
 
@@ -103,5 +104,38 @@ describe("findingKey", () => {
     expect(findingKey(pdpFinding())).toBe(
       "schema::Product schema has no aggregateRating",
     );
+  });
+});
+
+describe("issueActionBlocked", () => {
+  const IDEA = "idea-to-pr";
+
+  it("allows filing once Linear is connected and a binding exists", () => {
+    expect(issueActionBlocked("app", true, IDEA)).toBeNull();
+    // A personal API key is a supported fallback, not a blocker.
+    expect(issueActionBlocked("personal_key", true, IDEA)).toBeNull();
+  });
+
+  it("blocks on the global connection, not per-project credentials", () => {
+    // The bug this replaced: the report asked `/api/projects/{p}/credentials` for a
+    // `linear` row. Linear is configured globally — that endpoint's provider list
+    // is ["github"] — so the answer was a permanent no and the button vanished on
+    // every report of every project, with nothing on screen to explain it.
+    expect(issueActionBlocked("none", true, IDEA)).toMatch(/not connected/);
+    expect(issueActionBlocked("none", true, IDEA)).toMatch(/Credentials page/);
+  });
+
+  it("treats a still-loading status as not yet connected", () => {
+    expect(issueActionBlocked(undefined, true, IDEA)).toMatch(/not connected/);
+  });
+
+  it("names the missing binding, since that is what supplies the team", () => {
+    const why = issueActionBlocked("app", false, IDEA);
+    expect(why).toMatch(/idea-to-pr/);
+    expect(why).toMatch(/Linear settings/);
+  });
+
+  it("reports the connection first when both prerequisites are missing", () => {
+    expect(issueActionBlocked("none", false, IDEA)).toMatch(/not connected/);
   });
 });

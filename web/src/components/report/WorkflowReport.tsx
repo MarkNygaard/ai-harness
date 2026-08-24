@@ -17,12 +17,16 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useCreateRun } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
-import { useProjectCredentials } from "@/lib/credentials";
-import { useCreateLinearIssue, useLinearSources } from "@/lib/linear";
+import {
+  useCreateLinearIssue,
+  useLinearOauthStatus,
+  useLinearSources,
+} from "@/lib/linear";
 import {
   SEVERITY_RANK,
   findingKey,
   findingTaskDescription,
+  issueActionBlocked,
   ratingColor,
   useClearFindingState,
   useFindingStates,
@@ -80,16 +84,29 @@ export function WorkflowReport({
       (SEVERITY_RANK[b.severity ?? ""] ?? 9),
   );
 
-  // "Create issue" needs a Linear API key AND an idea-to-pr binding to file into.
-  const projectCreds = useProjectCredentials(project);
+  // "Create issue" needs Linear connected AND an idea-to-pr binding to file into.
+  //
+  // Connectedness is read from the OAuth status, not from per-project
+  // credentials. Linear is configured globally — the identity is the *app*, the
+  // same for every project — so `/api/projects/{p}/credentials` never reports a
+  // `linear` row (its provider list is `["github"]`, and a leftover per-project
+  // row is documented as inert). Asking it therefore always answered "not
+  // configured", which hid this button on every report for every project.
+  const linearStatus = useLinearOauthStatus();
   const linearSources = useLinearSources(project);
-  const hasLinearKey = !!projectCreds.data?.some(
-    (c) => c.provider === "linear" && c.configured,
-  );
   const hasBinding = !!linearSources.data?.some(
     (s) => s.workflow === IDEA_WORKFLOW,
   );
-  const linearEnabled = hasLinearKey && hasBinding;
+  // A button that simply vanishes teaches nobody anything — this gate read the
+  // wrong source for months and went unreported because its failure mode was an
+  // absence. When the action is declared by the workflow but a prerequisite is
+  // missing, show it disabled and name the prerequisite.
+  const issueBlocked = issueActionBlocked(
+    linearStatus.data?.mode,
+    hasBinding,
+    IDEA_WORKFLOW,
+  );
+  const linearEnabled = issueBlocked === null;
 
   // Persisted per-finding triage state, keyed by finding_key, scoped to this run.
   const states = useFindingStates(runId);
@@ -324,7 +341,8 @@ export function WorkflowReport({
                 key={i}
                 finding={f}
                 canBuild={canBuild && !!project}
-                canIssue={canIssue && linearEnabled}
+                canIssue={canIssue}
+                issueBlocked={issueBlocked}
                 canIgnore={canIgnore}
                 status={status}
                 state={stateByKey[findingKey(f)]}
@@ -401,6 +419,7 @@ function FindingRow({
   finding,
   canBuild,
   canIssue,
+  issueBlocked,
   canIgnore,
   status,
   state,
@@ -414,6 +433,8 @@ function FindingRow({
   finding: WorkflowFinding;
   canBuild: boolean;
   canIssue: boolean;
+  /** Why "Create issue" cannot be used, or null when it can. */
+  issueBlocked: string | null;
   canIgnore: boolean;
   status: ReportStatus;
   state: FindingState | undefined;
@@ -565,8 +586,11 @@ function FindingRow({
                     type="button"
                     size="sm"
                     variant="outline"
-                    disabled={busy}
-                    title="File a Linear issue for this finding — delegate it to the harness in Linear to start work"
+                    disabled={busy || !!issueBlocked}
+                    title={
+                      issueBlocked ??
+                      "File a Linear issue for this finding — delegate it to the harness in Linear to start work"
+                    }
                     onClick={onCreateIssue}
                   >
                     {busy ? "Working…" : "Create issue"}
