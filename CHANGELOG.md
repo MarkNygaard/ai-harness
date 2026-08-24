@@ -138,6 +138,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One dead sitemap URL no longer blinds the whole GEO audit.** The first real run
+  exposed three faults in a row. `pick-pages` took the first product in the store's
+  sitemap; that URL 404'd — a stale slug left behind by a rename, which the site
+  never removed and does not redirect — and `fetch-pages` gave up after a single
+  attempt, so the audit scored the entire shop having never seen a product page and
+  the heaviest-weighted dimension fell back to reading template source (it said so,
+  at least: "no product.html captured" was its own first critical finding). The
+  picker now writes a candidate list — up to four products and two categories,
+  chosen to be unlikely to fail together — and `fetch-pages` walks it until a page
+  actually returns; `fetch` reports failure instead of swallowing it, which is what
+  the walk needs to advance. Verified against the real store: two dead candidates
+  skipped, the third fetched, and the PDP signals captured.
+- **The GEO audit reports a sitemap that lists dead URLs.** It tripped over one and
+  said nothing. `discover` now samples the sitemap's own URLs for liveness — evenly
+  spaced, because stale slugs cluster and the first entries alone give a biased
+  rate — and the `crawlers` dimension reports the sampled figure as a finding, high
+  severity above roughly one in ten, quoting `M of N sampled` rather than
+  extrapolating. A sitemap full of 404s spends the crawl budget AI crawlers use for
+  discovery on nothing, and an assistant that cites one sends a reader to a dead
+  page. On the store audited, 2 of 12 sampled were dead.
+- **The GEO audit's sitemap sampling no longer starves categories and editorial.**
+  Child sitemaps were appended whole and the combined list truncated at 400, so the
+  product children filled the entire quota: the URL list held 400 product URLs and
+  not one category or article. The picker had to guess a category from the homepage
+  nav, and the `content` dimension reported the site's care and repair guides as
+  missing from its sitemap — a false high-severity finding, reasoned correctly from
+  starved data, since those guides sat in an articles child nobody had read. The cap
+  is now applied per child with a pass per kind (products, categories, editorial).
+  Same store: 400 product-only URLs became 300 product + 150 category + 144
+  editorial, and the 76 care-and-repair URLs that produced the false finding are now
+  present.
 - **A finding handed to `idea-to-pr` now says which page it was seen on.** The report's
   "Build this" action turns a finding into a task, and the task description named the
   project's entry URL as the live site — fine when the audit only looked at the
