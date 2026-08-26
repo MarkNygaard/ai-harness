@@ -120,6 +120,93 @@ pub struct PersistedNode {
     pub artifact_content: Option<String>,
 }
 
+/// One raw error line joined to its run — the input to the grouping below.
+#[derive(Debug, sqlx::FromRow)]
+struct ActivityErrorRow {
+    project: Option<String>,
+    workflow_name: String,
+    node_id: String,
+    activity: String,
+    run_id: String,
+    created_at: DateTime<Utc>,
+}
+
+/// One recurring agent-side failure, aggregated across runs.
+///
+/// The activity table records every tool result an agent produced, but it could
+/// only ever be read one run at a time — enough to render a live feed, useless for
+/// answering "what do the agents keep tripping over?". This is that second
+/// question: identical failures collapsed into one row with a count, so a
+/// repeated obstacle is visible as a pattern rather than as a line in a feed
+/// nobody re-reads.
+#[derive(Debug, Clone, Serialize)]
+pub struct ActivityErrorGroup {
+    /// How many times this failure appeared in the window.
+    pub count: i64,
+    /// How many distinct runs hit it — a high count over one run is one agent
+    /// looping; over many runs it is a property of the project.
+    pub runs: i64,
+    pub project: Option<String>,
+    pub workflow: String,
+    /// Node ids where it appeared (capped, most frequent first).
+    pub nodes: Vec<String>,
+    /// A representative message, verbatim.
+    pub sample: String,
+    pub first_seen: DateTime<Utc>,
+    pub last_seen: DateTime<Utc>,
+}
+
+/// Collapse a failure message to a coarse fingerprint so near-identical ones group.
+///
+/// Only run-specific noise is removed: digits become `N` and long hex runs become
+/// `ID`, so "took 1243ms" and "took 87ms" are one pattern and a uuid does not split
+/// a group per run. Deliberately crude — it is a grouping key, not a parser, and
+/// the group carries a verbatim `sample` so nothing is lost to the normalisation.
+pub fn error_fingerprint(message: &str) -> String {
+    let mut out = String::with_capacity(message.len());
+    let mut hex_run = 0usize;
+    let mut pending_hex = String::new();
+    let flush = |out: &mut String, pending: &mut String, run: usize| {
+        if run >= 8 {
+            out.push_str("ID");
+        } else {
+            out.push_str(pending);
+        }
+        pending.clear();
+    };
+    for c in message.chars() {
+        // A long unbroken hex-ish token is an id; a short one is a word.
+        if c.is_ascii_hexdigit() || c == '-' {
+            hex_run += 1;
+            pending_hex.push(c);
+            continue;
+        }
+        flush(&mut out, &mut pending_hex, hex_run);
+        hex_run = 0;
+        if c.is_ascii_digit() {
+            if !out.ends_with('N') {
+                out.push('N');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    flush(&mut out, &mut pending_hex, hex_run);
+    // Digits inside a short hex token still collapse, so the two passes agree.
+    let collapsed: String = out
+        .chars()
+        .scan(false, |prev_digit, c| {
+            let is_digit = c.is_ascii_digit();
+            let keep = !(is_digit && *prev_digit);
+            *prev_digit = is_digit;
+            Some((c, keep))
+        })
+        .filter(|(_, keep)| *keep)
+        .map(|(c, _)| if c.is_ascii_digit() { 'N' } else { c })
+        .collect();
+    collapsed.trim().chars().take(200).collect()
+}
+
 /// One persisted activity line (matches `harness_run_activity`). `id` is the
 /// cursor the UI pages through to fetch only lines newer than what it has.
 /// `kind` is one of `text` / `tool` / `tool_result`; `detail` carries a tool's
@@ -610,6 +697,108 @@ impl RunStore {
         Ok(rows)
     }
 
+    /// Recurring agent-side failures across runs, newest window first.
+    ///
+    /// Reads the same rows the live feed shows, but across every run instead of
+    /// one, and collapses them by [`error_fingerprint`] so a repeated obstacle
+    /// reads as a count rather than as scattered lines. `project` narrows to one
+    /// project; `days` bounds the window; `scan_limit` bounds how many raw rows
+    /// are considered (newest first) so a noisy month cannot pull an unbounded
+    /// result set into memory.
+    pub async fn activity_error_groups(
+        &self,
+        project: Option<&str>,
+        days: i32,
+        scan_limit: i64,
+    ) -> Result<Vec<ActivityErrorGroup>, PersistError> {
+        let rows: Vec<ActivityErrorRow> = sqlx::query_as(
+            "SELECT r.project, r.workflow_name, a.node_id, a.activity, a.run_id, a.created_at
+                 FROM harness_run_activity a
+                 JOIN harness_workflow_runs r ON r.id = a.run_id
+                 WHERE a.is_error
+                   AND a.created_at >= now() - make_interval(days => $1)
+                   AND ($2::text IS NULL OR r.project = $2)
+                 ORDER BY a.created_at DESC
+                 LIMIT $3",
+        )
+        .bind(days.max(1))
+        .bind(project)
+        .bind(scan_limit.max(1))
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Group in Rust rather than SQL: the fingerprint is the grouping key and
+        // it is a plain function, so it stays testable without a database.
+        use std::collections::HashMap;
+        struct Acc {
+            count: i64,
+            runs: std::collections::HashSet<String>,
+            nodes: HashMap<String, i64>,
+            sample: String,
+            first_seen: DateTime<Utc>,
+            last_seen: DateTime<Utc>,
+        }
+        let mut acc: HashMap<(Option<String>, String, String), Acc> = HashMap::new();
+        for row in rows {
+            let ActivityErrorRow {
+                project,
+                workflow_name: workflow,
+                node_id,
+                activity: message,
+                run_id,
+                created_at: at,
+            } = row;
+            let key = (
+                project.clone(),
+                workflow.clone(),
+                error_fingerprint(&message),
+            );
+            let e = acc.entry(key).or_insert_with(|| Acc {
+                count: 0,
+                runs: std::collections::HashSet::new(),
+                nodes: HashMap::new(),
+                sample: message.clone(),
+                first_seen: at,
+                last_seen: at,
+            });
+            e.count += 1;
+            e.runs.insert(run_id);
+            *e.nodes.entry(node_id).or_insert(0) += 1;
+            if at < e.first_seen {
+                e.first_seen = at;
+            }
+            if at > e.last_seen {
+                e.last_seen = at;
+                e.sample = message;
+            }
+        }
+        let mut out: Vec<ActivityErrorGroup> = acc
+            .into_iter()
+            .map(|((project, workflow, _), a)| {
+                let mut nodes: Vec<(String, i64)> = a.nodes.into_iter().collect();
+                nodes.sort_by(|x, y| y.1.cmp(&x.1).then_with(|| x.0.cmp(&y.0)));
+                ActivityErrorGroup {
+                    count: a.count,
+                    runs: a.runs.len() as i64,
+                    project,
+                    workflow,
+                    nodes: nodes.into_iter().take(6).map(|(n, _)| n).collect(),
+                    sample: a.sample,
+                    first_seen: a.first_seen,
+                    last_seen: a.last_seen,
+                }
+            })
+            .collect();
+        // Most-repeated first, then most recent — the reading order for "what
+        // should I write down in CLAUDE.md?".
+        out.sort_by(|x, y| {
+            y.count
+                .cmp(&x.count)
+                .then_with(|| y.last_seen.cmp(&x.last_seen))
+        });
+        Ok(out)
+    }
+
     /// Mark a run's terminal status (run finished). Only updates a run that is
     /// still `running` — so a run cancelled out from under the executor (via
     /// [`Self::cancel_run`] or [`Self::reconcile_orphaned_runs`]) stays cancelled
@@ -985,6 +1174,45 @@ pub(crate) fn is_test_db(url: &str) -> bool {
     let db = url.rsplit('/').next().unwrap_or(url);
     let db = db.split(['?', '#']).next().unwrap_or(db);
     db.to_ascii_lowercase().contains("test")
+}
+
+#[cfg(test)]
+mod fingerprint_tests {
+    use super::error_fingerprint as fp;
+
+    /// The point of the fingerprint is that the *same obstacle* groups even when
+    /// the message carries per-run noise. These pairs must land in one group.
+    #[test]
+    fn run_specific_noise_does_not_split_a_group() {
+        assert_eq!(fp("timed out after 1243ms"), fp("timed out after 87ms"));
+        assert_eq!(
+            fp("run 4f3a9c2e1b7d8a05 failed to start"),
+            fp("run 91bc0de4a2f36587 failed to start")
+        );
+        assert_eq!(fp("retry 1 of 3"), fp("retry 2 of 3"));
+    }
+
+    /// And genuinely different obstacles must not collapse into one, or the count
+    /// stops meaning anything.
+    #[test]
+    fn different_failures_stay_apart() {
+        assert_ne!(fp("permission denied"), fp("path not found"));
+        assert_ne!(
+            fp("cannot find module ./stores"),
+            fp("cannot find module ./sanity")
+        );
+    }
+
+    #[test]
+    fn the_shape_is_still_readable_and_bounded() {
+        // A fingerprint is a key, but it should not be gibberish when logged.
+        assert!(fp("typecheck failed with 42 errors").contains("typecheck failed with"));
+        assert!(fp(&"x".repeat(500)).chars().count() <= 200);
+        assert_eq!(
+            fp("   trailing and leading   ").trim(),
+            fp("trailing and leading")
+        );
+    }
 }
 
 #[cfg(test)]

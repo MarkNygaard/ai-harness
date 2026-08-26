@@ -118,6 +118,7 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
             .unwrap_or_default()
             .to_string()
     };
+    let i = |k: &str, default: i64| args.get(k).and_then(Value::as_i64).unwrap_or(default);
 
     match name {
         // ── Run control ─────────────────────────────────────────────────────
@@ -192,6 +193,35 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
                     format!("{} finding state(s) for run {id}", rows.len()),
                     &json!({ "findings": rows }),
                 ),
+                Err(e) => tool_error(e.to_string()),
+            }
+        }
+        "run_activity_errors" => {
+            let store = match state.store().await {
+                Ok(s) => s,
+                Err(e) => return tool_error(e),
+            };
+            let project = s("project");
+            let days = i("days", 14) as i32;
+            // Bounds the raw scan, not the reply: the grouping collapses it.
+            let scan = i("scan_limit", 5000);
+            let limit = i("limit", 25).clamp(1, 200) as usize;
+            let project = (!project.is_empty()).then_some(project);
+            match store
+                .activity_error_groups(project.as_deref(), days, scan)
+                .await
+            {
+                Ok(mut groups) => {
+                    let total: i64 = groups.iter().map(|g| g.count).sum();
+                    groups.truncate(limit);
+                    to_result(
+                        format!(
+                            "{} distinct failure(s), {total} occurrence(s), last {days}d",
+                            groups.len()
+                        ),
+                        &json!({ "groups": groups }),
+                    )
+                }
                 Err(e) => tool_error(e.to_string()),
             }
         }
@@ -449,6 +479,20 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "run_activity_errors",
+            "description": "Recurring agent-side failures across runs — what the agents keep tripping over, rather than one run's feed. Each group is identical failures collapsed together: `count` occurrences over `runs` distinct runs, the `workflow`, the `nodes` they happened in, a verbatim `sample`, and first/last seen. Most-repeated first. Use it to decide what belongs in a project's CLAUDE.md: a failure with a high `runs` count is a property of the project (a missing generated file, an absent credential, a command that isn't where the agent looked), not one agent's bad luck. Optional `project` narrows to one project, `days` sets the window (default 14), `limit` caps the groups returned (default 25). Note that a search matching nothing is not counted as a failure.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "project": { "type": "string" },
+                    "days": { "type": "integer" },
+                    "limit": { "type": "integer" },
+                    "scan_limit": { "type": "integer" }
+                },
+            }
+        }),
+        json!({
             "name": "run_linear_claim",
             "description": "Read how a run is tied back to Linear — the claim row the poller sweeps every 30s to report progress and move the issue. Returns `identifier`, `issue_id`, `phase` (claimed | in_review | done), `agent_session_id` (the delegated agent session progress is posted into; null for a column-polled run), `reported_nodes` (which steps have already been announced) and `last_activity_at` (when the session last heard anything). Use when a Linear issue or agent session is not receiving updates for a running run: no row means the run was never linked, a null `agent_session_id` means there is no session to post into, and a `last_activity_at` far behind the run's progress means the posts are being rejected or the poller is not sweeping.",
             "inputSchema": {
@@ -688,6 +732,7 @@ mod tests {
             "run_status",
             "run_findings",
             "run_linear_claim",
+            "run_activity_errors",
             "workflow_catalog",
             "workflow_create",
             "workflow_set_node",

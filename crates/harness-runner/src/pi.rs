@@ -629,13 +629,17 @@ fn activities_from_line(line: &str) -> Vec<Activity> {
                 .get("toolCallId")
                 .and_then(Value::as_str)
                 .map(str::to_string);
-            let is_error = v
+            let reported_error = v
                 .get("isError")
                 .and_then(Value::as_bool)
                 .or_else(|| v.get("result").and_then(|r| r.get("isError"))?.as_bool())
                 .unwrap_or(false);
+            let tool = v.get("toolName").and_then(Value::as_str).unwrap_or("");
             return match omp_tool_result_snippet(&v) {
-                Some(snippet) => vec![Activity::tool_result(snippet, id, is_error)],
+                Some(snippet) => {
+                    let failed = reported_error && !is_empty_lookup(tool, &snippet);
+                    vec![Activity::tool_result(snippet, id, failed)]
+                }
                 None => Vec::new(),
             };
         }
@@ -669,6 +673,45 @@ fn omp_tool_detail(v: &serde_json::Value) -> Option<String> {
 
 /// First non-empty line of a `tool_execution_end` result
 /// (`result.content[].text`).
+/// Tools whose purpose is to answer "is this here?".
+///
+/// Deliberately excludes `read`, `bash` and the edit tools: a read of a path that
+/// isn't there, or a command that doesn't exist, is the tool failing to do what it
+/// was asked. Searching and finding nothing is the tool succeeding.
+const LOOKUP_TOOLS: &[&str] = &["glob", "grep", "search", "find", "ls", "list_dir"];
+
+/// Phrases a lookup tool uses to say "nothing matched".
+const NO_MATCH: &[&str] = &[
+    "path not found",
+    "no files found",
+    "no files matched",
+    "no matches found",
+    "no matches for",
+    "no results",
+    "did not match any",
+    "found 0 ",
+];
+
+/// Whether a tool result flagged as an error is really just an empty search.
+///
+/// Providers mark a no-match lookup `isError`, which is how a run that probed for
+/// four generated files and correctly found none showed up as four red failures.
+/// That is not cosmetic: it inflates any error signal built on this data with the
+/// most common *successful* pattern an agent has — checking whether something
+/// exists before acting.
+///
+/// Keyed on the tool, not the text alone, because a genuine failure can easily say
+/// "not found" — `bash` reporting `command not found` is a real error and must
+/// stay one.
+pub(crate) fn is_empty_lookup(tool: &str, snippet: &str) -> bool {
+    let tool = tool.trim().to_ascii_lowercase();
+    if !LOOKUP_TOOLS.iter().any(|t| tool == *t) {
+        return false;
+    }
+    let lower = snippet.to_ascii_lowercase();
+    NO_MATCH.iter().any(|p| lower.contains(p))
+}
+
 fn omp_tool_result_snippet(v: &serde_json::Value) -> Option<String> {
     use serde_json::Value;
     let content = v.get("result")?.get("content")?.as_array()?;
@@ -898,11 +941,29 @@ mod tests {
         assert_eq!(acts[0].tool_id.as_deref(), Some("tool_1"));
         assert!(!acts[0].is_error);
 
-        // A failed tool surfaces is_error (from either `isError` location).
+        // A failed tool surfaces is_error (from either `isError` location). Note
+        // this one says "not found" and must stay an error: `bash` could not run
+        // what it was given, which is a failure however the message reads.
         let errored = r#"{"type":"tool_execution_end","toolCallId":"t3","toolName":"bash","isError":true,"result":{"content":[{"type":"text","text":"command not found"}]}}"#;
         let acts = activities_from_line(errored);
         assert!(acts[0].is_error);
         assert_eq!(acts[0].detail.as_deref(), Some("command not found"));
+
+        // A lookup that matched nothing is a negative answer, not a failure. The
+        // provider flags it `isError`, which turned a run's four probes for
+        // generated files into four red errors in the activity feed.
+        let empty = r#"{"type":"tool_execution_end","toolCallId":"t4","toolName":"glob","isError":true,"result":{"content":[{"type":"text","text":"Path not found: apps/web/i18n/stores.ts"}]}}"#;
+        let acts = activities_from_line(empty);
+        assert!(!acts[0].is_error, "an empty glob is not a failure");
+        assert_eq!(
+            acts[0].detail.as_deref(),
+            Some("Path not found: apps/web/i18n/stores.ts"),
+            "the line is still shown — only its severity changes"
+        );
+
+        // A lookup that failed for a real reason keeps its error flag.
+        let denied = r#"{"type":"tool_execution_end","toolCallId":"t5","toolName":"grep","isError":true,"result":{"content":[{"type":"text","text":"permission denied"}]}}"#;
+        assert!(activities_from_line(denied)[0].is_error);
 
         // A completed assistant message → its text; a task marker wins.
         let marked = r#"{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"[[TASK 2/5]] wiring it"}]}}"#;
