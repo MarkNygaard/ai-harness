@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`run_linear_claim` (MCP)** — read how a run is tied back to Linear: the claim
+  row the poller sweeps every 30 seconds to report progress and move the issue.
+  Returns the issue identifier, `phase`, `agent_session_id`, `reported_nodes` and
+  `last_activity_at`. Added because diagnosing a silent session took a line-by-line
+  read of the poller — nothing outside the process could see whether the claim
+  existed, carried a session, or had simply stopped being swept. No row means the
+  run was never linked; a null `agent_session_id` means there is no session to post
+  into; a `last_activity_at` far behind the run's progress means the posts are
+  failing or the poller is not sweeping.
 - **The harness answers questions asked in a Linear agent session.** Writing in the
   session mid-run previously got a fixed "I can't change course" reply whatever you
   asked. A follow-up is now answered from the run's own state — step statuses plus the
@@ -138,6 +147,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **One stalled HTTP request could stop every Linear update the harness makes.** A
+  delegated run reported nothing into its Linear session for 50 minutes — no step
+  activities, and no move to In Review even after its PR was opened — while the run
+  itself proceeded normally. The Linear client was built with
+  `reqwest::Client::new()`, which applies **no** request timeout, and the poller
+  awaits those calls inline in its tick loop: one connection that opened and then
+  stalled wedged the loop for the lifetime of the process. Every claim stopped being
+  swept, and because the loop never reached its next statement, nothing was logged
+  to say so — the only visible symptom was Linear's own "stopped responding". The
+  client now has a 30-second timeout (compile-time asserted non-zero), and a tick is
+  additionally bounded and unwind-guarded, so a hang or a panic costs one tick
+  rather than the poller.
+- **The Linear session no longer goes quiet when an activity is rejected.**
+  `report_to_session` returned `true` whenever a session id existed — even when the
+  post had just failed — and callers use that return to decide whether to fall back
+  to a plain issue comment. So a rejected activity produced neither a session entry
+  nor the comment meant to replace it. It now reports what actually happened.
+- **A credential the poller cannot use is logged at `warn`, not `debug`.**
+  `linear_client_or_none` returning `None` makes the poller skip every claim, so at
+  debug level the harness silently stopped transitioning issues with nothing in the
+  logs to explain it.
 - **One dead sitemap URL no longer blinds the whole GEO audit.** The first real run
   exposed three faults in a row. `pick-pages` took the first product in the store's
   sitemap; that URL 404'd — a stale slug left behind by a rename, which the site

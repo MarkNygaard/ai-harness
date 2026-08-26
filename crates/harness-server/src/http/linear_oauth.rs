@@ -498,7 +498,10 @@ pub(crate) async fn linear_client_or_none(state: &Arc<RunsState>) -> Option<Line
     match linear_client(state).await {
         Ok(c) => Some(c),
         Err(e) => {
-            tracing::debug!("linear: no usable credential: {e}");
+            // `warn`, not `debug`: the poller skips every claim when this returns
+            // None, so at debug level the harness silently stops transitioning
+            // issues and reporting progress with nothing in the logs to explain it.
+            tracing::warn!("linear: no usable credential: {e}");
             None
         }
     }

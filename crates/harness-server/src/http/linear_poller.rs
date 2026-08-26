@@ -45,6 +45,20 @@ use super::runs_routes::{start_run, CreateRunRequest, RunsState};
 /// `poll_interval_secs` has elapsed; status-sync runs every tick.
 const POLLER_TICK_SECS: u64 = 30;
 
+/// Hard ceiling on one tick's work.
+///
+/// The loop awaits [`poll_once`] inline, so anything that never returns stops the
+/// poller for the lifetime of the process: no claim swept, no progress reported,
+/// no status transitioned, and — because the loop simply stops reaching its next
+/// statement — nothing logged to say so. That happened: an untimed Linear request
+/// stalled and a delegated run went 50 minutes without a single session activity
+/// while the run itself completed normally. The per-request timeout is the actual
+/// fix; this is the backstop for the next await that forgets one.
+const TICK_BUDGET_SECS: u64 = 20 * 60;
+// The budget has to leave room for a tick's real work — several Linear round trips
+// per active claim — while still being far shorter than a person's patience.
+const _: () = assert!(TICK_BUDGET_SECS > POLLER_TICK_SECS * 4 && TICK_BUDGET_SECS <= 60 * 60);
+
 /// Runaway backstop for bindings with a failed-label configured: once an issue
 /// has been (re-)claimed this many times, stop claiming it even if the label is
 /// absent. The failed label is normally the pickup gate (and removing it re-arms
@@ -68,7 +82,24 @@ pub(crate) fn spawn_poller(state: Arc<RunsState>) {
         loop {
             tick.tick().await;
             sweep_attachments_if_due(&state, &mut last_sweep);
-            poll_once(&state, &mut last).await;
+            // Bounded, and unwind-guarded: a tick that hangs or panics costs one
+            // tick, not the poller. Without this the loop is a single point of
+            // failure for every Linear status transition the harness makes.
+            let work = std::panic::AssertUnwindSafe(poll_once(&state, &mut last));
+            match tokio::time::timeout(
+                Duration::from_secs(TICK_BUDGET_SECS),
+                futures::FutureExt::catch_unwind(work),
+            )
+            .await
+            {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => tracing::error!(
+                    "linear poller: tick panicked; continuing with the next tick"
+                ),
+                Err(_) => tracing::error!(
+                    "linear poller: tick exceeded {TICK_BUDGET_SECS}s and was abandoned;                      continuing with the next tick"
+                ),
+            }
         }
     });
 }
@@ -772,6 +803,13 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
 /// Returns whether the claim *was* delegated, which is also the caller's signal
 /// to skip the plain issue comment: for a delegated run the session thread is the
 /// conversation, and posting both duplicates every update.
+/// Post one activity into the claim's agent session.
+///
+/// Returns whether it was **delivered** — callers use that to fall back to a plain
+/// issue comment. It used to return `true` whenever a session id existed, even
+/// when the post had just failed, so a rejected activity produced neither a
+/// session entry nor the comment that was supposed to replace it: the thread simply
+/// went quiet, and only a `warn` line said otherwise.
 async fn report_to_session(
     client: &LinearClient,
     claim: &LinearClaim,
@@ -786,6 +824,7 @@ async fn report_to_session(
             claim.identifier,
             e.0
         );
+        return false;
     }
     true
 }

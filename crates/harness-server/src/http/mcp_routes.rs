@@ -195,6 +195,34 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
                 Err(e) => tool_error(e.to_string()),
             }
         }
+        "run_linear_claim" => {
+            let id = s("run_id");
+            if id.is_empty() {
+                return tool_error("`run_id` is required");
+            }
+            let store = match state.linear_claim_store().await {
+                Ok(s) => s,
+                Err(e) => return tool_error(e),
+            };
+            match store.claim_for_run(&id).await {
+                Ok(Some(claim)) => to_result(
+                    format!(
+                        "run {id} — {} / phase {} / session {}",
+                        claim.identifier,
+                        claim.phase,
+                        claim.agent_session_id.as_deref().unwrap_or("(none)")
+                    ),
+                    &claim,
+                ),
+                // Not an error: most runs are not Linear-triggered at all, and
+                // "no row" is itself the answer when one was expected.
+                Ok(None) => to_result(
+                    format!("run {id} has no Linear claim"),
+                    &json!({ "claim": null }),
+                ),
+                Err(e) => tool_error(e.to_string()),
+            }
+        }
         "workflow_models" => {
             match resolve_workflow_models(state, &s("workflow"), Some(&s("project"))) {
                 Ok(pairs) => to_result(
@@ -413,6 +441,16 @@ fn mcp_tools() -> Vec<Value> {
         json!({
             "name": "run_findings",
             "description": "Read the per-finding state a human set in a run's report: each finding's `finding_key` (category::title) + `action` — built | issued | ignored | checked | passed | failed — plus any `ref_run_id` / Linear `issue_identifier`+`issue_url`. Use to see which report items a person marked, e.g. which manual test scenarios passed vs failed. Findings with no recorded state are absent from the list.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "run_id": { "type": "string" } },
+                "required": ["run_id"],
+            }
+        }),
+        json!({
+            "name": "run_linear_claim",
+            "description": "Read how a run is tied back to Linear — the claim row the poller sweeps every 30s to report progress and move the issue. Returns `identifier`, `issue_id`, `phase` (claimed | in_review | done), `agent_session_id` (the delegated agent session progress is posted into; null for a column-polled run), `reported_nodes` (which steps have already been announced) and `last_activity_at` (when the session last heard anything). Use when a Linear issue or agent session is not receiving updates for a running run: no row means the run was never linked, a null `agent_session_id` means there is no session to post into, and a `last_activity_at` far behind the run's progress means the posts are being rejected or the poller is not sweeping.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -649,6 +687,7 @@ mod tests {
             "run_list",
             "run_status",
             "run_findings",
+            "run_linear_claim",
             "workflow_catalog",
             "workflow_create",
             "workflow_set_node",
