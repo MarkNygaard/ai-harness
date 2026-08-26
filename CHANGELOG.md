@@ -147,6 +147,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A claim recorded before its run row is no longer retired on sight.** `start_run`
+  returns as soon as it has a run id; the run row itself is written by the spawned
+  run task moments later. The Linear webhook records its claim in between, so a
+  claim legitimately references a run that does not exist yet — 6.3 seconds on the
+  run that exposed this. The claim sweep treated that as "run gone", set the claim
+  to `done`, and thereby ended all Linear reporting for that run permanently: no
+  step activities, no status transitions, for its entire life, from a single tick
+  landing in a few-second window (a ~20% chance at a 30s cadence). A missing row is
+  now tolerated for 10 minutes before the claim is dropped, and the drop is logged.
+  Affects delegated and poller-claimed runs alike, since both record the claim after
+  `start_run` returns.
 - **A Linear issue that cannot be moved no longer looks like one that was.** Every
   state transition in the poller was `let _ = client.set_issue_state(…)` — the
   failure discarded, not even logged — and the completed branch then set the claim

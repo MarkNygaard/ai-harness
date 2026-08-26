@@ -653,8 +653,22 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
         let detail = match run_store.get_run(&c.run_id).await {
             Ok(Some(d)) => d,
             Ok(None) => {
-                // Run row gone — stop tracking this claim.
-                let _ = claim_store.set_phase(&c.run_id, "done").await;
+                // Not necessarily gone — possibly not written yet. `start_run`
+                // returns before its spawned task records the run, so a fresh claim
+                // can point at a row that is still seconds away. Only give up once
+                // the row has had time to appear; closing on the first miss retires
+                // the claim for good and the run reports nothing for its entire life.
+                if Utc::now().signed_duration_since(c.created_at).num_minutes()
+                    >= MISSING_RUN_GRACE_MINS
+                {
+                    tracing::warn!(
+                        "linear poller: {} — no run row for {} after {}m; dropping the claim",
+                        c.identifier,
+                        c.run_id,
+                        MISSING_RUN_GRACE_MINS
+                    );
+                    let _ = claim_store.set_phase(&c.run_id, "done").await;
+                }
                 continue;
             }
             Err(_) => continue,
@@ -850,6 +864,17 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
 /// Returns whether the claim *was* delegated, which is also the caller's signal
 /// to skip the plain issue comment: for a delegated run the session thread is the
 /// conversation, and posting both duplicates every update.
+/// How long a claim may reference a run row that does not exist yet.
+///
+/// The run row is written by the spawned run task, not by `start_run` — which
+/// returns as soon as it has an id — so a claim recorded the instant `start_run`
+/// returns legitimately precedes its own run by seconds (6.3s on the run that
+/// exposed this). Treating that gap as "run gone" and closing the claim ends all
+/// Linear reporting for the whole run, permanently, from a single unlucky tick.
+/// Long enough to cover worktree setup and a slow first write; short enough that a
+/// genuinely deleted run stops being swept the same day.
+const MISSING_RUN_GRACE_MINS: i64 = 10;
+
 /// How long to keep retrying a Linear state transition that keeps failing.
 ///
 /// A rejected move is usually transient (a hiccup, a timeout), so the claim stays
