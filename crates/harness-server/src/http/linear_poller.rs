@@ -275,7 +275,14 @@ pub(crate) async fn rearm_linear_claim(
             }
             // Move it to In Progress so the poller won't re-claim it from source.
             if let Some(ip) = b.in_progress_state_id.as_deref() {
-                let _ = client.set_issue_state(&claim.issue_id, ip).await;
+                transition(
+                    &client,
+                    &claim.identifier,
+                    &claim.issue_id,
+                    ip,
+                    "in-progress",
+                )
+                .await;
             }
         }
     }
@@ -545,7 +552,16 @@ async fn claim_and_fire(
                 e
             );
             // Undo the In Progress move so the issue can be retried next poll.
-            let _ = client.set_issue_state(&issue.id, &b.source_state_id).await;
+            // `client` is already a `&LinearClient` here (unlike the owned binding
+            // inside the other call sites), so it is passed through as-is.
+            transition(
+                client,
+                &issue.identifier,
+                &issue.id,
+                &b.source_state_id,
+                "source",
+            )
+            .await;
         }
     }
 }
@@ -653,9 +669,15 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
 
         match detail.run.status.as_str() {
             "completed" => {
-                if let Some(ready) = binding.as_ref().and_then(|b| b.ready_state_id.as_deref()) {
-                    let _ = client.set_issue_state(&c.issue_id, ready).await;
-                }
+                let ready = binding.as_ref().and_then(|b| b.ready_state_id.as_deref());
+                let moved = match ready {
+                    Some(ready) => {
+                        transition(&client, &c.identifier, &c.issue_id, ready, "ready").await
+                    }
+                    // No ready state configured: nothing to move to, so the claim
+                    // is done as soon as the run is.
+                    None => true,
+                };
                 // A `response` activity is what marks a delegated session
                 // complete; a poller-claimed issue gets the comment instead.
                 let msg = format!("✅ ai-harness run `{}` completed.", c.run_id);
@@ -664,8 +686,33 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                 {
                     let _ = client.add_comment(&c.issue_id, &msg).await;
                 }
-                let _ = claim_store.set_phase(&c.run_id, "done").await;
-                tracing::info!("linear poller: {} — run completed → ready", c.identifier);
+                // Closing the claim is what stops the retry, so it is gated on the
+                // move having landed. Left open, the next tick tries again — the
+                // alternative is an issue stranded in the wrong column with the
+                // claim marked done and nothing left to notice.
+                let stale = Utc::now().signed_duration_since(c.created_at).num_hours()
+                    >= TRANSITION_RETRY_HOURS;
+                if moved {
+                    let _ = claim_store.set_phase(&c.run_id, "done").await;
+                    tracing::info!("linear poller: {} — run completed → ready", c.identifier);
+                } else if stale {
+                    let note = format!(
+                        "⚠️ ai-harness run `{}` completed, but this issue could not be moved                          to its ready state after {}h of retries — move it by hand and check                          the binding's ready state.",
+                        c.run_id, TRANSITION_RETRY_HOURS
+                    );
+                    let _ = client.add_comment(&c.issue_id, &note).await;
+                    let _ = claim_store.set_phase(&c.run_id, "done").await;
+                    tracing::error!(
+                        "linear poller: {} — giving up on the ready-state move after {}h",
+                        c.identifier,
+                        TRANSITION_RETRY_HOURS
+                    );
+                } else {
+                    tracing::warn!(
+                        "linear poller: {} — run completed but the ready-state move failed;                          retrying on the next tick",
+                        c.identifier
+                    );
+                }
             }
             "failed" | "cancelled" => {
                 // The binding's attempt budget (default 1); fall back to 1 if the
@@ -776,7 +823,7 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                     if let Some(review) =
                         binding.as_ref().and_then(|b| b.review_state_id.as_deref())
                     {
-                        let _ = client.set_issue_state(&c.issue_id, review).await;
+                        transition(&client, &c.identifier, &c.issue_id, review, "review").await;
                         let _ = claim_store.set_phase(&c.run_id, "in_review").await;
                         tracing::info!("linear poller: {} — PR opened → In Review", c.identifier);
                         // Mid-run progress for a delegated session: an `action`,
@@ -803,6 +850,41 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
 /// Returns whether the claim *was* delegated, which is also the caller's signal
 /// to skip the plain issue comment: for a delegated run the session thread is the
 /// conversation, and posting both duplicates every update.
+/// How long to keep retrying a Linear state transition that keeps failing.
+///
+/// A rejected move is usually transient (a hiccup, a timeout), so the claim stays
+/// open and the next tick tries again. A permanently invalid state id would
+/// otherwise retry forever, so past this age the poller says so on the issue and
+/// closes the claim rather than looping in the background.
+const TRANSITION_RETRY_HOURS: i64 = 6;
+
+/// Move an issue to `state_id`, reporting a failure instead of discarding it.
+///
+/// Every transition used to be `let _ = client.set_issue_state(…)`, so a rejected
+/// move left no trace whatsoever — and in the completed branch the `info!` line
+/// underneath announced the move as done regardless. An issue could sit in the
+/// wrong column indefinitely while the logs claimed otherwise, which is exactly
+/// what happened to a delegated run that finished but never reached its ready
+/// state.
+async fn transition(
+    client: &LinearClient,
+    identifier: &str,
+    issue_id: &str,
+    state_id: &str,
+    what: &str,
+) -> bool {
+    match client.set_issue_state(issue_id, state_id).await {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(
+                "linear poller: {identifier} — could not move to {what} ({state_id}): {}",
+                e.0
+            );
+            false
+        }
+    }
+}
+
 /// Post one activity into the claim's agent session.
 ///
 /// Returns whether it was **delivered** — callers use that to fall back to a plain
