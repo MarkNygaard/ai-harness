@@ -147,6 +147,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Linear issue that cannot be moved no longer looks like one that was.** Every
+  state transition in the poller was `let _ = client.set_issue_state(…)` — the
+  failure discarded, not even logged — and the completed branch then set the claim
+  to `done` unconditionally while logging `run completed → ready` regardless. So a
+  rejected move stranded the issue in the wrong column permanently, with the logs
+  asserting the opposite: a finished run left its issue in In Progress and nothing
+  anywhere recorded why. Transitions now report failure, the claim stays open so the
+  next tick retries, and after 6 hours of failed retries the poller comments on the
+  issue and gives up rather than looping in the background. The success line is only
+  logged when the move actually landed.
 - **One stalled HTTP request could stop every Linear update the harness makes.** A
   delegated run reported nothing into its Linear session for 50 minutes — no step
   activities, and no move to In Review even after its PR was opened — while the run
