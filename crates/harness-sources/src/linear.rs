@@ -782,6 +782,19 @@ impl LinearAuth {
     }
 }
 
+/// How long a single Linear API call may take before it is abandoned.
+///
+/// reqwest applies **no** timeout by default, so a connection that opens and then
+/// stalls waits forever. That is not merely slow: the poller awaits these calls
+/// inline in its tick loop, so one hung request stops every claim from being
+/// swept — no progress activities, no status transitions — for the lifetime of the
+/// process, with nothing logged. Generous enough for a slow GraphQL query, finite
+/// so a wedged socket cannot outlive it.
+const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+// A zero or absent timeout is the bug this constant exists to prevent, so it is
+// checked at compile time rather than trusted to review.
+const _: () = assert!(REQUEST_TIMEOUT.as_secs() > 0 && REQUEST_TIMEOUT.as_secs() <= 120);
+
 /// A Linear GraphQL client.
 pub struct LinearClient {
     http: reqwest::Client,
@@ -799,7 +812,12 @@ impl LinearClient {
     /// Build a client for an explicit auth scheme.
     pub fn with_auth(auth: LinearAuth) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            // Falls back to an untimed client only if the builder fails, which it
+            // does not for a timeout-only config.
+            http: reqwest::Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
             auth,
         }
     }
