@@ -28,6 +28,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`run_activity_errors` (MCP)** — what the agents keep tripping over, across runs
+  rather than one at a time. The activity table already recorded every tool result,
+  but the only reader was a per-run tail feeding the live UI, so a repeated obstacle
+  was visible only as a line in a feed nobody re-reads. Identical failures are now
+  collapsed into one group: occurrences, how many distinct runs hit it, the workflow
+  and nodes, a verbatim sample, and first/last seen — most-repeated first. A high
+  run count is the signal worth acting on: it means the obstacle is a property of
+  the project (a generated file that isn't there, an absent credential, a command
+  somewhere other than where the agent looked) and belongs in that project's
+  `CLAUDE.md` rather than being rediscovered every run. Grouping is by a coarse
+  fingerprint that collapses digits and long hex runs, so per-run noise ("took
+  1243ms", a uuid) doesn't split a group; the verbatim sample means nothing is lost
+  to it.
 - **`run_linear_claim` (MCP)** — read how a run is tied back to Linear: the claim
   row the poller sweeps every 30 seconds to report progress and move the issue.
   Returns the issue identifier, `phase`, `agent_session_id`, `reported_nodes` and
@@ -147,6 +160,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A search that matches nothing is no longer recorded as a failure.** Providers
+  flag a no-match lookup `isError`, so a run that probed for four generated files
+  and correctly found none appeared as four red errors in the activity feed. Not
+  merely cosmetic: it would have made the single most common *successful* agent
+  pattern — checking whether something exists before acting — the loudest entry in
+  any error report built on this data. An `isError` result from a lookup tool
+  (`glob`, `grep`, `search`, `find`, `ls`) whose message says nothing matched is now
+  recorded as an ordinary result. Keyed on the tool rather than the text, because a
+  real failure can say "not found" too: `bash` reporting `command not found` stays an
+  error, as does a lookup that failed for a reason of its own such as a permission
+  denial. The line is still shown; only its severity changes.
 - **A claim recorded before its run row is no longer retired on sight.** `start_run`
   returns as soon as it has a run id; the run row itself is written by the spawned
   run task moments later. The Linear webhook records its claim in between, so a
