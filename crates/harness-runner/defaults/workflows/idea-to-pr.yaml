@@ -148,21 +148,63 @@ nodes:
     category: setup
     bash: |
       set -uo pipefail
+      # Generated sources are gitignored, so a fresh worktree never has them —
+      # and the scripts that write them are wired into `build`, not into
+      # `typecheck` / `lint` / `test`. Without this an agent runs a check that
+      # cannot pass in a tree nobody has built, reads the failure as its own,
+      # and starts hand-stubbing generated files. Run whichever of these
+      # conventional script names the project actually defines ($1 = pkg
+      # manager). Non-fatal: a project whose codegen needs credentials this
+      # container lacks should still get a run, with the reason on the record.
+      codegen_in() {
+        [ -f package.json ] || return 0
+        for script in prebuild codegen generate db:generate; do
+          grep -q "\"$script\"[[:space:]]*:" package.json 2>/dev/null || continue
+          echo "  ↳ codegen: $script"
+          case "$1" in
+            # -r reaches a workspace package (the script often lives in the app,
+            # not the root); --if-present keeps the other packages quiet.
+            pnpm) pnpm -r --if-present run "$script" ;;
+            npm)  npm run --if-present "$script" ;;
+            *)    "$1" run "$script" ;;
+          esac
+          if [ $? -ne 0 ]; then
+            echo "  ↳ WARNING: \`$script\` failed. Generated sources are missing,"
+            echo "    so typecheck/lint/test may fail for reasons unrelated to the"
+            echo "    change. Do NOT hand-write or stub generated files — say so."
+          fi
+          return 0
+        done
+      }
       # Detect the lockfile in $1 and install. Runs in a subshell so the cd is
-      # scoped; returns the install command's exit code.
+      # scoped; returns the install command's exit code. Ordered most- to
+      # least-specific: a repo with several lockfiles gets its primary one.
       install_in() {
         ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
           if [ -f pnpm-lock.yaml ]; then
             echo "[$1] pnpm"
             pnpm install --frozen-lockfile || exit 1
-            if [ -f prisma/schema.prisma ] || grep -q '"db:generate"' package.json 2>/dev/null; then
-              pnpm db:generate || exit 1
-            fi
+            codegen_in pnpm
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+            echo "[$1] bun"; bun install --frozen-lockfile || exit 1; codegen_in bun
+          elif [ -f yarn.lock ]; then
+            echo "[$1] yarn"; yarn install --immutable 2>/dev/null || yarn install --frozen-lockfile || exit 1
+            codegen_in yarn
+          elif [ -f package-lock.json ]; then
+            echo "[$1] npm"; npm ci || exit 1; codegen_in npm
           elif [ -f Cargo.toml ]; then echo "[$1] cargo"; cargo fetch --locked || exit 1
-          elif [ -f package-lock.json ]; then echo "[$1] npm"; npm ci || exit 1
           elif [ -f uv.lock ]; then echo "[$1] uv"; uv sync --locked || exit 1
           elif [ -f poetry.lock ]; then echo "[$1] poetry"; poetry install --no-interaction || exit 1
           elif [ -f go.mod ]; then echo "[$1] go"; go mod download || exit 1
+          elif [ -f Gemfile.lock ]; then echo "[$1] bundler"; bundle install || exit 1
+          elif [ -f composer.lock ]; then echo "[$1] composer"; composer install --no-interaction || exit 1
+          # .NET pins versions in the project files, so there is no lockfile to
+          # match on — and the solution is as often under `src/` as at the root,
+          # so `dotnet restore` with no argument finds nothing. Locate it.
+          elif proj=$(find . -maxdepth 3 \( -name '*.sln' -o -name '*.slnx' \) -print -quit 2>/dev/null) && [ -n "$proj" ]; then
+            echo "[$1] dotnet ($proj)"; dotnet restore "$proj" || exit 1
+          elif proj=$(find . -maxdepth 3 \( -name '*.csproj' -o -name '*.fsproj' \) -print -quit 2>/dev/null) && [ -n "$proj" ]; then
+            echo "[$1] dotnet ($proj)"; dotnet restore "$proj" || exit 1
           else
             echo "[$1] no recognized lockfile — skipping. If this needs setup, \
             add the command to its CLAUDE.md so downstream agents can run it."
@@ -201,19 +243,43 @@ nodes:
 
       ## Scope (critical — do not exceed it)
 
-      First compute the changed-file set for THIS branch:
+      **First, list the repo folders to consider.** If `$HARNESS_REPOS` is
+      set this project spans several repos, each checked out in its own
+      folder at the workspace root — and the root itself is NOT a git repo:
 
-          git diff --name-only origin/$BASE_BRANCH...HEAD
+          echo "${HARNESS_REPOS:-}" | jq -r '.[].folder'   # multi-repo
+          # unset → a single repo at the workspace root: the one folder is `.`
+
+      **Then, per folder, compute that repo's own changed-file set.** Run
+      inside the folder, never at the workspace root:
+
+          cd "$folder"
+          git fetch --quiet origin "$BASE_BRANCH" 2>/dev/null || true
+          git diff --name-only "origin/$BASE_BRANCH...HEAD"
+
+      The fetch matters: against a stale `origin/$BASE_BRANCH` the diff
+      reports commits that merged upstream long ago — another ticket's work,
+      which is NOT yours to simplify.
 
       Those files — and ONLY those files — are in scope. Do NOT open,
       read-for-simplification, or edit any file outside that list. You
       are simplifying the work this PR introduced, not auditing the
-      repository. (If that command lists nothing, there is nothing to
-      do — skip to the no-op path below.)
+      repository.
+
+      **An empty diff means that repo is done — not that you should go
+      looking.** Most runs touch one repo out of several, so an empty
+      list is the expected answer for the rest. Never widen the search
+      because a folder came back empty, and never fall back to scanning a
+      repo's working tree, `git log`, or another folder to find something
+      to simplify. If `git` errors because you are at a multi-repo root,
+      the fix is to `cd` into a folder from the list above — not to hunt
+      for a git repo. If every folder's diff is empty, take the no-op path
+      below and stop.
 
       ## Process
 
-      Go file by file through the in-scope list. For each, look only for:
+      Go file by file through the in-scope list, repo by repo. For each,
+      look only for:
       - Unnecessary complexity / deep nesting that can flatten.
       - Redundant or duplicated logic, unused variables/imports.
       - Unclear names; dense one-liners that hurt readability.
@@ -224,28 +290,35 @@ nodes:
 
       ## Verify BEFORE you commit (non-negotiable)
 
-      After making edits, run the project's scoped verify chain for the
-      crates/packages you touched — the commands live in `CLAUDE.md` /
-      `AGENTS.md` (auto-loaded into your context). Use the narrowest
-      scope that covers your edits. If verification fails, FIX or REVERT
-      your simplification until it passes — never commit code that does
-      not build and pass its tests. A simplification that breaks the
-      build is worse than no simplification.
+      After making edits, run the verify chain of the repo you edited,
+      scoped to the crates/packages you touched — the commands live in
+      that repo's own `CLAUDE.md` / `AGENTS.md`. Make no assumption about
+      its stack; each repo in a multi-repo project may be a different one,
+      so read its manifest/build files rather than reusing a sibling's
+      commands. Use the narrowest scope that covers your edits. If
+      verification fails, FIX or REVERT your simplification until it
+      passes — never commit code that does not build and pass its tests.
+      A simplification that breaks the build is worse than no
+      simplification.
 
       ## Commit
 
-      - If, after a green verify, `git status --porcelain` shows modified
-        files, stage them and commit ONE conventional-commit:
+      - Commit per repo, from inside that repo's folder. If, after a green
+        verify, its `git status --porcelain` shows modified files, stage
+        them and commit ONE conventional-commit:
           `chore: simplify implementation`
         Do NOT push — `finalize-pr` pushes the branch. Do NOT use
         `--no-verify` or skip commit hooks. Do NOT run DB migrations.
+        Never stage a file outside the changed-file set you computed.
       - If you made no changes (or reverted them all), do nothing — a
         no-op is a perfectly good outcome.
 
       Honor any project-specific agent rules in `CLAUDE.md` / `AGENTS.md`.
 
-      Output a one-line summary (what you simplified + that verify passed,
-      or "no changes") and: <promise>SIMPLIFY-DONE</promise>
+      Output one line per repo folder you considered — `<folder>: N files in
+      scope, <what you simplified + that verify passed>` or `<folder>: no
+      changes` — so a wrong-scope run is visible at a glance. Then:
+      <promise>SIMPLIFY-DONE</promise>
 
   - id: validate
     category: validation
@@ -589,11 +662,26 @@ nodes:
       3. Push from that repo's folder to its PR branch.
 
       Do NOT post PR comments. Do NOT use `gh pr review`. Do NOT use --no-verify.
-      Push commits — that is the entire output.
+      Pushed commits are the only *change* you make.
 
       If you genuinely find nothing, push nothing.
 
-      When done, output: <promise>GPT-REVIEW-DONE</promise>
+      ## Report (always, even for a clean review)
+
+      Then write a short report — 3 to 6 lines, no padding:
+
+      - **Checked**: which repos/PRs and roughly how much diff you read.
+      - **Found**: each genuine issue, one line each, with `file:line` — or
+        "nothing" if the review came back clean.
+      - **Pushed**: the commit subjects you pushed, or "nothing".
+      - **Flags for the human**: scope cuts you think were wrong, or anything
+        you could not verify. Omit the line if there are none.
+
+      A clean review and a review that never happened are indistinguishable
+      without this, so "nothing found" is a real, expected, useful answer —
+      write it plainly rather than inventing a fix to justify the step.
+
+      End with: <promise>GPT-REVIEW-DONE</promise>
 
 
   - id: sonnet-review-fix
