@@ -56,10 +56,15 @@ so this is a no-op), using that repo's own base branch:
 
 ### 1.1 Load Workflow Artifacts
 
+Every one of these is optional — which exist depends on the workflow that called
+you, so list the directory and read what is actually there. A missing artifact
+is a shorter upstream workflow, not an error to report or stop on:
+
 ```bash
-cat $ARTIFACTS_DIR/plan-context.md
-cat $ARTIFACTS_DIR/implementation.md
-cat $ARTIFACTS_DIR/validation.md
+ls $ARTIFACTS_DIR
+for f in plan-context.md plan.md implementation.md validation.md; do
+  [ -f "$ARTIFACTS_DIR/$f" ] && { echo "--- $f"; cat "$ARTIFACTS_DIR/$f"; }
+done
 ```
 
 Extract:

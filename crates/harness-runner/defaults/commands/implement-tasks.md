@@ -32,10 +32,20 @@ the root, as usual.
 
 ## Phase 1: LOAD - Read Context
 
-### 1.1 Load Plan Context
+Which artifacts exist depends on the workflow that called you: some run a
+plan-setup / confirm-plan step first, many go straight from a plan to here. So
+**every artifact in 1.1 and 1.2 is optional.** Read what is there and move on —
+an absent one is the normal shape of a shorter workflow, not a deviation to
+report and not a reason to stop. Only the plan itself (1.3) is required.
 
 ```bash
-cat $ARTIFACTS_DIR/plan-context.md
+ls $ARTIFACTS_DIR
+```
+
+### 1.1 Load Plan Context (if present)
+
+```bash
+[ -f $ARTIFACTS_DIR/plan-context.md ] && cat $ARTIFACTS_DIR/plan-context.md
 ```
 
 Extract:
@@ -43,19 +53,21 @@ Extract:
 - Validation commands (especially type-check)
 - Patterns to mirror
 
-### 1.2 Load Plan Confirmation
+### 1.2 Load Plan Confirmation (if present)
 
 ```bash
-cat $ARTIFACTS_DIR/plan-confirmation.md
+[ -f $ARTIFACTS_DIR/plan-confirmation.md ] && cat $ARTIFACTS_DIR/plan-confirmation.md
 ```
 
 Check:
 - Status is CONFIRMED or PROCEED WITH CAUTION
 - Note any warnings to handle during implementation
 
-### 1.3 Load Original Plan
+### 1.3 Load Original Plan (required)
 
-The plan source path is in `plan-context.md`. Read the full plan for detailed task instructions:
+The plan source path is in `plan-context.md` when that exists; otherwise take
+the plan artifact the listing above shows (conventionally `plan.md`). Read the
+full plan for detailed task instructions:
 
 ```bash
 cat {plan-source-path}

@@ -273,8 +273,16 @@ nodes:
       dead code — while preserving behaviour exactly.
 
       ## Scope (do not exceed)
-      `git diff --name-only origin/$BASE_BRANCH...HEAD` — those files, and only
-      those, are in scope. If it lists nothing, skip (a no-op is fine).
+      Fetch the base first, then diff — against a stale `origin/$BASE_BRANCH`
+      the diff reports another ticket's already-merged work:
+
+        git fetch --quiet origin "$BASE_BRANCH" 2>/dev/null || true
+        git diff --name-only "origin/$BASE_BRANCH...HEAD"
+
+      Those files, and only those, are in scope. If it lists nothing, skip —
+      a no-op is fine. An empty diff is never a reason to widen the search:
+      do not fall back to the working tree, `git log`, or another folder to
+      find something to simplify.
 
       ## Look for
       Unnecessary complexity, duplicated logic, unused variables, unclear object

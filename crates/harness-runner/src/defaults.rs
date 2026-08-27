@@ -359,6 +359,43 @@ mod tests {
         assert!(names.contains(&"architect"));
         assert!(names.contains(&"revise-pr"));
     }
+
+    /// A node that derives its scope from `origin/$BASE_BRANCH` must also say
+    /// WHICH repo it is standing in. In a multi-repo project the workspace root
+    /// is not a git repo at all, so a bare `git diff` there fails — and an agent
+    /// that reads that failure as "look harder" walks into a sibling repo and
+    /// rewrites another ticket's work. The anchor is `$HARNESS_REPOS` (before
+    /// any PR exists) or `.pr-list` (after `finalize-pr` writes it).
+    #[test]
+    fn base_diff_nodes_in_multi_repo_workflows_name_their_repo() {
+        for (name, yaml) in WORKFLOWS {
+            // Only workflows written for multi-repo projects: a single-repo one
+            // stands in the single repo at the root by construction.
+            if !yaml.contains("HARNESS_REPOS") {
+                continue;
+            }
+            let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow parses");
+            for node in &wf.nodes {
+                let body = match &node.kind {
+                    harness_dag::NodeKind::Prompt(p) => p.as_str(),
+                    harness_dag::NodeKind::Bash(b) => b.as_str(),
+                    harness_dag::NodeKind::Loop(l) => l.prompt.as_str(),
+                    _ => continue,
+                };
+                if !body.contains("origin/$BASE_BRANCH") {
+                    continue;
+                }
+                assert!(
+                    body.contains("HARNESS_REPOS") || body.contains("pr-list"),
+                    "`{name}` node `{}` diffs against origin/$BASE_BRANCH without \
+                     naming the repo it runs in — at a multi-repo root that git \
+                     call fails and the agent goes hunting in a sibling repo",
+                    node.id
+                );
+            }
+        }
+    }
+
     #[test]
     fn architect_workflow_parses_and_enforces_readonly() {
         let yaml = default_workflow("architect").expect("architect bundled");
