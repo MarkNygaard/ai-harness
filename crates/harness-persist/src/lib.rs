@@ -121,12 +121,19 @@ pub struct PersistedNode {
 }
 
 /// One raw error line joined to its run — the input to the grouping below.
+///
+/// `message` is the failure text the query already coalesced: a failing tool
+/// result carries an empty `activity` and puts its output in `detail` (see
+/// [`harness_dag::Activity::tool_result`]), and since that constructor is the
+/// only producer of `is_error` rows, reading `activity` alone would leave every
+/// message blank — and blank messages all share one fingerprint, collapsing
+/// unrelated failures into a single meaningless group.
 #[derive(Debug, sqlx::FromRow)]
 struct ActivityErrorRow {
     project: Option<String>,
     workflow_name: String,
     node_id: String,
-    activity: String,
+    message: String,
     run_id: String,
     created_at: DateTime<Utc>,
 }
@@ -712,10 +719,16 @@ impl RunStore {
         scan_limit: i64,
     ) -> Result<Vec<ActivityErrorGroup>, PersistError> {
         let rows: Vec<ActivityErrorRow> = sqlx::query_as(
-            "SELECT r.project, r.workflow_name, a.node_id, a.activity, a.run_id, a.created_at
+            // A failing tool result keeps its text in `detail` and leaves
+            // `activity` empty, so coalesce. A row with neither carries no
+            // failure to report: dropping it beats grouping every one of them
+            // under the single fingerprint that a blank message shares.
+            "SELECT r.project, r.workflow_name, a.node_id, a.run_id, a.created_at,
+                    NULLIF(btrim(COALESCE(NULLIF(a.activity, ''), a.detail, '')), '') AS message
                  FROM harness_run_activity a
                  JOIN harness_workflow_runs r ON r.id = a.run_id
                  WHERE a.is_error
+                   AND NULLIF(btrim(COALESCE(NULLIF(a.activity, ''), a.detail, '')), '') IS NOT NULL
                    AND a.created_at >= now() - make_interval(days => $1)
                    AND ($2::text IS NULL OR r.project = $2)
                  ORDER BY a.created_at DESC
@@ -744,7 +757,7 @@ impl RunStore {
                 project,
                 workflow_name: workflow,
                 node_id,
-                activity: message,
+                message,
                 run_id,
                 created_at: at,
             } = row;
@@ -1669,6 +1682,82 @@ mod tests {
             .await
             .unwrap()
             .is_empty());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn activity_error_groups_read_the_message_a_failing_tool_actually_wrote() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let stamp = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let run_id = format!("test-errgroup-{stamp}");
+        // A project of this run's own, so the window filter isolates it from
+        // whatever else the suite left in the table.
+        let project = format!("errgroup-{stamp}");
+        let report = sample_report();
+        store
+            .start_run(
+                &run_id,
+                &report.workflow,
+                None,
+                None,
+                Some(&project),
+                2,
+                &report.graph,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // `Activity::tool_result` is the only producer of `is_error` rows and it
+        // leaves `activity` empty, putting the message in `detail` — so a reader
+        // that consults `activity` alone sees nothing but blanks.
+        let acts = [
+            harness_dag::Activity::tool_result(
+                "module not found: @/i18n/stores",
+                Some("t1".into()),
+                true,
+            ),
+            harness_dag::Activity::tool_result(
+                "module not found: @/i18n/stores",
+                Some("t2".into()),
+                true,
+            ),
+            harness_dag::Activity::tool_result("permission denied: .env", Some("t3".into()), true),
+            // Not a failure: must not be counted.
+            harness_dag::Activity::tool_result("tests: 930 passed", Some("t4".into()), false),
+            // A failure with nothing to say: dropped, not grouped as blank.
+            harness_dag::Activity::tool_result("   ", Some("t5".into()), true),
+        ];
+        for a in &acts {
+            store.record_activity(&run_id, "build", a).await.unwrap();
+        }
+
+        let groups = store
+            .activity_error_groups(Some(&project), 1, 1000)
+            .await
+            .unwrap();
+
+        assert_eq!(groups.len(), 2, "two distinct failures: {groups:?}");
+        for g in &groups {
+            assert!(
+                !g.sample.trim().is_empty(),
+                "a group with no sample tells nobody what to fix: {g:?}"
+            );
+            assert_eq!(g.runs, 1);
+            assert_eq!(g.nodes, vec!["build".to_string()]);
+        }
+        // Most-repeated first, and the repeat is collapsed rather than listed twice.
+        assert_eq!(groups[0].count, 2);
+        assert!(groups[0].sample.contains("@/i18n/stores"), "{groups:?}");
+        assert_eq!(groups[1].count, 1);
+        assert!(groups[1].sample.contains("permission denied"), "{groups:?}");
+
+        store.delete_run(&run_id).await.unwrap();
     }
 
     #[tokio::test]
