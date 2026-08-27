@@ -8,8 +8,11 @@ description: >-
   A/B-compare two models on the same task. Also covers **authoring custom
   workflows** over MCP (the workflow_* tools — see authoring-workflows.md) when
   the user wants to "create/edit a harness workflow", "add a node", or "branch a
-  workflow". Covers connecting the harness MCP-over-HTTP endpoint and the
-  run_trigger / run_trigger_pair / run_status / run_list / workflow_* tools.
+  workflow". Also use when the user asks what the harness or its agents keep
+  failing on, or how to stop a project's runs hitting the same obstacle
+  repeatedly. Covers connecting the harness MCP-over-HTTP endpoint and the
+  run_trigger / run_trigger_pair / run_status / run_list / run_activity_errors /
+  workflow_* tools.
 ---
 
 # Drive ai-harness from this project (over MCP)
@@ -109,6 +112,30 @@ the work happens on the cluster.
   e.g., which manual test scenarios a person passed vs failed.
 
 Don't fabricate a `run_id` or a result — only report what `run_status` returns.
+
+## What the agents keep tripping over
+
+`mcp__harness__run_activity_errors({ project, days, limit })` — recurring
+failures **across** runs, rather than one run's feed. Identical failures are
+collapsed into a group: `count` occurrences over `runs` distinct runs, the
+workflow and nodes, a verbatim `sample`, first/last seen. Most-repeated first.
+
+**Check it once a project has a few runs behind it, and periodically after.** Read
+each group as a question about the *project*, not the run:
+
+- **high `runs`** → the obstacle is a property of the repo: a generated file that
+  isn't in git, a credential the agent doesn't have, a command somewhere other
+  than where it looked. Write it into that project's `CLAUDE.md` — every agent
+  node reads it, so the next run starts knowing instead of rediscovering. Say what
+  the thing is, the command that produces or fixes it, and what *not* to do
+  (stubbing a generated file is worse than being blocked by its absence).
+- **high `count` but `runs: 1`** → one agent looping. Read that run; it says
+  nothing about the repo.
+
+A lookup that matched nothing is not counted as a failure, so what is listed is
+real. After a `CLAUDE.md` change, re-check in a few runs: the pattern should stop
+appearing. If it doesn't, the note isn't where the agent reads it, or it doesn't
+say what the agent needed.
 
 ## A/B compare two models (optional)
 
