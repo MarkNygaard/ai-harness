@@ -23,7 +23,8 @@
 //! later tick. Without a known app user id the gate cannot be evaluated, so the
 //! poller claims **nothing** rather than everything.
 //!
-//! The Linear credential is global, resolved by [`linear_client_or_none`] — an
+//! The Linear credential is per connection, resolved from each binding's project
+//! by [`resolve_for_project`] and then by [`linear_client_or_none`] — an
 //! `actor=app` OAuth token once the workspace is connected, so the comments and
 //! transitions below are authored by the app rather than by whoever's personal
 //! API key was pasted. The `live` flag defaults to false, so a binding is dry-run
@@ -38,6 +39,7 @@ use harness_persist::{LinearClaim, LinearSource};
 use harness_sources::linear::{AgentActivity, Comment, Issue, LinearClient};
 use tokio::time::{interval, Instant, MissedTickBehavior};
 
+use super::linear_connections::resolve_for_project;
 use super::linear_oauth::{app_user_id, linear_client_or_none};
 use super::runs_routes::{start_run, CreateRunRequest, RunsState};
 
@@ -159,7 +161,20 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
         }
         last.insert(key, now);
 
-        let Some(client) = linear_client_or_none(state).await else {
+        // Which Linear account this binding's project belongs to. A
+        // single-account install resolves every project to the one connection.
+        let conn = match resolve_for_project(state, &b.project).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(
+                    "linear poller: {}/{} — {e}; skipping",
+                    b.project,
+                    b.workflow
+                );
+                continue;
+            }
+        };
+        let Some(client) = linear_client_or_none(state, &conn).await else {
             tracing::debug!(
                 "linear poller: {}/{} — Linear is not connected",
                 b.project,
@@ -170,7 +185,7 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
         // Delegation is the eligibility gate, so without knowing our own app user
         // id there is no gate — claim nothing rather than everything in the
         // column. Reconnecting the workspace records the id.
-        let Some(delegate_id) = app_user_id(state).await else {
+        let Some(delegate_id) = app_user_id(state, &conn).await else {
             tracing::warn!(
                 "linear poller: {}/{} — the harness's Linear app user id is unknown, so \
                  delegated issues cannot be identified; skipping (reconnect the workspace \
@@ -265,7 +280,19 @@ pub(crate) async fn rearm_linear_claim(
         Ok(s) => s.get(&claim.project, &claim.workflow).await.ok().flatten(),
         Err(_) => None,
     };
-    if let Some(client) = linear_client_or_none(state).await {
+    // Skip the Linear side rather than guessing an account: re-arming against the
+    // wrong workspace would move somebody else's issue.
+    let client = match resolve_for_project(state, &claim.project).await {
+        Ok(conn) => linear_client_or_none(state, &conn).await,
+        Err(e) => {
+            tracing::warn!(
+                "linear poller: {} — {e}; not re-arming the issue in Linear",
+                claim.identifier
+            );
+            None
+        }
+    };
+    if let Some(client) = client {
         if let Some(b) = &binding {
             // Clear the failed-label so the issue no longer reads as failed.
             if let Some(name) = b.failed_label.as_deref() {
@@ -673,7 +700,14 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
             }
             Err(_) => continue,
         };
-        let Some(client) = linear_client_or_none(state).await else {
+        let conn = match resolve_for_project(state, &c.project).await {
+            Ok(conn) => conn,
+            Err(e) => {
+                tracing::warn!("linear poller: {} — {e}; not syncing status", c.identifier);
+                continue;
+            }
+        };
+        let Some(client) = linear_client_or_none(state, &conn).await else {
             continue;
         };
         let binding = match &source_store {

@@ -7,10 +7,9 @@
 //! - `GET /api/linear/discovery`            — teams + workflow states + labels
 //! - `GET /api/linear/preview?team=&state=` — matching issues (preview)
 //!
-//! Auth comes from the global `linear` credential in the encrypted store: the
-//! `actor=app` OAuth token once the workspace is connected, else a legacy
-//! `api_key`; neither → a 4xx telling the operator to connect. The `{project}`
-//! in the paths scopes the *bindings*, not the credential.
+//! Auth comes from the Linear connection the `{project}` in the path resolves
+//! to: the `actor=app` OAuth token once that workspace is connected, else a
+//! legacy `api_key`; neither → a 4xx telling the operator to connect.
 
 use std::sync::Arc;
 
@@ -21,21 +20,29 @@ use axum::Json;
 use harness_sources::linear::LinearClient;
 use serde::Deserialize;
 
+use super::linear_connections::{resolve_for_project, ConnectionId};
 use super::runs_routes::RunsState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
 }
 
-/// Build a Linear client from the stored credential, or a 4xx response.
-/// Attribution and token freshness are decided in
-/// [`linear_client`](super::linear_oauth::linear_client).
+/// The Linear connection `project` belongs to, or a 4xx response.
 // The `Err` here IS the finished HTTP response, handed straight back to axum.
 // Boxing it to satisfy `result_large_err` would add an allocation, plus an
 // unwrap at every call site, to avoid a move axum makes anyway.
 #[allow(clippy::result_large_err)]
-async fn client(state: &Arc<RunsState>) -> Result<LinearClient, Response> {
-    super::linear_oauth::linear_client(state)
+async fn connection(state: &Arc<RunsState>, project: &str) -> Result<ConnectionId, Response> {
+    resolve_for_project(state, project)
+        .await
+        .map_err(|e| err(StatusCode::BAD_REQUEST, e))
+}
+
+/// Build a Linear client for `conn`, or a 4xx response. Attribution and token
+/// freshness are decided in [`linear_client`](super::linear_oauth::linear_client).
+#[allow(clippy::result_large_err)]
+async fn client(state: &Arc<RunsState>, conn: &ConnectionId) -> Result<LinearClient, Response> {
+    super::linear_oauth::linear_client(state, conn)
         .await
         .map_err(|e| err(StatusCode::BAD_REQUEST, e))
 }
@@ -43,9 +50,13 @@ async fn client(state: &Arc<RunsState>) -> Result<LinearClient, Response> {
 /// `GET /api/projects/{project}/linear/discovery` — teams + states + labels.
 pub async fn discovery(
     Extension(state): Extension<Arc<RunsState>>,
-    AxumPath(_project): AxumPath<String>,
+    AxumPath(project): AxumPath<String>,
 ) -> Response {
-    let client = match client(&state).await {
+    let conn = match connection(&state, &project).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let client = match client(&state, &conn).await {
         Ok(c) => c,
         Err(resp) => return resp,
     };
@@ -66,19 +77,23 @@ pub struct PreviewQuery {
 /// Read-only; nothing is claimed.
 pub async fn preview(
     Extension(state): Extension<Arc<RunsState>>,
-    AxumPath(_project): AxumPath<String>,
+    AxumPath(project): AxumPath<String>,
     Query(q): Query<PreviewQuery>,
 ) -> Response {
     if q.team.trim().is_empty() || q.state.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "`team` and `state` are required");
     }
-    let client = match client(&state).await {
+    let conn = match connection(&state, &project).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let client = match client(&state, &conn).await {
         Ok(c) => c,
         Err(resp) => return resp,
     };
     // Mirrors the poller's gate exactly, so the preview can't promise more than
     // the poller would take.
-    let Some(delegate_id) = super::linear_oauth::app_user_id(&state).await else {
+    let Some(delegate_id) = super::linear_oauth::app_user_id(&state, &conn).await else {
         return err(
             StatusCode::PRECONDITION_FAILED,
             "the harness's Linear app user id is unknown — reconnect the workspace on the \

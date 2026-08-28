@@ -39,6 +39,7 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
+use super::linear_connections::ConnectionId;
 use super::linear_oauth::{linear_client, webhook_secret};
 use super::runs_routes::{start_run, CreateRunRequest, RunsState};
 
@@ -111,8 +112,12 @@ pub async fn webhook(
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
+    // Which connection delivered this. Routing an inbound delivery to the right
+    // workspace is its own problem — for now the only connection an existing
+    // install has is the legacy one, which is what this resolved to before.
+    let conn = ConnectionId::default();
     // No secret stored → we cannot verify anything, so we trust nothing.
-    let Some(secret) = webhook_secret(store).await else {
+    let Some(secret) = webhook_secret(store, &conn).await else {
         tracing::warn!(
             "linear webhook: rejected — no webhook signing secret stored (save it on the \
              Credentials page)"
@@ -159,11 +164,13 @@ pub async fn webhook(
     match event.action {
         AgentSessionAction::Created => {
             let state = state.clone();
-            tokio::spawn(async move { handle_created(&state, event).await });
+            let conn = conn.clone();
+            tokio::spawn(async move { handle_created(&state, &conn, event).await });
         }
         AgentSessionAction::Prompted => {
             let state = state.clone();
-            tokio::spawn(async move { handle_prompted(&state, event).await });
+            let conn = conn.clone();
+            tokio::spawn(async move { handle_prompted(&state, &conn, event).await });
         }
         AgentSessionAction::Other(ref a) => {
             tracing::debug!("linear webhook: ignoring agent session action `{a}`");
@@ -236,7 +243,7 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 /// Runs off the response path (see [`webhook`]), so it may take as long as it
 /// needs — but the acknowledgement still comes first, because Linear marks a
 /// session unresponsive without one inside 10 seconds.
-async fn handle_created(state: &Arc<RunsState>, event: AgentSessionEvent) {
+async fn handle_created(state: &Arc<RunsState>, conn: &ConnectionId, event: AgentSessionEvent) {
     // Deduplicate before doing anything observable: a redelivery must not post a
     // second acknowledgement, let alone start a second run.
     let Some(_guard) = SessionGuard::acquire(&event.session_id) else {
@@ -254,7 +261,7 @@ async fn handle_created(state: &Arc<RunsState>, event: AgentSessionEvent) {
         return;
     }
 
-    let client = match linear_client(state).await {
+    let client = match linear_client(state, conn).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("linear webhook: no usable Linear credential: {e}");
@@ -286,18 +293,19 @@ async fn handle_created(state: &Arc<RunsState>, event: AgentSessionEvent) {
     // Awaited, not spawned: `_guard` must outlive the run start, otherwise the
     // reservation would be released before the claim row exists and a concurrent
     // redelivery could slip between the two checks.
-    start_delegated_run(state, event, client).await;
+    start_delegated_run(state, conn, event, client).await;
 }
 
 /// Resolve project + workflow for a delegated issue, fire the run, and report
 /// the outcome into the session.
 async fn start_delegated_run(
     state: &Arc<RunsState>,
+    conn: &ConnectionId,
     event: AgentSessionEvent,
     client: LinearClient,
 ) {
     let session = event.session_id.clone();
-    let binding = match resolve_target(state, &event).await {
+    let binding = match resolve_target(state, conn, &event).await {
         Target::Ready { binding } => binding,
         Target::NoBinding => {
             let _ = client
@@ -527,8 +535,8 @@ const ARTIFACT_BUDGET_CHARS: usize = 500_000;
 ///
 /// Steering is a separate problem and still refused, honestly: nothing here edits
 /// the DAG in flight.
-async fn handle_prompted(state: &Arc<RunsState>, event: AgentSessionEvent) {
-    let Ok(client) = linear_client(state).await else {
+async fn handle_prompted(state: &Arc<RunsState>, conn: &ConnectionId, event: AgentSessionEvent) {
+    let Ok(client) = linear_client(state, conn).await else {
         return;
     };
     let question = event.prompt_body.clone().unwrap_or_default();
@@ -765,7 +773,11 @@ enum Target {
 /// The binding's **source status is still the gate**: delegating an issue that
 /// is sitting in Backlog does not start it. Delegation says *who* should do the
 /// work; the status says *when* it is ready.
-async fn resolve_target(state: &Arc<RunsState>, event: &AgentSessionEvent) -> Target {
+async fn resolve_target(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+    event: &AgentSessionEvent,
+) -> Target {
     let Ok(sources) = state.linear_source_store().await else {
         return Target::NoBinding;
     };
@@ -775,7 +787,7 @@ async fn resolve_target(state: &Arc<RunsState>, event: &AgentSessionEvent) -> Ta
     let Ok(bindings) = sources.list_all().await else {
         return Target::NoBinding;
     };
-    choose_target(&bindings, &issue_context(state, event).await)
+    choose_target(&bindings, &issue_context(state, conn, event).await)
 }
 
 /// The binding-selection and status-gate decision, split out so it is testable
@@ -950,11 +962,15 @@ async fn wrong_status_message(
 
 /// Where a delegated issue sits — team, status, delegate. Empty when the event
 /// carried no issue id or the lookup failed.
-async fn issue_context(state: &Arc<RunsState>, event: &AgentSessionEvent) -> IssueContext {
+async fn issue_context(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+    event: &AgentSessionEvent,
+) -> IssueContext {
     let Some(issue_id) = event.issue_id.as_deref() else {
         return IssueContext::default();
     };
-    let Ok(client) = linear_client(state).await else {
+    let Ok(client) = linear_client(state, conn).await else {
         return IssueContext::default();
     };
     client

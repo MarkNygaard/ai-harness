@@ -12,12 +12,14 @@
 //! - `GET  /api/linear/oauth/status`            — how the harness authenticates
 //! - `POST /api/linear/oauth/disconnect`        — revoke + clear the tokens
 //!
-//! **One workspace, one install.** The Linear credential is **global** — it lives
-//! on the Credentials page, not per project, because the identity being connected
-//! is the *app*, which is the same for every project. Any per-project `linear`
+//! **One credential per connected workspace.** Each install is a
+//! [`ConnectionId`] whose secrets live under its own provider key — see
+//! [`super::linear_connections`] — and a project resolves to one of them. The
+//! identity being connected is the *app*, so within one workspace a single
+//! install still serves every project pointing at it. Any per-project `linear`
 //! credential from an earlier version is inert: nothing reads it.
 //!
-//! **Credential fields** (global `linear` credential, encrypted at rest):
+//! **Credential fields** (per connection, encrypted at rest):
 //! `client_id` / `client_secret` (the OAuth app, pasted by the operator),
 //! `access_token` / `refresh_token` / `expires_at_ms` / `scope` (from the
 //! exchange), `workspace_id` / `workspace_name` / `workspace_url_key` (recorded
@@ -35,10 +37,8 @@ use harness_persist::CredentialStore;
 use harness_sources::linear::{LinearAuth, LinearClient};
 use serde::Deserialize;
 
+use super::linear_connections::ConnectionId;
 use super::runs_routes::RunsState;
-
-/// Provider key for the Linear credential.
-const PROVIDER: &str = "linear";
 
 /// Path Linear redirects back to. Must match the OAuth app's registered callback
 /// **exactly**, and is exempt from the bearer-token middleware (see
@@ -335,14 +335,20 @@ fn has_usable_auth(fields: &BTreeMap<String, String>) -> bool {
     field(fields, "access_token").is_some() || field(fields, "api_key").is_some()
 }
 
-/// The stored Linear credential, or `None` when nothing is stored.
-async fn credential(store: &CredentialStore) -> Option<BTreeMap<String, String>> {
-    store.get(PROVIDER).await.ok().flatten()
+/// The stored credential for `conn`, or `None` when nothing is stored.
+async fn credential(
+    store: &CredentialStore,
+    conn: &ConnectionId,
+) -> Option<BTreeMap<String, String>> {
+    store.get(&conn.provider_key()).await.ok().flatten()
 }
 
-/// The OAuth app's client id + secret, if both are stored.
-async fn client_credentials(store: &CredentialStore) -> Option<(String, String)> {
-    let fields = credential(store).await?;
+/// The OAuth app's client id + secret for `conn`, if both are stored.
+async fn client_credentials(
+    store: &CredentialStore,
+    conn: &ConnectionId,
+) -> Option<(String, String)> {
+    let fields = credential(store, conn).await?;
     Some((
         field(&fields, "client_id")?,
         field(&fields, "client_secret")?,
@@ -351,16 +357,16 @@ async fn client_credentials(store: &CredentialStore) -> Option<(String, String)>
 
 /// The webhook signing secret from the Linear OAuth app, used to verify inbound
 /// agent-session events.
-pub(crate) async fn webhook_secret(store: &CredentialStore) -> Option<String> {
-    field(&credential(store).await?, "webhook_secret")
+pub(crate) async fn webhook_secret(store: &CredentialStore, conn: &ConnectionId) -> Option<String> {
+    field(&credential(store, conn).await?, "webhook_secret")
 }
 
 /// The harness's own app user id in the workspace — the delegate the poller
 /// matches issues against. Recorded at connect time; `None` on an install made
 /// before it was captured, which the poller treats as "claim nothing".
-pub(crate) async fn app_user_id(state: &Arc<RunsState>) -> Option<String> {
+pub(crate) async fn app_user_id(state: &Arc<RunsState>, conn: &ConnectionId) -> Option<String> {
     let store = state.cred_store().await.ok()?;
-    field(&credential(store).await?, "app_user_id")
+    field(&credential(store, conn).await?, "app_user_id")
 }
 
 /// Whether the stored token actually carries the agent scopes — an install made
@@ -389,6 +395,7 @@ static REFRESH_LOCK: LazyLock<tokio::sync::Mutex<()>> =
 /// refresh was rejected).
 async fn ensure_fresh_token(
     store: &CredentialStore,
+    conn: &ConnectionId,
     fields: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let access = field(fields, "access_token").ok_or("credential has no access_token")?;
@@ -404,7 +411,7 @@ async fn ensure_fresh_token(
 
     let _guard = REFRESH_LOCK.lock().await;
     // Re-read under the lock: a concurrent caller may have just refreshed.
-    let current = credential(store).await.unwrap_or_default();
+    let current = credential(store, conn).await.unwrap_or_default();
     let access = field(&current, "access_token").unwrap_or(access);
     if let Some(exp) = current
         .get("expires_at_ms")
@@ -420,7 +427,7 @@ async fn ensure_fresh_token(
          workspace"
             .to_string()
     })?;
-    let (client_id, client_secret) = client_credentials(store)
+    let (client_id, client_secret) = client_credentials(store, conn)
         .await
         .ok_or("cannot refresh: the Linear OAuth client_id/client_secret are not stored")?;
 
@@ -429,7 +436,7 @@ async fn ensure_fresh_token(
             let mut update = token_fields(&tokens);
             update.insert("refresh_error".into(), String::new());
             store
-                .set(PROVIDER, &update)
+                .set(&conn.provider_key(), &update)
                 .await
                 .map_err(|e| e.to_string())?;
             tracing::info!(
@@ -444,7 +451,7 @@ async fn ensure_fresh_token(
             // `invalid_grant`, which no retry will fix.
             let _ = store
                 .set(
-                    PROVIDER,
+                    &conn.provider_key(),
                     &BTreeMap::from([("refresh_error".to_string(), e.clone())]),
                 )
                 .await;
@@ -478,14 +485,17 @@ fn token_fields(tokens: &TokenSet) -> BTreeMap<String, String> {
 /// Build a Linear client, preferring the app-actor OAuth token and falling back
 /// to a legacy personal API key. **Every** Linear call site goes through here, so
 /// attribution and token freshness are decided in one place.
-pub(crate) async fn linear_client(state: &Arc<RunsState>) -> Result<LinearClient, String> {
+pub(crate) async fn linear_client(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+) -> Result<LinearClient, String> {
     let store = state.cred_store().await?;
-    let fields = credential(store)
+    let fields = credential(store, conn)
         .await
         .filter(has_usable_auth)
         .ok_or("Linear is not connected — connect the workspace on the Credentials page")?;
     if field(&fields, "access_token").is_some() {
-        let token = ensure_fresh_token(store, &fields).await?;
+        let token = ensure_fresh_token(store, conn, &fields).await?;
         return Ok(LinearClient::with_auth(LinearAuth::OauthToken(token)));
     }
     let key = field(&fields, "api_key").ok_or("credential has neither access_token nor api_key")?;
@@ -494,8 +504,11 @@ pub(crate) async fn linear_client(state: &Arc<RunsState>) -> Result<LinearClient
 
 /// [`linear_client`] for background callers that just skip the work when Linear
 /// isn't connected (the poller logs and moves on).
-pub(crate) async fn linear_client_or_none(state: &Arc<RunsState>) -> Option<LinearClient> {
-    match linear_client(state).await {
+pub(crate) async fn linear_client_or_none(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+) -> Option<LinearClient> {
+    match linear_client(state, conn).await {
         Ok(c) => Some(c),
         Err(e) => {
             // `warn`, not `debug`: the poller skips every claim when this returns
@@ -515,6 +528,9 @@ pub(crate) async fn linear_client_or_none(state: &Arc<RunsState>) -> Option<Line
 /// token; a plain navigation to this path would be rejected by the auth
 /// middleware. The client follows `url` itself.
 pub async fn start(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    // Until the connection-management API lands, these routes address the
+    // legacy connection — which is the only one an existing install has.
+    let conn = ConnectionId::default();
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -523,7 +539,7 @@ pub async fn start(Extension(state): Extension<Arc<RunsState>>) -> Response {
         Ok(u) => u,
         Err(e) => return err(StatusCode::PRECONDITION_FAILED, e),
     };
-    let Some((client_id, _)) = client_credentials(store).await else {
+    let Some((client_id, _)) = client_credentials(store, &conn).await else {
         return err(
             StatusCode::PRECONDITION_FAILED,
             "no Linear OAuth app configured — save a client ID and client secret first \
@@ -582,6 +598,9 @@ pub async fn callback(
         );
     }
 
+    // Until the connection-management API lands, these routes address the
+    // legacy connection — which is the only one an existing install has.
+    let conn = ConnectionId::default();
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return back_to_ui("error", Some(&e)),
@@ -589,7 +608,7 @@ pub async fn callback(
     let Ok(redirect) = redirect_uri(&state) else {
         return back_to_ui("error", Some("no public URL configured"));
     };
-    let Some((client_id, client_secret)) = client_credentials(store).await else {
+    let Some((client_id, client_secret)) = client_credentials(store, &conn).await else {
         return back_to_ui("error", Some("Linear OAuth client credentials are missing"));
     };
 
@@ -628,7 +647,7 @@ pub async fn callback(
     fields.insert("workspace_url_key".into(), workspace.url_key);
     fields.insert("refresh_error".into(), String::new());
     fields.insert("app_user_id".into(), app_user_id.unwrap_or_default());
-    if let Err(e) = store.set(PROVIDER, &fields).await {
+    if let Err(e) = store.set(&conn.provider_key(), &fields).await {
         return back_to_ui("error", Some(&e.to_string()));
     }
     tracing::info!(
@@ -641,11 +660,14 @@ pub async fn callback(
 /// `GET /api/linear/oauth/status` — how the harness talks to Linear, and what
 /// still needs doing. Never returns secrets.
 pub async fn status(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    // Until the connection-management API lands, these routes address the
+    // legacy connection — which is the only one an existing install has.
+    let conn = ConnectionId::default();
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    let fields = credential(store).await.unwrap_or_default();
+    let fields = credential(store, &conn).await.unwrap_or_default();
     let mode = if field(&fields, "access_token").is_some() {
         "app"
     } else if field(&fields, "api_key").is_some() {
@@ -683,11 +705,14 @@ pub async fn status(Extension(state): Extension<Arc<RunsState>>) -> Response {
 /// **keeping** the OAuth client id/secret so reconnecting is one click. Use the
 /// credential's Clear button to remove those too.
 pub async fn disconnect(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    // Until the connection-management API lands, these routes address the
+    // legacy connection — which is the only one an existing install has.
+    let conn = ConnectionId::default();
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    let current = credential(store).await.unwrap_or_default();
+    let current = credential(store, &conn).await.unwrap_or_default();
     if let Some(token) = field(&current, "access_token") {
         revoke_token(&token).await;
     }
@@ -704,7 +729,7 @@ pub async fn disconnect(Extension(state): Extension<Arc<RunsState>>) -> Response
         ("refresh_error".to_string(), String::new()),
         ("app_user_id".to_string(), String::new()),
     ]);
-    match store.set(PROVIDER, &cleared).await {
+    match store.set(&conn.provider_key(), &cleared).await {
         Ok(()) => Json(serde_json::json!({ "disconnected": true })).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }

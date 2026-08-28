@@ -3,11 +3,14 @@
 //! A **project** scopes runs to a git repo. Each project is registered once (its
 //! repo is cloned onto the control plane's persistent volume) and then runs are
 //! triggered *within* it — the run operates on that project's checkout, and
-//! (later) its Linear sources feed it. Provider credentials stay global; only the
-//! repo + its GitHub access are project-scoped.
+//! (later) its Linear sources feed it.
 //!
 //! This module just persists the registry rows; cloning/fetching the working
 //! copy is the server's responsibility (it owns the filesystem layout).
+//!
+//! Provider credentials live in the shared credential store, not here; a project
+//! only *points* at one via `linear_connection` (which named Linear connection
+//! its issues come from) and carries its own GitHub access.
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -24,6 +27,7 @@ CREATE TABLE IF NOT EXISTS harness_projects (
     external_url     text,
     toolchains       jsonb NOT NULL DEFAULT '[]'::jsonb,
     repos            jsonb NOT NULL DEFAULT '[]'::jsonb,
+    linear_connection text,
     created_at       timestamptz NOT NULL DEFAULT now(),
     updated_at       timestamptz NOT NULL DEFAULT now()
 )";
@@ -44,6 +48,12 @@ const ALTER_PROJECTS_EXTERNAL_URL: &str =
 /// (the `git_url`/`base_branch` columns). Idempotent.
 const ALTER_PROJECTS_REPOS: &str =
     "ALTER TABLE harness_projects ADD COLUMN IF NOT EXISTS repos jsonb NOT NULL DEFAULT '[]'::jsonb";
+
+/// Which named Linear connection this project's issues come from. `NULL` = not
+/// pinned, which resolves to the sole configured connection — so a single-account
+/// install never has to set it. Idempotent.
+const ALTER_PROJECTS_LINEAR_CONNECTION: &str =
+    "ALTER TABLE harness_projects ADD COLUMN IF NOT EXISTS linear_connection text";
 
 /// One repo in a multi-repo project. The harness makes **no** assumption about
 /// its stack — the agent inspects the checked-out repo to learn its language /
@@ -89,6 +99,14 @@ pub struct Project {
     pub repos: Vec<ProjectRepo>,
     /// Per-project build-cache cap in GiB; `None` falls back to the env default.
     pub cargo_target_cap_gb: Option<i32>,
+    /// Id of the named Linear connection this project's issues come from.
+    /// `None` = not pinned; the server resolves it to the sole configured
+    /// connection, so a single-account install leaves this alone.
+    ///
+    /// Deliberately absent from [`ProjectInput`]: re-registering a project must
+    /// not silently unpin it. Set it with
+    /// [`ProjectStore::set_linear_connection`].
+    pub linear_connection: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -134,13 +152,16 @@ impl ProjectStore {
         sqlx::query(ALTER_PROJECTS_REPOS)
             .execute(&store.pool)
             .await?;
+        sqlx::query(ALTER_PROJECTS_LINEAR_CONNECTION)
+            .execute(&store.pool)
+            .await?;
         Ok(store)
     }
 
     /// All projects, alphabetical.
     pub async fn list(&self) -> Result<Vec<Project>, PersistError> {
         let rows = sqlx::query_as::<_, Project>(
-            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, created_at, updated_at
+            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, linear_connection, created_at, updated_at
              FROM harness_projects ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -151,7 +172,7 @@ impl ProjectStore {
     /// One project by name, if present.
     pub async fn get(&self, name: &str) -> Result<Option<Project>, PersistError> {
         let row = sqlx::query_as::<_, Project>(
-            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, created_at, updated_at
+            "SELECT name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, linear_connection, created_at, updated_at
              FROM harness_projects WHERE name = $1",
         )
         .bind(name)
@@ -164,6 +185,10 @@ impl ProjectStore {
     /// on update; `updated_at` always advances.
     pub async fn upsert(&self, name: &str, input: &ProjectInput) -> Result<Project, PersistError> {
         let row = sqlx::query_as::<_, Project>(
+            // `linear_connection` is deliberately not written here: it is not a
+            // registration field, and listing it in the upsert would unpin a
+            // project every time the register form is re-submitted. A fresh row
+            // gets NULL; on conflict the stored value is preserved.
             "INSERT INTO harness_projects (name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), now())
              ON CONFLICT (name) DO UPDATE SET
@@ -175,7 +200,7 @@ impl ProjectStore {
                 repos                 = excluded.repos,
                 cargo_target_cap_gb   = excluded.cargo_target_cap_gb,
                 updated_at            = now()
-             RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, created_at, updated_at",
+             RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains, repos, cargo_target_cap_gb, linear_connection, created_at, updated_at",
         )
         .bind(name)
         .bind(&input.git_url)
@@ -200,13 +225,67 @@ impl ProjectStore {
             "UPDATE harness_projects SET cargo_target_cap_gb = $2, updated_at = now()
              WHERE name = $1
              RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains,
-                       repos, cargo_target_cap_gb, created_at, updated_at",
+                       repos, cargo_target_cap_gb, linear_connection, created_at, updated_at",
         )
         .bind(name)
         .bind(cap_gb)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
+    }
+
+    /// Pin this project to a named Linear connection, or unpin it (`None`).
+    /// Returns the updated row, or `None` if the project doesn't exist.
+    ///
+    /// Unpinned projects resolve to the sole configured connection, so this only
+    /// has to be set once a second Linear account exists.
+    pub async fn set_linear_connection(
+        &self,
+        name: &str,
+        connection: Option<&str>,
+    ) -> Result<Option<Project>, PersistError> {
+        let row = sqlx::query_as::<_, Project>(
+            "UPDATE harness_projects SET linear_connection = $2, updated_at = now()
+             WHERE name = $1
+             RETURNING name, git_url, base_branch, default_workflow, external_url, toolchains,
+                       repos, cargo_target_cap_gb, linear_connection, created_at, updated_at",
+        )
+        .bind(name)
+        .bind(connection)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// Projects pinned to `connection` — the guard that stops a connection being
+    /// deleted while something still points at it.
+    pub async fn names_using_linear_connection(
+        &self,
+        connection: &str,
+    ) -> Result<Vec<String>, PersistError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM harness_projects WHERE linear_connection = $1 ORDER BY name",
+        )
+        .bind(connection)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Pin every not-yet-pinned project to `connection`.
+    ///
+    /// Run when a *second* Linear connection is added: without it, existing
+    /// projects would stop resolving (rule 2 only applies while exactly one
+    /// connection is configured). Returns how many rows were pinned.
+    pub async fn backfill_linear_connection(&self, connection: &str) -> Result<u64, PersistError> {
+        let result = sqlx::query(
+            "UPDATE harness_projects SET linear_connection = $1, updated_at = now()
+             WHERE linear_connection IS NULL",
+        )
+        .bind(connection)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
     }
 
     /// Remove a project from the registry (does not touch its checkout on disk).
@@ -333,5 +412,89 @@ mod tests {
 
         store.delete(&name).await.unwrap();
         assert!(store.get(&name).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn linear_connection_pins_survive_re_registration() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = ProjectStore::connect(&url).await.expect("connect");
+        let name = format!(
+            "test-proj-conn-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        let input = ProjectInput {
+            git_url: "https://github.com/me/ticket0.git".into(),
+            base_branch: "main".into(),
+            default_workflow: None,
+            external_url: None,
+            toolchains: vec![],
+            repos: vec![],
+            cargo_target_cap_gb: None,
+        };
+
+        // A freshly registered project is unpinned.
+        let created = store.upsert(&name, &input).await.expect("upsert");
+        assert_eq!(created.linear_connection, None);
+
+        let pinned = store
+            .set_linear_connection(&name, Some("acme"))
+            .await
+            .expect("pin")
+            .expect("project exists");
+        assert_eq!(pinned.linear_connection.as_deref(), Some("acme"));
+
+        // The register form doesn't carry the pin, so re-registering must not
+        // silently unpin the project.
+        let re_registered = store.upsert(&name, &input).await.expect("re-upsert");
+        assert_eq!(re_registered.linear_connection.as_deref(), Some("acme"));
+
+        assert!(store
+            .names_using_linear_connection("acme")
+            .await
+            .unwrap()
+            .contains(&name));
+
+        // Unpinning is how a project goes back to "resolve automatically".
+        let cleared = store
+            .set_linear_connection(&name, None)
+            .await
+            .expect("unpin")
+            .expect("project exists");
+        assert_eq!(cleared.linear_connection, None);
+        assert!(!store
+            .names_using_linear_connection("acme")
+            .await
+            .unwrap()
+            .contains(&name));
+
+        // Adding a second connection pins everything still unpinned.
+        let pinned_count = store
+            .backfill_linear_connection("default")
+            .await
+            .expect("backfill");
+        assert!(pinned_count >= 1);
+        assert_eq!(
+            store
+                .get(&name)
+                .await
+                .unwrap()
+                .unwrap()
+                .linear_connection
+                .as_deref(),
+            Some("default")
+        );
+
+        // Setting a pin on an unknown project reports "no such project".
+        assert!(store
+            .set_linear_connection("no-such-project", Some("acme"))
+            .await
+            .unwrap()
+            .is_none());
+
+        store.delete(&name).await.unwrap();
     }
 }
