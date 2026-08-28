@@ -82,27 +82,32 @@
 
 :root {
   color-scheme: light;
-  /* Surface ladder, mirroring the dark one below: the canvas sits *under* the
-     raised surfaces, so a card reads as raised rather than as an outline on the
-     same colour. Light mode had `--background` and `--card` both at pure white,
-     which left every panel with nothing but its 1px ring to separate it from
-     the page. Steps are ~0.03 apart, the same spacing dark mode uses.
+  /* Surface ladder. Light mode had `--background` and `--card` both at pure
+     white, which left every panel with nothing but its 1px ring to separate it
+     from the page. These are the two values swapped: the page is white and the
+     panels are tinted, so a card reads as a distinct surface *on* the page
+     rather than a raised slab above it. Steps are ~0.03 apart, the same
+     spacing dark mode uses.
 
-       recessed fills 0.94  <  canvas 0.97  <  cards / popovers / sidebar 1.00 */
-  --background: oklch(0.97 0 0);
+       recessed fills 0.94  <  panels / popovers / sidebar 0.97  <  canvas 1.00
+
+     Note this inverts dark's direction, where panels sit *lighter* than the
+     canvas. That is deliberate rather than an oversight: there is no room
+     above white, so a light theme separates surfaces by tinting them down. */
+  --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
-  --card: oklch(1 0 0);
+  --card: oklch(0.97 0 0);
   --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
+  --popover: oklch(0.97 0 0);
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
   --secondary: oklch(0.94 0 0);
   --secondary-foreground: oklch(0.205 0 0);
   --muted: oklch(0.94 0 0);
-  /* Darkened with the canvas: at 0.556 this read 4.73:1 on white but only
-     4.34:1 on the new ground, and it carries most of the secondary text in the
-     app. 0.52 restores AA at 5.05:1. */
+  /* Stays darkened. Most secondary text sits on the 0.97 panels now, where
+     the original 0.556 reads at only 4.34:1 — below AA. 0.52 gives 5.05:1
+     there and 5.50:1 on the white canvas. */
   --muted-foreground: oklch(0.52 0 0);
   --accent: oklch(0.94 0 0);
   --accent-foreground: oklch(0.205 0 0);
@@ -122,7 +127,7 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.2rem;
-  --sidebar: oklch(1 0 0);
+  --sidebar: oklch(0.97 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
