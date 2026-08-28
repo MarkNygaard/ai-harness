@@ -33,13 +33,16 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
                 }
             }
         });
-        Arc::new(runs_routes::RunsState::new(
-            db_url,
-            agent_registry,
-            state.core.project_root.clone(),
-            secret_key,
-            config.server.public_url.clone(),
-        ))
+        Arc::new(
+            runs_routes::RunsState::new(
+                db_url,
+                agent_registry,
+                state.core.project_root.clone(),
+                secret_key,
+                config.server.public_url.clone(),
+            )
+            .with_api_token(auth::resolve_api_token(&config.server)),
+        )
     };
     // Periodically reap runs whose lease has gone stale (crashed/orphaned), so a
     // lost run doesn't linger as `running`. Live runs heartbeat and are skipped.
@@ -59,6 +62,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // Linear poller (Slice 3a, dry-run): logs which eligible issues each enabled
     // binding WOULD fire — no claim, no transition, no run triggered.
     super::linear_poller::spawn_poller(runs_state.clone());
+    // Generate the MCP key now, so `/mcp` is guarded from the first request
+    // rather than from whenever someone first opens its settings page.
+    super::mcp_key::spawn_ensure(runs_state.clone());
     Router::new()
         .route("/", get(crate::dashboard::index))
         .route("/overview", get(crate::overview::index))
@@ -122,6 +128,12 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // Authoring + run control for editors via `{ "type": "http", "url":
         // ".../mcp" }`. Behind the global bearer-token middleware.
         .route("/mcp", post(mcp_routes::handle_mcp))
+        // How an editor is told to connect: the endpoint, the key, and the
+        // snippet to paste. Behind the normal middleware, unlike `/mcp` itself.
+        .route(
+            "/api/mcp/connection",
+            get(mcp_routes::connection).post(mcp_routes::regenerate_connection),
+        )
         // ── Linear read-only discovery (Phase 8, Slice 1) ───────────────────
         .route(
             "/api/projects/{project}/linear/discovery",

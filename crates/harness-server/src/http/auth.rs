@@ -122,6 +122,12 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             // third party we cannot hand a bearer token; authenticated by the
             // `Linear-Signature` HMAC over the raw body (see `linear_agent`).
             | "/api/linear/webhook"
+            // MCP-over-HTTP. Exempt from *this* middleware so an editor holding
+            // only the MCP key can reach it — a key this middleware knows
+            // nothing about. `handle_mcp` then authenticates every request
+            // itself, accepting that key or the legacy shared token, and is
+            // never open when either exists (see `mcp_key::authorized`).
+            | "/mcp"
             | "/"
             | "/overview"
             | "/worktrees"

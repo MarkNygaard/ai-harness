@@ -5,6 +5,7 @@ import {
   IconBinaryTree2,
   IconFolderCog,
   IconKey,
+  IconPlugConnected,
   IconSettings2,
   IconTags,
 } from "@tabler/icons-react";
@@ -45,6 +46,12 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
         label: "Preferences",
         icon: IconSettings2,
         keywords: "theme appearance dark light sidebar menu",
+      },
+      {
+        href: "/settings/mcp",
+        label: "Editor connection",
+        icon: IconPlugConnected,
+        keywords: "mcp claude code cursor vscode token key editor snippet",
       },
     ],
   },
