@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Check, ExternalLink, KeyRound, Loader2, Trash2 } from "lucide-react";
-import { AppShell } from "@/components/AppShell";
+import { SettingsShell } from "@/components/SettingsShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -148,7 +148,7 @@ export function CredentialsPage() {
   );
 
   return (
-    <AppShell title="Credentials">
+    <SettingsShell title="Credentials">
       <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold">
@@ -242,7 +242,7 @@ export function CredentialsPage() {
           </ProviderSummary>
         </Section>
       </div>
-    </AppShell>
+    </SettingsShell>
   );
 }
 

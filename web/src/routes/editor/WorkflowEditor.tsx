@@ -282,7 +282,7 @@ function Editor() {
       )
     )
       return;
-    reset.mutate(routeName, { onSuccess: () => navigate("/editor") });
+    reset.mutate(routeName, { onSuccess: () => navigate("/settings/workflows") });
   }, [reset, routeName, navigate]);
 
   const selectedNode = useMemo(
@@ -298,7 +298,7 @@ function Editor() {
   const editorTitle = (
     <div className="flex min-w-0 items-center gap-2">
       <Link
-        to="/editor"
+        to="/settings/workflows"
         className="shrink-0 font-semibold text-muted-foreground hover:text-foreground"
       >
         Workflows

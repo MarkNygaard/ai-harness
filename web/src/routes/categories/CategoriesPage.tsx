@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Tags, Trash2 } from "lucide-react";
-import { AppShell } from "@/components/AppShell";
+import { SettingsShell } from "@/components/SettingsShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -17,7 +17,7 @@ const inputCls =
 export function CategoriesPage() {
   const cats = useCategories();
   return (
-    <AppShell title="Categories">
+    <SettingsShell title="Categories">
       <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
         <div>
           <h1 className="flex items-center gap-2 text-lg font-semibold">
@@ -44,7 +44,7 @@ export function CategoriesPage() {
 
         <NewCategoryForm />
       </div>
-    </AppShell>
+    </SettingsShell>
   );
 }
 

@@ -10,6 +10,7 @@ export function AppShell({
   title,
   actions,
   viewActions,
+  sidebar,
   children,
 }: {
   title: React.ReactNode;
@@ -28,6 +29,12 @@ export function AppShell({
    * flow, where there is no room to sit beside a heading anyway.
    */
   viewActions?: React.ReactNode;
+  /**
+   * Sidebar to render. Defaults to the application nav; Settings swaps in its
+   * own, because configuring the harness is a different mode from watching it
+   * work rather than a page inside it.
+   */
+  sidebar?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -40,7 +47,7 @@ export function AppShell({
         } as React.CSSProperties
       }
     >
-      <AppSidebar variant="inset" />
+      {sidebar ?? <AppSidebar variant="inset" />}
       <SidebarInset className="flex min-h-0 flex-col overflow-hidden">
         <SiteHeader title={title} actions={actions} />
         <div className="min-h-0 flex-1 overflow-auto">

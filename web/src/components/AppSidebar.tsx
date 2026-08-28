@@ -1,25 +1,18 @@
-import { useEffect, useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
-  IconBinaryTree2,
   IconClipboardCheck,
-  IconEye,
-  IconEyeOff,
-  IconFolderCog,
   IconGitCompare,
   IconHexagonalPrism,
-  IconKey,
   IconLayoutDashboard,
-  IconPencil,
   IconReportSearch,
   IconRocket,
   IconSearch,
+  IconSettings,
   IconShieldCheck,
-  IconTags,
   IconWorldSearch,
   IconZoomCode,
 } from "@tabler/icons-react";
-import { cn } from "@/lib/utils";
+import { useHiddenNav } from "@/lib/nav-prefs";
 import { useRuns } from "@/lib/runs";
 import { useWorkflowList } from "@/lib/authoring";
 import { ClaudeCodeVersion } from "@/components/ClaudeCodeVersion";
@@ -32,12 +25,11 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
-  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 
-interface NavItem {
+export interface NavItem {
   href: string;
   label: string;
   icon: typeof IconRocket;
@@ -59,71 +51,20 @@ const DEFAULT_NAV_ICON = IconReportSearch;
 /** Icon keys a workflow may pick for `ui.nav.icon` (the builder's picker reads
  *  this so its options stay in sync with what the sidebar can actually render). */
 export const NAV_ICON_KEYS = Object.keys(NAV_ICONS);
-// Everything you author or configure — the building blocks you define and the
-// system settings — kept out of Operations (which is run-observation only).
-const MANAGE: NavItem[] = [
-  {
-    href: "/projects",
-    label: "Projects",
-    icon: IconFolderCog,
-    match: "/projects",
-  },
-  {
-    href: "/editor",
-    label: "Workflows",
-    icon: IconBinaryTree2,
-    match: "/editor",
-  },
-  {
-    href: "/credentials",
-    label: "Credentials",
-    icon: IconKey,
-    match: "/credentials",
-  },
-  {
-    href: "/categories",
-    label: "Categories",
-    icon: IconTags,
-    match: "/categories",
-  },
-];
 function isActive(pathname: string, item: NavItem): boolean {
   return (
     pathname === item.href || (!!item.match && pathname.startsWith(item.match))
   );
 }
 
-/** Personal, per-browser set of nav hrefs the user has hidden from the menu. */
-const HIDDEN_KEY = "harness.nav.hidden";
-function loadHidden(): Set<string> {
-  try {
-    const raw = localStorage.getItem(HIDDEN_KEY);
-    return new Set(raw ? (JSON.parse(raw) as string[]) : []);
-  } catch {
-    return new Set();
-  }
-}
-
-/** Left navigation, mirroring home-ops-agent's sidebar (base-nova). */
-export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
-  const { pathname } = useLocation();
-  // Edit mode reveals a per-item eye toggle; the hidden set persists per browser.
-  const [editing, setEditing] = useState(false);
-  const [hidden, setHidden] = useState<Set<string>>(loadHidden);
-  useEffect(() => {
-    try {
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify([...hidden]));
-    } catch {
-      /* private mode / storage disabled — hiding just won't persist */
-    }
-  }, [hidden]);
-  const toggleHidden = (href: string) =>
-    setHidden((prev) => {
-      const next = new Set(prev);
-      if (next.has(href)) next.delete(href);
-      else next.add(href);
-      return next;
-    });
+/**
+ * The Operations entries, in sidebar order.
+ *
+ * Exported as a hook because Settings → Preferences lists the same entries to
+ * show and hide them, and the workflow-declared ones are only knowable at
+ * runtime — so the two views cannot share a constant.
+ */
+export function useOperationsNav(): NavItem[] {
   // A workflow's page is only useful once it has a run — show these nav entries
   // conditionally (the run list is cached/shared across pages).
   const runs = useRuns({});
@@ -142,52 +83,25 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       match: `/reports/${w.name}`,
     }));
 
-  const operations: NavItem[] = [
+  return [
     { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
     { href: "/runs", label: "Runs", icon: IconRocket, match: "/runs" },
     { href: "/ab", label: "A/B Tests", icon: IconGitCompare, match: "/ab" },
     ...declaredNav,
   ];
+}
 
-  const group = (label: string, items: NavItem[]) => {
-    // Out of edit mode, hidden items disappear; in edit mode every item shows
-    // (dimmed if hidden) with an eye toggle. An all-hidden group vanishes too.
-    const visible = editing ? items : items.filter((i) => !hidden.has(i.href));
-    if (visible.length === 0) return null;
-    return (
-      <SidebarGroup>
-        <SidebarGroupLabel>{label}</SidebarGroupLabel>
-        <SidebarGroupContent>
-          <SidebarMenu>
-            {visible.map((item) => {
-              const isHidden = hidden.has(item.href);
-              return (
-                <SidebarMenuItem key={item.href}>
-                  <SidebarMenuButton
-                    render={<Link to={item.href} />}
-                    isActive={isActive(pathname, item)}
-                    className={cn(editing && isHidden && "opacity-40")}
-                  >
-                    <item.icon />
-                    <span>{item.label}</span>
-                  </SidebarMenuButton>
-                  {editing && (
-                    <SidebarMenuAction
-                      onClick={() => toggleHidden(item.href)}
-                      aria-label={isHidden ? "Show in menu" : "Hide from menu"}
-                      title={isHidden ? "Show in menu" : "Hide from menu"}
-                    >
-                      {isHidden ? <IconEyeOff /> : <IconEye />}
-                    </SidebarMenuAction>
-                  )}
-                </SidebarMenuItem>
-              );
-            })}
-          </SidebarMenu>
-        </SidebarGroupContent>
-      </SidebarGroup>
-    );
-  };
+/**
+ * Left navigation: what you watch.
+ *
+ * Everything you author or configure lives in Settings, reached from the footer
+ * — including which of these entries are shown, which used to be an edit mode
+ * inside this component.
+ */
+export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const { pathname } = useLocation();
+  const { isHidden } = useHiddenNav();
+  const operations = useOperationsNav().filter((i) => !isHidden(i.href));
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -205,24 +119,36 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {group("Operations", operations)}
-        {group("Manage", MANAGE)}
+        {operations.length > 0 && (
+          <SidebarGroup>
+            <SidebarGroupLabel>Operations</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                {operations.map((item) => (
+                  <SidebarMenuItem key={item.href}>
+                    <SidebarMenuButton
+                      render={<Link to={item.href} />}
+                      isActive={isActive(pathname, item)}
+                    >
+                      <item.icon />
+                      <span>{item.label}</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ))}
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
       <SidebarFooter>
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton
-              onClick={() => setEditing((v) => !v)}
-              isActive={editing}
-              className="text-xs text-muted-foreground"
-              title={
-                editing
-                  ? "Done — hidden items are now tucked away"
-                  : "Show / hide menu items"
-              }
+              render={<Link to="/settings/preferences" />}
+              isActive={pathname.startsWith("/settings")}
             >
-              <IconPencil />
-              <span>{editing ? "Done editing menu" : "Edit menu"}</span>
+              <IconSettings />
+              <span>Settings</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
