@@ -68,7 +68,12 @@ impl TokenStore {
     }
 
     /// Wrap an existing pool; ensures the table and index exist.
+    ///
+    /// The accounts table comes first: this one has a foreign key into it, and
+    /// on a fresh install the token store may well be the first thing a request
+    /// touches.
     pub async fn from_pool(pool: PgPool) -> Result<Self, PersistError> {
+        crate::users::ensure_schema(&pool).await?;
         for stmt in [CREATE_TOKENS, CREATE_TOKENS_USER_IDX] {
             sqlx::query(stmt).execute(&pool).await?;
         }
@@ -161,6 +166,47 @@ mod tests {
             .await
             .expect("create user");
         (users, user.id)
+    }
+
+    /// Reproduces a fresh install: the token store connecting before anything
+    /// has created the accounts table it references.
+    ///
+    /// This is the failure CI found and a developer machine hides, because a
+    /// database that has ever run the other tests already has `harness_users`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn the_token_store_can_be_the_first_thing_to_connect() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        // Tear the accounts tables down so this store is genuinely first.
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&url)
+            .await
+            .expect("connect");
+        sqlx::query("DROP TABLE IF EXISTS harness_tokens, harness_sessions, harness_users CASCADE")
+            .execute(&pool)
+            .await
+            .expect("drop");
+
+        // Would fail with `relation "harness_users" does not exist` if the token
+        // schema did not ensure its dependency first.
+        let store = TokenStore::connect(&url)
+            .await
+            .expect("connect tokens first");
+        let (users, user_id) = a_user(&url, "first").await;
+        let secret = "hrn_pat_first_connect";
+        store
+            .create(&user_id, "laptop", secret)
+            .await
+            .expect("create");
+        assert_eq!(
+            store.owner_of(secret).await.unwrap().as_deref(),
+            Some(user_id.as_str())
+        );
+        users.delete(&user_id).await.unwrap();
     }
 
     #[tokio::test]
