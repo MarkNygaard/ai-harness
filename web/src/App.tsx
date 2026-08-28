@@ -15,6 +15,8 @@ import { PreferencesPage } from "./routes/settings/PreferencesPage";
 import { EditorConnectionPage } from "./routes/settings/EditorConnectionPage";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { TokenPrompt } from "./components/TokenPrompt";
+import { LoginPage, SetupPage } from "./routes/auth/SignInPage";
+import { RequireSignIn } from "./components/RequireSignIn";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -32,6 +34,9 @@ export function App() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Routes>
+          {/* Outside the gate: they are how you get through it. */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/setup" element={<SetupPage />} />
           <Route path="/" element={<DashboardPage />} />
           <Route path="/runs" element={<RunsPage />} />
           <Route path="/ab" element={<AbTestsPage />} />
@@ -78,6 +83,7 @@ export function App() {
             element={<Navigate to="/settings/categories" replace />}
           />
         </Routes>
+        <RequireSignIn />
         <TokenPrompt />
       </TooltipProvider>
     </QueryClientProvider>

@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { TOKEN_KEY, unauthorizedEvents } from "@/lib/api";
+import { useAuthStatus } from "@/lib/auth";
 
 export function TokenPrompt() {
+  const status = useAuthStatus();
   const [open, setOpen] = useState(false);
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -19,6 +21,9 @@ export function TokenPrompt() {
     if (open) inputRef.current?.focus();
   }, [open]);
 
+  // In `accounts` mode a 401 means "sign in", and `RequireSignIn` takes you
+  // there. Asking for a shared token would be asking for the wrong thing.
+  if (status.data?.mode === "accounts") return null;
   if (!open) return null;
 
   const save = () => {

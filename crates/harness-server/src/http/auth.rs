@@ -114,6 +114,13 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             | "/signals"
             | "/favicon.ico"
             | "/auth/reset-password"
+            // Claiming an install and signing in: the routes that exist to get
+            // you *past* this middleware. Each authenticates itself — the
+            // one-time setup token, a password, or in `status`'s case nothing
+            // worth protecting (see `auth_routes`).
+            | "/api/auth/status"
+            | "/api/auth/setup"
+            | "/api/auth/login"
             // Linear's OAuth redirect: a browser navigation cannot carry an
             // `Authorization` header. Authenticated instead by the single-use,
             // unguessable `state` nonce the server minted (see `linear_oauth`).
@@ -164,6 +171,26 @@ pub(crate) async fn api_auth_middleware(
     // task-status events).
     if is_auth_exempt_path(path) {
         return next.run(req).await;
+    }
+
+    // In `accounts` mode a signed-in session is what authorises a request, and
+    // the shared token stops being a way in for a person. Checked before the
+    // bearer logic because it *replaces* that rather than adding to it.
+    if let Some(runs) = req
+        .extensions()
+        .get::<Arc<super::runs_routes::RunsState>>()
+        .cloned()
+    {
+        if super::accounts::mode(&runs).await == super::accounts::Mode::Accounts {
+            if super::auth_routes::permits(&runs, req.headers()).await {
+                return next.run(req).await;
+            }
+            return (
+                axum::http::StatusCode::UNAUTHORIZED,
+                Json(json!({"error": "sign in to use this harness"})),
+            )
+                .into_response();
+        }
     }
 
     let Some(expected) = resolve_api_token(&state.core.server.config.server) else {

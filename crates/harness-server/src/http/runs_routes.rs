@@ -105,6 +105,8 @@ pub struct RunsState {
     linear_source_store: OnceCell<harness_persist::LinearSourceStore>,
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     finding_store: OnceCell<harness_persist::FindingStateStore>,
+    user_store: OnceCell<harness_persist::UserStore>,
+    settings_store: OnceCell<harness_persist::SettingsStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
     /// The server's global project root. Custom workflows are global (like
@@ -116,8 +118,10 @@ pub struct RunsState {
     /// features no-op.
     pub(crate) public_url: Option<String>,
     /// Resolved legacy shared token (`HARNESS_API_TOKEN` / `server.api_token`).
-    /// Held here because `/mcp` authenticates itself and must still accept it;
-    /// the global middleware reads it from the server config independently.
+    /// Held here because several auth decisions happen outside the global
+    /// middleware and still need it: `/mcp` authenticates itself and must accept
+    /// it, the initial auth mode is derived from whether it is set, and claiming
+    /// an install accepts it as a setup token.
     api_token: Option<String>,
     /// This server instance's identity, stamped as the `owner` of every run it
     /// starts (lease attribution). Unique per process so a restart/replica is
@@ -142,6 +146,7 @@ impl RunsState {
     /// `/mcp` does its own authentication (it is exempt from the global
     /// middleware, so that an MCP key alone is enough) and still has to accept
     /// the shared token, for editors configured before MCP keys existed.
+    ///
     /// A builder rather than another constructor argument: only the router
     /// knows this, and the tests that build a bare state do not care.
     pub fn with_api_token(mut self, token: Option<String>) -> Self {
@@ -195,6 +200,8 @@ impl RunsState {
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             finding_store: OnceCell::new(),
+            user_store: OnceCell::new(),
+            settings_store: OnceCell::new(),
             projects_dir,
             project_root: project_root_global,
             public_url,
@@ -202,6 +209,36 @@ impl RunsState {
             instance_id,
             live: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Lazily connect the accounts + sessions store.
+    pub(crate) async fn user_store(&self) -> Result<&harness_persist::UserStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.user_store
+            .get_or_try_init(|| async {
+                harness_persist::UserStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the instance-settings store.
+    pub(crate) async fn settings_store(&self) -> Result<&harness_persist::SettingsStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.settings_store
+            .get_or_try_init(|| async {
+                harness_persist::SettingsStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
     }
 
     /// Lazily connect the project registry store.
