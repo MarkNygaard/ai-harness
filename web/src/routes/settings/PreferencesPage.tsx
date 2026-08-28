@@ -137,7 +137,7 @@ function SidebarItems() {
 export function PreferencesPage() {
   return (
     <SettingsShell title="Preferences">
-      <div className="flex flex-col gap-6 p-6">
+      <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
         <p className="max-w-prose text-xs text-muted-foreground">
           Personal to this browser. Nothing here is shared with anyone else
           using this harness.
