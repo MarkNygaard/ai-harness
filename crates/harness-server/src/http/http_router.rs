@@ -1,14 +1,14 @@
 use axum::{
     middleware,
-    routing::{get, post},
+    routing::{delete, get, post, put},
     Extension, Router,
 };
 use std::sync::Arc;
 
 use super::{
     auth, billing_routes, categories_routes, credentials_routes, finding_routes, health_check,
-    linear_agent, linear_oauth, linear_routes, linear_source_routes, mcp_routes, password_reset,
-    runs_routes, state::AppState, system_routes, workflows_routes,
+    linear_agent, linear_connections, linear_oauth, linear_routes, linear_source_routes,
+    mcp_routes, password_reset, runs_routes, state::AppState, system_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -131,11 +131,26 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/projects/{project}/linear/preview",
             get(linear_routes::preview),
         )
+        // ── Linear connections — one per connected workspace. A project
+        // resolves to one; with a single connection nothing needs configuring.
+        .route(
+            "/api/linear/connections",
+            get(linear_connections::list_connections).post(linear_connections::create_connection),
+        )
+        .route(
+            "/api/linear/connections/{id}",
+            delete(linear_connections::delete_connection),
+        )
+        .route(
+            "/api/projects/{project}/linear-connection",
+            put(linear_connections::set_project_connection),
+        )
         // ── Linear OAuth (`actor=app`) — writes attributed to the app, not to
-        // the person whose personal API key was pasted. Global: one workspace,
-        // one install, managed on the Credentials page. `start` returns the
-        // authorization URL as JSON (a bearer-authenticated fetch); the callback
-        // is a browser redirect and is auth-exempt, guarded by its `state` nonce.
+        // the person whose personal API key was pasted. One install per
+        // connected workspace, managed on the Credentials page; the routes take
+        // `?connection=<id>`. `start` returns the authorization URL as JSON (a
+        // bearer-authenticated fetch); the callback is a browser redirect and is
+        // auth-exempt, guarded by its `state` nonce.
         .route("/api/linear/oauth/start", get(linear_oauth::start))
         .route("/api/linear/oauth/status", get(linear_oauth::status))
         .route(

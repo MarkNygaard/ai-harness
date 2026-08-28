@@ -29,6 +29,18 @@ use super::runs_routes::RunsState;
 /// [`super::linear_oauth`]).
 const PROVIDERS: &[&str] = &["claude", "codex", "pi", "github", "cursor", "linear"];
 
+/// Whether `provider` is one the UI may write to.
+///
+/// Beyond the fixed list, every named Linear connection has its own credential
+/// key (`linear:<id>`) holding that account's OAuth app details. Those are not
+/// listed as provider cards — the connections API surfaces them — but they must
+/// be writable, since that is where a second account's `client_id`,
+/// `client_secret` and `webhook_secret` are saved.
+fn is_known_provider(provider: &str) -> bool {
+    PROVIDERS.contains(&provider)
+        || super::linear_connections::ConnectionId::from_provider_key(provider).is_some()
+}
+
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
 }
@@ -144,7 +156,7 @@ pub async fn set_credential(
     AxumPath(provider): AxumPath<String>,
     Json(req): Json<SetCredentialRequest>,
 ) -> Response {
-    if !PROVIDERS.contains(&provider.as_str()) {
+    if !is_known_provider(&provider) {
         return err(
             StatusCode::BAD_REQUEST,
             format!("unknown provider `{provider}`"),

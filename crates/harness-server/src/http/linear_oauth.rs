@@ -130,11 +130,14 @@ fn now_ms() -> i64 {
 // lands on the same instance that issued the nonce. A restart mid-flow just
 // means the user clicks Connect again.
 
-static PENDING: LazyLock<std::sync::Mutex<HashMap<String, i64>>> =
+/// Nonce -> (minted at, the connection being authorized). Carrying the
+/// connection through the redirect is what lets the callback store the tokens
+/// against the right workspace without trusting anything Linear sends back.
+static PENDING: LazyLock<std::sync::Mutex<HashMap<String, (i64, ConnectionId)>>> =
     LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
-/// Mint a single-use `state` nonce, pruning expired ones.
-fn issue_state() -> String {
+/// Mint a single-use `state` nonce for `conn`, pruning expired ones.
+fn issue_state(conn: &ConnectionId) -> String {
     // Two v4 UUIDs = 256 bits of randomness (the `uuid` crate is already a dep;
     // this avoids pulling `rand` into harness-server just for a nonce).
     let nonce = format!(
@@ -144,22 +147,19 @@ fn issue_state() -> String {
     );
     let now = now_ms();
     if let Ok(mut map) = PENDING.lock() {
-        map.retain(|_, created| now - *created < PENDING_TTL_MS);
-        map.insert(nonce.clone(), now);
+        map.retain(|_, (created, _)| now - *created < PENDING_TTL_MS);
+        map.insert(nonce.clone(), (now, conn.clone()));
     }
     nonce
 }
 
-/// Consume a `state` nonce. `false` if unknown, already used, or expired — all of
-/// which must fail the callback.
-fn take_state(nonce: &str) -> bool {
-    let Ok(mut map) = PENDING.lock() else {
-        return false;
-    };
-    match map.remove(nonce) {
-        Some(created) => now_ms() - created < PENDING_TTL_MS,
-        None => false,
-    }
+/// Consume a `state` nonce, returning the connection it was minted for.
+/// `None` if unknown, already used, or expired — all of which must fail the
+/// callback.
+fn take_state(nonce: &str) -> Option<ConnectionId> {
+    let mut map = PENDING.lock().ok()?;
+    let (created, conn) = map.remove(nonce)?;
+    (now_ms() - created < PENDING_TTL_MS).then_some(conn)
 }
 
 // ── URL building ─────────────────────────────────────────────────────────────
@@ -367,6 +367,63 @@ pub(crate) struct WebhookIdentity {
     pub(crate) secret: String,
 }
 
+/// One connection as the UI sees it — the shape of the Credentials page's card.
+/// Never carries a secret value.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct ConnectionSummary {
+    pub(crate) id: String,
+    /// What the operator called it when adding it. Falls back to the workspace
+    /// name once connected, and to the id before that.
+    pub(crate) label: Option<String>,
+    pub(crate) workspace_name: Option<String>,
+    pub(crate) workspace_url_key: Option<String>,
+    /// How this connection authenticates: `app`, `personal_key`, or `none`.
+    pub(crate) mode: &'static str,
+    pub(crate) client_configured: bool,
+    pub(crate) webhook_secret_configured: bool,
+    pub(crate) agent_scopes_granted: bool,
+    /// Last refresh failure, if the connection needs reconnecting.
+    pub(crate) refresh_error: Option<String>,
+    /// Projects whose Linear traffic is pinned to this connection.
+    pub(crate) projects: Vec<String>,
+}
+
+/// The non-secret view of one connection's stored credential.
+pub(crate) async fn describe(store: &CredentialStore, conn: &ConnectionId) -> ConnectionSummary {
+    let fields = credential(store, conn).await.unwrap_or_default();
+    let token_scope = field(&fields, "scope");
+    ConnectionSummary {
+        id: conn.as_str().to_string(),
+        label: field(&fields, "label"),
+        workspace_name: field(&fields, "workspace_name"),
+        workspace_url_key: field(&fields, "workspace_url_key"),
+        mode: if field(&fields, "access_token").is_some() {
+            "app"
+        } else if field(&fields, "api_key").is_some() {
+            "personal_key"
+        } else {
+            "none"
+        },
+        client_configured: field(&fields, "client_id").is_some()
+            && field(&fields, "client_secret").is_some(),
+        webhook_secret_configured: field(&fields, "webhook_secret").is_some(),
+        agent_scopes_granted: has_agent_scopes(token_scope.as_deref()),
+        refresh_error: field(&fields, "refresh_error"),
+        projects: Vec::new(),
+    }
+}
+
+/// Revoke this connection's access token at Linear, if it has one.
+///
+/// Deleting the row alone would leave a live token installed in the workspace
+/// with nothing left here to revoke it with.
+pub(crate) async fn revoke_for(store: &CredentialStore, conn: &ConnectionId) {
+    let fields = credential(store, conn).await.unwrap_or_default();
+    if let Some(token) = field(&fields, "access_token") {
+        revoke_token(&token).await;
+    }
+}
+
 /// Every connection that can verify an inbound webhook, i.e. has a signing
 /// secret stored. Connections without one are omitted: they cannot authenticate
 /// a delivery, so they can never be the answer.
@@ -557,10 +614,14 @@ pub(crate) async fn linear_client_or_none(
 /// Returns JSON rather than a 302 because the SPA calls it with the API bearer
 /// token; a plain navigation to this path would be rejected by the auth
 /// middleware. The client follows `url` itself.
-pub async fn start(Extension(state): Extension<Arc<RunsState>>) -> Response {
-    // Until the connection-management API lands, these routes address the
-    // legacy connection — which is the only one an existing install has.
-    let conn = ConnectionId::default();
+pub async fn start(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<ConnectionQuery>,
+) -> Response {
+    let conn = match q.resolve() {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -576,8 +637,28 @@ pub async fn start(Extension(state): Extension<Arc<RunsState>>) -> Response {
              (Linear → Settings → API → OAuth applications)",
         );
     };
-    let url = build_authorize_url(&client_id, &redirect, &issue_state());
+    let url = build_authorize_url(&client_id, &redirect, &issue_state(&conn));
     Json(serde_json::json!({ "url": url, "callback_url": redirect })).into_response()
+}
+
+/// `?connection=<id>` on the routes that act on one connection. Absent means
+/// the legacy connection, which is the only one a single-account install has.
+#[derive(Debug, Default, Deserialize)]
+pub struct ConnectionQuery {
+    #[serde(default)]
+    pub connection: Option<String>,
+}
+
+impl ConnectionQuery {
+    /// The connection addressed, or the parse error as a finished 400.
+    // The `Err` here IS the finished HTTP response, handed straight back to axum.
+    #[allow(clippy::result_large_err)]
+    fn resolve(&self) -> Result<ConnectionId, Response> {
+        match self.connection.as_deref().map(str::trim) {
+            None | Some("") => Ok(ConnectionId::default()),
+            Some(raw) => ConnectionId::parse(raw).map_err(|e| err(StatusCode::BAD_REQUEST, e)),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -619,18 +700,16 @@ pub async fn callback(
     let (Some(code), Some(nonce)) = (q.code.as_deref(), q.state.as_deref()) else {
         return back_to_ui("error", Some("callback missing `code` or `state`"));
     };
-    // Single-use nonce: this is what authenticates an unauthenticated callback.
-    if !take_state(nonce) {
+    // Single-use nonce: this is what authenticates an unauthenticated callback,
+    // and it carries which connection the operator started the flow for.
+    let Some(conn) = take_state(nonce) else {
         tracing::warn!("linear oauth: callback with unknown/expired state");
         return back_to_ui(
             "error",
             Some("authorization expired or was already used — start again"),
         );
-    }
+    };
 
-    // Until the connection-management API lands, these routes address the
-    // legacy connection — which is the only one an existing install has.
-    let conn = ConnectionId::default();
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return back_to_ui("error", Some(&e)),
@@ -689,10 +768,14 @@ pub async fn callback(
 
 /// `GET /api/linear/oauth/status` — how the harness talks to Linear, and what
 /// still needs doing. Never returns secrets.
-pub async fn status(Extension(state): Extension<Arc<RunsState>>) -> Response {
-    // Until the connection-management API lands, these routes address the
-    // legacy connection — which is the only one an existing install has.
-    let conn = ConnectionId::default();
+pub async fn status(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<ConnectionQuery>,
+) -> Response {
+    let conn = match q.resolve() {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -707,6 +790,7 @@ pub async fn status(Extension(state): Extension<Arc<RunsState>>) -> Response {
     };
     let token_scope = field(&fields, "scope");
     Json(serde_json::json!({
+        "connection": conn.as_str(),
         "mode": mode,
         "workspace_name": field(&fields, "workspace_name"),
         "workspace_url_key": field(&fields, "workspace_url_key"),
@@ -734,10 +818,14 @@ pub async fn status(Extension(state): Extension<Arc<RunsState>>) -> Response {
 /// `POST /api/linear/oauth/disconnect` — revoke the token at Linear and clear it,
 /// **keeping** the OAuth client id/secret so reconnecting is one click. Use the
 /// credential's Clear button to remove those too.
-pub async fn disconnect(Extension(state): Extension<Arc<RunsState>>) -> Response {
-    // Until the connection-management API lands, these routes address the
-    // legacy connection — which is the only one an existing install has.
-    let conn = ConnectionId::default();
+pub async fn disconnect(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<ConnectionQuery>,
+) -> Response {
+    let conn = match q.resolve() {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -826,27 +914,55 @@ mod tests {
     }
 
     #[test]
-    fn state_nonce_is_single_use() {
-        let a = issue_state();
-        let b = issue_state();
+    fn state_nonce_is_single_use_and_names_its_connection() {
+        let default = ConnectionId::default();
+        let acme = ConnectionId::parse("acme").unwrap();
+        let a = issue_state(&default);
+        let b = issue_state(&acme);
         assert_ne!(a, b, "each authorization gets its own nonce");
-        assert!(take_state(&a));
+
+        // The nonce is how the callback knows which workspace was being
+        // connected — nothing Linear sends back says so.
+        assert_eq!(take_state(&a), Some(default));
         // Replaying it must fail — this is the callback's only authentication.
-        assert!(!take_state(&a));
-        assert!(!take_state("never-issued"));
-        assert!(take_state(&b));
+        assert_eq!(take_state(&a), None);
+        assert_eq!(take_state("never-issued"), None);
+        assert_eq!(take_state(&b), Some(acme));
     }
 
     #[test]
     fn expired_state_nonce_is_rejected() {
-        let nonce = issue_state();
+        let nonce = issue_state(&ConnectionId::default());
         // Backdate it past the TTL.
         if let Ok(mut map) = PENDING.lock() {
-            if let Some(created) = map.get_mut(&nonce) {
+            if let Some((created, _)) = map.get_mut(&nonce) {
                 *created -= PENDING_TTL_MS + 1;
             }
         }
-        assert!(!take_state(&nonce));
+        assert_eq!(take_state(&nonce), None);
+    }
+
+    #[test]
+    fn connection_query_defaults_to_the_legacy_connection() {
+        let default = ConnectionId::default();
+        // Absent or blank: the single-account case, where the UI sends nothing.
+        assert_eq!(ConnectionQuery::default().resolve().unwrap(), default);
+        for blank in ["", "   "] {
+            let q = ConnectionQuery {
+                connection: Some(blank.into()),
+            };
+            assert_eq!(q.resolve().unwrap(), default);
+        }
+        let q = ConnectionQuery {
+            connection: Some("acme".into()),
+        };
+        assert_eq!(q.resolve().unwrap().as_str(), "acme");
+        // A malformed id is a 400, not a silent fallback to someone else's
+        // workspace.
+        let q = ConnectionQuery {
+            connection: Some("Not A Slug".into()),
+        };
+        assert_eq!(q.resolve().unwrap_err().status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

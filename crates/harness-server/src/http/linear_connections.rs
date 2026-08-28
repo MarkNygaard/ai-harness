@@ -15,11 +15,17 @@
 //! Unpinned (`NULL`) is the normal state for a single-account install — see
 //! [`resolve_for_project`] for how that resolves.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
+use axum::extract::{Extension, Path as AxumPath};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::Json;
 use harness_persist::CredentialStore;
+use serde::Deserialize;
 
+use super::linear_oauth::{describe, revoke_for, ConnectionSummary};
 use super::runs_routes::RunsState;
 
 /// Provider key of the pre-multi-connection Linear credential. Read as
@@ -233,6 +239,248 @@ fn choose(pinned: Option<&str>, available: &[ConnectionId]) -> Result<Connection
     }
 }
 
+// ── Managing connections ─────────────────────────────────────────────────────
+//
+// - `GET    /api/linear/connections`        — every connection + what uses it
+// - `POST   /api/linear/connections`        — add one, then connect it via OAuth
+// - `DELETE /api/linear/connections/{id}`   — revoke and remove
+// - `PUT    /api/projects/{project}/linear-connection` — pin a project
+
+fn err(status: StatusCode, msg: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
+}
+
+/// Turn a human label into a connection id: lowercase, non-alphanumerics folded
+/// to single dashes, trimmed to [`MAX_ID_LEN`].
+fn slugify(label: &str) -> String {
+    let mut out = String::with_capacity(label.len());
+    for c in label.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-');
+    // Truncating can re-expose a trailing dash, and a leading digit is fine but a
+    // leading dash is not.
+    out.chars()
+        .take(MAX_ID_LEN)
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string()
+}
+
+/// The slug for `label`, suffixed until it doesn't collide with `taken`.
+fn unique_id(label: &str, taken: &[ConnectionId]) -> Result<ConnectionId, String> {
+    let base = slugify(label);
+    if base.is_empty() {
+        return Err(format!(
+            "`{label}` has no letters or digits to make a name from"
+        ));
+    }
+    let is_taken = |c: &str| taken.iter().any(|t| t.as_str() == c);
+    if !is_taken(&base) {
+        return ConnectionId::parse(&base);
+    }
+    for n in 2..100 {
+        // Keep room for the suffix rather than overflowing the length cap.
+        let suffix = format!("-{n}");
+        let head: String = base.chars().take(MAX_ID_LEN - suffix.len()).collect();
+        let candidate = format!("{}{suffix}", head.trim_end_matches('-'));
+        if !is_taken(&candidate) {
+            return ConnectionId::parse(&candidate);
+        }
+    }
+    Err(format!("too many connections named like `{base}`"))
+}
+
+/// Every connection, with the projects pinned to each.
+async fn summaries(state: &Arc<RunsState>) -> Result<Vec<ConnectionSummary>, String> {
+    let store = state.cred_store().await?;
+    let mut out = Vec::new();
+    for id in list_ids(store).await? {
+        let mut summary = describe(store, &id).await;
+        if let Ok(projects) = state.project_store().await {
+            summary.projects = projects
+                .names_using_linear_connection(id.as_str())
+                .await
+                .unwrap_or_default();
+        }
+        out.push(summary);
+    }
+    Ok(out)
+}
+
+/// `GET /api/linear/connections` — every connected (or half-configured) Linear
+/// account, and which projects use each.
+pub async fn list_connections(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    match summaries(&state).await {
+        Ok(list) => Json(list).into_response(),
+        Err(e) => err(StatusCode::SERVICE_UNAVAILABLE, e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateConnectionRequest {
+    /// What to call this account, e.g. "Acme". The id is derived from it.
+    pub label: String,
+}
+
+/// `POST /api/linear/connections` — add an account, ready to be connected.
+///
+/// This only creates the row. The operator then saves the OAuth app's client id
+/// and secret against it and runs the connect flow with `?connection=<id>`.
+pub async fn create_connection(
+    Extension(state): Extension<Arc<RunsState>>,
+    Json(req): Json<CreateConnectionRequest>,
+) -> Response {
+    let label = req.label.trim();
+    if label.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "a name is required");
+    }
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let existing = match list_ids(store).await {
+        Ok(e) => e,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    };
+    let id = match unique_id(label, &existing) {
+        Ok(id) => id,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+
+    // Creating the row is what makes the connection exist — `list_ids` reads the
+    // credential store, so a connection with no credential row is not a thing.
+    let fields = BTreeMap::from([("label".to_string(), label.to_string())]);
+    if let Err(e) = store.set(&id.provider_key(), &fields).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+
+    // Going from one connection to two is the moment unpinned projects stop
+    // resolving: rule 2 only applies while there is exactly one. Pin them all to
+    // the account they were already using, so adding a second changes nothing
+    // for the projects already running and the operator only has to move the
+    // ones that belong to the new account.
+    if existing.len() == 1 {
+        match state.project_store().await {
+            Ok(projects) => match projects
+                .backfill_linear_connection(existing[0].as_str())
+                .await
+            {
+                Ok(n) if n > 0 => tracing::info!(
+                    "linear: pinned {n} project(s) to `{}` on adding a second connection",
+                    existing[0]
+                ),
+                Ok(_) => {}
+                Err(e) => tracing::warn!("linear: could not pin existing projects: {e}"),
+            },
+            Err(e) => tracing::warn!("linear: could not pin existing projects: {e}"),
+        }
+    }
+
+    (StatusCode::CREATED, Json(describe(store, &id).await)).into_response()
+}
+
+/// `DELETE /api/linear/connections/{id}` — revoke the token and remove it.
+///
+/// Refused while any project is pinned to it: without the guard those projects
+/// would silently fall back to whichever connection is left, which is how issues
+/// end up being worked in the wrong account.
+pub async fn delete_connection(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let id = match ConnectionId::parse(&id) {
+        Ok(id) => id,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    if let Ok(projects) = state.project_store().await {
+        match projects.names_using_linear_connection(id.as_str()).await {
+            Ok(using) if !using.is_empty() => {
+                return err(
+                    StatusCode::CONFLICT,
+                    format!(
+                        "`{id}` is still used by {} — point them at another Linear account first",
+                        using.join(", ")
+                    ),
+                );
+            }
+            Ok(_) => {}
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        }
+    }
+    revoke_for(store, &id).await;
+    match store.delete(&id.provider_key()).await {
+        Ok(()) => {
+            Json(serde_json::json!({ "deleted": true, "connection": id.as_str() })).into_response()
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PinProjectRequest {
+    /// The connection to use, or `null` to resolve automatically (only
+    /// unambiguous while exactly one connection is configured).
+    pub connection: Option<String>,
+}
+
+/// `PUT /api/projects/{project}/linear-connection` — which Linear account this
+/// project's issues come from.
+pub async fn set_project_connection(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(project): AxumPath<String>,
+    Json(req): Json<PinProjectRequest>,
+) -> Response {
+    let requested = match req.connection.as_deref().map(str::trim) {
+        None | Some("") => None,
+        Some(raw) => match ConnectionId::parse(raw) {
+            Ok(id) => Some(id),
+            Err(e) => return err(StatusCode::BAD_REQUEST, e),
+        },
+    };
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    // Pinning to a connection that doesn't exist would read as unpinned, which
+    // is not what the operator asked for.
+    if let Some(id) = &requested {
+        match list_ids(store).await {
+            Ok(available) if available.contains(id) => {}
+            Ok(_) => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    format!("there is no Linear connection called `{id}`"),
+                )
+            }
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
+        }
+    }
+    let projects = match state.project_store().await {
+        Ok(p) => p,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match projects
+        .set_linear_connection(&project, requested.as_ref().map(ConnectionId::as_str))
+        .await
+    {
+        Ok(Some(p)) => Json(p).into_response(),
+        Ok(None) => err(
+            StatusCode::NOT_FOUND,
+            format!("project `{project}` not found"),
+        ),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,6 +489,50 @@ mod tests {
         raw.iter()
             .map(|s| ConnectionId::parse(s).unwrap())
             .collect()
+    }
+
+    #[test]
+    fn labels_become_ids() {
+        assert_eq!(slugify("Acme"), "acme");
+        assert_eq!(slugify("Acme Corp"), "acme-corp");
+        assert_eq!(slugify("  Dilling (EU)  "), "dilling-eu");
+        assert_eq!(slugify("A—B"), "a-b");
+        assert_eq!(slugify("2024 Team"), "2024-team");
+        // Nothing to make a name from.
+        assert_eq!(slugify("!!!"), "");
+        assert_eq!(slugify(""), "");
+        // Truncation must not leave a trailing dash behind.
+        let long = slugify(&format!("{} tail", "a".repeat(MAX_ID_LEN - 1)));
+        assert!(long.len() <= MAX_ID_LEN, "{long}");
+        assert!(!long.ends_with('-'), "{long}");
+        // Whatever comes out has to be a valid id.
+        for label in ["Acme", "Acme Corp", "  Dilling (EU)  ", "2024 Team"] {
+            assert!(ConnectionId::parse(&slugify(label)).is_ok(), "{label}");
+        }
+    }
+
+    #[test]
+    fn ids_are_suffixed_until_they_stop_colliding() {
+        let taken = ids(&["acme"]);
+        assert_eq!(unique_id("Acme", &taken).unwrap().as_str(), "acme-2");
+
+        let taken = ids(&["acme", "acme-2"]);
+        assert_eq!(unique_id("Acme", &taken).unwrap().as_str(), "acme-3");
+
+        // A free name is used as-is.
+        assert_eq!(unique_id("Acme", &[]).unwrap().as_str(), "acme");
+
+        // `default` is only taken once the legacy connection exists, and then a
+        // label that slugs to it steps aside rather than colliding with it.
+        assert_eq!(unique_id("Default", &[]).unwrap().as_str(), "default");
+        let taken = ids(&["default"]);
+        assert_eq!(unique_id("Default", &taken).unwrap().as_str(), "default-2");
+    }
+
+    #[test]
+    fn a_label_with_nothing_to_name_it_by_is_refused() {
+        let e = unique_id("!!!", &[]).unwrap_err();
+        assert!(e.contains("!!!"), "{e}");
     }
 
     #[test]
