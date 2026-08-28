@@ -57,6 +57,7 @@ import {
   toGraph,
 } from "@/components/editor/graph";
 import { emptyNode, prebuiltNode } from "@/lib/workflow-yaml";
+import { useTheme } from "@/lib/theme";
 
 const nodeTypes: NodeTypes = { editor: EditorNodeView };
 
@@ -69,6 +70,9 @@ interface Meta {
 }
 
 function Editor() {
+  // React Flow paints its own controls and edges, so it has to be told
+  // which theme is active rather than inheriting it from the page.
+  const { resolved } = useTheme();
   const { name: routeName = null } = useParams();
   const catalog = useCatalog();
   const source = useWorkflowSource(routeName);
@@ -431,7 +435,7 @@ function Editor() {
                 }}
                 onPaneClick={() => setSelectedId(null)}
                 fitView
-                colorMode="dark"
+                colorMode={resolved}
                 proOptions={{ hideAttribution: true }}
                 className="bg-transparent"
               >
