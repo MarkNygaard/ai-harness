@@ -15,6 +15,7 @@
 //! Unpinned (`NULL`) is the normal state for a single-account install — see
 //! [`resolve_for_project`] for how that resolves.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use harness_persist::CredentialStore;
@@ -154,6 +155,37 @@ pub(crate) async fn resolve_for_project(
         pinned_for_project(state, project).await.as_deref(),
         &available,
     )
+}
+
+/// Resolve many projects in one pass, reusing a single connection listing.
+///
+/// The webhook path needs this: attributing a delivery means filtering every
+/// binding down to the ones whose project belongs to the sending workspace, and
+/// calling [`resolve_for_project`] per binding would re-list the connections
+/// each time. Projects whose resolution is ambiguous are simply absent from the
+/// map, which reads as "not this connection" at every call site.
+pub(crate) async fn resolve_for_projects(
+    state: &Arc<RunsState>,
+    projects: &[&str],
+) -> HashMap<String, ConnectionId> {
+    let Ok(store) = state.cred_store().await else {
+        return HashMap::new();
+    };
+    let Ok(available) = list_ids(store).await else {
+        return HashMap::new();
+    };
+    let mut out: HashMap<String, ConnectionId> = HashMap::new();
+    for project in projects {
+        let project = *project;
+        if out.contains_key(project) {
+            continue;
+        }
+        let pinned = pinned_for_project(state, project).await;
+        if let Ok(conn) = choose(pinned.as_deref(), &available) {
+            out.insert(project.to_string(), conn);
+        }
+    }
+    out
 }
 
 /// The connection a project is pinned to, if any.

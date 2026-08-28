@@ -355,10 +355,40 @@ async fn client_credentials(
     ))
 }
 
-/// The webhook signing secret from the Linear OAuth app, used to verify inbound
-/// agent-session events.
-pub(crate) async fn webhook_secret(store: &CredentialStore, conn: &ConnectionId) -> Option<String> {
-    field(&credential(store, conn).await?, "webhook_secret")
+/// What identifies one connection's inbound webhook deliveries: the workspace
+/// they come from, and the secret they are signed with.
+pub(crate) struct WebhookIdentity {
+    pub(crate) id: ConnectionId,
+    /// Linear's `organizationId` for this install, recorded at connect time.
+    /// `None` on an install made before it was captured — such a connection can
+    /// still be identified by its signature, just not by the payload.
+    pub(crate) workspace_id: Option<String>,
+    /// The OAuth app's webhook signing secret.
+    pub(crate) secret: String,
+}
+
+/// Every connection that can verify an inbound webhook, i.e. has a signing
+/// secret stored. Connections without one are omitted: they cannot authenticate
+/// a delivery, so they can never be the answer.
+pub(crate) async fn webhook_identities(store: &CredentialStore) -> Vec<WebhookIdentity> {
+    let mut out = Vec::new();
+    for id in super::linear_connections::list_ids(store)
+        .await
+        .unwrap_or_default()
+    {
+        let Some(fields) = credential(store, &id).await else {
+            continue;
+        };
+        let Some(secret) = field(&fields, "webhook_secret") else {
+            continue;
+        };
+        out.push(WebhookIdentity {
+            id,
+            workspace_id: field(&fields, "workspace_id"),
+            secret,
+        });
+    }
+    out
 }
 
 /// The harness's own app user id in the workspace — the delegate the poller
