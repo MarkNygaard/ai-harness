@@ -82,7 +82,14 @@
 
 :root {
   color-scheme: light;
-  --background: oklch(1 0 0);
+  /* Surface ladder, mirroring the dark one below: the canvas sits *under* the
+     raised surfaces, so a card reads as raised rather than as an outline on the
+     same colour. Light mode had `--background` and `--card` both at pure white,
+     which left every panel with nothing but its 1px ring to separate it from
+     the page. Steps are ~0.03 apart, the same spacing dark mode uses.
+
+       recessed fills 0.94  <  canvas 0.97  <  cards / popovers / sidebar 1.00 */
+  --background: oklch(0.97 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -90,11 +97,14 @@
   --popover-foreground: oklch(0.145 0 0);
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.97 0 0);
+  --secondary: oklch(0.94 0 0);
   --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.97 0 0);
-  --muted-foreground: oklch(0.556 0 0);
-  --accent: oklch(0.97 0 0);
+  --muted: oklch(0.94 0 0);
+  /* Darkened with the canvas: at 0.556 this read 4.73:1 on white but only
+     4.34:1 on the new ground, and it carries most of the secondary text in the
+     app. 0.52 restores AA at 5.05:1. */
+  --muted-foreground: oklch(0.52 0 0);
+  --accent: oklch(0.94 0 0);
   --accent-foreground: oklch(0.205 0 0);
   /* Darker than the dark-mode accent on purpose: 18 of its 28 uses are
      `text-accent-orange`, and the dark-mode value reads at only 3.79:1 on white
@@ -112,11 +122,13 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.2rem;
-  --sidebar: oklch(0.985 0 0);
+  --sidebar: oklch(1 0 0);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
+  /* The selected nav item, one step below the sidebar — the same 0.06 gap dark
+     mode puts between `--sidebar` and `--sidebar-accent`. */
+  --sidebar-accent: oklch(0.94 0 0);
   --sidebar-accent-foreground: oklch(0.205 0 0);
   --sidebar-border: oklch(0.922 0 0);
   --sidebar-ring: oklch(0.708 0 0);
