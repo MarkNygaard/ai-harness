@@ -18,9 +18,12 @@ import {
 } from "@/lib/credentials";
 import { LANE_FOR_CREDENTIAL } from "@/lib/billing";
 import {
+  AddLinearConnection,
   LinearCallbackBanner,
-  LinearConnect,
+  LinearConnectionCard,
 } from "@/components/credentials/LinearConnect";
+import { useLinearConnections } from "@/lib/linear";
+import type { LinearConnection } from "@/types/linear";
 import { BillingFields } from "./BillingFields";
 import {
   Dialog,
@@ -232,21 +235,80 @@ export function CredentialsPage() {
           </ProviderSummary>
           <ProviderSummary
             label="Linear"
-            help="Connect the workspace as an app so the harness's comments and status changes are authored by the app, not by a person."
+            help="Connect each Linear account as an app so the harness's comments and status changes are authored by the app, not by a person. Projects pick which account their issues come from."
             configured={configured.get("linear") ?? false}
           >
-            <div className="flex flex-col gap-4">
-              <LinearConnect />
-              <ProviderCard
-                provider={providerDef("linear")}
-                configured={configured.get("linear") ?? false}
-              />
-            </div>
+            <LinearAccounts />
           </ProviderSummary>
         </Section>
       </div>
     </AppShell>
   );
+}
+
+/**
+ * Every connected Linear account: its connection state, and the OAuth
+ * application backing it. With one account this is the single card it has
+ * always been.
+ */
+function LinearAccounts() {
+  const connections = useLinearConnections();
+  const list = connections.data ?? [];
+  // Before the first account exists there is still the legacy row to configure,
+  // so fall back to showing one unconnected card rather than nothing.
+  const accounts: LinearConnection[] =
+    list.length > 0
+      ? list
+      : [
+          {
+            id: "default",
+            label: null,
+            workspace_name: null,
+            workspace_url_key: null,
+            mode: "none",
+            client_configured: false,
+            webhook_secret_configured: false,
+            agent_scopes_granted: false,
+            refresh_error: null,
+            projects: [],
+          },
+        ];
+
+  return (
+    <div className="flex flex-col gap-3">
+      {accounts.map((c) => (
+        <div
+          key={c.id}
+          className="flex flex-col gap-3 rounded-md border border-border p-3"
+        >
+          <LinearConnectionCard
+            connection={c}
+            removable={accounts.length > 1}
+          />
+          <ProviderCard
+            provider={providerDef("linear")}
+            configured={c.client_configured}
+            credentialKey={credentialKeyFor(c.id)}
+          />
+        </div>
+      ))}
+      <AddLinearConnection />
+      {connections.isError && (
+        <span className="text-[10px] text-destructive">
+          {connections.error.message}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Where an account's OAuth application is stored. The first account predates
+ * named connections and keeps the bare `linear` row, so existing installs need
+ * no migration.
+ */
+function credentialKeyFor(id: string): string {
+  return id === "default" ? "linear" : `linear:${id}`;
 }
 
 /** A titled group of provider rows, so agents and integrations read apart. */
@@ -613,9 +675,16 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
 function ProviderCard({
   provider,
   configured,
+  credentialKey,
 }: {
   provider: (typeof PROVIDERS)[number];
   configured: boolean;
+  /**
+   * Credential row to write to; defaults to the provider's own id. Each named
+   * Linear account stores its OAuth application under `linear:<id>`, so the
+   * same set of fields is saved against a different row per account.
+   */
+  credentialKey?: string;
 }) {
   const save = useSetCredential();
   const del = useDeleteCredential();
@@ -628,7 +697,7 @@ function ProviderCard({
     );
     if (Object.keys(fields).length === 0) return;
     save.mutate(
-      { provider: provider.id, fields },
+      { provider: credentialKey ?? provider.id, fields },
       { onSuccess: () => setValues({}) },
     );
   }

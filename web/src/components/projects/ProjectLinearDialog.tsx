@@ -13,12 +13,19 @@ import {
 import { useWorkflowList } from "@/lib/authoring";
 import {
   useDeleteLinearSource,
+  useLinearConnections,
   useLinearDiscovery,
-  useLinearOauthStatus,
   useLinearSources,
   useSaveLinearSource,
+  useSetProjectLinearConnection,
 } from "@/lib/linear";
-import type { LinearSource, LinearState, LinearTeam } from "@/types/linear";
+import { connectionName } from "@/types/linear";
+import type {
+  LinearConnection,
+  LinearSource,
+  LinearState,
+  LinearTeam,
+} from "@/types/linear";
 import type { WorkflowSummary } from "@/types/authoring";
 
 const inputCls =
@@ -81,11 +88,13 @@ function StateSelect({
  * the project has a Linear credential configured.
  */
 export function ProjectLinearDialog({ project }: { project: string }) {
-  // Gate on a credential that can actually authenticate (an app install or a
-  // legacy key) — a credential holding only OAuth client details isn't one yet.
-  // The Linear connection is global; the bindings below are per project.
-  const status = useLinearOauthStatus();
-  if ((status.data?.mode ?? "none") === "none") return null;
+  // Gate on an account that can actually authenticate (an app install or a
+  // legacy key) — one holding only OAuth client details isn't one yet. Any
+  // usable account is enough to open this: which one this project uses is
+  // chosen inside.
+  const connections = useLinearConnections();
+  const accounts = connections.data ?? [];
+  if (!accounts.some((c) => c.mode !== "none")) return null;
 
   return (
     <Dialog>
@@ -109,13 +118,70 @@ export function ProjectLinearDialog({ project }: { project: string }) {
             One binding per workflow.
           </DialogDescription>
         </DialogHeader>
-        <DialogBody project={project} />
+        <DialogBody project={project} accounts={accounts} />
       </DialogContent>
     </Dialog>
   );
 }
 
-function DialogBody({ project }: { project: string }) {
+/**
+ * Which Linear account this project's issues come from.
+ *
+ * Hidden while there is only one account — there is nothing to choose, and the
+ * harness resolves to it automatically.
+ */
+function AccountSelect({
+  project,
+  accounts,
+}: {
+  project: string;
+  accounts: LinearConnection[];
+}) {
+  const pin = useSetProjectLinearConnection(project);
+  if (accounts.length < 2) return null;
+
+  // Which account claims this project. The connections list already carries it,
+  // so this needs no separate lookup.
+  const current = accounts.find((c) => c.projects.includes(project))?.id ?? "";
+
+  return (
+    <div className="flex flex-col gap-1.5 rounded-md border border-border bg-muted/30 p-2">
+      <Field label="Linear account">
+        <select
+          className={inputCls}
+          value={current}
+          disabled={pin.isPending}
+          onChange={(e) => pin.mutate(e.target.value || null)}
+        >
+          <option value="">(choose an account)</option>
+          {accounts.map((c) => (
+            <option key={c.id} value={c.id}>
+              {connectionName(c)}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <span className="text-[10px] text-muted-foreground">
+        Teams belong to an account, so the bindings below are set up against
+        this one. Switching accounts means picking their teams and statuses
+        again.
+      </span>
+      {pin.isError && (
+        <span className="text-[10px] text-destructive">
+          {pin.error.message}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function DialogBody({
+  project,
+  accounts,
+}: {
+  project: string;
+  accounts: LinearConnection[];
+}) {
   const discovery = useLinearDiscovery(project);
   const sources = useLinearSources(project);
   const workflows = useWorkflowList();
@@ -138,9 +204,15 @@ function DialogBody({ project }: { project: string }) {
   };
 
   if (discovery.isError) {
+    // A project with several accounts and none chosen lands here: discovery
+    // can't say which workspace to read. The selector above is the fix, so it
+    // has to render alongside the error rather than instead of it.
     return (
-      <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-        {discovery.error.message}
+      <div className="flex flex-col gap-2">
+        <AccountSelect project={project} accounts={accounts} />
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {discovery.error.message}
+        </div>
       </div>
     );
   }
@@ -165,6 +237,7 @@ function DialogBody({ project }: { project: string }) {
 
   return (
     <div className="flex flex-col gap-3">
+      <AccountSelect project={project} accounts={accounts} />
       {sources.isLoading && (
         <p className="text-xs text-muted-foreground">Loading…</p>
       )}
