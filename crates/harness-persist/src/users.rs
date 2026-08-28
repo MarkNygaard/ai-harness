@@ -84,6 +84,18 @@ pub struct UserStore {
     pool: PgPool,
 }
 
+/// Create the accounts table, if it is not there.
+///
+/// Shared rather than private to [`UserStore`]: every table with a foreign key
+/// into `harness_users` has to be able to ensure it exists first, because
+/// whichever store a request happens to touch first is the one that creates its
+/// own schema — and on a fresh install that may not be this one.
+pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), PersistError> {
+    sqlx::query(CREATE_USERS).execute(pool).await?;
+    sqlx::query(CREATE_USERS_EMAIL_IDX).execute(pool).await?;
+    Ok(())
+}
+
 fn hash_session_id(id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(id.as_bytes());
@@ -102,14 +114,9 @@ impl UserStore {
 
     /// Wrap an existing pool; ensures the tables and indexes exist.
     pub async fn from_pool(pool: PgPool) -> Result<Self, PersistError> {
-        for stmt in [
-            CREATE_USERS,
-            CREATE_USERS_EMAIL_IDX,
-            CREATE_SESSIONS,
-            CREATE_SESSIONS_USER_IDX,
-        ] {
-            sqlx::query(stmt).execute(&pool).await?;
-        }
+        ensure_schema(&pool).await?;
+        sqlx::query(CREATE_SESSIONS).execute(&pool).await?;
+        sqlx::query(CREATE_SESSIONS_USER_IDX).execute(&pool).await?;
         Ok(Self { pool })
     }
 

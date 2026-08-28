@@ -451,6 +451,7 @@ async fn claim_and_fire(
         Vec::new()
     });
     let req = CreateRunRequest {
+        triggered_by: Some("linear".to_string()),
         workflow: b.workflow.clone(),
         title: Some(format!("{} {}", issue.identifier, issue.title)),
         // Images pasted into the issue or its comments are downloaded and the
@@ -1356,6 +1357,7 @@ mod tests {
     fn detail_with(nodes: Vec<harness_persist::PersistedNode>) -> harness_persist::RunDetail {
         harness_persist::RunDetail {
             run: harness_persist::RunSummary {
+                triggered_by: None,
                 id: "r1".into(),
                 workflow_name: "idea-to-pr".into(),
                 title: None,

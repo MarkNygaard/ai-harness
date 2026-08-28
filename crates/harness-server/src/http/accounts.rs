@@ -321,6 +321,71 @@ pub(crate) async fn current_user(state: &Arc<RunsState>, headers: &HeaderMap) ->
 
 // ── Requiring an administrator ───────────────────────────────────────────────
 
+// ── Personal access tokens ───────────────────────────────────────────────────
+
+/// Marks a personal token in logs, and lets secret scanners recognise one that
+/// has been committed to a repo by mistake.
+pub(crate) const PAT_PREFIX: &str = "hrn_pat_";
+
+/// Mint a token. 256 bits from two v4 UUIDs, as elsewhere in this crate.
+pub(crate) fn mint_token() -> String {
+    format!(
+        "{PAT_PREFIX}{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+/// The bearer token on a request, if there is one.
+pub(crate) fn bearer(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
+/// The person behind a personal access token, if the request carries one.
+///
+/// Only tokens with the right prefix are looked up, so a shared secret or an
+/// MCP key never costs a database round trip here.
+pub(crate) async fn user_for_token(state: &Arc<RunsState>, headers: &HeaderMap) -> Option<User> {
+    let token = bearer(headers)?;
+    if !token.starts_with(PAT_PREFIX) {
+        return None;
+    }
+    let tokens = state.token_store().await.ok()?;
+    let user_id = tokens.owner_of(&token).await.ok()??;
+    let users = state.user_store().await.ok()?;
+    // Through `get`, so a suspended account's tokens stop working with it.
+    let user = users.get(&user_id).await.ok()??;
+    user.disabled_at.is_none().then_some(user)
+}
+
+/// Who is asking — a signed-in browser, or a program holding someone's token.
+///
+/// The single answer to "who is this" for everything that is not the legacy
+/// shared secret, which belongs to nobody in particular.
+pub(crate) async fn authenticated_user(
+    state: &Arc<RunsState>,
+    headers: &HeaderMap,
+) -> Option<User> {
+    match current_user(state, headers).await {
+        Some(user) => Some(user),
+        None => user_for_token(state, headers).await,
+    }
+}
+
+/// What to stamp a run with, so it can later be said who asked for it.
+///
+/// `None` where nobody is signed in — an `open` install, or the legacy shared
+/// token, which identifies no one.
+pub(crate) async fn caller_id(state: &Arc<RunsState>, headers: &HeaderMap) -> Option<String> {
+    authenticated_user(state, headers).await.map(|u| u.id)
+}
+
 /// An extractor that refuses the request unless the caller may administer this
 /// harness.
 ///
@@ -357,7 +422,7 @@ where
         if mode(&state).await != Mode::Accounts {
             return Ok(AdminOnly);
         }
-        match current_user(&state, &parts.headers).await {
+        match authenticated_user(&state, &parts.headers).await {
             Some(user) if user.role == ROLE_ADMIN => Ok(AdminOnly),
             Some(_) => Err(deny(
                 axum::http::StatusCode::FORBIDDEN,

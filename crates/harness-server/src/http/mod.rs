@@ -29,6 +29,7 @@ pub(crate) mod rate_limit;
 pub(crate) mod runs_routes;
 pub(crate) mod state;
 pub(crate) mod system_routes;
+pub(crate) mod tokens_routes;
 pub(crate) mod usage_routes;
 pub(crate) mod users_routes;
 pub(crate) mod workflows_routes;

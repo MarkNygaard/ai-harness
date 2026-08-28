@@ -43,6 +43,9 @@ pub async fn handle_mcp(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    // Whose token this is, if it is a personal one. The shared MCP key belongs
+    // to nobody in particular, so a run it starts is attributed to nobody.
+    let actor = super::accounts::caller_id(&state, &headers).await;
     if !mcp_key::authorized(&state, &headers).await {
         // A plain 401 rather than a JSON-RPC error: the caller never got as far
         // as a session, and MCP clients surface the HTTP status.
@@ -58,7 +61,7 @@ pub async fn handle_mcp(
     if let Some(batch) = body.as_array() {
         let mut out = Vec::new();
         for req in batch {
-            if let Some(resp) = handle_one(&state, req).await {
+            if let Some(resp) = handle_one(&state, actor.as_deref(), req).await {
                 out.push(resp);
             }
         }
@@ -67,13 +70,13 @@ pub async fn handle_mcp(
         }
         return Json(Value::Array(out)).into_response();
     }
-    match handle_one(&state, &body).await {
+    match handle_one(&state, actor.as_deref(), &body).await {
         Some(resp) => Json(resp).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
 }
 
-async fn handle_one(state: &Arc<RunsState>, req: &Value) -> Option<Value> {
+async fn handle_one(state: &Arc<RunsState>, actor: Option<&str>, req: &Value) -> Option<Value> {
     let id = req.get("id").cloned();
     let method = req.get("method").and_then(Value::as_str).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -107,7 +110,7 @@ async fn handle_one(state: &Arc<RunsState>, req: &Value) -> Option<Value> {
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let result = call_tool(state, &name, &args).await;
+            let result = call_tool(state, actor, &name, &args).await;
             success(id, result)
         }
         // Any notification (initialized, cancelled, …) — no reply.
@@ -129,7 +132,7 @@ fn state_after(dir: &Path, name: &str, msg: String) -> Value {
     }
 }
 
-async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
+async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args: &Value) -> Value {
     let s = |k: &str| {
         args.get(k)
             .and_then(Value::as_str)
@@ -142,6 +145,7 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
         // ── Run control ─────────────────────────────────────────────────────
         "run_trigger" => {
             let req = CreateRunRequest {
+                triggered_by: actor.map(str::to_string),
                 workflow: s("workflow"),
                 title: args
                     .get("title")
@@ -296,6 +300,7 @@ async fn call_tool(state: &Arc<RunsState>, name: &str, args: &Value) -> Value {
                 );
             };
             let req = CreateRunPairRequest {
+                triggered_by: actor.map(str::to_string),
                 workflow: s("workflow"),
                 title: args
                     .get("title")

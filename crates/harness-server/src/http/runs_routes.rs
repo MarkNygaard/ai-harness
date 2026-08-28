@@ -107,6 +107,7 @@ pub struct RunsState {
     finding_store: OnceCell<harness_persist::FindingStateStore>,
     user_store: OnceCell<harness_persist::UserStore>,
     settings_store: OnceCell<harness_persist::SettingsStore>,
+    token_store: OnceCell<harness_persist::TokenStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
     /// The server's global project root. Custom workflows are global (like
@@ -202,6 +203,7 @@ impl RunsState {
             finding_store: OnceCell::new(),
             user_store: OnceCell::new(),
             settings_store: OnceCell::new(),
+            token_store: OnceCell::new(),
             projects_dir,
             project_root: project_root_global,
             public_url,
@@ -220,6 +222,21 @@ impl RunsState {
         self.user_store
             .get_or_try_init(|| async {
                 harness_persist::UserStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the personal-access-token store.
+    pub(crate) async fn token_store(&self) -> Result<&harness_persist::TokenStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.token_store
+            .get_or_try_init(|| async {
+                harness_persist::TokenStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -446,6 +463,13 @@ impl ModelRef {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateRunRequest {
+    /// Who asked for this run, stamped on the row so it can later be said.
+    ///
+    /// `skip_deserializing`, so it is **never** read from a request body: the
+    /// entry point fills it from whoever authenticated, and a caller cannot
+    /// attribute their run to somebody else.
+    #[serde(skip_deserializing)]
+    pub triggered_by: Option<String>,
     /// Workflow path or bundled/project name.
     pub workflow: String,
     /// Human task title — names the run; exposed to nodes as `$TASK_TITLE`.
@@ -1171,9 +1195,11 @@ pub struct JudgePairResponse {
 
 pub async fn judge_run_pair(
     Extension(state): Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     AxumPath(pair_id): AxumPath<String>,
     Json(req): Json<JudgePairRequest>,
 ) -> Response {
+    let triggered_by = super::accounts::caller_id(&state, &headers).await;
     let store = match state.store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -1207,6 +1233,7 @@ pub async fn judge_run_pair(
         summaries[0].title.as_deref().unwrap_or(pair_id.as_str())
     );
     let run_req = CreateRunRequest {
+        triggered_by: triggered_by.clone(),
         workflow: "judge-ab".to_string(),
         title: Some(title),
         description: evidence,
@@ -1238,8 +1265,10 @@ pub async fn judge_run_pair(
 /// `POST /runs` — submit a workflow; execute it in a background task.
 pub async fn create_run(
     Extension(state): Extension<Arc<RunsState>>,
-    Json(req): Json<CreateRunRequest>,
+    headers: axum::http::HeaderMap,
+    Json(mut req): Json<CreateRunRequest>,
 ) -> Response {
+    req.triggered_by = super::accounts::caller_id(&state, &headers).await;
     match start_run(&state, req).await {
         Ok(run_id) => (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response(),
         Err((status, msg)) => err(status, msg),
@@ -1254,8 +1283,12 @@ pub async fn create_run(
 /// Always a real run.
 pub async fn rerun_run(
     Extension(state): Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {
+    // A rerun belongs to whoever asked for it, not to whoever started the
+    // original — they are different decisions, often by different people.
+    let triggered_by = super::accounts::caller_id(&state, &headers).await;
     let store = match state.store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -1279,6 +1312,7 @@ pub async fn rerun_run(
         );
     };
     let req = CreateRunRequest {
+        triggered_by: triggered_by.clone(),
         workflow: detail.run.workflow_name.clone(),
         title: detail.run.title.clone(),
         description: detail.run.description.clone().unwrap_or_default(),
@@ -1311,6 +1345,9 @@ pub async fn rerun_run(
 /// baseline.
 #[derive(Debug, Deserialize)]
 pub struct CreateRunPairRequest {
+    /// Who asked. Server-set; see [`CreateRunRequest::triggered_by`].
+    #[serde(skip_deserializing)]
+    pub triggered_by: Option<String>,
     pub workflow: String,
     #[serde(default)]
     pub title: Option<String>,
@@ -1342,8 +1379,10 @@ pub struct CreateRunPairResponse {
 /// `POST /runs/pair` — start both arms of an A/B comparison.
 pub async fn create_run_pair(
     Extension(state): Extension<Arc<RunsState>>,
-    Json(req): Json<CreateRunPairRequest>,
+    headers: axum::http::HeaderMap,
+    Json(mut req): Json<CreateRunPairRequest>,
 ) -> Response {
+    req.triggered_by = super::accounts::caller_id(&state, &headers).await;
     match start_run_pair(&state, req).await {
         Ok(resp) => (StatusCode::ACCEPTED, Json(resp)).into_response(),
         Err((status, msg)) => err(status, msg),
@@ -1359,6 +1398,7 @@ pub(crate) async fn start_run_pair(
     let pair_id = format!("ab-{}", now_millis());
     // One arm = the base request with the swap and pairing stamp filled in.
     let arm = |arm: &str, variant: &ModelRef| CreateRunRequest {
+        triggered_by: req.triggered_by.clone(),
         workflow: req.workflow.clone(),
         title: req.title.clone(),
         description: req.description.clone(),
@@ -1428,6 +1468,7 @@ pub(crate) async fn start_run(
 ) -> Result<String, (StatusCode, String)> {
     // A run must live in a project — the project's checkout is the workspace
     // (there is no global project root). Reject a missing/unknown project.
+    let triggered_by = req.triggered_by.clone();
     let project = match req
         .project
         .as_deref()
@@ -1536,6 +1577,7 @@ pub(crate) async fn start_run(
             repos,
             toolchains,
             ab,
+            triggered_by,
             btx,
         )
         .await;
@@ -1567,6 +1609,7 @@ async fn execute_run_task(
     repos: Vec<harness_persist::ProjectRepo>,
     toolchains: Vec<String>,
     ab: Option<AbInfo>,
+    triggered_by: Option<String>,
     btx: broadcast::Sender<RunEvent>,
 ) {
     // The workspace is an isolated per-run worktree off the project checkout's
@@ -1605,6 +1648,7 @@ async fn execute_run_task(
                         &[],
                         Some(&state.instance_id),
                         ab_ref.as_ref(),
+                        triggered_by.as_deref(),
                     )
                     .await;
                 let _ = store
@@ -1761,6 +1805,7 @@ async fn execute_run_task(
     let persist_description = description.clone();
     let persist_project = Some(project.clone());
     let persist_owner = state.instance_id.clone();
+    let persist_triggered_by = triggered_by.clone();
     let persist_ab = ab;
     // Map node id → declared artifact path so the forwarder can read each
     // artifact the moment its node finishes (the worktree still exists) and
@@ -1812,6 +1857,7 @@ async fn execute_run_task(
                                 nodes,
                                 Some(&persist_owner),
                                 ab_ref.as_ref(),
+                                persist_triggered_by.as_deref(),
                             )
                             .await;
                     }
