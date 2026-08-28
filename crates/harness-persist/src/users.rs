@@ -303,15 +303,14 @@ impl UserStore {
     /// Touches `last_seen_at` so an idle session can be told from an active one.
     pub async fn user_for_session(&self, session_id: &str) -> Result<Option<User>, PersistError> {
         let hash = hash_session_id(session_id);
-        let sql = format!(
+        let row: Option<(String,)> = sqlx::query_as(
             "UPDATE harness_sessions SET last_seen_at = now()
              WHERE id_hash = $1 AND expires_at > now()
-             RETURNING user_id"
-        );
-        let row: Option<(String,)> = sqlx::query_as(&sql)
-            .bind(&hash)
-            .fetch_optional(&self.pool)
-            .await?;
+             RETURNING user_id",
+        )
+        .bind(&hash)
+        .fetch_optional(&self.pool)
+        .await?;
         let Some((user_id,)) = row else {
             return Ok(None);
         };

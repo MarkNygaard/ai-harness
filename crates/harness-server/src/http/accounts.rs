@@ -34,7 +34,7 @@ use argon2::password_hash::{rand_core::OsRng, PasswordHash, PasswordHasher, Salt
 use argon2::{Argon2, PasswordVerifier};
 use axum::http::HeaderMap;
 use chrono::Duration;
-use harness_persist::{SettingsStore, User, UserStore};
+use harness_persist::{User, UserStore};
 use subtle::ConstantTimeEq;
 
 use super::runs_routes::RunsState;
@@ -317,11 +317,6 @@ pub(crate) async fn current_user(state: &Arc<RunsState>, headers: &HeaderMap) ->
     let id = session_id(headers)?;
     let users = state.user_store().await.ok()?;
     users.user_for_session(&id).await.ok().flatten()
-}
-
-/// Settings store handle, or a sentence saying why there isn't one.
-pub(crate) async fn settings(state: &Arc<RunsState>) -> Result<&SettingsStore, String> {
-    state.settings_store().await
 }
 
 #[cfg(test)]
