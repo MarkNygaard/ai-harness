@@ -10,19 +10,24 @@
 //! - `run_trigger` / `run_list` / `run_status` → [`super::runs_routes`]
 //! - `workflow_*` → [`harness_runner::authoring`] (same core as the web editor)
 //!
-//! Auth is the global bearer-token middleware (`Authorization: Bearer …`); this
-//! route is not exempt, so the cluster token gates every call.
+//! **Auth is this route's own.** `/mcp` is exempt from the global bearer-token
+//! middleware, because an editor holding only the MCP key would otherwise be
+//! turned away by a middleware that knows nothing about that key. Instead every
+//! call goes through [`super::mcp_key::authorized`], which accepts the MCP key
+//! or the legacy shared token — the same two-layer arrangement `/ws` already
+//! uses, and for the same reason.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use axum::extract::Extension;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use harness_runner::authoring;
 use serde_json::{json, Value};
 
+use super::mcp_key;
 use super::runs_routes::{
     resolve_workflow_models, start_run, start_run_pair, CreateRunPairRequest, CreateRunRequest,
     ModelRef, RunsState,
@@ -35,8 +40,21 @@ const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
 /// (no `id`) produce no response; a request with an `id` produces one.
 pub async fn handle_mcp(
     Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    if !mcp_key::authorized(&state, &headers).await {
+        // A plain 401 rather than a JSON-RPC error: the caller never got as far
+        // as a session, and MCP clients surface the HTTP status.
+        return (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({
+                "error": "missing or invalid MCP key — copy the connection snippet from \
+                          Settings → Editor connection"
+            })),
+        )
+            .into_response();
+    }
     if let Some(batch) = body.as_array() {
         let mut out = Vec::new();
         for req in batch {
@@ -792,5 +810,62 @@ mod tests {
         assert_eq!(r["structuredContent"]["run_id"], "x");
         assert_eq!(r["content"][0]["text"], "hi");
         assert_eq!(tool_error("boom")["isError"], true);
+    }
+}
+
+// ── Connecting an editor ─────────────────────────────────────────────────────
+
+/// Tools this endpoint exposes, grouped as the settings page lists them.
+const RUN_TOOLS: &[&str] = &[
+    "run_trigger",
+    "run_trigger_pair",
+    "run_list",
+    "run_status",
+    "run_findings",
+];
+const AUTHORING_TOOLS: &[&str] = &[
+    "workflow_list",
+    "workflow_get",
+    "workflow_create",
+    "workflow_save",
+    "workflow_validate",
+    "workflow_set_node",
+    "workflow_remove_node",
+    "workflow_connect",
+    "workflow_set_ui",
+    "workflow_delete",
+    "workflow_catalog",
+    "workflow_models",
+];
+
+fn connection_body(state: &Arc<RunsState>, token: Option<String>) -> Value {
+    json!({
+        // `None` when no public URL is configured — the page says so rather
+        // than rendering a snippet that would not work.
+        "endpoint": state.public_url.as_deref().map(|b| format!("{b}/mcp")),
+        "token": token,
+        // True when the endpoint is reachable without any credential, which is
+        // worth saying out loud on the page.
+        "unauthenticated": token.is_none() && state.api_token().is_none(),
+        "run_tools": RUN_TOOLS,
+        "authoring_tools": AUTHORING_TOOLS,
+    })
+}
+
+/// `GET /api/mcp/connection` — everything needed to connect an editor.
+///
+/// Returns the key in plaintext: the page's whole job is to hand over a snippet
+/// you can paste. It sits behind the normal middleware, so in a deployment with
+/// a shared token you already had to authenticate to get here.
+pub async fn connection(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    let token = mcp_key::ensure(&state).await;
+    Json(connection_body(&state, token)).into_response()
+}
+
+/// `POST /api/mcp/connection` — replace the key.
+pub async fn regenerate_connection(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    match mcp_key::regenerate(&state).await {
+        Ok(token) => Json(connection_body(&state, Some(token))).into_response(),
+        Err(e) => (StatusCode::SERVICE_UNAVAILABLE, Json(json!({ "error": e }))).into_response(),
     }
 }

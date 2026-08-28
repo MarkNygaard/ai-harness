@@ -19,6 +19,7 @@ pub(crate) mod linear_oauth;
 pub(crate) mod linear_poller;
 pub(crate) mod linear_routes;
 pub(crate) mod linear_source_routes;
+pub(crate) mod mcp_key;
 pub(crate) mod mcp_routes;
 pub(crate) mod misc_routes;
 pub(crate) mod projects_routes;

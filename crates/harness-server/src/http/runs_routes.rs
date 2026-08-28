@@ -115,6 +115,10 @@ pub struct RunsState {
     /// `server.public_url`), trailing slash trimmed. `None` => run-link
     /// features no-op.
     pub(crate) public_url: Option<String>,
+    /// Resolved legacy shared token (`HARNESS_API_TOKEN` / `server.api_token`).
+    /// Held here because `/mcp` authenticates itself and must still accept it;
+    /// the global middleware reads it from the server config independently.
+    api_token: Option<String>,
     /// This server instance's identity, stamped as the `owner` of every run it
     /// starts (lease attribution). Unique per process so a restart/replica is
     /// distinguishable.
@@ -133,6 +137,25 @@ struct LiveRun {
 }
 
 impl RunsState {
+    /// Attach the resolved legacy API token.
+    ///
+    /// `/mcp` does its own authentication (it is exempt from the global
+    /// middleware, so that an MCP key alone is enough) and still has to accept
+    /// the shared token, for editors configured before MCP keys existed.
+    /// A builder rather than another constructor argument: only the router
+    /// knows this, and the tests that build a bare state do not care.
+    pub fn with_api_token(mut self, token: Option<String>) -> Self {
+        self.api_token = token
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty());
+        self
+    }
+
+    /// The legacy shared token, if this deployment sets one.
+    pub(crate) fn api_token(&self) -> Option<String> {
+        self.api_token.clone()
+    }
+
     pub fn new(
         db_url: Option<String>,
         agent_registry: Arc<AgentRegistry>,
@@ -175,6 +198,7 @@ impl RunsState {
             projects_dir,
             project_root: project_root_global,
             public_url,
+            api_token: None,
             instance_id,
             live: Mutex::new(HashMap::new()),
         }

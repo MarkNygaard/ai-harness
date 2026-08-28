@@ -12,6 +12,7 @@ import { ProjectsPage } from "./routes/projects/ProjectsPage";
 import { CredentialsPage } from "./routes/credentials/CredentialsPage";
 import { CategoriesPage } from "./routes/categories/CategoriesPage";
 import { PreferencesPage } from "./routes/settings/PreferencesPage";
+import { EditorConnectionPage } from "./routes/settings/EditorConnectionPage";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { TokenPrompt } from "./components/TokenPrompt";
 
@@ -52,6 +53,7 @@ export function App() {
             element={<Navigate to="/settings/preferences" replace />}
           />
           <Route path="/settings/preferences" element={<PreferencesPage />} />
+          <Route path="/settings/mcp" element={<EditorConnectionPage />} />
           <Route path="/settings/credentials" element={<CredentialsPage />} />
           <Route path="/settings/projects" element={<ProjectsPage />} />
           <Route path="/settings/workflows" element={<WorkflowsList />} />
