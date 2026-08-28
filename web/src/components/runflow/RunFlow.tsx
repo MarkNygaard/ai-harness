@@ -8,6 +8,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import type { NodeView } from "@/types/run";
+import { useTheme } from "@/lib/theme";
 import { layoutRun } from "./layout";
 import { RunNode } from "./RunNode";
 import { StepDialog } from "./StepDialog";
@@ -20,6 +21,9 @@ const nodeTypes: NodeTypes = { run: RunNode };
  * animate while a downstream step is running.
  */
 export function RunFlow({ nodes: views }: { nodes: NodeView[] }) {
+  // React Flow paints its own controls and edges, so it has to be told
+  // which theme is active rather than inheriting it from the page.
+  const { resolved } = useTheme();
   const { nodes, edges } = useMemo(() => layoutRun(views), [views]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -45,11 +49,16 @@ export function RunFlow({ nodes: views }: { nodes: NodeView[] }) {
         maxZoom={1.5}
         nodesConnectable={false}
         onNodeClick={(_e, n) => setSelectedId(n.id)}
-        colorMode="dark"
+        colorMode={resolved}
         proOptions={{ hideAttribution: true }}
         className="bg-transparent"
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="var(--border)" />
+        <Background
+          variant={BackgroundVariant.Dots}
+          gap={20}
+          size={1}
+          color="var(--border)"
+        />
         <Controls showInteractive={false} className="border-border! bg-card!" />
       </ReactFlow>
       <StepDialog view={selected} onClose={() => setSelectedId(null)} />

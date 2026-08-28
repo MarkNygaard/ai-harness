@@ -96,7 +96,10 @@
   --muted-foreground: oklch(0.556 0 0);
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
-  --accent-orange: oklch(0.6137 0.0737 67.86);
+  /* Darker than the dark-mode accent on purpose: 18 of its 28 uses are
+     `text-accent-orange`, and the dark-mode value reads at only 3.79:1 on white
+     — below AA. This lands at 5.14:1 and keeps the hue. */
+  --accent-orange: oklch(0.54 0.0737 67.86);
   --accent-orange-light: oklch(0.9649 0.0471 100.71);
   --accent-orange-foreground: oklch(1 0 0);
   --destructive: oklch(0.577 0.245 27.325);
@@ -123,9 +126,11 @@
   --font-geist-mono:
     "Geist Mono Variable", ui-monospace, "JetBrains Mono", monospace;
 
-  /* Status palette (mode-independent). */
+  /* Status palette. `running`/`failed`/`skipped` follow tokens that are already
+     per-theme; `success` needs its own value per theme, since one lightness
+     cannot read on both grounds. */
   --status-running: var(--accent-orange);
-  --status-success: oklch(0.72 0.15 150);
+  --status-success: oklch(0.52 0.15 150);
   --status-failed: var(--destructive);
   --status-skipped: var(--muted-foreground);
   --status-pending: var(--muted-foreground);
@@ -174,6 +179,7 @@
   --accent-orange-light: oklch(0.9649 0.0471 100.71);
   --accent-orange-foreground: oklch(1 0 0);
   --destructive: oklch(0.704 0.191 22.216);
+  --status-success: oklch(0.72 0.15 150);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
   --ring: oklch(0.556 0 0);
