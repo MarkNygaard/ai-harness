@@ -16,6 +16,12 @@
 //! replays. With no secret stored, the endpoint refuses everything rather than
 //! trusting unverified input.
 //!
+//! **Which workspace sent it.** One endpoint serves every connected Linear
+//! account, so a delivery has to be attributed to one before it can be
+//! acted on -- see [`resolve_connection`]. The payload's `organizationId`
+//! names the workspace and the signature proves it. Attribution never
+//! guesses: an ambiguous delivery is refused.
+//!
 //! **The 10-second rule.** Linear marks a session unresponsive unless an activity
 //! arrives within 10 seconds of `created`. So the handler emits the acknowledging
 //! `thought` **inline, before** any slower work (workflow lookup, worktree, run
@@ -39,7 +45,8 @@ use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 
-use super::linear_oauth::{linear_client, webhook_secret};
+use super::linear_connections::{resolve_for_projects, ConnectionId};
+use super::linear_oauth::{linear_client, webhook_identities, WebhookIdentity};
 use super::runs_routes::{start_run, CreateRunRequest, RunsState};
 
 /// Header carrying the hex HMAC-SHA256 of the raw body.
@@ -98,6 +105,96 @@ fn timestamp_fresh(body: &[u8], now: i64) -> bool {
     }
 }
 
+/// The workspace a delivery claims to come from, straight off the raw body.
+///
+/// Read **before** the signature is checked, which is safe because it only
+/// chooses which secret to check *first* — verification still gates everything,
+/// and the signature covers this field along with the rest of the body.
+fn claimed_organization_id(body: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(body)
+        .ok()?
+        .get("organizationId")?
+        .as_str()
+        .map(str::to_string)
+}
+
+/// Attribute a signed delivery to the connection that sent it.
+///
+/// `organizationId` narrows the candidates to the connections installed in that
+/// workspace, and the signature picks among them. A payload with no usable org
+/// id — absent, or naming a workspace we have not recorded — falls back to
+/// trying every connection's secret, which is also what identifies a delivery
+/// when one OAuth app serves several workspaces and they therefore *share* a
+/// signing secret.
+///
+/// `Err` is the finished 401/412 response. Two connections that both verify are
+/// an `Err`, not a coin flip: attributing a session to the wrong workspace would
+/// start a run against the wrong repo, which is worse than dropping a delivery
+/// Linear will retry.
+// The `Err` here IS the finished HTTP response, handed straight back to axum.
+#[allow(clippy::result_large_err)]
+fn resolve_connection(
+    identities: &[WebhookIdentity],
+    body: &[u8],
+    received: &str,
+) -> Result<ConnectionId, Response> {
+    if identities.is_empty() {
+        tracing::warn!(
+            "linear webhook: rejected — no webhook signing secret stored (save it on the \
+             Credentials page)"
+        );
+        return Err(err(
+            StatusCode::PRECONDITION_FAILED,
+            "no Linear webhook signing secret configured",
+        ));
+    }
+
+    // Narrow to the workspace the payload names, when we recognize it. An
+    // unrecognized or absent org id leaves every connection in play.
+    let claimed = claimed_organization_id(body);
+    let narrowed: Vec<&WebhookIdentity> = match claimed.as_deref() {
+        Some(org) => identities
+            .iter()
+            .filter(|i| i.workspace_id.as_deref() == Some(org))
+            .collect(),
+        None => Vec::new(),
+    };
+    let candidates: Vec<&WebhookIdentity> = if narrowed.is_empty() {
+        identities.iter().collect()
+    } else {
+        narrowed
+    };
+
+    let verified: Vec<&WebhookIdentity> = candidates
+        .into_iter()
+        .filter(|i| signature_matches(&i.secret, body, received))
+        .collect();
+
+    match verified.as_slice() {
+        [only] => Ok(only.id.clone()),
+        [] => {
+            tracing::warn!("linear webhook: rejected — signature mismatch");
+            Err(err(StatusCode::UNAUTHORIZED, "invalid signature"))
+        }
+        many => {
+            // Several connections share a signing secret *and* the payload did
+            // not name a workspace we know. Reconnecting them records their
+            // workspace ids, which makes this decidable.
+            let ids: Vec<&str> = many.iter().map(|i| i.id.as_str()).collect();
+            tracing::warn!(
+                "linear webhook: rejected — the signature verifies for several connections \
+                 ({}) and the payload carries no recognized organizationId, so it cannot be \
+                 attributed to one workspace; reconnect them to record their workspace ids",
+                ids.join(", ")
+            );
+            Err(err(
+                StatusCode::UNAUTHORIZED,
+                "delivery cannot be attributed to one Linear connection",
+            ))
+        }
+    }
+}
+
 /// `POST /api/linear/webhook` — an agent session was created or prompted.
 ///
 /// Always answers 200 once the signature checks out, including for event types
@@ -111,17 +208,6 @@ pub async fn webhook(
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    // No secret stored → we cannot verify anything, so we trust nothing.
-    let Some(secret) = webhook_secret(store).await else {
-        tracing::warn!(
-            "linear webhook: rejected — no webhook signing secret stored (save it on the \
-             Credentials page)"
-        );
-        return err(
-            StatusCode::PRECONDITION_FAILED,
-            "no Linear webhook signing secret configured",
-        );
-    };
     let Some(received) = headers
         .get(SIGNATURE_HEADER)
         .and_then(|v| v.to_str().ok())
@@ -129,10 +215,13 @@ pub async fn webhook(
     else {
         return err(StatusCode::UNAUTHORIZED, "missing Linear-Signature header");
     };
-    if !signature_matches(&secret, &body, received) {
-        tracing::warn!("linear webhook: rejected — signature mismatch");
-        return err(StatusCode::UNAUTHORIZED, "invalid signature");
-    }
+    // Verification and attribution in one step: the signature both
+    // authenticates the delivery and says which workspace it came from.
+    let identities = webhook_identities(store).await;
+    let conn = match resolve_connection(&identities, &body, received) {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     if !timestamp_fresh(&body, now_ms()) {
         tracing::warn!("linear webhook: rejected — stale webhookTimestamp (replay?)");
         return err(StatusCode::UNAUTHORIZED, "stale webhook timestamp");
@@ -159,11 +248,13 @@ pub async fn webhook(
     match event.action {
         AgentSessionAction::Created => {
             let state = state.clone();
-            tokio::spawn(async move { handle_created(&state, event).await });
+            let conn = conn.clone();
+            tokio::spawn(async move { handle_created(&state, &conn, event).await });
         }
         AgentSessionAction::Prompted => {
             let state = state.clone();
-            tokio::spawn(async move { handle_prompted(&state, event).await });
+            let conn = conn.clone();
+            tokio::spawn(async move { handle_prompted(&state, &conn, event).await });
         }
         AgentSessionAction::Other(ref a) => {
             tracing::debug!("linear webhook: ignoring agent session action `{a}`");
@@ -236,7 +327,7 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 /// Runs off the response path (see [`webhook`]), so it may take as long as it
 /// needs — but the acknowledgement still comes first, because Linear marks a
 /// session unresponsive without one inside 10 seconds.
-async fn handle_created(state: &Arc<RunsState>, event: AgentSessionEvent) {
+async fn handle_created(state: &Arc<RunsState>, conn: &ConnectionId, event: AgentSessionEvent) {
     // Deduplicate before doing anything observable: a redelivery must not post a
     // second acknowledgement, let alone start a second run.
     let Some(_guard) = SessionGuard::acquire(&event.session_id) else {
@@ -254,7 +345,7 @@ async fn handle_created(state: &Arc<RunsState>, event: AgentSessionEvent) {
         return;
     }
 
-    let client = match linear_client(state).await {
+    let client = match linear_client(state, conn).await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!("linear webhook: no usable Linear credential: {e}");
@@ -286,18 +377,19 @@ async fn handle_created(state: &Arc<RunsState>, event: AgentSessionEvent) {
     // Awaited, not spawned: `_guard` must outlive the run start, otherwise the
     // reservation would be released before the claim row exists and a concurrent
     // redelivery could slip between the two checks.
-    start_delegated_run(state, event, client).await;
+    start_delegated_run(state, conn, event, client).await;
 }
 
 /// Resolve project + workflow for a delegated issue, fire the run, and report
 /// the outcome into the session.
 async fn start_delegated_run(
     state: &Arc<RunsState>,
+    conn: &ConnectionId,
     event: AgentSessionEvent,
     client: LinearClient,
 ) {
     let session = event.session_id.clone();
-    let binding = match resolve_target(state, &event).await {
+    let binding = match resolve_target(state, conn, &event).await {
         Target::Ready { binding } => binding,
         Target::NoBinding => {
             let _ = client
@@ -527,8 +619,8 @@ const ARTIFACT_BUDGET_CHARS: usize = 500_000;
 ///
 /// Steering is a separate problem and still refused, honestly: nothing here edits
 /// the DAG in flight.
-async fn handle_prompted(state: &Arc<RunsState>, event: AgentSessionEvent) {
-    let Ok(client) = linear_client(state).await else {
+async fn handle_prompted(state: &Arc<RunsState>, conn: &ConnectionId, event: AgentSessionEvent) {
+    let Ok(client) = linear_client(state, conn).await else {
         return;
     };
     let question = event.prompt_body.clone().unwrap_or_default();
@@ -765,7 +857,11 @@ enum Target {
 /// The binding's **source status is still the gate**: delegating an issue that
 /// is sitting in Backlog does not start it. Delegation says *who* should do the
 /// work; the status says *when* it is ready.
-async fn resolve_target(state: &Arc<RunsState>, event: &AgentSessionEvent) -> Target {
+async fn resolve_target(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+    event: &AgentSessionEvent,
+) -> Target {
     let Ok(sources) = state.linear_source_store().await else {
         return Target::NoBinding;
     };
@@ -775,7 +871,18 @@ async fn resolve_target(state: &Arc<RunsState>, event: &AgentSessionEvent) -> Ta
     let Ok(bindings) = sources.list_all().await else {
         return Target::NoBinding;
     };
-    choose_target(&bindings, &issue_context(state, event).await)
+    // Only the bindings belonging to the workspace that sent this. Linear team
+    // ids are unique across workspaces, so a cross-account collision is not the
+    // hazard — the team-unknown fallback in `choose_target` is: without this
+    // filter, a delivery from one account could be answered by another account's
+    // lone binding, starting a run against the wrong repo.
+    let names: Vec<&str> = bindings.iter().map(|b| b.project.as_str()).collect();
+    let mine = resolve_for_projects(state, &names).await;
+    let bindings: Vec<LinearSource> = bindings
+        .into_iter()
+        .filter(|b| mine.get(&b.project) == Some(conn))
+        .collect();
+    choose_target(&bindings, &issue_context(state, conn, event).await)
 }
 
 /// The binding-selection and status-gate decision, split out so it is testable
@@ -950,11 +1057,15 @@ async fn wrong_status_message(
 
 /// Where a delegated issue sits — team, status, delegate. Empty when the event
 /// carried no issue id or the lookup failed.
-async fn issue_context(state: &Arc<RunsState>, event: &AgentSessionEvent) -> IssueContext {
+async fn issue_context(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+    event: &AgentSessionEvent,
+) -> IssueContext {
     let Some(issue_id) = event.issue_id.as_deref() else {
         return IssueContext::default();
     };
-    let Ok(client) = linear_client(state).await else {
+    let Ok(client) = linear_client(state, conn).await else {
         return IssueContext::default();
     };
     client
@@ -967,6 +1078,145 @@ async fn issue_context(state: &Arc<RunsState>, event: &AgentSessionEvent) -> Iss
 mod tests {
     use super::*;
     use harness_sources::linear::parse_agent_session_event;
+
+    // ── Attributing a delivery to a connection ───────────────────────────────
+
+    fn identity(id: &str, workspace: Option<&str>, secret: &str) -> WebhookIdentity {
+        WebhookIdentity {
+            id: ConnectionId::parse(id).unwrap(),
+            workspace_id: workspace.map(str::to_string),
+            secret: secret.into(),
+        }
+    }
+
+    /// A body Linear would send, naming the workspace it came from.
+    fn delivery(org: Option<&str>) -> Vec<u8> {
+        match org {
+            Some(o) => format!(
+                r#"{{"type":"AgentSessionEvent","action":"created","organizationId":"{o}",
+                    "agentSession":{{"id":"sess-1"}}}}"#
+            )
+            .into_bytes(),
+            None => br#"{"type":"AgentSessionEvent","action":"created",
+                        "agentSession":{"id":"sess-1"}}"#
+                .to_vec(),
+        }
+    }
+
+    fn signed(secret: &str, body: &[u8]) -> String {
+        compute_signature(secret, body).unwrap()
+    }
+
+    #[test]
+    fn organization_id_picks_the_connection_that_sent_the_delivery() {
+        let ids = [
+            identity("default", Some("org-a"), "secret-a"),
+            identity("acme", Some("org-b"), "secret-b"),
+        ];
+        let body = delivery(Some("org-b"));
+        let conn = resolve_connection(&ids, &body, &signed("secret-b", &body)).unwrap();
+        assert_eq!(conn.as_str(), "acme");
+
+        // …and the other direction, so this isn't passing by ordering.
+        let body = delivery(Some("org-a"));
+        let conn = resolve_connection(&ids, &body, &signed("secret-a", &body)).unwrap();
+        assert_eq!(conn.as_str(), "default");
+    }
+
+    #[test]
+    fn one_oauth_app_in_two_workspaces_is_split_by_organization_id_alone() {
+        // The case the org-id route exists for: a single OAuth app installed into
+        // both workspaces signs both accounts' deliveries with the *same* secret,
+        // so "which secret verifies" cannot tell them apart.
+        let shared = "one-app-one-secret";
+        let ids = [
+            identity("default", Some("org-a"), shared),
+            identity("acme", Some("org-b"), shared),
+        ];
+        let body = delivery(Some("org-b"));
+        assert_eq!(
+            resolve_connection(&ids, &body, &signed(shared, &body))
+                .unwrap()
+                .as_str(),
+            "acme"
+        );
+    }
+
+    #[test]
+    fn without_an_organization_id_the_signature_identifies_the_connection() {
+        // Distinct secrets, so the scan is decisive.
+        let ids = [
+            identity("default", Some("org-a"), "secret-a"),
+            identity("acme", Some("org-b"), "secret-b"),
+        ];
+        let body = delivery(None);
+        assert_eq!(
+            resolve_connection(&ids, &body, &signed("secret-b", &body))
+                .unwrap()
+                .as_str(),
+            "acme"
+        );
+    }
+
+    #[test]
+    fn an_unrecorded_workspace_id_falls_back_to_the_signature() {
+        // An install made before the workspace id was captured: the payload names
+        // a workspace we can't match, so the secret has to do the work.
+        let ids = [identity("acme", None, "secret-b")];
+        let body = delivery(Some("org-b"));
+        assert_eq!(
+            resolve_connection(&ids, &body, &signed("secret-b", &body))
+                .unwrap()
+                .as_str(),
+            "acme"
+        );
+    }
+
+    #[test]
+    fn an_unattributable_delivery_is_refused_rather_than_guessed() {
+        // Shared secret *and* no org id: both connections verify, so there is no
+        // honest answer. Guessing would start a run against the wrong repo.
+        let shared = "one-app-one-secret";
+        let ids = [
+            identity("default", Some("org-a"), shared),
+            identity("acme", Some("org-b"), shared),
+        ];
+        let body = delivery(None);
+        let e = resolve_connection(&ids, &body, &signed(shared, &body)).unwrap_err();
+        assert_eq!(e.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn a_delivery_no_connection_signed_is_rejected() {
+        let ids = [identity("default", Some("org-a"), "secret-a")];
+        let body = delivery(Some("org-a"));
+        // Signed with a secret we don't hold.
+        let e = resolve_connection(&ids, &body, &signed("not-ours", &body)).unwrap_err();
+        assert_eq!(e.status(), StatusCode::UNAUTHORIZED);
+
+        // Right secret, but the body was altered after signing.
+        let e = resolve_connection(&ids, b"tampered", &signed("secret-a", &body)).unwrap_err();
+        assert_eq!(e.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn with_no_signing_secret_stored_nothing_is_trusted() {
+        let body = delivery(Some("org-a"));
+        let e = resolve_connection(&[], &body, &signed("anything", &body)).unwrap_err();
+        assert_eq!(e.status(), StatusCode::PRECONDITION_FAILED);
+    }
+
+    #[test]
+    fn claimed_organization_id_reads_the_field_or_nothing() {
+        assert_eq!(
+            claimed_organization_id(&delivery(Some("org-b"))).as_deref(),
+            Some("org-b")
+        );
+        assert_eq!(claimed_organization_id(&delivery(None)), None);
+        assert_eq!(claimed_organization_id(b"not json"), None);
+        // Present but not a string: not an id.
+        assert_eq!(claimed_organization_id(br#"{"organizationId":7}"#), None);
+    }
 
     /// Known-answer vectors (independently computed with `openssl dgst -sha256
     /// -hmac`). These pin the algorithm *and* the hex encoding — a self-consistent

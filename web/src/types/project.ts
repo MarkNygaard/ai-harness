@@ -29,6 +29,12 @@ export interface Project {
   repos: ProjectRepo[];
   /** Per-project build-cache cap in GiB; `null` falls back to the env default. */
   cargo_target_cap_gb: number | null;
+  /**
+   * Which Linear account this project's issues come from. `null` = not pinned,
+   * which resolves to the sole connected account — so a single-account install
+   * never sets it.
+   */
+  linear_connection: string | null;
   created_at: string;
   updated_at: string;
 }

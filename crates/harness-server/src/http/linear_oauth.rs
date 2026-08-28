@@ -12,12 +12,14 @@
 //! - `GET  /api/linear/oauth/status`            — how the harness authenticates
 //! - `POST /api/linear/oauth/disconnect`        — revoke + clear the tokens
 //!
-//! **One workspace, one install.** The Linear credential is **global** — it lives
-//! on the Credentials page, not per project, because the identity being connected
-//! is the *app*, which is the same for every project. Any per-project `linear`
+//! **One credential per connected workspace.** Each install is a
+//! [`ConnectionId`] whose secrets live under its own provider key — see
+//! [`super::linear_connections`] — and a project resolves to one of them. The
+//! identity being connected is the *app*, so within one workspace a single
+//! install still serves every project pointing at it. Any per-project `linear`
 //! credential from an earlier version is inert: nothing reads it.
 //!
-//! **Credential fields** (global `linear` credential, encrypted at rest):
+//! **Credential fields** (per connection, encrypted at rest):
 //! `client_id` / `client_secret` (the OAuth app, pasted by the operator),
 //! `access_token` / `refresh_token` / `expires_at_ms` / `scope` (from the
 //! exchange), `workspace_id` / `workspace_name` / `workspace_url_key` (recorded
@@ -35,10 +37,8 @@ use harness_persist::CredentialStore;
 use harness_sources::linear::{LinearAuth, LinearClient};
 use serde::Deserialize;
 
+use super::linear_connections::ConnectionId;
 use super::runs_routes::RunsState;
-
-/// Provider key for the Linear credential.
-const PROVIDER: &str = "linear";
 
 /// Path Linear redirects back to. Must match the OAuth app's registered callback
 /// **exactly**, and is exempt from the bearer-token middleware (see
@@ -130,11 +130,14 @@ fn now_ms() -> i64 {
 // lands on the same instance that issued the nonce. A restart mid-flow just
 // means the user clicks Connect again.
 
-static PENDING: LazyLock<std::sync::Mutex<HashMap<String, i64>>> =
+/// Nonce -> (minted at, the connection being authorized). Carrying the
+/// connection through the redirect is what lets the callback store the tokens
+/// against the right workspace without trusting anything Linear sends back.
+static PENDING: LazyLock<std::sync::Mutex<HashMap<String, (i64, ConnectionId)>>> =
     LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
-/// Mint a single-use `state` nonce, pruning expired ones.
-fn issue_state() -> String {
+/// Mint a single-use `state` nonce for `conn`, pruning expired ones.
+fn issue_state(conn: &ConnectionId) -> String {
     // Two v4 UUIDs = 256 bits of randomness (the `uuid` crate is already a dep;
     // this avoids pulling `rand` into harness-server just for a nonce).
     let nonce = format!(
@@ -144,22 +147,19 @@ fn issue_state() -> String {
     );
     let now = now_ms();
     if let Ok(mut map) = PENDING.lock() {
-        map.retain(|_, created| now - *created < PENDING_TTL_MS);
-        map.insert(nonce.clone(), now);
+        map.retain(|_, (created, _)| now - *created < PENDING_TTL_MS);
+        map.insert(nonce.clone(), (now, conn.clone()));
     }
     nonce
 }
 
-/// Consume a `state` nonce. `false` if unknown, already used, or expired — all of
-/// which must fail the callback.
-fn take_state(nonce: &str) -> bool {
-    let Ok(mut map) = PENDING.lock() else {
-        return false;
-    };
-    match map.remove(nonce) {
-        Some(created) => now_ms() - created < PENDING_TTL_MS,
-        None => false,
-    }
+/// Consume a `state` nonce, returning the connection it was minted for.
+/// `None` if unknown, already used, or expired — all of which must fail the
+/// callback.
+fn take_state(nonce: &str) -> Option<ConnectionId> {
+    let mut map = PENDING.lock().ok()?;
+    let (created, conn) = map.remove(nonce)?;
+    (now_ms() - created < PENDING_TTL_MS).then_some(conn)
 }
 
 // ── URL building ─────────────────────────────────────────────────────────────
@@ -335,32 +335,125 @@ fn has_usable_auth(fields: &BTreeMap<String, String>) -> bool {
     field(fields, "access_token").is_some() || field(fields, "api_key").is_some()
 }
 
-/// The stored Linear credential, or `None` when nothing is stored.
-async fn credential(store: &CredentialStore) -> Option<BTreeMap<String, String>> {
-    store.get(PROVIDER).await.ok().flatten()
+/// The stored credential for `conn`, or `None` when nothing is stored.
+async fn credential(
+    store: &CredentialStore,
+    conn: &ConnectionId,
+) -> Option<BTreeMap<String, String>> {
+    store.get(&conn.provider_key()).await.ok().flatten()
 }
 
-/// The OAuth app's client id + secret, if both are stored.
-async fn client_credentials(store: &CredentialStore) -> Option<(String, String)> {
-    let fields = credential(store).await?;
+/// The OAuth app's client id + secret for `conn`, if both are stored.
+async fn client_credentials(
+    store: &CredentialStore,
+    conn: &ConnectionId,
+) -> Option<(String, String)> {
+    let fields = credential(store, conn).await?;
     Some((
         field(&fields, "client_id")?,
         field(&fields, "client_secret")?,
     ))
 }
 
-/// The webhook signing secret from the Linear OAuth app, used to verify inbound
-/// agent-session events.
-pub(crate) async fn webhook_secret(store: &CredentialStore) -> Option<String> {
-    field(&credential(store).await?, "webhook_secret")
+/// What identifies one connection's inbound webhook deliveries: the workspace
+/// they come from, and the secret they are signed with.
+pub(crate) struct WebhookIdentity {
+    pub(crate) id: ConnectionId,
+    /// Linear's `organizationId` for this install, recorded at connect time.
+    /// `None` on an install made before it was captured — such a connection can
+    /// still be identified by its signature, just not by the payload.
+    pub(crate) workspace_id: Option<String>,
+    /// The OAuth app's webhook signing secret.
+    pub(crate) secret: String,
+}
+
+/// One connection as the UI sees it — the shape of the Credentials page's card.
+/// Never carries a secret value.
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct ConnectionSummary {
+    pub(crate) id: String,
+    /// What the operator called it when adding it. Falls back to the workspace
+    /// name once connected, and to the id before that.
+    pub(crate) label: Option<String>,
+    pub(crate) workspace_name: Option<String>,
+    pub(crate) workspace_url_key: Option<String>,
+    /// How this connection authenticates: `app`, `personal_key`, or `none`.
+    pub(crate) mode: &'static str,
+    pub(crate) client_configured: bool,
+    pub(crate) webhook_secret_configured: bool,
+    pub(crate) agent_scopes_granted: bool,
+    /// Last refresh failure, if the connection needs reconnecting.
+    pub(crate) refresh_error: Option<String>,
+    /// Projects whose Linear traffic is pinned to this connection.
+    pub(crate) projects: Vec<String>,
+}
+
+/// The non-secret view of one connection's stored credential.
+pub(crate) async fn describe(store: &CredentialStore, conn: &ConnectionId) -> ConnectionSummary {
+    let fields = credential(store, conn).await.unwrap_or_default();
+    let token_scope = field(&fields, "scope");
+    ConnectionSummary {
+        id: conn.as_str().to_string(),
+        label: field(&fields, "label"),
+        workspace_name: field(&fields, "workspace_name"),
+        workspace_url_key: field(&fields, "workspace_url_key"),
+        mode: if field(&fields, "access_token").is_some() {
+            "app"
+        } else if field(&fields, "api_key").is_some() {
+            "personal_key"
+        } else {
+            "none"
+        },
+        client_configured: field(&fields, "client_id").is_some()
+            && field(&fields, "client_secret").is_some(),
+        webhook_secret_configured: field(&fields, "webhook_secret").is_some(),
+        agent_scopes_granted: has_agent_scopes(token_scope.as_deref()),
+        refresh_error: field(&fields, "refresh_error"),
+        projects: Vec::new(),
+    }
+}
+
+/// Revoke this connection's access token at Linear, if it has one.
+///
+/// Deleting the row alone would leave a live token installed in the workspace
+/// with nothing left here to revoke it with.
+pub(crate) async fn revoke_for(store: &CredentialStore, conn: &ConnectionId) {
+    let fields = credential(store, conn).await.unwrap_or_default();
+    if let Some(token) = field(&fields, "access_token") {
+        revoke_token(&token).await;
+    }
+}
+
+/// Every connection that can verify an inbound webhook, i.e. has a signing
+/// secret stored. Connections without one are omitted: they cannot authenticate
+/// a delivery, so they can never be the answer.
+pub(crate) async fn webhook_identities(store: &CredentialStore) -> Vec<WebhookIdentity> {
+    let mut out = Vec::new();
+    for id in super::linear_connections::list_ids(store)
+        .await
+        .unwrap_or_default()
+    {
+        let Some(fields) = credential(store, &id).await else {
+            continue;
+        };
+        let Some(secret) = field(&fields, "webhook_secret") else {
+            continue;
+        };
+        out.push(WebhookIdentity {
+            id,
+            workspace_id: field(&fields, "workspace_id"),
+            secret,
+        });
+    }
+    out
 }
 
 /// The harness's own app user id in the workspace — the delegate the poller
 /// matches issues against. Recorded at connect time; `None` on an install made
 /// before it was captured, which the poller treats as "claim nothing".
-pub(crate) async fn app_user_id(state: &Arc<RunsState>) -> Option<String> {
+pub(crate) async fn app_user_id(state: &Arc<RunsState>, conn: &ConnectionId) -> Option<String> {
     let store = state.cred_store().await.ok()?;
-    field(&credential(store).await?, "app_user_id")
+    field(&credential(store, conn).await?, "app_user_id")
 }
 
 /// Whether the stored token actually carries the agent scopes — an install made
@@ -389,6 +482,7 @@ static REFRESH_LOCK: LazyLock<tokio::sync::Mutex<()>> =
 /// refresh was rejected).
 async fn ensure_fresh_token(
     store: &CredentialStore,
+    conn: &ConnectionId,
     fields: &BTreeMap<String, String>,
 ) -> Result<String, String> {
     let access = field(fields, "access_token").ok_or("credential has no access_token")?;
@@ -404,7 +498,7 @@ async fn ensure_fresh_token(
 
     let _guard = REFRESH_LOCK.lock().await;
     // Re-read under the lock: a concurrent caller may have just refreshed.
-    let current = credential(store).await.unwrap_or_default();
+    let current = credential(store, conn).await.unwrap_or_default();
     let access = field(&current, "access_token").unwrap_or(access);
     if let Some(exp) = current
         .get("expires_at_ms")
@@ -420,7 +514,7 @@ async fn ensure_fresh_token(
          workspace"
             .to_string()
     })?;
-    let (client_id, client_secret) = client_credentials(store)
+    let (client_id, client_secret) = client_credentials(store, conn)
         .await
         .ok_or("cannot refresh: the Linear OAuth client_id/client_secret are not stored")?;
 
@@ -429,7 +523,7 @@ async fn ensure_fresh_token(
             let mut update = token_fields(&tokens);
             update.insert("refresh_error".into(), String::new());
             store
-                .set(PROVIDER, &update)
+                .set(&conn.provider_key(), &update)
                 .await
                 .map_err(|e| e.to_string())?;
             tracing::info!(
@@ -444,7 +538,7 @@ async fn ensure_fresh_token(
             // `invalid_grant`, which no retry will fix.
             let _ = store
                 .set(
-                    PROVIDER,
+                    &conn.provider_key(),
                     &BTreeMap::from([("refresh_error".to_string(), e.clone())]),
                 )
                 .await;
@@ -478,14 +572,17 @@ fn token_fields(tokens: &TokenSet) -> BTreeMap<String, String> {
 /// Build a Linear client, preferring the app-actor OAuth token and falling back
 /// to a legacy personal API key. **Every** Linear call site goes through here, so
 /// attribution and token freshness are decided in one place.
-pub(crate) async fn linear_client(state: &Arc<RunsState>) -> Result<LinearClient, String> {
+pub(crate) async fn linear_client(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+) -> Result<LinearClient, String> {
     let store = state.cred_store().await?;
-    let fields = credential(store)
+    let fields = credential(store, conn)
         .await
         .filter(has_usable_auth)
         .ok_or("Linear is not connected — connect the workspace on the Credentials page")?;
     if field(&fields, "access_token").is_some() {
-        let token = ensure_fresh_token(store, &fields).await?;
+        let token = ensure_fresh_token(store, conn, &fields).await?;
         return Ok(LinearClient::with_auth(LinearAuth::OauthToken(token)));
     }
     let key = field(&fields, "api_key").ok_or("credential has neither access_token nor api_key")?;
@@ -494,8 +591,11 @@ pub(crate) async fn linear_client(state: &Arc<RunsState>) -> Result<LinearClient
 
 /// [`linear_client`] for background callers that just skip the work when Linear
 /// isn't connected (the poller logs and moves on).
-pub(crate) async fn linear_client_or_none(state: &Arc<RunsState>) -> Option<LinearClient> {
-    match linear_client(state).await {
+pub(crate) async fn linear_client_or_none(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+) -> Option<LinearClient> {
+    match linear_client(state, conn).await {
         Ok(c) => Some(c),
         Err(e) => {
             // `warn`, not `debug`: the poller skips every claim when this returns
@@ -514,7 +614,14 @@ pub(crate) async fn linear_client_or_none(state: &Arc<RunsState>) -> Option<Line
 /// Returns JSON rather than a 302 because the SPA calls it with the API bearer
 /// token; a plain navigation to this path would be rejected by the auth
 /// middleware. The client follows `url` itself.
-pub async fn start(Extension(state): Extension<Arc<RunsState>>) -> Response {
+pub async fn start(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<ConnectionQuery>,
+) -> Response {
+    let conn = match q.resolve() {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -523,15 +630,35 @@ pub async fn start(Extension(state): Extension<Arc<RunsState>>) -> Response {
         Ok(u) => u,
         Err(e) => return err(StatusCode::PRECONDITION_FAILED, e),
     };
-    let Some((client_id, _)) = client_credentials(store).await else {
+    let Some((client_id, _)) = client_credentials(store, &conn).await else {
         return err(
             StatusCode::PRECONDITION_FAILED,
             "no Linear OAuth app configured — save a client ID and client secret first \
              (Linear → Settings → API → OAuth applications)",
         );
     };
-    let url = build_authorize_url(&client_id, &redirect, &issue_state());
+    let url = build_authorize_url(&client_id, &redirect, &issue_state(&conn));
     Json(serde_json::json!({ "url": url, "callback_url": redirect })).into_response()
+}
+
+/// `?connection=<id>` on the routes that act on one connection. Absent means
+/// the legacy connection, which is the only one a single-account install has.
+#[derive(Debug, Default, Deserialize)]
+pub struct ConnectionQuery {
+    #[serde(default)]
+    pub connection: Option<String>,
+}
+
+impl ConnectionQuery {
+    /// The connection addressed, or the parse error as a finished 400.
+    // The `Err` here IS the finished HTTP response, handed straight back to axum.
+    #[allow(clippy::result_large_err)]
+    fn resolve(&self) -> Result<ConnectionId, Response> {
+        match self.connection.as_deref().map(str::trim) {
+            None | Some("") => Ok(ConnectionId::default()),
+            Some(raw) => ConnectionId::parse(raw).map_err(|e| err(StatusCode::BAD_REQUEST, e)),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -573,14 +700,15 @@ pub async fn callback(
     let (Some(code), Some(nonce)) = (q.code.as_deref(), q.state.as_deref()) else {
         return back_to_ui("error", Some("callback missing `code` or `state`"));
     };
-    // Single-use nonce: this is what authenticates an unauthenticated callback.
-    if !take_state(nonce) {
+    // Single-use nonce: this is what authenticates an unauthenticated callback,
+    // and it carries which connection the operator started the flow for.
+    let Some(conn) = take_state(nonce) else {
         tracing::warn!("linear oauth: callback with unknown/expired state");
         return back_to_ui(
             "error",
             Some("authorization expired or was already used — start again"),
         );
-    }
+    };
 
     let store = match state.cred_store().await {
         Ok(s) => s,
@@ -589,7 +717,7 @@ pub async fn callback(
     let Ok(redirect) = redirect_uri(&state) else {
         return back_to_ui("error", Some("no public URL configured"));
     };
-    let Some((client_id, client_secret)) = client_credentials(store).await else {
+    let Some((client_id, client_secret)) = client_credentials(store, &conn).await else {
         return back_to_ui("error", Some("Linear OAuth client credentials are missing"));
     };
 
@@ -628,7 +756,7 @@ pub async fn callback(
     fields.insert("workspace_url_key".into(), workspace.url_key);
     fields.insert("refresh_error".into(), String::new());
     fields.insert("app_user_id".into(), app_user_id.unwrap_or_default());
-    if let Err(e) = store.set(PROVIDER, &fields).await {
+    if let Err(e) = store.set(&conn.provider_key(), &fields).await {
         return back_to_ui("error", Some(&e.to_string()));
     }
     tracing::info!(
@@ -640,12 +768,19 @@ pub async fn callback(
 
 /// `GET /api/linear/oauth/status` — how the harness talks to Linear, and what
 /// still needs doing. Never returns secrets.
-pub async fn status(Extension(state): Extension<Arc<RunsState>>) -> Response {
+pub async fn status(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<ConnectionQuery>,
+) -> Response {
+    let conn = match q.resolve() {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    let fields = credential(store).await.unwrap_or_default();
+    let fields = credential(store, &conn).await.unwrap_or_default();
     let mode = if field(&fields, "access_token").is_some() {
         "app"
     } else if field(&fields, "api_key").is_some() {
@@ -655,6 +790,7 @@ pub async fn status(Extension(state): Extension<Arc<RunsState>>) -> Response {
     };
     let token_scope = field(&fields, "scope");
     Json(serde_json::json!({
+        "connection": conn.as_str(),
         "mode": mode,
         "workspace_name": field(&fields, "workspace_name"),
         "workspace_url_key": field(&fields, "workspace_url_key"),
@@ -682,12 +818,19 @@ pub async fn status(Extension(state): Extension<Arc<RunsState>>) -> Response {
 /// `POST /api/linear/oauth/disconnect` — revoke the token at Linear and clear it,
 /// **keeping** the OAuth client id/secret so reconnecting is one click. Use the
 /// credential's Clear button to remove those too.
-pub async fn disconnect(Extension(state): Extension<Arc<RunsState>>) -> Response {
+pub async fn disconnect(
+    Extension(state): Extension<Arc<RunsState>>,
+    Query(q): Query<ConnectionQuery>,
+) -> Response {
+    let conn = match q.resolve() {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    let current = credential(store).await.unwrap_or_default();
+    let current = credential(store, &conn).await.unwrap_or_default();
     if let Some(token) = field(&current, "access_token") {
         revoke_token(&token).await;
     }
@@ -704,7 +847,7 @@ pub async fn disconnect(Extension(state): Extension<Arc<RunsState>>) -> Response
         ("refresh_error".to_string(), String::new()),
         ("app_user_id".to_string(), String::new()),
     ]);
-    match store.set(PROVIDER, &cleared).await {
+    match store.set(&conn.provider_key(), &cleared).await {
         Ok(()) => Json(serde_json::json!({ "disconnected": true })).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
@@ -771,27 +914,55 @@ mod tests {
     }
 
     #[test]
-    fn state_nonce_is_single_use() {
-        let a = issue_state();
-        let b = issue_state();
+    fn state_nonce_is_single_use_and_names_its_connection() {
+        let default = ConnectionId::default();
+        let acme = ConnectionId::parse("acme").unwrap();
+        let a = issue_state(&default);
+        let b = issue_state(&acme);
         assert_ne!(a, b, "each authorization gets its own nonce");
-        assert!(take_state(&a));
+
+        // The nonce is how the callback knows which workspace was being
+        // connected — nothing Linear sends back says so.
+        assert_eq!(take_state(&a), Some(default));
         // Replaying it must fail — this is the callback's only authentication.
-        assert!(!take_state(&a));
-        assert!(!take_state("never-issued"));
-        assert!(take_state(&b));
+        assert_eq!(take_state(&a), None);
+        assert_eq!(take_state("never-issued"), None);
+        assert_eq!(take_state(&b), Some(acme));
     }
 
     #[test]
     fn expired_state_nonce_is_rejected() {
-        let nonce = issue_state();
+        let nonce = issue_state(&ConnectionId::default());
         // Backdate it past the TTL.
         if let Ok(mut map) = PENDING.lock() {
-            if let Some(created) = map.get_mut(&nonce) {
+            if let Some((created, _)) = map.get_mut(&nonce) {
                 *created -= PENDING_TTL_MS + 1;
             }
         }
-        assert!(!take_state(&nonce));
+        assert_eq!(take_state(&nonce), None);
+    }
+
+    #[test]
+    fn connection_query_defaults_to_the_legacy_connection() {
+        let default = ConnectionId::default();
+        // Absent or blank: the single-account case, where the UI sends nothing.
+        assert_eq!(ConnectionQuery::default().resolve().unwrap(), default);
+        for blank in ["", "   "] {
+            let q = ConnectionQuery {
+                connection: Some(blank.into()),
+            };
+            assert_eq!(q.resolve().unwrap(), default);
+        }
+        let q = ConnectionQuery {
+            connection: Some("acme".into()),
+        };
+        assert_eq!(q.resolve().unwrap().as_str(), "acme");
+        // A malformed id is a 400, not a silent fallback to someone else's
+        // workspace.
+        let q = ConnectionQuery {
+            connection: Some("Not A Slug".into()),
+        };
+        assert_eq!(q.resolve().unwrap_err().status(), StatusCode::BAD_REQUEST);
     }
 
     #[test]

@@ -6,14 +6,95 @@ import { apiJson } from "./api";
 import type {
   CreatedLinearIssue,
   CreateLinearIssueInput,
+  LinearConnection,
   LinearDiscovery,
   LinearSource,
   LinearSourceInput,
 } from "@/types/linear";
+import type { Project } from "@/types/project";
 
 /**
- * How the harness authenticates against Linear. One workspace, one install —
- * the credential is global (Credentials page), not per project.
+ * `?connection=<id>` for the routes that act on one account. Omitted for the
+ * default connection, so a single-account install sends the same requests it
+ * always did.
+ */
+function connectionQuery(connection?: string): string {
+  return connection && connection !== "default"
+    ? `?connection=${encodeURIComponent(connection)}`
+    : "";
+}
+
+/** Every connected Linear account, and which projects use each. */
+export function useLinearConnections() {
+  return useQuery<LinearConnection[], Error>({
+    queryKey: ["linear", "connections"],
+    queryFn: ({ signal }) =>
+      apiJson<LinearConnection[]>("/api/linear/connections", { signal }),
+    retry: false,
+  });
+}
+
+/**
+ * Add an account. This only creates it — the OAuth app details are saved
+ * against it next, and then it is connected.
+ */
+export function useCreateLinearConnection() {
+  const qc = useQueryClient();
+  return useMutation<LinearConnection, Error, { label: string }>({
+    mutationFn: (body) =>
+      apiJson<LinearConnection>("/api/linear/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["linear", "connections"] });
+      // Adding a second account pins the projects that were using the first.
+      qc.invalidateQueries({ queryKey: ["projects"] });
+    },
+  });
+}
+
+/** Revoke an account's token and remove it. Refused while projects use it. */
+export function useDeleteLinearConnection() {
+  const qc = useQueryClient();
+  return useMutation<{ deleted: boolean; connection: string }, Error, string>({
+    mutationFn: (id) =>
+      apiJson<{ deleted: boolean; connection: string }>(
+        `/api/linear/connections/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["linear", "connections"] });
+      qc.invalidateQueries({ queryKey: ["credentials"] });
+    },
+  });
+}
+
+/** Point a project's Linear traffic at an account (`null` = resolve automatically). */
+export function useSetProjectLinearConnection(project: string | null) {
+  const qc = useQueryClient();
+  return useMutation<Project, Error, string | null>({
+    mutationFn: (connection) =>
+      apiJson<Project>(
+        `/api/projects/${encodeURIComponent(project!)}/linear-connection`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ connection }),
+        },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["linear", "connections"] });
+      // The team list belongs to the account, so it has to be re-fetched.
+      qc.invalidateQueries({ queryKey: ["linear", "discovery", project] });
+    },
+  });
+}
+
+/**
+ * How one connected Linear account authenticates, and what it still needs.
  *
  * `app` = an `actor=app` OAuth install, so the harness's comments and status
  * moves are authored by the application. `personal_key` = the legacy API key,
@@ -21,6 +102,8 @@ import type {
  * connected.
  */
 export interface LinearOauthStatus {
+  /** Which connection this describes. */
+  connection: string;
   mode: "app" | "personal_key" | "none";
   workspace_name: string | null;
   workspace_url_key: string | null;
@@ -46,11 +129,14 @@ export interface LinearOauthStatus {
   app_user_id: string | null;
 }
 
-export function useLinearOauthStatus() {
+export function useLinearOauthStatus(connection?: string) {
   return useQuery<LinearOauthStatus, Error>({
-    queryKey: ["linear", "oauth-status"],
+    queryKey: ["linear", "oauth-status", connection ?? "default"],
     queryFn: ({ signal }) =>
-      apiJson<LinearOauthStatus>("/api/linear/oauth/status", { signal }),
+      apiJson<LinearOauthStatus>(
+        `/api/linear/oauth/status${connectionQuery(connection)}`,
+        { signal },
+      ),
     retry: false,
   });
 }
@@ -60,10 +146,12 @@ export function useLinearOauthStatus() {
  * (this request carries the API bearer token, which a plain navigation could
  * not), and the caller then sends the browser there.
  */
-export function useConnectLinear() {
+export function useConnectLinear(connection?: string) {
   return useMutation<{ url: string; callback_url: string }, Error, void>({
     mutationFn: () =>
-      apiJson<{ url: string; callback_url: string }>("/api/linear/oauth/start"),
+      apiJson<{ url: string; callback_url: string }>(
+        `/api/linear/oauth/start${connectionQuery(connection)}`,
+      ),
     onSuccess: ({ url }) => {
       window.location.assign(url);
     },
@@ -71,15 +159,17 @@ export function useConnectLinear() {
 }
 
 /** Revoke the app token at Linear and clear it, keeping the OAuth client details. */
-export function useDisconnectLinear() {
+export function useDisconnectLinear(connection?: string) {
   const qc = useQueryClient();
   return useMutation<{ disconnected: boolean }, Error, void>({
     mutationFn: () =>
-      apiJson<{ disconnected: boolean }>("/api/linear/oauth/disconnect", {
-        method: "POST",
-      }),
+      apiJson<{ disconnected: boolean }>(
+        `/api/linear/oauth/disconnect${connectionQuery(connection)}`,
+        { method: "POST" },
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["linear", "oauth-status"] });
+      qc.invalidateQueries({ queryKey: ["linear", "connections"] });
       qc.invalidateQueries({ queryKey: ["credentials"] });
       qc.invalidateQueries({ queryKey: ["linear", "discovery"] });
     },

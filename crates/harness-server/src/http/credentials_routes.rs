@@ -27,7 +27,23 @@ use super::runs_routes::RunsState;
 /// and Linear — whose fields are the OAuth app's `client_id`/`client_secret`,
 /// with the tokens themselves written by the `actor=app` connect flow in
 /// [`super::linear_oauth`]).
+///
+/// `linear` here is the *first* Linear account. Additional ones store their own
+/// OAuth application under `linear:<id>` and are surfaced by the connections
+/// API rather than as provider cards — see [`is_known_provider`].
 const PROVIDERS: &[&str] = &["claude", "codex", "pi", "github", "cursor", "linear"];
+
+/// Whether `provider` is one the UI may write to.
+///
+/// Beyond the fixed list, every named Linear connection has its own credential
+/// key (`linear:<id>`) holding that account's OAuth app details. Those are not
+/// listed as provider cards — the connections API surfaces them — but they must
+/// be writable, since that is where a second account's `client_id`,
+/// `client_secret` and `webhook_secret` are saved.
+fn is_known_provider(provider: &str) -> bool {
+    PROVIDERS.contains(&provider)
+        || super::linear_connections::ConnectionId::from_provider_key(provider).is_some()
+}
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
@@ -144,7 +160,7 @@ pub async fn set_credential(
     AxumPath(provider): AxumPath<String>,
     Json(req): Json<SetCredentialRequest>,
 ) -> Response {
-    if !PROVIDERS.contains(&provider.as_str()) {
+    if !is_known_provider(&provider) {
         return err(
             StatusCode::BAD_REQUEST,
             format!("unknown provider `{provider}`"),
@@ -230,11 +246,12 @@ pub async fn delete_credential(
 /// Providers that may be overridden **per project** — the external integrations
 /// whose account can differ by project. AI provider keys stay global only.
 ///
-/// **Linear is deliberately not here.** The identity connected to Linear is the
-/// *app* (an `actor=app` OAuth install), which is the same for every project, so
-/// it lives on the Credentials page as a single global credential. Any
-/// per-project `linear` row left over from an earlier version is inert —
-/// [`super::linear_oauth::linear_client`] reads the global credential only.
+/// **Linear is deliberately not here.** Linear accounts are a shared registry
+/// that projects *point into* (`harness_projects.linear_connection`), not
+/// per-project overrides of one credential — several projects normally share an
+/// account, and the identity connected is the app, not the project. See
+/// [`super::linear_connections`]. Any per-project `linear` row left over from an
+/// earlier version is inert: nothing reads it.
 const PROJECT_PROVIDERS: &[&str] = &["github"];
 
 /// `GET /api/projects/{project}/credentials` — which per-project providers are

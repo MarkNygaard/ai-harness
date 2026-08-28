@@ -1,12 +1,22 @@
 import { useEffect, useState } from "react";
-import { IconBolt, IconCopy, IconPlugConnected } from "@tabler/icons-react";
+import {
+  IconBolt,
+  IconCopy,
+  IconPlugConnected,
+  IconPlus,
+  IconTrash,
+} from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   useConnectLinear,
+  useCreateLinearConnection,
+  useDeleteLinearConnection,
   useDisconnectLinear,
   useLinearOauthStatus,
 } from "@/lib/linear";
+import { connectionName } from "@/types/linear";
+import type { LinearConnection } from "@/types/linear";
 
 /** A copyable URL the operator has to paste into the Linear OAuth app. */
 function UrlRow({ label, url }: { label: string; url: string }) {
@@ -64,25 +74,40 @@ function expiresIn(atMs: number | null): string | null {
 }
 
 /**
- * Connect the Linear workspace as an **app** (`actor=app` OAuth), so the
- * harness's comments and status moves are authored by the application instead of
- * by the person whose personal API key was pasted. One install serves every
- * project — the identity being connected is the app.
+ * One connected Linear account, as an **app** (`actor=app` OAuth) so the
+ * harness's comments and status moves are authored by the application instead
+ * of by the person whose personal API key was pasted.
+ *
+ * The harness can hold several accounts; each project's issues come from one of
+ * them. A single-account install has exactly one of these cards and never has to
+ * choose.
  */
-export function LinearConnect() {
-  const status = useLinearOauthStatus();
-  const connect = useConnectLinear();
-  const disconnect = useDisconnectLinear();
+export function LinearConnectionCard({
+  connection,
+  removable,
+}: {
+  connection: LinearConnection;
+  /** Whether to offer Remove — hidden for a lone account, which has nothing to
+   *  fall back to and is better disconnected than deleted. */
+  removable: boolean;
+}) {
+  const id = connection.id;
+  const status = useLinearOauthStatus(id);
+  const connect = useConnectLinear(id);
+  const disconnect = useDisconnectLinear(id);
+  const remove = useDeleteLinearConnection();
 
   const s = status.data;
-  const mode = s?.mode ?? "none";
+  const mode = s?.mode ?? connection.mode;
   const refreshError = s?.refresh_error?.trim() ? s.refresh_error : null;
 
   return (
-    <div className="flex flex-col gap-2 rounded-md border border-border p-3">
+    <div className="flex flex-col gap-2">
       <div className="flex items-center gap-2">
         <IconBolt className="size-4 text-muted-foreground" />
-        <span className="text-xs font-medium">Linear workspace</span>
+        <span className="text-xs font-medium">
+          {connectionName(connection)}
+        </span>
         <Badge
           variant={
             mode === "app"
@@ -212,16 +237,91 @@ export function LinearConnect() {
             {disconnect.isPending ? "Disconnecting…" : "Disconnect"}
           </Button>
         )}
+        {removable && (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="ml-auto text-muted-foreground"
+            onClick={() => remove.mutate(id)}
+            disabled={remove.isPending || connection.projects.length > 0}
+            title={
+              connection.projects.length > 0
+                ? `Used by ${connection.projects.join(", ")} — point those projects at another account first`
+                : "Revoke the token and remove this account"
+            }
+          >
+            <IconTrash className="size-3.5" />
+            {remove.isPending ? "Removing…" : "Remove"}
+          </Button>
+        )}
       </div>
 
-      {(connect.isError || disconnect.isError || status.isError) && (
+      {connection.projects.length > 0 && (
+        <span className="text-[10px] text-muted-foreground">
+          Issues for {connection.projects.join(", ")} come from this account.
+        </span>
+      )}
+
+      {(connect.isError ||
+        disconnect.isError ||
+        remove.isError ||
+        status.isError) && (
         <span className="text-[10px] text-destructive">
           {connect.error?.message ??
             disconnect.error?.message ??
+            remove.error?.message ??
             status.error?.message}
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * Add another Linear account. Creating it only makes the row — its OAuth app
+ * details are saved against it below, and then it is connected.
+ */
+export function AddLinearConnection() {
+  const [label, setLabel] = useState("");
+  const create = useCreateLinearConnection();
+
+  function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const name = label.trim();
+    if (!name) return;
+    create.mutate({ label: name }, { onSuccess: () => setLabel("") });
+  }
+
+  return (
+    <form onSubmit={submit} className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <input
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="Another Linear account (e.g. Acme)"
+          aria-label="Name for the Linear account to add"
+          className="h-8 min-w-0 flex-1 rounded-md border border-input bg-transparent px-2 text-[13px] outline-none focus:ring-2 focus:ring-ring"
+        />
+        <Button
+          type="submit"
+          size="sm"
+          variant="outline"
+          disabled={!label.trim() || create.isPending}
+        >
+          <IconPlus className="size-3.5" />
+          {create.isPending ? "Adding…" : "Add account"}
+        </Button>
+      </div>
+      <span className="text-[10px] text-muted-foreground">
+        Each account needs its own OAuth application in Linear, registering the
+        same callback and webhook URLs shown above.
+      </span>
+      {create.isError && (
+        <span className="text-[10px] text-destructive">
+          {create.error.message}
+        </span>
+      )}
+    </form>
   );
 }
 

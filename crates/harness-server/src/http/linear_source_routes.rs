@@ -13,6 +13,7 @@ use axum::Json;
 use harness_persist::LinearSourceInput;
 use serde::Deserialize;
 
+use super::linear_connections::resolve_for_project;
 use super::linear_oauth::linear_client;
 use super::runs_routes::RunsState;
 
@@ -186,8 +187,13 @@ pub async fn create_issue(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
 
-    // App-actor OAuth token if the workspace is connected, else a legacy key.
-    let client = match linear_client(&state).await {
+    // The Linear account this project files against, then its app-actor OAuth
+    // token if that workspace is connected, else a legacy key.
+    let conn = match resolve_for_project(&state, &project).await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    let client = match linear_client(&state, &conn).await {
         Ok(c) => c,
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };

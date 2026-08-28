@@ -27,6 +27,40 @@ export interface LinearDiscovery {
   teams: LinearTeam[];
 }
 
+/**
+ * One connected Linear workspace. The harness can hold several — a project
+ * points at one — and a single-account install simply has one.
+ *
+ * `mode` is how it authenticates: `app` = an `actor=app` OAuth install, so the
+ * harness's comments and status moves are authored by the application;
+ * `personal_key` = the legacy API key, which attributes every write to whoever
+ * minted it; `none` = added but not connected yet.
+ */
+export interface LinearConnection {
+  /** Stable id, used wherever a connection is addressed. */
+  id: string;
+  /** What it was called when added. */
+  label: string | null;
+  workspace_name: string | null;
+  workspace_url_key: string | null;
+  mode: "app" | "personal_key" | "none";
+  /** Whether this account's OAuth client ID + secret are stored. */
+  client_configured: boolean;
+  /** Whether its webhook signing secret is stored (delegation needs it). */
+  webhook_secret_configured: boolean;
+  /** Whether its token carries `app:assignable` + `app:mentionable`. */
+  agent_scopes_granted: boolean;
+  /** Last refresh failure — set means this account must be reconnected. */
+  refresh_error: string | null;
+  /** Projects whose issues come from this account. */
+  projects: string[];
+}
+
+/** What to call a connection on screen, in descending order of usefulness. */
+export function connectionName(c: LinearConnection): string {
+  return c.workspace_name ?? c.label ?? c.id;
+}
+
 /** A persisted Linear trigger binding (matches `harness_linear_sources`). */
 export interface LinearSource {
   project: string;
