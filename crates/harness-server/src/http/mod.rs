@@ -3,7 +3,9 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+pub(crate) mod accounts;
 pub(crate) mod auth;
+pub(crate) mod auth_routes;
 pub(crate) mod billing_routes;
 pub(crate) mod categories_routes;
 pub(crate) mod codex_routes;

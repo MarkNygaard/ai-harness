@@ -100,6 +100,8 @@ tokio-stream = "0.1"
 hmac = "0.12"
 sha2 = "0.10"
 subtle = "2"
+# Password hashing for local accounts (Argon2id).
+argon2 = "0.5"
 # Credential encryption-at-rest (AES-256-GCM).
 aes-gcm = "0.10"
 base64 = "0.22"

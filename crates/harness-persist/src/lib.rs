@@ -33,6 +33,12 @@ pub use linear_sources::{LinearSource, LinearSourceInput, LinearSourceStore};
 mod linear_claims;
 pub use linear_claims::{LinearClaim, LinearClaimStore};
 
+mod settings;
+pub use settings::SettingsStore;
+
+mod users;
+pub use users::{NewUser, User, UserStore};
+
 mod finding_state;
 pub use finding_state::{FindingState, FindingStateInput, FindingStateStore};
 

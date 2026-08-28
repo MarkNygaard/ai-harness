@@ -7,7 +7,6 @@ import {
   IconReportSearch,
   IconRocket,
   IconSearch,
-  IconSettings,
   IconShieldCheck,
   IconWorldSearch,
   IconZoomCode,
@@ -15,6 +14,7 @@ import {
 import { useHiddenNav } from "@/lib/nav-prefs";
 import { useRuns } from "@/lib/runs";
 import { useWorkflowList } from "@/lib/authoring";
+import { AccountMenu } from "@/components/AccountMenu";
 import { ClaudeCodeVersion } from "@/components/ClaudeCodeVersion";
 import {
   Sidebar,
@@ -141,17 +141,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         )}
       </SidebarContent>
       <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              render={<Link to="/settings/preferences" />}
-              isActive={pathname.startsWith("/settings")}
-            >
-              <IconSettings />
-              <span>Settings</span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <AccountMenu />
         <ClaudeCodeVersion />
       </SidebarFooter>
     </Sidebar>

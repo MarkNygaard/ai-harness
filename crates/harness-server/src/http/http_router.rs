@@ -6,9 +6,10 @@ use axum::{
 use std::sync::Arc;
 
 use super::{
-    auth, billing_routes, categories_routes, credentials_routes, finding_routes, health_check,
-    linear_agent, linear_connections, linear_oauth, linear_routes, linear_source_routes,
-    mcp_routes, password_reset, runs_routes, state::AppState, system_routes, workflows_routes,
+    auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
+    health_check, linear_agent, linear_connections, linear_oauth, linear_routes,
+    linear_source_routes, mcp_routes, password_reset, runs_routes, state::AppState, system_routes,
+    workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -65,6 +66,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // Generate the MCP key now, so `/mcp` is guarded from the first request
     // rather than from whenever someone first opens its settings page.
     super::mcp_key::spawn_ensure(runs_state.clone());
+    // Announce a one-time setup token while nobody has claimed this install.
+    super::accounts::spawn_setup_token(runs_state.clone());
     Router::new()
         .route("/", get(crate::dashboard::index))
         .route("/overview", get(crate::overview::index))
@@ -76,6 +79,13 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/favicon.ico", get(crate::dashboard::favicon))
         .route("/health", get(health_check))
         .route("/auth/reset-password", post(password_reset))
+        // ── Accounts: claiming the install, and signing in ──────────────────
+        // Auth-exempt because they are how you get past the middleware; each
+        // authenticates itself (setup token, password, or nothing to protect).
+        .route("/api/auth/status", get(auth_routes::status))
+        .route("/api/auth/setup", post(auth_routes::setup))
+        .route("/api/auth/login", post(auth_routes::login))
+        .route("/api/auth/logout", post(auth_routes::logout))
         // ── System: agent-CLI version + in-app update ───────────────────────
         .route(
             "/api/system/claude-version",
