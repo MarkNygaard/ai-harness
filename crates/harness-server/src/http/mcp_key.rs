@@ -131,6 +131,14 @@ fn same(a: &str, b: &str) -> bool {
 /// install can hold neither — which is exactly what `/mcp` did before this
 /// existed, so upgrading never silently locks anyone out of their own harness.
 pub(crate) async fn authorized(state: &Arc<RunsState>, headers: &HeaderMap) -> bool {
+    // A personal token identifies a person, which is strictly better than the
+    // shared key: the run it starts can be attributed to them.
+    if super::accounts::user_for_token(state, headers)
+        .await
+        .is_some()
+    {
+        return true;
+    }
     let key = ensure(state).await;
     let legacy = state.api_token();
     if key.is_none() && legacy.is_none() {

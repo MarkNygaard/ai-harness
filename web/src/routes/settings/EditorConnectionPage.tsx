@@ -6,6 +6,7 @@ import {
   IconEyeOff,
   IconRefresh,
 } from "@tabler/icons-react";
+import { PersonalTokens } from "@/components/settings/PersonalTokens";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,6 +17,7 @@ import {
   useRegenerateMcpKey,
 } from "@/lib/mcp";
 import type { McpClient } from "@/lib/mcp";
+import { useAuthStatus } from "@/lib/auth";
 
 function Section({
   title,
@@ -84,11 +86,18 @@ export function EditorConnectionPage() {
   const regenerate = useRegenerateMcpKey();
   const [client, setClient] = useState<McpClient>("claude-code");
 
+  const status = useAuthStatus();
+  const hasAccounts = status.data?.mode === "accounts";
+  // A token exists in the clear for exactly as long as this page stays open.
+  const [minted, setMinted] = useState<string | null>(null);
+
   const data = connection.data;
   const endpoint = data?.endpoint ?? null;
-  const snippet = endpoint
-    ? mcpSnippet(client, endpoint, data?.token ?? null)
-    : null;
+  // With accounts, the snippet should carry *your* token rather than the shared
+  // key — a run it starts is then attributable to you. Until one is minted there
+  // is nothing to show, so it falls back to a placeholder.
+  const secret = hasAccounts ? minted : (data?.token ?? null);
+  const snippet = endpoint ? mcpSnippet(client, endpoint, secret) : null;
 
   return (
     <SettingsShell title="Editor connection">
@@ -139,7 +148,7 @@ export function EditorConnectionPage() {
               </Card>
             </Section>
 
-            {data?.token && (
+            {data?.token && !hasAccounts && (
               <Section title="Key">
                 <Card>
                   <CardContent className="p-0">
@@ -220,6 +229,8 @@ export function EditorConnectionPage() {
                 your user configuration instead.
               </p>
             </Section>
+
+            {hasAccounts && <PersonalTokens onMinted={setMinted} />}
 
             <Section title="What your editor gets">
               <Card>

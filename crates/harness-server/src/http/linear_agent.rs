@@ -500,6 +500,7 @@ async fn start_delegated_run(
     }
 
     let req = CreateRunRequest {
+        triggered_by: Some("linear".to_string()),
         workflow: binding.workflow.clone(),
         title,
         description,
@@ -1696,6 +1697,7 @@ mod tests {
         };
         harness_persist::RunDetail {
             run: harness_persist::RunSummary {
+                triggered_by: None,
                 id: "r1".into(),
                 workflow_name: "idea-to-pr".into(),
                 title: None,

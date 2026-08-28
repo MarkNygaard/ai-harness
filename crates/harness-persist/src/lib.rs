@@ -39,6 +39,9 @@ pub use settings::SettingsStore;
 mod users;
 pub use users::{NewUser, User, UserStore};
 
+mod tokens;
+pub use tokens::{AccessToken, TokenStore};
+
 mod finding_state;
 pub use finding_state::{FindingState, FindingStateInput, FindingStateStore};
 
@@ -70,6 +73,9 @@ pub struct RunSummary {
     /// Display label for the arm's substituted model (e.g. `"cursor/composer-2.5"`),
     /// so the comparison view can name each arm without re-reading node rows.
     pub ab_label: Option<String>,
+    /// Who asked for this run — a user id, or a label like `linear` for a run
+    /// nothing signed-in started. `None` on runs from before accounts existed.
+    pub triggered_by: Option<String>,
 }
 /// A/B pairing metadata stamped on a run at start time (borrowed for binding).
 #[derive(Debug, Clone, Copy)]
@@ -273,6 +279,9 @@ CREATE TABLE IF NOT EXISTS harness_workflow_runs (
     node_count    int  NOT NULL DEFAULT 0,
     graph         jsonb NOT NULL DEFAULT '[]'::jsonb,
     owner         text,
+    -- Who asked for this run: a user id, or a label like `linear` for a run
+    -- nothing signed-in started. NULL on every run from before accounts.
+    triggered_by  text,
     heartbeat_at  timestamptz,
     recorded_at   timestamptz NOT NULL DEFAULT now()
 )";
@@ -280,6 +289,9 @@ CREATE TABLE IF NOT EXISTS harness_workflow_runs (
 /// Bring older `harness_workflow_runs` tables up to date. Idempotent.
 const ALTER_RUNS_GRAPH: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS graph jsonb NOT NULL DEFAULT '[]'::jsonb";
+/// Who asked for a run. Idempotent.
+const ALTER_RUNS_TRIGGERED_BY: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS triggered_by text";
 const ALTER_RUNS_TITLE: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS title text";
 const ALTER_RUNS_DESCRIPTION: &str =
@@ -395,6 +407,9 @@ impl RunStore {
     pub async fn migrate(&self) -> Result<(), PersistError> {
         sqlx::query(CREATE_RUNS).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_GRAPH).execute(&self.pool).await?;
+        sqlx::query(ALTER_RUNS_TRIGGERED_BY)
+            .execute(&self.pool)
+            .await?;
         sqlx::query(ALTER_RUNS_TITLE).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_DESCRIPTION)
             .execute(&self.pool)
@@ -532,14 +547,15 @@ impl RunStore {
         graph: &[NodeMeta],
         owner: Option<&str>,
         ab: Option<&AbPairing<'_>>,
+        triggered_by: Option<&str>,
     ) -> Result<(), PersistError> {
         // Stamp the lease (`owner` + fresh `heartbeat_at`) so this run is
         // claimed by the current instance and protected from reconcile until its
         // heartbeat goes stale. A/B fields are stamped once at start and preserved
         // on conflict (COALESCE) so a re-`start_run` never drops the pairing.
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, owner, ab_pair_id, ab_arm, ab_label, heartbeat_at, recorded_at)
-             VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9, $10, $11, now(), now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, owner, ab_pair_id, ab_arm, ab_label, triggered_by, heartbeat_at, recorded_at)
+             VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9, $10, $11, $12, now(), now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 title         = COALESCE(excluded.title, harness_workflow_runs.title),
@@ -550,6 +566,9 @@ impl RunStore {
                 ab_pair_id    = COALESCE(harness_workflow_runs.ab_pair_id, excluded.ab_pair_id),
                 ab_arm        = COALESCE(harness_workflow_runs.ab_arm, excluded.ab_arm),
                 ab_label      = COALESCE(harness_workflow_runs.ab_label, excluded.ab_label),
+                -- Preserve-first, like the A/B fields: a re-`start_run` must not
+                -- reattribute a run to whoever restarted it.
+                triggered_by  = COALESCE(harness_workflow_runs.triggered_by, excluded.triggered_by),
                 heartbeat_at  = now()",
         )
         .bind(run_id)
@@ -563,6 +582,7 @@ impl RunStore {
         .bind(ab.map(|a| a.pair_id))
         .bind(ab.map(|a| a.arm))
         .bind(ab.and_then(|a| a.label))
+        .bind(triggered_by)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -964,7 +984,7 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              GROUP BY r.id
@@ -987,7 +1007,7 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              WHERE r.project = $1
@@ -1008,7 +1028,7 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, r.description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              WHERE r.ab_pair_id = $1
@@ -1057,7 +1077,7 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              WHERE r.project IS NULL OR btrim(r.project) = ''
@@ -1124,7 +1144,7 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, r.description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              WHERE r.id = $1
@@ -1457,6 +1477,7 @@ mod tests {
                 &report_a.graph,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1560,6 +1581,7 @@ mod tests {
                 &report.graph,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1632,6 +1654,7 @@ mod tests {
                 None,
                 2,
                 &report.graph,
+                None,
                 None,
                 None,
             )
@@ -1715,6 +1738,7 @@ mod tests {
                 &report.graph,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1788,6 +1812,7 @@ mod tests {
                 None,
                 2,
                 &report.graph,
+                None,
                 None,
                 None,
             )
@@ -1878,6 +1903,7 @@ mod tests {
                 &report.graph,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -1928,6 +1954,7 @@ mod tests {
                 None,
                 2,
                 &report.graph,
+                None,
                 None,
                 None,
             )

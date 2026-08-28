@@ -205,7 +205,9 @@ pub async fn logout(Extension(state): Extension<Arc<RunsState>>, headers: Header
 /// the behaviour the harness already had, decided by the bearer token.
 pub(crate) async fn permits(state: &Arc<RunsState>, headers: &HeaderMap) -> bool {
     match accounts::mode(state).await {
-        Mode::Accounts => current_user(state, headers).await.is_some(),
+        // A person in a browser, or a program holding that person's token —
+        // an MCP client cannot complete a sign-in flow.
+        Mode::Accounts => accounts::authenticated_user(state, headers).await.is_some(),
         // Not this function's decision — the bearer middleware still runs.
         Mode::Open | Mode::Token => true,
     }
