@@ -202,7 +202,7 @@ export function AbTestForm() {
               <span className="text-[11px] text-muted-foreground">
                 No connected providers —{" "}
                 <Link
-                  to="/credentials"
+                  to="/settings/credentials"
                   className="text-accent-orange hover:underline"
                 >
                   connect one

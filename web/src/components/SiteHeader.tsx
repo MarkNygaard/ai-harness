@@ -1,6 +1,5 @@
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
-import { ThemeToggle } from "@/components/ThemeToggle";
 
 /** Top bar inside the sidebar inset: trigger + page title + optional actions. */
 export function SiteHeader({
@@ -19,7 +18,6 @@ export function SiteHeader({
       />
       <div className="min-w-0 flex-1 truncate text-sm font-medium">{title}</div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
-      <ThemeToggle />
     </header>
   );
 }

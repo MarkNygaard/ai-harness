@@ -230,7 +230,7 @@ function NewRunForm() {
               <span className="text-[11px] text-muted-foreground">
                 No projects yet —{" "}
                 <Link
-                  to="/projects"
+                  to="/settings/projects"
                   className="text-accent-orange hover:underline"
                 >
                   register one

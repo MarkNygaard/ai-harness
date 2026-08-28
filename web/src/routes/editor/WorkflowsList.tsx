@@ -6,7 +6,7 @@ import {
   IconLayoutList,
   IconPlus,
 } from "@tabler/icons-react";
-import { AppShell } from "@/components/AppShell";
+import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useWorkflowList } from "@/lib/authoring";
@@ -50,7 +50,7 @@ export function WorkflowsList() {
   const templates = all.filter((wf) => wf.source === "bundled");
 
   return (
-    <AppShell
+    <SettingsShell
       title="Workflows"
       viewActions={
         <>
@@ -114,7 +114,7 @@ export function WorkflowsList() {
           ))}
         </Section>
       </div>
-    </AppShell>
+    </SettingsShell>
   );
 }
 

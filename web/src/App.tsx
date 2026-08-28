@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { DashboardPage } from "./routes/dashboard/DashboardPage";
 import { RunsPage } from "./routes/runs/RunsPage";
 import { RunDetailPage } from "./routes/runs/RunDetailPage";
@@ -11,6 +11,7 @@ import { WorkflowsList } from "./routes/editor/WorkflowsList";
 import { ProjectsPage } from "./routes/projects/ProjectsPage";
 import { CredentialsPage } from "./routes/credentials/CredentialsPage";
 import { CategoriesPage } from "./routes/categories/CategoriesPage";
+import { PreferencesPage } from "./routes/settings/PreferencesPage";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { TokenPrompt } from "./components/TokenPrompt";
 
@@ -40,12 +41,40 @@ export function App() {
             element={<RunPairComparisonPage />}
           />
           <Route path="/runs/:id" element={<RunDetailPage />} />
-          <Route path="/projects" element={<ProjectsPage />} />
-          <Route path="/editor" element={<WorkflowsList />} />
+          {/* The workflow editor keeps the app frame and its own URL: it is a
+              full-canvas view, not a settings form, and run pages link into it. */}
           <Route path="/editor/new" element={<WorkflowEditor />} />
           <Route path="/editor/:name" element={<WorkflowEditor />} />
-          <Route path="/credentials" element={<CredentialsPage />} />
-          <Route path="/categories" element={<CategoriesPage />} />
+
+          {/* ── Settings ─────────────────────────────────────────────────── */}
+          <Route
+            path="/settings"
+            element={<Navigate to="/settings/preferences" replace />}
+          />
+          <Route path="/settings/preferences" element={<PreferencesPage />} />
+          <Route path="/settings/credentials" element={<CredentialsPage />} />
+          <Route path="/settings/projects" element={<ProjectsPage />} />
+          <Route path="/settings/workflows" element={<WorkflowsList />} />
+          <Route path="/settings/categories" element={<CategoriesPage />} />
+
+          {/* These were live URLs before Settings existed, and `/editor` is
+              linked from run pages — redirect rather than 404. */}
+          <Route
+            path="/projects"
+            element={<Navigate to="/settings/projects" replace />}
+          />
+          <Route
+            path="/editor"
+            element={<Navigate to="/settings/workflows" replace />}
+          />
+          <Route
+            path="/credentials"
+            element={<Navigate to="/settings/credentials" replace />}
+          />
+          <Route
+            path="/categories"
+            element={<Navigate to="/settings/categories" replace />}
+          />
         </Routes>
         <TokenPrompt />
       </TooltipProvider>

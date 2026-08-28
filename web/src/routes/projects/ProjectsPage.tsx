@@ -7,7 +7,7 @@ import {
   IconPlus,
   IconTrash,
 } from "@tabler/icons-react";
-import { AppShell } from "@/components/AppShell";
+import { SettingsShell } from "@/components/SettingsShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -62,7 +62,7 @@ export function ProjectsPage() {
   const projects = useProjects();
 
   return (
-    <AppShell title="Projects" viewActions={<RegisterProjectDialog />}>
+    <SettingsShell title="Projects" viewActions={<RegisterProjectDialog />}>
       <div className="mx-auto flex max-w-4xl flex-col gap-5 p-6">
         {/* `sm:pr-64` reserves room for the view actions, which are positioned
             out of flow against the view's right edge. */}
@@ -102,7 +102,7 @@ export function ProjectsPage() {
           </div>
         </section>
       </div>
-    </AppShell>
+    </SettingsShell>
   );
 }
 
