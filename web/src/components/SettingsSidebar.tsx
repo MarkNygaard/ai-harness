@@ -8,7 +8,9 @@ import {
   IconPlugConnected,
   IconSettings2,
   IconTags,
+  IconUsers,
 } from "@tabler/icons-react";
+import { useAuthStatus } from "@/lib/auth";
 import {
   Sidebar,
   SidebarContent,
@@ -27,6 +29,11 @@ interface SettingsNavItem {
   icon: typeof IconKey;
   /** Words that should match this entry beyond its label. */
   keywords?: string;
+  /**
+   * Hide from members. Presentation only — every one of these routes rejects a
+   * non-administrator server-side, which is what actually protects them.
+   */
+  adminOnly?: boolean;
 }
 
 /**
@@ -59,10 +66,18 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
     label: "Workspace",
     items: [
       {
+        href: "/settings/members",
+        label: "Members",
+        icon: IconUsers,
+        keywords: "users people accounts admin role invite team",
+        adminOnly: true,
+      },
+      {
         href: "/settings/credentials",
         label: "Credentials",
         icon: IconKey,
         keywords: "claude codex cursor github linear token oauth api key",
+        adminOnly: true,
       },
     ],
   },
@@ -110,11 +125,19 @@ export function SettingsSidebar({
   ...props
 }: React.ComponentProps<typeof Sidebar>) {
   const { pathname } = useLocation();
+  const status = useAuthStatus();
   const [query, setQuery] = useState("");
+
+  // Before an install has accounts there are no roles, so nothing is hidden —
+  // whoever got in is the operator by definition.
+  const isAdmin =
+    status.data?.mode !== "accounts" || status.data?.user?.role === "admin";
 
   const groups = GROUPS.map((g) => ({
     ...g,
-    items: g.items.filter((i) => matches(i, query)),
+    items: g.items.filter(
+      (i) => (isAdmin || !i.adminOnly) && matches(i, query),
+    ),
   })).filter((g) => g.items.length > 0);
 
   return (

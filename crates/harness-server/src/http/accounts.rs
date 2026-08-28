@@ -100,7 +100,7 @@ pub(crate) async fn mode(state: &Arc<RunsState>) -> Mode {
 // ── Passwords ────────────────────────────────────────────────────────────────
 
 /// Hash a password with Argon2id at the crate's default parameters.
-pub(crate) fn hash_password(password: &str) -> Result<String, String> {
+pub fn hash_password(password: &str) -> Result<String, String> {
     let salt = SaltString::generate(&mut OsRng);
     Argon2::default()
         .hash_password(password.as_bytes(), &salt)
@@ -124,7 +124,7 @@ pub(crate) fn verify_password(password: &str, hash: &str) -> bool {
 pub(crate) const MIN_PASSWORD_LEN: usize = 12;
 
 /// `Err` with a sentence the person can act on, or `Ok` if it will do.
-pub(crate) fn check_password(password: &str) -> Result<(), String> {
+pub fn check_password(password: &str) -> Result<(), String> {
     if password.chars().count() < MIN_PASSWORD_LEN {
         return Err(format!(
             "password must be at least {MIN_PASSWORD_LEN} characters"
@@ -317,6 +317,68 @@ pub(crate) async fn current_user(state: &Arc<RunsState>, headers: &HeaderMap) ->
     let id = session_id(headers)?;
     let users = state.user_store().await.ok()?;
     users.user_for_session(&id).await.ok().flatten()
+}
+
+// ── Requiring an administrator ───────────────────────────────────────────────
+
+/// An extractor that refuses the request unless the caller may administer this
+/// harness.
+///
+/// A route argument rather than a check inside each handler, because a check you
+/// have to remember to write is a check somebody eventually forgets — and the
+/// routes this guards front every credential the harness holds.
+///
+/// **Before an install has accounts there are no roles.** In `open` and `token`
+/// mode anyone who got past the global middleware is the operator by
+/// definition, so this admits them; it starts meaning something the moment the
+/// install is claimed.
+pub(crate) struct AdminOnly;
+
+impl<S> axum::extract::FromRequestParts<S> for AdminOnly
+where
+    S: Send + Sync,
+{
+    type Rejection = axum::response::Response;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        let deny = |status: axum::http::StatusCode, msg: &str| {
+            use axum::response::IntoResponse;
+            (status, axum::Json(serde_json::json!({ "error": msg }))).into_response()
+        };
+        let Some(state) = parts.extensions.get::<Arc<RunsState>>().cloned() else {
+            return Err(deny(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "server state is unavailable",
+            ));
+        };
+        if mode(&state).await != Mode::Accounts {
+            return Ok(AdminOnly);
+        }
+        match current_user(&state, &parts.headers).await {
+            Some(user) if user.role == ROLE_ADMIN => Ok(AdminOnly),
+            Some(_) => Err(deny(
+                axum::http::StatusCode::FORBIDDEN,
+                "only an administrator can change this",
+            )),
+            None => Err(deny(
+                axum::http::StatusCode::UNAUTHORIZED,
+                "sign in to use this harness",
+            )),
+        }
+    }
+}
+
+/// The two roles. `member` is everything else: triggering runs, reading
+/// reports, authoring workflows.
+pub(crate) const ROLE_ADMIN: &str = "admin";
+pub(crate) const ROLE_MEMBER: &str = "member";
+
+/// Whether a string names a role at all.
+pub(crate) fn valid_role(role: &str) -> bool {
+    role == ROLE_ADMIN || role == ROLE_MEMBER
 }
 
 #[cfg(test)]

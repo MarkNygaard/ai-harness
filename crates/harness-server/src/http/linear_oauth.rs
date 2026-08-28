@@ -37,6 +37,7 @@ use harness_persist::CredentialStore;
 use harness_sources::linear::{LinearAuth, LinearClient};
 use serde::Deserialize;
 
+use super::accounts::AdminOnly;
 use super::linear_connections::ConnectionId;
 use super::runs_routes::RunsState;
 
@@ -615,6 +616,7 @@ pub(crate) async fn linear_client_or_none(
 /// token; a plain navigation to this path would be rejected by the auth
 /// middleware. The client follows `url` itself.
 pub async fn start(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     Query(q): Query<ConnectionQuery>,
 ) -> Response {
@@ -769,6 +771,7 @@ pub async fn callback(
 /// `GET /api/linear/oauth/status` — how the harness talks to Linear, and what
 /// still needs doing. Never returns secrets.
 pub async fn status(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     Query(q): Query<ConnectionQuery>,
 ) -> Response {
@@ -819,6 +822,7 @@ pub async fn status(
 /// **keeping** the OAuth client id/secret so reconnecting is one click. Use the
 /// credential's Clear button to remove those too.
 pub async fn disconnect(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     Query(q): Query<ConnectionQuery>,
 ) -> Response {

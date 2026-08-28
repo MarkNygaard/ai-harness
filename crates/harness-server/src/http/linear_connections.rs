@@ -25,6 +25,7 @@ use axum::Json;
 use harness_persist::CredentialStore;
 use serde::Deserialize;
 
+use super::accounts::AdminOnly;
 use super::linear_oauth::{describe, revoke_for, ConnectionSummary};
 use super::runs_routes::RunsState;
 
@@ -314,7 +315,10 @@ async fn summaries(state: &Arc<RunsState>) -> Result<Vec<ConnectionSummary>, Str
 
 /// `GET /api/linear/connections` — every connected (or half-configured) Linear
 /// account, and which projects use each.
-pub async fn list_connections(Extension(state): Extension<Arc<RunsState>>) -> Response {
+pub async fn list_connections(
+    _: AdminOnly,
+    Extension(state): Extension<Arc<RunsState>>,
+) -> Response {
     match summaries(&state).await {
         Ok(list) => Json(list).into_response(),
         Err(e) => err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -332,6 +336,7 @@ pub struct CreateConnectionRequest {
 /// This only creates the row. The operator then saves the OAuth app's client id
 /// and secret against it and runs the connect flow with `?connection=<id>`.
 pub async fn create_connection(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     Json(req): Json<CreateConnectionRequest>,
 ) -> Response {
@@ -390,6 +395,7 @@ pub async fn create_connection(
 /// would silently fall back to whichever connection is left, which is how issues
 /// end up being worked in the wrong account.
 pub async fn delete_connection(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
@@ -435,6 +441,7 @@ pub struct PinProjectRequest {
 /// `PUT /api/projects/{project}/linear-connection` — which Linear account this
 /// project's issues come from.
 pub async fn set_project_connection(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(project): AxumPath<String>,
     Json(req): Json<PinProjectRequest>,

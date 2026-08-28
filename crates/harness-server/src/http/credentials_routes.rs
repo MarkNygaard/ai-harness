@@ -21,6 +21,7 @@ use axum::Json;
 use harness_persist::{CredentialStore, ProviderCredential};
 use serde::Deserialize;
 
+use super::accounts::AdminOnly;
 use super::runs_routes::RunsState;
 
 /// Providers the UI can configure (the agent backends, GitHub for repo access,
@@ -64,7 +65,10 @@ pub(crate) async fn usage_card_visible(store: &CredentialStore, provider: &str) 
 
 /// `GET /api/credentials` — list providers + whether each is configured.
 /// Never returns secret values.
-pub async fn list_credentials(Extension(state): Extension<Arc<RunsState>>) -> Response {
+pub async fn list_credentials(
+    _: AdminOnly,
+    Extension(state): Extension<Arc<RunsState>>,
+) -> Response {
     let store = match state.cred_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -156,6 +160,7 @@ pub struct SetCredentialRequest {
 
 /// `PUT /api/credentials/{provider}` — store a provider's credential fields.
 pub async fn set_credential(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(provider): AxumPath<String>,
     Json(req): Json<SetCredentialRequest>,
@@ -209,6 +214,7 @@ pub async fn set_credential(
 
 /// `DELETE /api/credentials/{provider}` — clear a provider's credential.
 pub async fn delete_credential(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(provider): AxumPath<String>,
 ) -> Response {
@@ -257,6 +263,7 @@ const PROJECT_PROVIDERS: &[&str] = &["github"];
 /// `GET /api/projects/{project}/credentials` — which per-project providers are
 /// configured for this project (no secrets).
 pub async fn list_project_credentials(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(project): AxumPath<String>,
 ) -> Response {
@@ -283,6 +290,7 @@ pub async fn list_project_credentials(
 /// `PUT /api/projects/{project}/credentials/{provider}` — set a project-scoped
 /// credential (allowlisted to `github`).
 pub async fn set_project_credential(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath((project, provider)): AxumPath<(String, String)>,
     Json(req): Json<SetCredentialRequest>,
@@ -312,6 +320,7 @@ pub async fn set_project_credential(
 /// `DELETE /api/projects/{project}/credentials/{provider}` — clear a
 /// project-scoped credential (falls back to the global one thereafter).
 pub async fn delete_project_credential(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath((project, provider)): AxumPath<(String, String)>,
 ) -> Response {
@@ -365,6 +374,7 @@ pub(crate) async fn project_env_vars(
 
 /// `GET /api/projects/{project}/env` — the project's env vars, values included.
 pub async fn list_project_env(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(project): AxumPath<String>,
 ) -> Response {
@@ -378,6 +388,7 @@ pub async fn list_project_env(
 
 /// `PUT /api/projects/{project}/env` — replace the project's env vars wholesale.
 pub async fn set_project_env(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(project): AxumPath<String>,
     Json(req): Json<ProjectEnvRequest>,
@@ -409,6 +420,7 @@ pub async fn set_project_env(
 
 /// `DELETE /api/projects/{project}/env` — clear all of a project's env vars.
 pub async fn delete_project_env(
+    _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(project): AxumPath<String>,
 ) -> Response {

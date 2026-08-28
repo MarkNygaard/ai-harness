@@ -13,6 +13,7 @@
 // paths inside this crate continue to resolve without modification.
 pub use harness_workflow::checkpoint;
 pub use harness_workflow::circuit_breaker;
+pub mod admin;
 pub mod assets;
 pub(crate) mod billing_calibration;
 pub mod dashboard;
