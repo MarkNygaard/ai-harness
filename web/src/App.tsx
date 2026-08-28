@@ -13,6 +13,7 @@ import { CredentialsPage } from "./routes/credentials/CredentialsPage";
 import { CategoriesPage } from "./routes/categories/CategoriesPage";
 import { PreferencesPage } from "./routes/settings/PreferencesPage";
 import { EditorConnectionPage } from "./routes/settings/EditorConnectionPage";
+import { MembersPage } from "./routes/settings/MembersPage";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { TokenPrompt } from "./components/TokenPrompt";
 import { LoginPage, SetupPage } from "./routes/auth/SignInPage";
@@ -59,6 +60,7 @@ export function App() {
           />
           <Route path="/settings/preferences" element={<PreferencesPage />} />
           <Route path="/settings/mcp" element={<EditorConnectionPage />} />
+          <Route path="/settings/members" element={<MembersPage />} />
           <Route path="/settings/credentials" element={<CredentialsPage />} />
           <Route path="/settings/projects" element={<ProjectsPage />} />
           <Route path="/settings/workflows" element={<WorkflowsList />} />

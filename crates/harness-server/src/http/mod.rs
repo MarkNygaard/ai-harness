@@ -3,7 +3,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub(crate) mod accounts;
+pub mod accounts;
 pub(crate) mod auth;
 pub(crate) mod auth_routes;
 pub(crate) mod billing_routes;
@@ -30,6 +30,7 @@ pub(crate) mod runs_routes;
 pub(crate) mod state;
 pub(crate) mod system_routes;
 pub(crate) mod usage_routes;
+pub(crate) mod users_routes;
 pub(crate) mod workflows_routes;
 
 #[cfg(test)]

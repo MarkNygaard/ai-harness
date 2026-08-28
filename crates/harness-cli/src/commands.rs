@@ -25,6 +25,21 @@ pub struct Cli {
     pub config: Option<PathBuf>,
 }
 
+/// Break-glass account recovery. Cannot turn authentication off — nothing can.
+#[derive(Subcommand)]
+pub enum AdminAction {
+    /// Create an administrator, or promote an existing account and set its password
+    Create {
+        #[arg(long)]
+        email: String,
+        /// Display name; defaults to the email
+        #[arg(long)]
+        name: Option<String>,
+        #[arg(long)]
+        password: String,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Start the App Server
@@ -48,6 +63,16 @@ pub enum Command {
 
     /// Start MCP Server mode (JSON-RPC over stdio)
     McpServer,
+
+    /// Recover administrator access to a harness that has accounts
+    ///
+    /// Signing in can be turned on but never off, so this exists to make that
+    /// one-way door a safeguard rather than a trap. It needs a shell on the
+    /// server, which is the correct bar.
+    Admin {
+        #[command(subcommand)]
+        action: AdminAction,
+    },
 
     /// Execute a prompt non-interactively
     Exec {
@@ -544,6 +569,27 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
     log_runtime_log_status(&logging);
 
     match cli.command {
+        Command::Admin { action } => {
+            let AdminAction::Create {
+                email,
+                name,
+                password,
+            } = action;
+            let Some(db) = config.server.database_url.clone() else {
+                anyhow::bail!(
+                    "no database configured — set server.database_url or HARNESS_DATABASE_URL"
+                );
+            };
+            let message = harness_server::admin::create_or_promote_admin(
+                &db,
+                &email,
+                name.as_deref(),
+                &password,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{message}");
+        }
         Command::Serve {
             transport,
             port,

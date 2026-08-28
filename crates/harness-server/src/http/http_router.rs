@@ -9,7 +9,7 @@ use super::{
     auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
     health_check, linear_agent, linear_connections, linear_oauth, linear_routes,
     linear_source_routes, mcp_routes, password_reset, runs_routes, state::AppState, system_routes,
-    workflows_routes,
+    users_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -86,6 +86,11 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/auth/setup", post(auth_routes::setup))
         .route("/api/auth/login", post(auth_routes::login))
         .route("/api/auth/logout", post(auth_routes::logout))
+        // ── Who has an account here. Administrator-only, at the route. ──────
+        .route("/api/users", get(users_routes::list_users))
+        .route("/api/users/{id}/role", put(users_routes::set_role))
+        .route("/api/users/{id}/disabled", put(users_routes::set_disabled))
+        .route("/api/users/{id}", delete(users_routes::delete_user))
         // ── System: agent-CLI version + in-app update ───────────────────────
         .route(
             "/api/system/claude-version",
