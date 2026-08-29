@@ -114,10 +114,15 @@ pub struct RunsState {
     /// bundled): the editor authors them here, and runs/MCP resolve them here so
     /// they apply to every project.
     pub(crate) project_root: PathBuf,
-    /// External base URL of this instance (`HARNESS_PUBLIC_URL` /
-    /// `server.public_url`), trailing slash trimmed. `None` => run-link
-    /// features no-op.
-    pub(crate) public_url: Option<String>,
+    /// External base URL of this instance, trailing slash trimmed. `None` =>
+    /// run-link features no-op.
+    ///
+    /// Seeded from `HARNESS_PUBLIC_URL` / `server.public_url` and then
+    /// overridden by the stored setting, so changing it is a form field rather
+    /// than a redeploy. Behind a lock and read through [`Self::public_url`],
+    /// which stays synchronous — the OAuth redirect builder is not async, and
+    /// making it so would cascade through every caller for no benefit.
+    public_url: std::sync::RwLock<Option<String>>,
     /// Resolved legacy shared token (`HARNESS_API_TOKEN` / `server.api_token`).
     /// Held here because several auth decisions happen outside the global
     /// middleware and still need it: `/mcp` authenticates itself and must accept
@@ -206,7 +211,7 @@ impl RunsState {
             token_store: OnceCell::new(),
             projects_dir,
             project_root: project_root_global,
-            public_url,
+            public_url: std::sync::RwLock::new(public_url),
             api_token: None,
             instance_id,
             live: Mutex::new(HashMap::new()),
@@ -226,6 +231,22 @@ impl RunsState {
                     .map_err(|e| e.to_string())
             })
             .await
+    }
+
+    /// The external base URL this instance advertises.
+    pub(crate) fn public_url(&self) -> Option<String> {
+        self.public_url.read().ok().and_then(|v| v.clone())
+    }
+
+    /// Replace it. Called once at startup with the stored value, and again
+    /// whenever an administrator saves a new one.
+    pub(crate) fn set_public_url(&self, url: Option<String>) {
+        let normalized = url
+            .map(|u| u.trim().trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty());
+        if let Ok(mut guard) = self.public_url.write() {
+            *guard = normalized;
+        }
     }
 
     /// Lazily connect the personal-access-token store.
@@ -2461,7 +2482,7 @@ mod tests {
             None,
             Some("https://example.com/".to_string()),
         );
-        assert_eq!(state.public_url, Some("https://example.com".to_string()));
+        assert_eq!(state.public_url(), Some("https://example.com".to_string()));
     }
 
     #[test]
@@ -2474,7 +2495,7 @@ mod tests {
             None,
             Some("https://example.com///".to_string()),
         );
-        assert_eq!(state.public_url, Some("https://example.com".to_string()));
+        assert_eq!(state.public_url(), Some("https://example.com".to_string()));
     }
 
     #[test]
@@ -2487,7 +2508,7 @@ mod tests {
             None,
             Some("   ".to_string()),
         );
-        assert_eq!(state.public_url, None);
+        assert_eq!(state.public_url(), None);
     }
 
     #[test]
@@ -2500,14 +2521,14 @@ mod tests {
             None,
             Some("".to_string()),
         );
-        assert_eq!(state.public_url, None);
+        assert_eq!(state.public_url(), None);
     }
 
     #[test]
     fn public_url_none_when_input_none() {
         let reg = Arc::new(AgentRegistry::new("codex"));
         let state = RunsState::new(None, reg, std::path::PathBuf::from("/tmp"), None, None);
-        assert_eq!(state.public_url, None);
+        assert_eq!(state.public_url(), None);
     }
 
     #[test]

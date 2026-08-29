@@ -287,8 +287,7 @@ pub(crate) fn clear_cookie(secure: bool) -> String {
 /// Whether cookies should carry `Secure`, inferred from the public URL.
 pub(crate) fn secure_cookies(state: &Arc<RunsState>) -> bool {
     state
-        .public_url
-        .as_deref()
+        .public_url()
         .is_some_and(|u| u.starts_with("https://"))
 }
 

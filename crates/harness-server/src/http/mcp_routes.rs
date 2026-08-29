@@ -847,7 +847,7 @@ fn connection_body(state: &Arc<RunsState>, token: Option<String>) -> Value {
     json!({
         // `None` when no public URL is configured — the page says so rather
         // than rendering a snippet that would not work.
-        "endpoint": state.public_url.as_deref().map(|b| format!("{b}/mcp")),
+        "endpoint": state.public_url().map(|b| format!("{b}/mcp")),
         "token": token,
         // True when the endpoint is reachable without any credential, which is
         // worth saying out loud on the page.
