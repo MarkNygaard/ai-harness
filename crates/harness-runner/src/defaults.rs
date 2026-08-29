@@ -46,6 +46,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "review-area",
         include_str!("../defaults/workflows/review-area.yaml"),
     ),
+    (
+        "linear-epic-plan",
+        include_str!("../defaults/workflows/linear-epic-plan.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.
@@ -162,6 +166,23 @@ mod tests {
             );
         }
         assert!(default_command("nope").is_none());
+    }
+
+    #[test]
+    fn the_epic_planner_parses_and_refuses_before_it_writes() {
+        let yaml = default_workflow("linear-epic-plan").expect("registered");
+        let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow must parse");
+
+        let ids: Vec<&str> = wf.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["guard", "plan", "file-sub-issues", "ledger"]);
+
+        // The order is the safety property: nothing is filed until the guard
+        // has established that this epic has no sub-issues yet, so a second
+        // trigger cannot file a duplicate of every piece.
+        let filing = wf.nodes.iter().find(|n| n.id == "file-sub-issues").unwrap();
+        assert_eq!(filing.depends_on, ["plan"]);
+        let plan = wf.nodes.iter().find(|n| n.id == "plan").unwrap();
+        assert_eq!(plan.depends_on, ["guard"]);
     }
 
     #[test]
