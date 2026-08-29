@@ -7,9 +7,9 @@ use std::sync::Arc;
 
 use super::{
     auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
-    health_check, invites_routes, linear_agent, linear_connections, linear_oauth, linear_routes,
-    linear_source_routes, mcp_routes, oidc, password_reset, runs_routes, settings_routes,
-    state::AppState, system_routes, tokens_routes, users_routes, workflows_routes,
+    github_sso, health_check, invites_routes, linear_agent, linear_connections, linear_oauth,
+    linear_routes, linear_source_routes, mcp_routes, oidc, password_reset, runs_routes,
+    settings_routes, state::AppState, system_routes, tokens_routes, users_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -117,6 +117,19 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // What the sign-in page may know before anyone has signed in.
         .route("/api/auth/oidc/status", get(oidc::public_status))
         .route(oidc::CALLBACK_PATH, get(oidc::callback))
+        // ── The same, for GitHub: OAuth2 with no ID token, and organisation
+        // membership as the allowlist.
+        .route(
+            "/api/settings/sso/github",
+            get(github_sso::describe).put(github_sso::configure),
+        )
+        .route(
+            "/api/settings/sso/github/test",
+            post(github_sso::test_github),
+        )
+        .route("/api/auth/github/start", get(github_sso::start))
+        .route("/api/auth/github/status", get(github_sso::public_status))
+        .route(github_sso::CALLBACK_PATH, get(github_sso::callback))
         // ── Invitations, and the links that redeem them ────────────────────
         .route(
             "/api/invites",

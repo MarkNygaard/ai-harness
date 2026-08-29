@@ -1,10 +1,15 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
-import { IconHexagonalPrism } from "@tabler/icons-react";
+import { IconBrandGithub, IconHexagonalPrism } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAuthStatus, useLogin, useSetup } from "@/lib/auth";
-import { useSsoPublicStatus, useStartSso } from "@/lib/sso";
+import {
+  useGithubSsoPublicStatus,
+  useSsoPublicStatus,
+  useStartGithubSso,
+  useStartSso,
+} from "@/lib/sso";
 
 const inputCls =
   "h-9 w-full rounded-md border border-input bg-transparent px-2.5 text-[13px] outline-none focus:ring-2 focus:ring-ring";
@@ -69,6 +74,8 @@ export function LoginPage() {
   const login = useLogin();
   const sso = useSsoPublicStatus();
   const startSso = useStartSso();
+  const github = useGithubSsoPublicStatus();
+  const startGithub = useStartGithubSso();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -120,26 +127,41 @@ export function LoginPage() {
         <Button type="submit" disabled={login.isPending}>
           {login.isPending ? "Signing in…" : "Sign in"}
         </Button>
-        {sso.data?.enabled && (
+        {(sso.data?.enabled || github.data?.enabled) && (
           <>
             <div className="flex items-center gap-2 py-0.5">
               <span className="h-px flex-1 bg-border" />
               <span className="text-[10px] text-muted-foreground">or</span>
               <span className="h-px flex-1 bg-border" />
             </div>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={startSso.isPending}
-              onClick={() => startSso.mutate({ next: "/" })}
-            >
-              {startSso.isPending
-                ? "Redirecting…"
-                : `Continue with ${sso.data.label?.trim() || "your provider"}`}
-            </Button>
-            {startSso.isError && (
+            {sso.data?.enabled && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={startSso.isPending}
+                onClick={() => startSso.mutate({ next: "/" })}
+              >
+                {startSso.isPending
+                  ? "Redirecting…"
+                  : `Continue with ${sso.data.label?.trim() || "your provider"}`}
+              </Button>
+            )}
+            {github.data?.enabled && (
+              <Button
+                type="button"
+                variant="outline"
+                disabled={startGithub.isPending}
+                onClick={() => startGithub.mutate({ next: "/" })}
+              >
+                <IconBrandGithub className="size-4" />
+                {startGithub.isPending
+                  ? "Redirecting…"
+                  : "Continue with GitHub"}
+              </Button>
+            )}
+            {(startSso.isError || startGithub.isError) && (
               <p className="text-[11px] text-destructive">
-                {startSso.error.message}
+                {startSso.error?.message ?? startGithub.error?.message}
               </p>
             )}
           </>

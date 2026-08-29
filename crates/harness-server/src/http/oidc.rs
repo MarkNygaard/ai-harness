@@ -20,11 +20,11 @@
 //! and then `iss`, `aud`, `exp` and the `nonce` this server minted. A signature
 //! check alone would accept a token minted for somebody else's application.
 
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, LazyLock};
+use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use axum::extract::{Extension, Query};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::Engine;
@@ -36,6 +36,10 @@ use sha2::{Digest, Sha256};
 
 use super::accounts::{self, AdminOnly, Mode, ROLE_MEMBER};
 use super::runs_routes::RunsState;
+use super::sso_flow::{
+    back, binding_cookie, binding_matches, clear_binding_cookie, enc, err, hash, issue_state,
+    random_token, safe_next, take_state, Attempt, Pending, Provider,
+};
 
 /// Credential provider the configuration lives under.
 const PROVIDER: &str = "sso-oidc";
@@ -46,179 +50,8 @@ const PROVIDER: &str = "sso-oidc";
 /// `state` nonce is what authenticates it.
 pub(crate) const CALLBACK_PATH: &str = "/api/auth/oidc/callback";
 
-/// How long an unused authorization attempt stays valid.
-const PENDING_TTL_MS: i64 = 10 * 60 * 1000;
-
-fn err(status: StatusCode, msg: impl Into<String>) -> Response {
-    (status, Json(json!({ "error": msg.into() }))).into_response()
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 fn b64url(bytes: &[u8]) -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-/// Percent-encode for a query string.
-fn enc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
-
-// ── What is in flight ────────────────────────────────────────────────────────
-
-/// One authorization attempt: its PKCE verifier, the nonce the ID token must
-/// carry back, and where to land afterwards.
-struct Pending {
-    created_at: i64,
-    verifier: String,
-    nonce: String,
-    next: String,
-    /// A test run proves the configuration works without signing anybody in.
-    test: bool,
-    /// Hash of the value in the browser's `harness_oidc` cookie.
-    ///
-    /// **This is what ties the flow to a user agent.** Without it, a `state`
-    /// the attacker minted for their own identity would authenticate the
-    /// attacker's flow inside somebody else's browser, seating an
-    /// attacker-controlled session there — PKCE and `nonce` bind the token to
-    /// this server's flow, but neither binds the flow to a browser.
-    /// Hashed rather than stored, so this map never holds a live credential.
-    binding_hash: String,
-}
-
-/// In-process, like Linear's: the harness is one container, and the callback
-/// lands on the instance that issued the nonce. A restart mid-flow means
-/// clicking the button again.
-static PENDING: LazyLock<std::sync::Mutex<HashMap<String, Pending>>> =
-    LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
-
-fn random_token() -> String {
-    format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    )
-}
-
-/// Mint a `state` nonce, pruning expired attempts.
-fn issue_state(
-    verifier: String,
-    nonce: String,
-    next: String,
-    test: bool,
-    binding_hash: String,
-) -> String {
-    let state = random_token();
-    let now = now_ms();
-    if let Ok(mut map) = PENDING.lock() {
-        map.retain(|_, p| now - p.created_at < PENDING_TTL_MS);
-        map.insert(
-            state.clone(),
-            Pending {
-                created_at: now,
-                verifier,
-                nonce,
-                next,
-                test,
-                binding_hash,
-            },
-        );
-    }
-    state
-}
-
-/// Consume a `state` nonce. `None` if unknown, already used, or expired — all
-/// of which must fail the callback, because this is what authenticates it.
-fn take_state(state: &str) -> Option<Pending> {
-    let mut map = PENDING.lock().ok()?;
-    let pending = map.remove(state)?;
-    (now_ms() - pending.created_at < PENDING_TTL_MS).then_some(pending)
-}
-
-/// Carries the value that ties one authorization attempt to one browser.
-/// Scoped to the OIDC paths and short-lived: it exists only between `start` and
-/// `callback`.
-const BINDING_COOKIE: &str = "harness_oidc";
-
-fn binding_cookie(value: &str, secure: bool) -> String {
-    let max_age = PENDING_TTL_MS / 1000;
-    format!(
-        "{BINDING_COOKIE}={value}; Path=/api/auth/oidc; HttpOnly; SameSite=Lax; \
-         Max-Age={max_age}{}",
-        if secure { "; Secure" } else { "" }
-    )
-}
-
-fn clear_binding_cookie(secure: bool) -> String {
-    format!(
-        "{BINDING_COOKIE}=; Path=/api/auth/oidc; HttpOnly; SameSite=Lax; Max-Age=0{}",
-        if secure { "; Secure" } else { "" }
-    )
-}
-
-/// Read it back off the request.
-fn binding_from(headers: &axum::http::HeaderMap) -> Option<String> {
-    headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())?
-        .split(';')
-        .map(str::trim)
-        .find_map(|pair| pair.strip_prefix(&format!("{BINDING_COOKIE}=")))
-        .filter(|v| !v.is_empty())
-        .map(str::to_string)
-}
-
-fn hash(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
-}
-
-/// Where to send the browser after signing in.
-///
-/// **Only a same-origin path.** An absolute URL here would make the sign-in
-/// page a phishing hop: a link that authenticates against the real harness and
-/// then lands somewhere else entirely.
-fn safe_next(raw: Option<&str>) -> String {
-    let candidate = raw.unwrap_or("/").trim();
-
-    // Refusing only `//` is not enough, because the browser's parser is more
-    // forgiving than a prefix check:
-    //
-    //   * a backslash is equivalent to a forward slash in the relative states
-    //     of a special scheme, so `/\evil.example` parses as `//evil.example`;
-    //   * TAB, CR and LF are stripped *before* parsing, so `/<TAB>/evil.example`
-    //     collapses to the same thing.
-    //
-    // Both would satisfy "starts with one slash, not two". Reject the
-    // characters that make them possible rather than trying to out-guess the
-    // parser.
-    let sneaky = candidate
-        .bytes()
-        .any(|b| b == b'\\' || b < 0x21 || b == 0x7f);
-    if sneaky {
-        return "/".to_string();
-    }
-
-    // `//evil.example` is protocol-relative — a path by appearance and an
-    // absolute URL by behaviour.
-    if candidate.starts_with('/') && !candidate.starts_with("//") {
-        candidate.to_string()
-    } else {
-        "/".to_string()
-    }
 }
 
 // ── Configuration ────────────────────────────────────────────────────────────
@@ -419,7 +252,14 @@ async fn authorize_url(
     // The browser keeps this; the map keeps only its hash. Presenting it back
     // at the callback is what proves the same browser started the flow.
     let binding = random_token();
-    let state_nonce = issue_state(verifier, nonce.clone(), next, test, hash(&binding));
+    let state_nonce = issue_state(Attempt {
+        provider: Provider::Oidc,
+        verifier: Some(verifier),
+        nonce: Some(nonce.clone()),
+        next,
+        test,
+        binding_hash: hash(&binding),
+    });
     let cookie = binding_cookie(&binding, accounts::secure_cookies(state));
 
     let url = format!(
@@ -453,22 +293,10 @@ struct TokenResponse {
     id_token: String,
 }
 
-/// Send the browser back with an outcome. Relative `Location`: the browser is
-/// already on this origin.
-fn back(to: &str, status: &str, detail: Option<&str>) -> Response {
-    let sep = if to.contains('?') { '&' } else { '?' };
-    let mut location = format!("{to}{sep}sso={}", enc(status));
-    if let Some(d) = detail {
-        let short: String = d.chars().take(200).collect();
-        location.push_str(&format!("&sso_message={}", enc(&short)));
-    }
-    (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response()
-}
-
 /// `GET /api/auth/oidc/callback` — the provider's redirect.
 pub async fn callback(
     Extension(state): Extension<Arc<RunsState>>,
-    headers: axum::http::HeaderMap,
+    headers: HeaderMap,
     Query(q): Query<CallbackQuery>,
 ) -> Response {
     if let Some(e) = q.error.as_deref() {
@@ -479,7 +307,7 @@ pub async fn callback(
         return back("/login", "error", Some("callback missing code or state"));
     };
     // Single-use, and half of what authenticates this request.
-    let Some(pending) = take_state(state_nonce) else {
+    let Some(pending) = take_state(state_nonce, Provider::Oidc) else {
         return back(
             "/login",
             "error",
@@ -491,8 +319,7 @@ pub async fn callback(
     // Without it a `state` minted elsewhere would seat somebody else's session
     // here, which is login CSRF however carefully the token itself is checked.
     let secure = accounts::secure_cookies(&state);
-    let presented = binding_from(&headers).map(|v| hash(&v));
-    if presented.as_deref() != Some(pending.binding_hash.as_str()) {
+    if !binding_matches(&pending, &headers) {
         tracing::warn!("oidc: callback without the binding cookie that started the flow");
         return (
             [(header::SET_COOKIE, clear_binding_cookie(secure))],
@@ -559,7 +386,10 @@ async fn complete(
         ("redirect_uri", redirect.as_str()),
         ("client_id", cfg.client_id.as_str()),
         ("client_secret", cfg.client_secret.as_str()),
-        ("code_verifier", pending.verifier.as_str()),
+        (
+            "code_verifier",
+            pending.verifier.as_deref().unwrap_or_default(),
+        ),
     ];
     let resp = reqwest::Client::new()
         .post(&discovery.token_endpoint)
@@ -580,7 +410,11 @@ async fn complete(
         .await
         .map_err(|e| format!("the token response had no id_token: {e}"))?;
 
-    let claims = validate(&tokens.id_token, &discovery, &cfg, &pending.nonce).await?;
+    let expected_nonce = pending
+        .nonce
+        .as_deref()
+        .ok_or("this sign-in recorded no nonce to check the token against")?;
+    let claims = validate(&tokens.id_token, &discovery, &cfg, expected_nonce).await?;
 
     if pending.test {
         return Ok(None);
@@ -836,130 +670,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_post_sign_in_destination_stays_on_this_origin() {
-        // The whole point: a link that authenticates against the real harness
-        // and then lands somewhere else is a phishing hop.
-        for hostile in [
-            "https://evil.example/steal",
-            "http://evil.example",
-            // Protocol-relative: a path by appearance, an absolute URL by
-            // behaviour, and the one people forget.
-            "//evil.example/steal",
-            "///evil.example",
-            // A backslash is a forward slash to the browser's URL parser, so
-            // these are `//evil.example` by the time it matters.
-            "/\\evil.example",
-            "/\\/evil.example",
-            "\\\\evil.example",
-            // Stripped before parsing, collapsing to `//evil.example`.
-            "/\t/evil.example",
-            "/\r\n/evil.example",
-            "javascript:alert(1)",
-            "",
-            "   ",
-        ] {
-            assert_eq!(
-                safe_next(Some(hostile)),
-                "/",
-                "{hostile:?} should be refused"
-            );
-        }
-        assert_eq!(safe_next(None), "/");
-
-        // Ordinary destinations survive.
-        for ok in ["/", "/runs", "/settings/sso", "/runs/abc?tab=graph"] {
-            assert_eq!(safe_next(Some(ok)), ok, "{ok} should be kept");
-        }
-    }
-
-    #[test]
-    fn a_state_nonce_is_single_use_and_carries_the_attempt() {
-        let state = issue_state(
-            "verifier-1".into(),
-            "nonce-1".into(),
-            "/runs".into(),
-            false,
-            hash("b1"),
-        );
-        let other = issue_state(
-            "verifier-2".into(),
-            "nonce-2".into(),
-            "/".into(),
-            true,
-            hash("b2"),
-        );
-        assert_ne!(state, other, "each attempt gets its own");
-
-        let taken = take_state(&state).expect("live");
-        assert_eq!(taken.verifier, "verifier-1");
-        assert_eq!(taken.nonce, "nonce-1");
-        assert_eq!(taken.next, "/runs");
-        assert!(!taken.test);
-
-        // Replaying it must fail: this is what authenticates the callback.
-        assert!(take_state(&state).is_none());
-        assert!(take_state("never-issued").is_none());
-
-        assert!(take_state(&other).expect("live").test);
-    }
-
-    #[test]
-    fn an_attempt_is_bound_to_the_browser_that_started_it() {
-        // The property that stops login CSRF: a `state` alone is not enough,
-        // because the attacker can mint one. The callback also has to see the
-        // cookie handed out when the flow started.
-        let binding = random_token();
-        let state = issue_state("v".into(), "n".into(), "/".into(), false, hash(&binding));
-        let pending = take_state(&state).expect("live");
-
-        assert_eq!(hash(&binding), pending.binding_hash, "the right browser");
-        assert_ne!(
-            hash(&random_token()),
-            pending.binding_hash,
-            "somebody else's browser must not match"
-        );
-        // The map never holds the live value, only its hash.
-        assert_ne!(pending.binding_hash, binding);
-    }
-
-    #[test]
-    fn the_binding_cookie_is_read_back_and_scoped() {
-        let secure = binding_cookie("abc123", true);
-        assert!(secure.contains("harness_oidc=abc123"));
-        assert!(secure.contains("HttpOnly"), "{secure}");
-        assert!(secure.contains("SameSite=Lax"), "{secure}");
-        // Scoped to the flow, so it is not sent with every request.
-        assert!(secure.contains("Path=/api/auth/oidc"), "{secure}");
-        assert!(secure.contains("; Secure"), "{secure}");
-        assert!(!binding_cookie("abc123", false).contains("; Secure"));
-        assert!(clear_binding_cookie(true).contains("Max-Age=0"));
-
-        let mut headers = axum::http::HeaderMap::new();
-        assert_eq!(binding_from(&headers), None);
-        headers.insert(
-            axum::http::header::COOKIE,
-            "theme=dark; harness_oidc=abc123; harness_session=x"
-                .parse()
-                .unwrap(),
-        );
-        assert_eq!(binding_from(&headers).as_deref(), Some("abc123"));
-        // A cleared cookie carries no value, so it must not read as one.
-        headers.insert(axum::http::header::COOKIE, "harness_oidc=".parse().unwrap());
-        assert_eq!(binding_from(&headers), None);
-    }
-
-    #[test]
-    fn an_expired_attempt_is_refused() {
-        let state = issue_state("v".into(), "n".into(), "/".into(), false, hash("b"));
-        if let Ok(mut map) = PENDING.lock() {
-            if let Some(p) = map.get_mut(&state) {
-                p.created_at -= PENDING_TTL_MS + 1;
-            }
-        }
-        assert!(take_state(&state).is_none());
-    }
-
-    #[test]
     fn the_pkce_challenge_is_the_sha256_of_the_verifier() {
         // Known-answer from RFC 7636 appendix B, so this pins the encoding as
         // well as the hash — a base64 with padding would be quietly wrong.
@@ -971,29 +681,11 @@ mod tests {
     }
 
     #[test]
-    fn query_encoding_escapes_what_would_break_a_url() {
-        assert_eq!(enc("aZ09-_.~"), "aZ09-_.~");
-        assert_eq!(enc("openid email profile"), "openid%20email%20profile");
-        assert_eq!(
-            enc("https://h.example/api/auth/oidc/callback"),
-            "https%3A%2F%2Fh.example%2Fapi%2Fauth%2Foidc%2Fcallback"
-        );
-        // An `&` that survived would let a redirect_uri smuggle a parameter.
-        assert_eq!(enc("a&b=c"), "a%26b%3Dc");
-    }
-
-    #[test]
     fn allowed_domains_are_parsed_forgivingly() {
-        let fields = BTreeMap::from([
-            ("issuer".to_string(), "https://id.example".to_string()),
-            ("client_id".to_string(), "cid".to_string()),
-            ("client_secret".to_string(), "sec".to_string()),
-            (
-                "allowed_domains".to_string(),
-                " Example.com, @other.test ,,".to_string(),
-            ),
-        ]);
-        // Mirrors what `config` does, without needing a store.
+        let fields = BTreeMap::from([(
+            "allowed_domains".to_string(),
+            " Example.com, @other.test ,,".to_string(),
+        )]);
         let parsed: Vec<String> = field(&fields, "allowed_domains")
             .map(|d| {
                 d.split(',')

@@ -132,6 +132,9 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             | "/api/auth/oidc/callback"
             | "/api/auth/oidc/start"
             | "/api/auth/oidc/status"
+            | "/api/auth/github/callback"
+            | "/api/auth/github/start"
+            | "/api/auth/github/status"
             // Linear's agent-session webhook (delegation / @-mention). Also a
             // third party we cannot hand a bearer token; authenticated by the
             // `Linear-Signature` HMAC over the raw body (see `linear_agent`).
