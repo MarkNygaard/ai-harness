@@ -103,9 +103,13 @@ export function useStartSso() {
 // A separate provider, not a variant of the OIDC one: no ID token, and
 // organisation membership rather than an email domain is the allowlist.
 
+/** Where the allowlist comes from. Never "anybody with a GitHub account". */
+export type GithubAudience = "org" | "existing";
+
 export interface GithubSsoConfig {
   client_id: string | null;
   client_secret_set: boolean;
+  audience: GithubAudience;
   org: string | null;
   team: string | null;
   enabled: boolean;
@@ -127,6 +131,7 @@ export type GithubSsoInput = Partial<{
   client_id: string;
   /** Omit to leave the stored one alone. */
   client_secret: string;
+  audience: GithubAudience;
   org: string;
   team: string;
 }>;

@@ -8,7 +8,7 @@ import {
   useSaveGithubSso,
   useTestGithubSso,
 } from "@/lib/sso";
-import type { GithubSsoInput } from "@/lib/sso";
+import type { GithubAudience, GithubSsoInput } from "@/lib/sso";
 
 const inputCls =
   "h-8 w-full rounded-md border border-input bg-transparent px-2 text-[13px] outline-none focus:ring-2 focus:ring-ring";
@@ -35,12 +35,31 @@ function Field({
   );
 }
 
+/** The two ways to bound who may sign in. There is deliberately no third. */
+const AUDIENCES: {
+  value: GithubAudience;
+  title: string;
+  help: string;
+}[] = [
+  {
+    value: "org",
+    title: "Members of an organisation",
+    help: "Anyone in the GitHub organisation below, optionally narrowed to one team. First sign-in creates their account.",
+  },
+  {
+    value: "existing",
+    title: "People who already have an account here",
+    help: "Matched on the verified email GitHub holds for them. No account is ever created, so the allowlist is exactly who you have invited.",
+  },
+];
+
 /**
  * GitHub sign-in.
  *
- * An organisation is required rather than optional, unlike the OIDC provider's
- * email-domain list: a GitHub account is free and anyone can have one, so
- * without an organisation the allowlist would be everybody.
+ * Unlike the OIDC provider's email-domain list, which may be left blank for a
+ * single-tenant issuer, this always needs a boundary: a GitHub account is free
+ * and anyone can have one, so the provider itself is not one. Which boundary
+ * is the choice below.
  */
 export function GithubSso() {
   const config = useGithubSsoConfig(true);
@@ -56,6 +75,7 @@ export function GithubSso() {
     if (!data || seeded) return;
     setForm({
       client_id: data.client_id ?? "",
+      audience: data.audience ?? "org",
       org: data.org ?? "",
       team: data.team ?? "",
     });
@@ -67,8 +87,13 @@ export function GithubSso() {
     value: GithubSsoInput[K],
   ) => setForm((f) => ({ ...f, [key]: value }));
 
+  const audience: GithubAudience = form.audience ?? data?.audience ?? "org";
+  // Existing-accounts mode carries its allowlist in the user table, so there is
+  // nothing further to fill in.
   const ready =
-    !!data?.client_id && data?.client_secret_set && !!data?.org?.trim();
+    !!data?.client_id &&
+    data?.client_secret_set &&
+    (data?.audience === "existing" || !!data?.org?.trim());
 
   return (
     <section className="flex flex-col gap-2">
@@ -154,30 +179,60 @@ export function GithubSso() {
               </Field>
             </div>
 
-            <div className="grid gap-3 sm:grid-cols-2">
-              <Field
-                label="Organisation"
-                help="Required. Members of this org may sign in — a GitHub account alone is not enough, since anyone can have one."
-              >
-                <input
-                  className={inputCls}
-                  value={form.org ?? ""}
-                  onChange={(e) => set("org", e.target.value)}
-                  placeholder="your-org"
-                />
-              </Field>
-              <Field
-                label="Team (optional)"
-                help="Narrow it further, by team slug."
-              >
-                <input
-                  className={inputCls}
-                  value={form.team ?? ""}
-                  onChange={(e) => set("team", e.target.value)}
-                  placeholder="engineering"
-                />
-              </Field>
-            </div>
+            <fieldset className="flex flex-col gap-1.5">
+              <legend className="mb-1 text-[11px] font-medium text-muted-foreground">
+                Who may sign in
+              </legend>
+              {AUDIENCES.map((option) => (
+                <label
+                  key={option.value}
+                  className="flex cursor-pointer items-start gap-2"
+                >
+                  <input
+                    type="radio"
+                    name="github-audience"
+                    className="mt-0.5 size-3.5 shrink-0"
+                    checked={audience === option.value}
+                    onChange={() => set("audience", option.value)}
+                  />
+                  <span className="flex flex-col gap-0.5">
+                    <span className="text-[13px] leading-tight">
+                      {option.title}
+                    </span>
+                    <span className="text-[10px] leading-snug text-muted-foreground">
+                      {option.help}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+
+            {audience === "org" && (
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Field
+                  label="Organisation"
+                  help="Required for this mode — a GitHub account alone is not enough, since anyone can have one."
+                >
+                  <input
+                    className={inputCls}
+                    value={form.org ?? ""}
+                    onChange={(e) => set("org", e.target.value)}
+                    placeholder="your-org"
+                  />
+                </Field>
+                <Field
+                  label="Team (optional)"
+                  help="Narrow it further, by team slug."
+                >
+                  <input
+                    className={inputCls}
+                    value={form.team ?? ""}
+                    onChange={(e) => set("team", e.target.value)}
+                    placeholder="engineering"
+                  />
+                </Field>
+              </div>
+            )}
 
             <div className="flex items-center gap-2 pt-0.5">
               <Button type="submit" size="sm" disabled={save.isPending}>
@@ -191,7 +246,7 @@ export function GithubSso() {
                 title={
                   ready
                     ? "Sign in once to prove it works — that is what switches it on"
-                    : "Save a client ID, secret and organisation first"
+                    : "Save a client ID and secret first, and an organisation if you chose that mode"
                 }
                 onClick={() => test.mutate()}
               >
