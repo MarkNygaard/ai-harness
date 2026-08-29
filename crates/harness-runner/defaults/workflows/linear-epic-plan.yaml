@@ -1,0 +1,241 @@
+name: linear-epic-plan
+description: |
+  Decompose a **Linear epic** into ordered sub-issues the harness can build one
+  at a time.
+
+  Triggered from a Linear binding: move an epic into the column this workflow is
+  bound to and it reads the epic, plans the work, and files each piece as a
+  sub-issue under it — in order, each with acceptance criteria the supervisor
+  can later grade against.
+
+  **The board is the state machine.** Nothing about the epic is stored here: the
+  sub-issues, their order and their columns *are* the plan, and the ledger
+  comment on the epic is the record of what happened. That is what makes the
+  whole thing inspectable — and editable — in Linear rather than in a database
+  nobody can see.
+
+  **It will not decompose an epic twice.** An epic that already has sub-issues
+  is left alone, because re-planning would file a second copy of every piece
+  beside the ones already being built.
+
+  Sub-issues are filed by the harness app (`harness linear`), so they are
+  authored by the application rather than by whoever's key was to hand.
+
+  Set the project env var `EPIC_READY_STATE` to the Linear state id the build
+  binding watches and the first sub-issue is moved there, so work starts by
+  itself. Without it every piece is filed in the team's default state and a
+  human starts the first one — which is the Phase 1 default, and safer while
+  you are still deciding whether the plans are any good.
+
+  NOT for: building a sub-issue (that is `idea-to-pr`, via its own binding), or
+  reviewing what was built (that is the supervisor, which does not exist yet).
+
+provider: claude
+model: opus
+
+nodes:
+  # ── Refuse early, and refuse loudly ──────────────────────────────────────
+  #
+  # Both failures here are cheap to hit and expensive to discover later: a run
+  # triggered from outside Linear has no epic to decompose, and an epic that
+  # already has children would end up with two of everything.
+  - id: guard
+    category: setup
+    bash: |
+      set -uo pipefail
+      issue="$ISSUE_ID"
+      project="$PROJECT"
+      mkdir -p "$ARTIFACTS_DIR"
+
+      if [ -z "$issue" ]; then
+        echo "No Linear issue behind this run — linear-epic-plan is triggered by moving an epic into its bound column, not from the UI." >&2
+        exit 1
+      fi
+      if [ -z "$project" ]; then
+        echo "This run has no project, so its Linear workspace cannot be resolved." >&2
+        exit 1
+      fi
+
+      if ! harness linear children --project "$project" --issue "$issue" \
+            > "$ARTIFACTS_DIR/existing.json" 2> "$ARTIFACTS_DIR/children.err"; then
+        echo "Could not read the epic's sub-issues:" >&2
+        cat "$ARTIFACTS_DIR/children.err" >&2
+        exit 1
+      fi
+
+      existing="$(jq 'length' < "$ARTIFACTS_DIR/existing.json")"
+      if [ "$existing" -gt 0 ]; then
+        echo "This epic already has $existing sub-issues — refusing to plan it again." >&2
+        echo "Delete them first if you want a fresh decomposition." >&2
+        jq -r '.[] | "  \(.identifier)  \(.state)  \(.title)"' < "$ARTIFACTS_DIR/existing.json" >&2
+        exit 1
+      fi
+      echo "epic=$issue project=$project — no sub-issues yet, planning"
+
+  # ── The plan ─────────────────────────────────────────────────────────────
+  - id: plan
+    category: planning
+    provider: claude
+    model: opus
+    effort: max
+    context: fresh
+    depends_on: [guard]
+    artifact: epic-plan.json
+    prompt: |
+      Decompose this epic into an ordered sequence of sub-issues, each one a
+      single pull request's worth of work.
+
+      The epic:
+
+      $ARGUMENTS
+
+      Read the repository before you plan. A decomposition that ignores how the
+      code is actually laid out produces pieces that cannot be built in the
+      order you chose.
+
+      **Order is the contract.** Each piece is built and merged before the next
+      one starts, so piece N may rely on everything in 1..N-1 and nothing later.
+      If two pieces could go in either order, pick one — there is no parallelism
+      here to exploit.
+
+      **Each piece needs acceptance criteria that a reviewer could check without
+      you.** "Works correctly" is not one. Name the behaviour, the file or
+      surface it lives on, and what would demonstrate it — a test that passes, a
+      command whose output changes, a page that renders. The supervisor grades
+      the merged result against exactly these words, so vagueness here becomes a
+      wrong verdict later.
+
+      Sizing: prefer 3–8 pieces. One piece is not a decomposition; more than
+      about a dozen usually means the epic is really several epics, and it is
+      more useful to say so than to fan out thirty issues.
+
+      Write the plan to `$ARTIFACTS_DIR/epic-plan.json` as an array, in build
+      order:
+
+      ```json
+      [
+        {
+          "title": "Short imperative title, as it will read on the board",
+          "body": "Markdown. What to build and why, then an `## Acceptance` section listing the criteria."
+        }
+      ]
+      ```
+
+      Write nothing else to that file — a bash step reads it directly, and a
+      stray fence or preamble makes it unparseable.
+
+      Then emit the JSON verdict described by the output schema.
+    output_format:
+      type: object
+      properties:
+        piece_count:
+          type: integer
+          description: "How many sub-issues the plan contains."
+        summary:
+          type: string
+          description: "2-4 sentences: the shape of the decomposition and why this order."
+        risks:
+          type: string
+          description: "What could make this ordering wrong, or empty if nothing."
+      required: [piece_count, summary]
+
+  # ── File them ────────────────────────────────────────────────────────────
+  #
+  # The plan is read from the artifact rather than from `$plan.output`: a
+  # substituted JSON blob inside a shell script is an escaping bug waiting for
+  # the first apostrophe in an acceptance criterion.
+  - id: file-sub-issues
+    category: delivery
+    depends_on: [plan]
+    bash: |
+      set -uo pipefail
+      issue="$ISSUE_ID"
+      project="$PROJECT"
+      plan="$ARTIFACTS_DIR/epic-plan.json"
+
+      if [ ! -s "$plan" ]; then
+        echo "The planning step wrote no $plan — nothing to file." >&2
+        exit 1
+      fi
+      if ! jq -e 'type == "array" and length > 0' "$plan" > /dev/null; then
+        echo "$plan is not a non-empty JSON array:" >&2
+        head -c 2000 "$plan" >&2
+        exit 1
+      fi
+
+      count="$(jq 'length' "$plan")"
+      echo "filing $count sub-issues under $issue"
+      : > "$ARTIFACTS_DIR/filed.txt"
+
+      # `jq -r` per index rather than a `while read` over the whole array: a
+      # body is multi-line markdown, and streaming it through the loop variable
+      # would fold it onto one line.
+      i=0
+      while [ "$i" -lt "$count" ]; do
+        title="$(jq -r --argjson i "$i" '.[$i].title' "$plan")"
+        jq -r --argjson i "$i" '.[$i].body' "$plan" > "$ARTIFACTS_DIR/body-$i.md"
+
+        if [ -z "$title" ] || [ "$title" = "null" ]; then
+          echo "piece $i has no title — stopping rather than filing an untitled issue." >&2
+          exit 1
+        fi
+
+        # Stop at the first failure. A half-filed epic is recoverable by hand;
+        # one that kept going past an error is a guessing game about which
+        # pieces exist.
+        if ! out="$(harness linear create-sub-issue \
+              --project "$project" \
+              --parent "$issue" \
+              --title "$title" \
+              --description-file "$ARTIFACTS_DIR/body-$i.md" 2>&1)"; then
+          echo "failed on piece $((i + 1)) of $count ($title):" >&2
+          echo "$out" >&2
+          echo "Sub-issues filed before this one are listed in filed.txt and are real." >&2
+          exit 1
+        fi
+        echo "$out" | tee -a "$ARTIFACTS_DIR/filed.txt"
+        i=$((i + 1))
+      done
+
+      # Start the first piece, when the project says where "started" is.
+      ready="${EPIC_READY_STATE:-}"
+      first="$(head -n 1 "$ARTIFACTS_DIR/filed.txt" | awk '{print $1}')"
+      if [ -n "$ready" ]; then
+        # The identifier is what was printed; the mutation needs the internal
+        # id, so re-read the children and match on it.
+        first_id="$(harness linear children --project "$project" --issue "$issue" \
+          | jq -r --arg ident "$first" '.[] | select(.identifier == $ident) | .id')"
+        if [ -n "$first_id" ]; then
+          harness linear move-state --project "$project" --issue "$first_id" --state "$ready" \
+            && echo "moved $first into EPIC_READY_STATE"
+        else
+          echo "could not find $first among the epic's sub-issues — leaving it where it is" >&2
+        fi
+      else
+        echo "EPIC_READY_STATE is not set on this project — $first is filed but not started."
+      fi
+
+  # ── Say what happened, on the epic ───────────────────────────────────────
+  - id: ledger
+    category: delivery
+    depends_on: [file-sub-issues]
+    bash: |
+      set -uo pipefail
+      issue="$ISSUE_ID"
+      project="$PROJECT"
+      ledger="$ARTIFACTS_DIR/ledger.md"
+
+      {
+        echo "**Planned into $(wc -l < "$ARTIFACTS_DIR/filed.txt" | tr -d ' ') sub-issues.** They build in this order:"
+        echo
+        awk '{ print "  " NR ". " $0 }' "$ARTIFACTS_DIR/filed.txt"
+        echo
+        echo "$plan.output.summary"
+      } > "$ledger"
+
+      # The ledger is a convenience, not the record — the sub-issues are. A
+      # failure to comment must not fail a run whose real work already landed.
+      if ! harness linear comment --project "$project" --issue "$issue" --body-file "$ledger"; then
+        echo "could not write the ledger comment; the sub-issues are filed regardless" >&2
+      fi
+      cat "$ledger"
