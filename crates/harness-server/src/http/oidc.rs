@@ -89,6 +89,15 @@ struct Pending {
     next: String,
     /// A test run proves the configuration works without signing anybody in.
     test: bool,
+    /// Hash of the value in the browser's `harness_oidc` cookie.
+    ///
+    /// **This is what ties the flow to a user agent.** Without it, a `state`
+    /// the attacker minted for their own identity would authenticate the
+    /// attacker's flow inside somebody else's browser, seating an
+    /// attacker-controlled session there — PKCE and `nonce` bind the token to
+    /// this server's flow, but neither binds the flow to a browser.
+    /// Hashed rather than stored, so this map never holds a live credential.
+    binding_hash: String,
 }
 
 /// In-process, like Linear's: the harness is one container, and the callback
@@ -106,7 +115,13 @@ fn random_token() -> String {
 }
 
 /// Mint a `state` nonce, pruning expired attempts.
-fn issue_state(verifier: String, nonce: String, next: String, test: bool) -> String {
+fn issue_state(
+    verifier: String,
+    nonce: String,
+    next: String,
+    test: bool,
+    binding_hash: String,
+) -> String {
     let state = random_token();
     let now = now_ms();
     if let Ok(mut map) = PENDING.lock() {
@@ -119,6 +134,7 @@ fn issue_state(verifier: String, nonce: String, next: String, test: bool) -> Str
                 nonce,
                 next,
                 test,
+                binding_hash,
             },
         );
     }
@@ -133,6 +149,43 @@ fn take_state(state: &str) -> Option<Pending> {
     (now_ms() - pending.created_at < PENDING_TTL_MS).then_some(pending)
 }
 
+/// Carries the value that ties one authorization attempt to one browser.
+/// Scoped to the OIDC paths and short-lived: it exists only between `start` and
+/// `callback`.
+const BINDING_COOKIE: &str = "harness_oidc";
+
+fn binding_cookie(value: &str, secure: bool) -> String {
+    let max_age = PENDING_TTL_MS / 1000;
+    format!(
+        "{BINDING_COOKIE}={value}; Path=/api/auth/oidc; HttpOnly; SameSite=Lax; \
+         Max-Age={max_age}{}",
+        if secure { "; Secure" } else { "" }
+    )
+}
+
+fn clear_binding_cookie(secure: bool) -> String {
+    format!(
+        "{BINDING_COOKIE}=; Path=/api/auth/oidc; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        if secure { "; Secure" } else { "" }
+    )
+}
+
+/// Read it back off the request.
+fn binding_from(headers: &axum::http::HeaderMap) -> Option<String> {
+    headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|v| v.to_str().ok())?
+        .split(';')
+        .map(str::trim)
+        .find_map(|pair| pair.strip_prefix(&format!("{BINDING_COOKIE}=")))
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
+fn hash(value: &str) -> String {
+    format!("{:x}", Sha256::digest(value.as_bytes()))
+}
+
 /// Where to send the browser after signing in.
 ///
 /// **Only a same-origin path.** An absolute URL here would make the sign-in
@@ -140,6 +193,25 @@ fn take_state(state: &str) -> Option<Pending> {
 /// then lands somewhere else entirely.
 fn safe_next(raw: Option<&str>) -> String {
     let candidate = raw.unwrap_or("/").trim();
+
+    // Refusing only `//` is not enough, because the browser's parser is more
+    // forgiving than a prefix check:
+    //
+    //   * a backslash is equivalent to a forward slash in the relative states
+    //     of a special scheme, so `/\evil.example` parses as `//evil.example`;
+    //   * TAB, CR and LF are stripped *before* parsing, so `/<TAB>/evil.example`
+    //     collapses to the same thing.
+    //
+    // Both would satisfy "starts with one slash, not two". Reject the
+    // characters that make them possible rather than trying to out-guess the
+    // parser.
+    let sneaky = candidate
+        .bytes()
+        .any(|b| b == b'\\' || b < 0x21 || b == 0x7f);
+    if sneaky {
+        return "/".to_string();
+    }
+
     // `//evil.example` is protocol-relative — a path by appearance and an
     // absolute URL by behaviour.
     if candidate.starts_with('/') && !candidate.starts_with("//") {
@@ -313,13 +385,21 @@ pub async fn start(
     Query(q): Query<StartQuery>,
 ) -> Response {
     match authorize_url(&state, safe_next(q.next.as_deref()), false).await {
-        Ok(url) => Json(json!({ "url": url })).into_response(),
+        // The cookie rides along on the same response the sign-in page is
+        // already reading, so binding the flow costs nothing in the UI.
+        Ok((url, cookie)) => {
+            ([(header::SET_COOKIE, cookie)], Json(json!({ "url": url }))).into_response()
+        }
         Err(e) => err(StatusCode::PRECONDITION_FAILED, e),
     }
 }
 
 /// Build the authorization URL and record what the callback will need.
-async fn authorize_url(state: &Arc<RunsState>, next: String, test: bool) -> Result<String, String> {
+async fn authorize_url(
+    state: &Arc<RunsState>,
+    next: String,
+    test: bool,
+) -> Result<(String, String), String> {
     let store = state.cred_store().await?;
     let cfg = config(store).await.ok_or("sign-in is not configured")?;
     // A test may run before the provider is armed; a real sign-in may not.
@@ -336,9 +416,13 @@ async fn authorize_url(state: &Arc<RunsState>, next: String, test: bool) -> Resu
     // Bound into the ID token, and checked on the way back — this is what stops
     // a token minted for a different sign-in being replayed into ours.
     let nonce = random_token();
-    let state_nonce = issue_state(verifier, nonce.clone(), next, test);
+    // The browser keeps this; the map keeps only its hash. Presenting it back
+    // at the callback is what proves the same browser started the flow.
+    let binding = random_token();
+    let state_nonce = issue_state(verifier, nonce.clone(), next, test, hash(&binding));
+    let cookie = binding_cookie(&binding, accounts::secure_cookies(state));
 
-    Ok(format!(
+    let url = format!(
         "{}?response_type=code&client_id={}&redirect_uri={}&scope={}&state={}&nonce={}\
          &code_challenge={}&code_challenge_method=S256",
         discovery.authorization_endpoint,
@@ -348,7 +432,8 @@ async fn authorize_url(state: &Arc<RunsState>, next: String, test: bool) -> Resu
         enc(&state_nonce),
         enc(&nonce),
         enc(&challenge),
-    ))
+    );
+    Ok((url, cookie))
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,6 +468,7 @@ fn back(to: &str, status: &str, detail: Option<&str>) -> Response {
 /// `GET /api/auth/oidc/callback` — the provider's redirect.
 pub async fn callback(
     Extension(state): Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     Query(q): Query<CallbackQuery>,
 ) -> Response {
     if let Some(e) = q.error.as_deref() {
@@ -392,7 +478,7 @@ pub async fn callback(
     let (Some(code), Some(state_nonce)) = (q.code.as_deref(), q.state.as_deref()) else {
         return back("/login", "error", Some("callback missing code or state"));
     };
-    // Single-use, and the only thing authenticating this request.
+    // Single-use, and half of what authenticates this request.
     let Some(pending) = take_state(state_nonce) else {
         return back(
             "/login",
@@ -401,9 +487,34 @@ pub async fn callback(
         );
     };
 
+    // The other half: this browser must be the one that started the flow.
+    // Without it a `state` minted elsewhere would seat somebody else's session
+    // here, which is login CSRF however carefully the token itself is checked.
+    let secure = accounts::secure_cookies(&state);
+    let presented = binding_from(&headers).map(|v| hash(&v));
+    if presented.as_deref() != Some(pending.binding_hash.as_str()) {
+        tracing::warn!("oidc: callback without the binding cookie that started the flow");
+        return (
+            [(header::SET_COOKIE, clear_binding_cookie(secure))],
+            back(
+                if pending.test {
+                    "/settings/sso"
+                } else {
+                    "/login"
+                },
+                "error",
+                Some("that sign-in did not start in this browser — try again here"),
+            ),
+        )
+            .into_response();
+    }
+
     match complete(&state, code, &pending).await {
         Ok(Some(cookie)) => (
-            [(header::SET_COOKIE, cookie)],
+            [
+                (header::SET_COOKIE, cookie),
+                (header::SET_COOKIE, clear_binding_cookie(secure)),
+            ],
             back(&pending.next, "ok", None),
         )
             .into_response(),
@@ -701,7 +812,9 @@ pub async fn configure(
 /// right" and "this works".
 pub async fn test_sso(_: AdminOnly, Extension(state): Extension<Arc<RunsState>>) -> Response {
     match authorize_url(&state, "/settings/sso".to_string(), true).await {
-        Ok(url) => Json(json!({ "url": url })).into_response(),
+        Ok((url, cookie)) => {
+            ([(header::SET_COOKIE, cookie)], Json(json!({ "url": url }))).into_response()
+        }
         Err(e) => err(StatusCode::PRECONDITION_FAILED, e),
     }
 }
@@ -733,6 +846,14 @@ mod tests {
             // behaviour, and the one people forget.
             "//evil.example/steal",
             "///evil.example",
+            // A backslash is a forward slash to the browser's URL parser, so
+            // these are `//evil.example` by the time it matters.
+            "/\\evil.example",
+            "/\\/evil.example",
+            "\\\\evil.example",
+            // Stripped before parsing, collapsing to `//evil.example`.
+            "/\t/evil.example",
+            "/\r\n/evil.example",
             "javascript:alert(1)",
             "",
             "   ",
@@ -753,8 +874,20 @@ mod tests {
 
     #[test]
     fn a_state_nonce_is_single_use_and_carries_the_attempt() {
-        let state = issue_state("verifier-1".into(), "nonce-1".into(), "/runs".into(), false);
-        let other = issue_state("verifier-2".into(), "nonce-2".into(), "/".into(), true);
+        let state = issue_state(
+            "verifier-1".into(),
+            "nonce-1".into(),
+            "/runs".into(),
+            false,
+            hash("b1"),
+        );
+        let other = issue_state(
+            "verifier-2".into(),
+            "nonce-2".into(),
+            "/".into(),
+            true,
+            hash("b2"),
+        );
         assert_ne!(state, other, "each attempt gets its own");
 
         let taken = take_state(&state).expect("live");
@@ -771,8 +904,53 @@ mod tests {
     }
 
     #[test]
+    fn an_attempt_is_bound_to_the_browser_that_started_it() {
+        // The property that stops login CSRF: a `state` alone is not enough,
+        // because the attacker can mint one. The callback also has to see the
+        // cookie handed out when the flow started.
+        let binding = random_token();
+        let state = issue_state("v".into(), "n".into(), "/".into(), false, hash(&binding));
+        let pending = take_state(&state).expect("live");
+
+        assert_eq!(hash(&binding), pending.binding_hash, "the right browser");
+        assert_ne!(
+            hash(&random_token()),
+            pending.binding_hash,
+            "somebody else's browser must not match"
+        );
+        // The map never holds the live value, only its hash.
+        assert_ne!(pending.binding_hash, binding);
+    }
+
+    #[test]
+    fn the_binding_cookie_is_read_back_and_scoped() {
+        let secure = binding_cookie("abc123", true);
+        assert!(secure.contains("harness_oidc=abc123"));
+        assert!(secure.contains("HttpOnly"), "{secure}");
+        assert!(secure.contains("SameSite=Lax"), "{secure}");
+        // Scoped to the flow, so it is not sent with every request.
+        assert!(secure.contains("Path=/api/auth/oidc"), "{secure}");
+        assert!(secure.contains("; Secure"), "{secure}");
+        assert!(!binding_cookie("abc123", false).contains("; Secure"));
+        assert!(clear_binding_cookie(true).contains("Max-Age=0"));
+
+        let mut headers = axum::http::HeaderMap::new();
+        assert_eq!(binding_from(&headers), None);
+        headers.insert(
+            axum::http::header::COOKIE,
+            "theme=dark; harness_oidc=abc123; harness_session=x"
+                .parse()
+                .unwrap(),
+        );
+        assert_eq!(binding_from(&headers).as_deref(), Some("abc123"));
+        // A cleared cookie carries no value, so it must not read as one.
+        headers.insert(axum::http::header::COOKIE, "harness_oidc=".parse().unwrap());
+        assert_eq!(binding_from(&headers), None);
+    }
+
+    #[test]
     fn an_expired_attempt_is_refused() {
-        let state = issue_state("v".into(), "n".into(), "/".into(), false);
+        let state = issue_state("v".into(), "n".into(), "/".into(), false, hash("b"));
         if let Ok(mut map) = PENDING.lock() {
             if let Some(p) = map.get_mut(&state) {
                 p.created_at -= PENDING_TTL_MS + 1;
