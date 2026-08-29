@@ -15,7 +15,6 @@ import { useHiddenNav } from "@/lib/nav-prefs";
 import { useRuns } from "@/lib/runs";
 import { useWorkflowList } from "@/lib/authoring";
 import { AccountMenu } from "@/components/AccountMenu";
-import { ClaudeCodeVersion } from "@/components/ClaudeCodeVersion";
 import {
   Sidebar,
   SidebarContent,
@@ -142,7 +141,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       </SidebarContent>
       <SidebarFooter>
         <AccountMenu />
-        <ClaudeCodeVersion />
       </SidebarFooter>
     </Sidebar>
   );

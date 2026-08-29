@@ -146,10 +146,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/users/{id}/disabled", put(users_routes::set_disabled))
         .route("/api/users/{id}", delete(users_routes::delete_user))
         // ── System: agent-CLI version + in-app update ───────────────────────
-        .route(
-            "/api/system/claude-version",
-            get(system_routes::claude_version),
-        )
+        .route("/api/system/providers", get(system_routes::providers))
         .route(
             "/api/system/claude-update",
             post(system_routes::claude_update),

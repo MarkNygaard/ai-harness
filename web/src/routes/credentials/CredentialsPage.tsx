@@ -1,10 +1,20 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Check, ExternalLink, KeyRound, Loader2, Trash2 } from "lucide-react";
+import {
+  ArrowUpCircle,
+  Check,
+  ExternalLink,
+  KeyRound,
+  Loader2,
+  Trash2,
+} from "lucide-react";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ProviderMark } from "@/components/providers/ProviderMark";
+import { describeProvider } from "@/lib/provider-status";
+import { useProviderHealth, useUpdateClaudeCode } from "@/lib/system";
 import {
   startKimiConnect,
   pollKimiConnect,
@@ -179,6 +189,7 @@ export function CredentialsPage() {
           help="The CLIs that execute workflow nodes. Each node picks its provider and model."
         >
           <ProviderSummary
+            provider="claude"
             label={providerDef("claude").label}
             help={providerDef("claude").help}
             configured={configured.get("claude") ?? false}
@@ -190,6 +201,7 @@ export function CredentialsPage() {
             />
           </ProviderSummary>
           <ProviderSummary
+            provider="codex"
             label="ChatGPT (Codex)"
             help="Connect your ChatGPT/Codex subscription for gpt-5.5 review steps."
             configured={configured.get("codex") ?? false}
@@ -198,6 +210,7 @@ export function CredentialsPage() {
             <CodexConnectCard configured={configured.get("codex") ?? false} />
           </ProviderSummary>
           <ProviderSummary
+            provider="pi"
             label="Kimi-for-Coding"
             help="Connect your Kimi subscription for `provider: pi` nodes."
             configured={configured.get("pi") ?? false}
@@ -206,6 +219,7 @@ export function CredentialsPage() {
             <KimiConnectCard configured={configured.get("pi") ?? false} />
           </ProviderSummary>
           <ProviderSummary
+            provider="cursor"
             label={providerDef("cursor").label}
             help={providerDef("cursor").help}
             configured={configured.get("cursor") ?? false}
@@ -224,6 +238,7 @@ export function CredentialsPage() {
           help="Where work comes from and where results land: the repos runs operate on, and the issue tracker that triggers them."
         >
           <ProviderSummary
+            provider="github"
             label={providerDef("github").label}
             help={providerDef("github").help}
             configured={configured.get("github") ?? false}
@@ -234,6 +249,7 @@ export function CredentialsPage() {
             />
           </ProviderSummary>
           <ProviderSummary
+            provider="linear"
             label="Linear"
             help="Connect each Linear account as an app so the harness's comments and status changes are authored by the app, not by a person. Projects pick which account their issues come from."
             configured={configured.get("linear") ?? false}
@@ -329,16 +345,17 @@ function Section({
         </h2>
         <p className="mt-0.5 text-xs text-muted-foreground">{help}</p>
       </div>
-      {children}
+      {/* One card per group rather than per provider: the rows read as a list
+          you scan down, which a stack of separate boxes does not. */}
+      <Card>
+        <CardContent className="flex flex-col divide-y px-4 py-1">
+          {children}
+        </CardContent>
+      </Card>
     </section>
   );
 }
 
-/**
- * Compact provider row: name + connection status + a button that opens a dialog
- * with the full settings (credential fields / connect flow + subscription cost).
- * Keeps the page scannable — details live behind "Configure"/"Connect".
- */
 /**
  * A non-secret per-credential toggle: show or hide this provider's usage card on
  * the dashboard. Saves immediately (its own mutation, separate from the secret
@@ -368,13 +385,26 @@ function UsageCardToggle({ provider }: { provider: string }) {
   );
 }
 
+/**
+ * One provider, at a glance: its mark, whether it can actually run, and a way in.
+ *
+ * The status line underneath is the point. A credential and a CLI are separate
+ * things that can each be missing, and "connected" alone cannot tell you which
+ * — so the row states it in words, and the dot on the mark only repeats it.
+ *
+ * Everything else stays behind "Configure": the page is a list to scan, not a
+ * form to fill.
+ */
 function ProviderSummary({
+  provider,
   label,
   help,
   configured,
   usageCardProvider,
   children,
 }: {
+  /** Credential-store key — picks the brand mark and the CLI health entry. */
+  provider: string;
   label: string;
   help?: string;
   configured: boolean;
@@ -382,42 +412,99 @@ function ProviderSummary({
   usageCardProvider?: string;
   children: React.ReactNode;
 }) {
+  const healthQuery = useProviderHealth();
+  const health = healthQuery.data?.find((h) => h.provider === provider);
+  const { status, detail } = describeProvider(configured, health);
+
   return (
-    <Card>
-      <CardContent className="flex items-center justify-between gap-3 py-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="truncate text-sm font-medium">{label}</span>
-          {configured ? (
-            <Badge variant="success">
-              <Check className="h-3 w-3" /> connected
-            </Badge>
-          ) : (
-            <Badge variant="outline">not set</Badge>
+    <div className="flex flex-col gap-1 py-3 first:pt-1 last:pb-1">
+      <div className="flex items-center gap-2">
+        <ProviderMark provider={provider} status={status} />
+        <span className="truncate text-sm font-medium">{label}</span>
+        {health?.version && (
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
+            v{health.version}
+          </span>
+        )}
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {health?.update_available && (
+            <ClaudeUpdateButton to={health.latest} />
           )}
+          <Dialog>
+            <DialogTrigger
+              render={
+                <Button
+                  variant={configured ? "outline" : "default"}
+                  size="sm"
+                />
+              }
+            >
+              {configured ? "Configure" : "Connect"}
+            </DialogTrigger>
+            <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+              {/* The settings card carries its own title/help; keep an a11y title
+                  without visually duplicating it. */}
+              <DialogHeader className="sr-only">
+                <DialogTitle>{label}</DialogTitle>
+                {help && <DialogDescription>{help}</DialogDescription>}
+              </DialogHeader>
+              {children}
+              {usageCardProvider && (
+                <UsageCardToggle provider={usageCardProvider} />
+              )}
+            </DialogContent>
+          </Dialog>
         </div>
-        <Dialog>
-          <DialogTrigger
-            render={
-              <Button variant={configured ? "outline" : "default"} size="sm" />
-            }
-          >
-            {configured ? "Configure" : "Connect"}
-          </DialogTrigger>
-          <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-            {/* The settings card carries its own title/help; keep an a11y title
-                without visually duplicating it. */}
-            <DialogHeader className="sr-only">
-              <DialogTitle>{label}</DialogTitle>
-              {help && <DialogDescription>{help}</DialogDescription>}
-            </DialogHeader>
-            {children}
-            {usageCardProvider && (
-              <UsageCardToggle provider={usageCardProvider} />
-            )}
-          </DialogContent>
-        </Dialog>
-      </CardContent>
-    </Card>
+      </div>
+      <p className="text-xs text-muted-foreground">{detail}</p>
+    </div>
+  );
+}
+
+/**
+ * Install the newer Claude Code the row just reported.
+ *
+ * This used to live in the sidebar footer, where it was permanently visible to
+ * everyone and actionable by nobody but an admin. It belongs beside the version
+ * it is updating. The install goes into the container's persistent
+ * `$HOME/.local` (see `system_routes.rs`), so it survives restarts.
+ */
+function ClaudeUpdateButton({ to }: { to: string | null }) {
+  const update = useUpdateClaudeCode();
+  const failed = update.isError
+    ? update.error.message
+    : update.data && !update.data.ok
+      ? update.data.message
+      : null;
+
+  if (failed) {
+    return (
+      <span className="text-[11px] text-status-failed" title={failed}>
+        Update failed — see server logs
+      </span>
+    );
+  }
+
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      className="gap-1"
+      disabled={update.isPending}
+      onClick={() => update.mutate()}
+      title={`Update Claude Code to ${to}`}
+    >
+      {update.isPending ? (
+        <>
+          <Loader2 className="size-3 animate-spin" /> Updating…
+        </>
+      ) : (
+        <>
+          <ArrowUpCircle className="size-3" /> Update to {to}
+        </>
+      )}
+    </Button>
   );
 }
 
