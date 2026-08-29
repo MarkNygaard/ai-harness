@@ -47,8 +47,22 @@ const SETUP_TOKEN_KEY: &str = "setup_token_sha256";
 /// Cookie carrying the session id.
 pub(crate) const SESSION_COOKIE: &str = "harness_session";
 
-/// How long a browser session lasts before it has to sign in again.
-const SESSION_TTL_DAYS: i64 = 30;
+/// How long a session may sit unused. Measured from the last request, not from
+/// sign-in: using the harness keeps you signed in.
+const SESSION_IDLE_DAYS: i64 = 30;
+
+/// The ceiling the idle window cannot pass, measured from sign-in. A sliding
+/// window on its own never expires for whoever holds the cookie -- and an
+/// attacker who has one can keep it warm exactly as easily as its owner. This
+/// is what guarantees a stolen session dies on a known date.
+const SESSION_MAX_DAYS: i64 = 90;
+
+/// What the browser is told, which is deliberately longer than either. The
+/// cookie is an opaque id checked against the database on every request, so one
+/// the server has expired is already worthless -- and a cookie that outlives
+/// the session is what lets the session slide at all. 400 days is the longest
+/// browsers will honour.
+const SESSION_COOKIE_DAYS: i64 = 400;
 
 /// How the harness authenticates callers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -269,7 +283,7 @@ pub(crate) fn session_id(headers: &HeaderMap) -> Option<String> {
 /// had. `Secure` is conditional: a harness reached over plain HTTP on a private
 /// network would otherwise be handed a cookie the browser refuses to send back.
 pub(crate) fn session_cookie(id: &str, secure: bool) -> String {
-    let max_age = SESSION_TTL_DAYS * 24 * 3600;
+    let max_age = SESSION_COOKIE_DAYS * 24 * 3600;
     format!(
         "{SESSION_COOKIE}={id}; Path=/; HttpOnly; SameSite=Lax; Max-Age={max_age}{}",
         if secure { "; Secure" } else { "" }
@@ -305,7 +319,7 @@ pub(crate) async fn open_session(
         uuid::Uuid::new_v4().simple()
     );
     users
-        .open_session(&id, &user.id, Duration::days(SESSION_TTL_DAYS))
+        .open_session(&id, &user.id, Duration::days(SESSION_IDLE_DAYS))
         .await
         .map_err(|e| e.to_string())?;
     Ok(session_cookie(&id, secure_cookies(state)))
@@ -315,7 +329,15 @@ pub(crate) async fn open_session(
 pub(crate) async fn current_user(state: &Arc<RunsState>, headers: &HeaderMap) -> Option<User> {
     let id = session_id(headers)?;
     let users = state.user_store().await.ok()?;
-    users.user_for_session(&id).await.ok().flatten()
+    users
+        .user_for_session(
+            &id,
+            Duration::days(SESSION_IDLE_DAYS),
+            Duration::days(SESSION_MAX_DAYS),
+        )
+        .await
+        .ok()
+        .flatten()
 }
 
 // ── Requiring an administrator ───────────────────────────────────────────────
