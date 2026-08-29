@@ -35,8 +35,11 @@ description: |
     * `EPIC_BLOCKED_STATE` — where a stalled epic goes.
     * `EPIC_CORRECTIVE_LABEL` — a label id put on correctives, for looks.
 
-  NOT for: building a piece (`idea-to-pr`), or decomposing an epic
-  (`linear-epic-plan`).
+  The epic's pieces are written by hand, as sub-issues, and delegated to the
+  harness. This starts each one after the last is accepted; you start the first.
+
+  NOT for: building a piece — that is `idea-to-pr`, bound to whichever column
+  you park pieces in.
 
 provider: claude
 model: opus
