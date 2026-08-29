@@ -1,20 +1,27 @@
 use crate::http::{
-    auth,
-    misc_routes::{disabled_password_reset_response, prepare_password_reset_request},
-    rate_limit::PasswordResetRateLimiter,
+    auth, misc_routes::prepare_password_reset_request, rate_limit::PasswordResetRateLimiter,
 };
 use axum::http::StatusCode;
 
+/// The endpoint is implemented now, so what is worth pinning is that the
+/// rate limiter still runs before anything else — it fronts an unauthenticated
+/// route that sends mail.
 #[tokio::test]
-async fn password_reset_returns_not_implemented() -> anyhow::Result<()> {
+async fn password_reset_rate_limits_before_doing_any_work() -> anyhow::Result<()> {
     let limiter = PasswordResetRateLimiter::new(2);
     let email = prepare_password_reset_request(&limiter, 2, "user@example.com")
         .expect("valid email should pass rate limiting");
     assert_eq!(email, "user@example.com");
 
-    let (status, json) = disabled_password_reset_response();
-    assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
-    assert_eq!(json["error"], "password reset is not yet implemented");
+    // Second is still within the limit; the third is not.
+    prepare_password_reset_request(&limiter, 2, "user@example.com").expect("second is allowed");
+    let (status, json) = prepare_password_reset_request(&limiter, 2, "user@example.com")
+        .expect_err("third exceeds the limit");
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        json["error"].as_str().unwrap().contains("rate limit"),
+        "{json}"
+    );
     Ok(())
 }
 

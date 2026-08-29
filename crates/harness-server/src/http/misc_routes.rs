@@ -1,4 +1,8 @@
-use axum::{extract::State, http::StatusCode, Json};
+use axum::{
+    extract::{Extension, State},
+    http::StatusCode,
+    Json,
+};
 use serde_json::json;
 use std::sync::Arc;
 
@@ -50,20 +54,18 @@ pub(crate) fn prepare_password_reset_request(
     Ok(email)
 }
 
-pub(crate) fn disabled_password_reset_response() -> (StatusCode, serde_json::Value) {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        json!({"error": "password reset is not yet implemented"}),
-    )
-}
-
-/// POST /auth/reset-password — temporarily disabled until email delivery exists.
+/// POST /auth/reset-password — ask for a link to set a new password.
 ///
-/// Requests are still validated, rate-limited, and logged so the auth-exempt
-/// endpoint retains its abuse protections while the actual reset flow is
-/// unavailable.
+/// **The answer never says whether the address exists.** An unauthenticated
+/// endpoint that distinguishes a known address from an unknown one is a way to
+/// enumerate who has an account here, so both take the same path and get the
+/// same words.
+///
+/// Rate limiting stays where it was: this route sends mail on an unauthenticated
+/// request, which is a spam vector as much as a guessing one.
 pub(crate) async fn password_reset(
     State(state): State<Arc<AppState>>,
+    Extension(runs): Extension<Arc<crate::http::runs_routes::RunsState>>,
     Json(req): Json<PasswordResetRequest>,
 ) -> (StatusCode, Json<serde_json::Value>) {
     let limit = state
@@ -81,17 +83,15 @@ pub(crate) async fn password_reset(
         Err((status, body)) => return (status, Json(body)),
     };
 
-    tracing::info!(
-        email_hash = %format!("{:x}", {
-            use std::hash::{Hash, Hasher};
-            let mut h = std::collections::hash_map::DefaultHasher::new();
-            email.hash(&mut h);
-            h.finish()
-        }),
-        "password reset requested while endpoint disabled"
-    );
+    // Best-effort and silent: whether an account exists, whether mail is
+    // configured, and whether the send succeeded are all invisible from here.
+    crate::http::invites_routes::send_reset_link(&runs, &email).await;
 
-    // TODO: wire up SMTP/transactional email before enabling this endpoint.
-    let (status, body) = disabled_password_reset_response();
-    (status, Json(body))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "ok": true,
+            "message": "If that address has an account, a reset link is on its way.",
+        })),
+    )
 }

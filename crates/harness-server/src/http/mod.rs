@@ -13,6 +13,7 @@ pub(crate) mod credentials_routes;
 pub(crate) mod finding_routes;
 pub(crate) mod http_router;
 pub(crate) mod init;
+pub(crate) mod invites_routes;
 pub(crate) mod kimi_routes;
 pub(crate) mod linear_agent;
 pub(crate) mod linear_attachments;

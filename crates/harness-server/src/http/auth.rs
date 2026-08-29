@@ -140,6 +140,11 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             | "/worktrees"
             | "/ws"
     ) || path.starts_with("/assets/")
+        // Redeeming an invitation or a reset link. Whoever holds one has not
+        // signed in yet — that is the point of it — and the token in the path is
+        // what authenticates them: single-use, expiring, and hashed at rest.
+        // A prefix, because the token is a path segment.
+        || path.starts_with("/api/invites/token/")
 }
 
 /// Bearer token authentication middleware.

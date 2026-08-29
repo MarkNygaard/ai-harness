@@ -108,6 +108,7 @@ pub struct RunsState {
     user_store: OnceCell<harness_persist::UserStore>,
     settings_store: OnceCell<harness_persist::SettingsStore>,
     token_store: OnceCell<harness_persist::TokenStore>,
+    invite_store: OnceCell<harness_persist::InviteStore>,
     /// Where project repos are cloned (one checkout dir per project).
     pub(crate) projects_dir: PathBuf,
     /// The server's global project root. Custom workflows are global (like
@@ -209,6 +210,7 @@ impl RunsState {
             user_store: OnceCell::new(),
             settings_store: OnceCell::new(),
             token_store: OnceCell::new(),
+            invite_store: OnceCell::new(),
             projects_dir,
             project_root: project_root_global,
             public_url: std::sync::RwLock::new(public_url),
@@ -247,6 +249,21 @@ impl RunsState {
         if let Ok(mut guard) = self.public_url.write() {
             *guard = normalized;
         }
+    }
+
+    /// Lazily connect the invitation store.
+    pub(crate) async fn invite_store(&self) -> Result<&harness_persist::InviteStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.invite_store
+            .get_or_try_init(|| async {
+                harness_persist::InviteStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
     }
 
     /// Lazily connect the personal-access-token store.
