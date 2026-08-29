@@ -4,6 +4,7 @@ import { PasswordField } from "@/components/auth/PasswordField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAcceptInvite, useInviteDetails } from "@/lib/invites";
+import { useGithubSsoPublicStatus, useSsoPublicStatus } from "@/lib/sso";
 import { useAuthStatus } from "@/lib/auth";
 
 const inputCls =
@@ -26,8 +27,24 @@ export function AcceptInvitePage() {
   const [password, setPassword] = useState("");
   const [passwordOk, setPasswordOk] = useState(false);
 
+  const sso = useSsoPublicStatus();
+  const github = useGithubSsoPublicStatus();
+
   const isReset = details.data?.kind === "reset";
   const minLen = status.data?.min_password_len ?? 12;
+
+  // Somebody who signs in through a provider does not need a password: it
+  // would be invented here, never used, and stored anyway. Offered only when a
+  // provider is actually armed — the server refuses otherwise, since the
+  // account would have no way in at all.
+  const providers = [
+    github.data?.enabled ? "GitHub" : null,
+    sso.data?.enabled ? (sso.data.label ?? "your identity provider") : null,
+  ].filter(Boolean) as string[];
+  const canSkipPassword = !isReset && providers.length > 0;
+  const [wantsPassword, setWantsPassword] = useState(false);
+  const showPassword = !canSkipPassword || wantsPassword;
+  const ready = showPassword ? passwordOk : true;
 
   return (
     <div className="flex min-h-svh items-center justify-center p-6">
@@ -57,7 +74,9 @@ export function AcceptInvitePage() {
               <p>
                 {isReset
                   ? "Your password is set. Any other sessions were signed out."
-                  : "Your account is ready."}
+                  : showPassword
+                    ? "Your account is ready."
+                    : `Your account is ready. Sign in with ${providers[0]}.`}
               </p>
               <Button size="sm" onClick={() => navigate("/login")}>
                 Sign in
@@ -73,9 +92,13 @@ export function AcceptInvitePage() {
                 className="flex flex-col gap-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (!passwordOk) return;
+                  if (!ready) return;
                   accept.mutate(
-                    isReset ? { password } : { name: name.trim(), password },
+                    isReset
+                      ? { password }
+                      : showPassword
+                        ? { name: name.trim(), password }
+                        : { name: name.trim() },
                   );
                 }}
               >
@@ -98,15 +121,34 @@ export function AcceptInvitePage() {
                   </label>
                 )}
 
-                <PasswordField
-                  value={password}
-                  onChange={setPassword}
-                  minLength={minLen}
-                  // The address is already known from the link; the name is
-                  // only asked for on an invitation.
-                  identity={[details.data.email, name]}
-                  onValidChange={setPasswordOk}
-                />
+                {showPassword ? (
+                  <PasswordField
+                    value={password}
+                    onChange={setPassword}
+                    minLength={minLen}
+                    // The address is already known from the link; the name is
+                    // only asked for on an invitation.
+                    identity={[details.data.email, name]}
+                    onValidChange={setPasswordOk}
+                  />
+                ) : (
+                  <p className="text-[11px] text-muted-foreground">
+                    You will sign in with {providers.join(" or ")}, so there is
+                    no password to choose.
+                  </p>
+                )}
+
+                {canSkipPassword && (
+                  <button
+                    type="button"
+                    className="self-start text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+                    onClick={() => setWantsPassword((v) => !v)}
+                  >
+                    {wantsPassword
+                      ? `Use ${providers[0]} instead`
+                      : "Set a password instead"}
+                  </button>
+                )}
 
                 {accept.isError && (
                   <span className="text-[11px] text-destructive">
@@ -114,10 +156,7 @@ export function AcceptInvitePage() {
                   </span>
                 )}
 
-                <Button
-                  type="submit"
-                  disabled={!passwordOk || accept.isPending}
-                >
+                <Button type="submit" disabled={!ready || accept.isPending}>
                   {accept.isPending
                     ? "Setting…"
                     : isReset

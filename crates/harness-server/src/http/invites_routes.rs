@@ -198,20 +198,36 @@ pub async fn describe_invite(
 pub struct AcceptRequest {
     #[serde(default)]
     pub name: Option<String>,
-    pub password: String,
+    /// Omitted by someone who will sign in through a provider instead. Only an
+    /// invitation may omit it, and only while a provider is armed -- see
+    /// [`accept_invite`].
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 /// `POST /api/invites/{token}` — redeem a link.
 ///
 /// Creates the account for an invitation, or re-passwords it for a reset.
 /// Spending the token comes first: two requests racing must not both get in.
+///
+/// **The password is optional for an invitation**, because for somebody who
+/// will sign in through a provider it is a credential invented on the spot,
+/// never used, and stored anyway. The column is nullable precisely for this.
+///
+/// Two things it is not optional for. A **reset** with no password is a request
+/// to do nothing. And an invitation may only skip it **while a provider is
+/// armed** — otherwise the account is created with no way at all to sign in,
+/// which is a worse outcome than being asked for a password. If the provider is
+/// later switched off, a password reset by email is the way back in.
 pub async fn accept_invite(
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(token): AxumPath<String>,
     Json(req): Json<AcceptRequest>,
 ) -> Response {
-    if let Err(e) = check_password(&req.password) {
-        return err(StatusCode::BAD_REQUEST, e);
+    if let Some(password) = &req.password {
+        if let Err(e) = check_password(password) {
+            return err(StatusCode::BAD_REQUEST, e);
+        }
     }
     let store = match state.invite_store().await {
         Ok(s) => s,
@@ -239,21 +255,37 @@ pub async fn accept_invite(
         Ok(u) => u,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    let hash = match hash_password(&req.password) {
+    let hash = match req.password.as_deref().map(hash_password).transpose() {
         Ok(h) => h,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     };
 
     if invite.kind == KIND_RESET {
+        let Some(hash) = hash.as_deref() else {
+            return err(StatusCode::BAD_REQUEST, "a password reset needs a password");
+        };
         let Ok(Some(existing)) = users.get_by_email(&invite.email).await else {
             return err(StatusCode::NOT_FOUND, "that account no longer exists");
         };
-        if let Err(e) = users.set_password_hash(&existing.id, Some(&hash)).await {
+        if let Err(e) = users.set_password_hash(&existing.id, Some(hash)).await {
             return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
         }
         // Every other session was opened with the old password.
         let _ = users.close_sessions_for(&existing.id).await;
         return Json(json!({ "accepted": true, "email": invite.email })).into_response();
+    }
+
+    // An account with no password and no provider could never sign in. The
+    // check is here rather than at the top because it costs two credential
+    // reads, and only this branch can reach it.
+    if hash.is_none()
+        && !super::github_sso::is_enabled(&state).await
+        && !super::oidc::is_enabled(&state).await
+    {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "no sign-in provider is switched on, so this account needs a password",
+        );
     }
 
     let name = req
@@ -266,7 +298,7 @@ pub async fn accept_invite(
             email: invite.email.clone(),
             name,
             role: invite.role.clone(),
-            password_hash: Some(hash),
+            password_hash: hash,
         })
         .await
     {

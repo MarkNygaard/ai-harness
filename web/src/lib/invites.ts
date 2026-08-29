@@ -92,7 +92,7 @@ export function useAcceptInvite(token: string | null) {
   return useMutation<
     { accepted: boolean; email: string },
     Error,
-    { name?: string; password: string }
+    { name?: string; password?: string }
   >({
     mutationFn: (body) =>
       apiJson<{ accepted: boolean; email: string }>(
