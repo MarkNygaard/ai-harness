@@ -1,15 +1,21 @@
 /**
- * System maintenance data layer (`/api/system/*`) — currently the Claude Code
- * CLI version check and in-app update. The update installs into the container's
+ * System maintenance data layer (`/api/system/*`) — which agent CLIs the image
+ * actually has, what version each reports, and the in-app Claude Code update. The update installs into the container's
  * persistent `$HOME/.local`, so it survives restarts on a volume-backed home.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "./api";
 
-export interface ClaudeVersionInfo {
-  /** Version of the on-PATH `claude` binary, e.g. "2.1.223". */
-  installed: string | null;
-  /** Latest version on npm; null when the registry was unreachable. */
+export interface ProviderHealth {
+  /** Credential-store key: "claude", "codex", "pi", "cursor". */
+  provider: string;
+  /** The executable the harness spawns for it. */
+  binary: string;
+  /** Whether that executable resolves on PATH inside the container. */
+  on_path: boolean;
+  /** Version it reports, when it is there to be asked. */
+  version: string | null;
+  /** Latest on npm. Claude Code only, since it is the one we can install. */
   latest: string | null;
   update_available: boolean;
   /** Set when the latest-version lookup failed (e.g. no egress). */
@@ -25,13 +31,18 @@ export interface ClaudeUpdateResult {
   message: string;
 }
 
-export function useClaudeCodeVersion() {
-  return useQuery<ClaudeVersionInfo, Error>({
-    queryKey: ["claude-code-version"],
+/**
+ * Per-provider CLI presence and version.
+ *
+ * Each entry costs a process spawn on the server, and the npm lookup hits the
+ * network, so this opts out of the app-wide 5s refetch: checked on mount, kept
+ * fresh for 30 minutes. Nothing here changes without a deploy or an update.
+ */
+export function useProviderHealth() {
+  return useQuery<ProviderHealth[], Error>({
+    queryKey: ["provider-health"],
     queryFn: ({ signal }) =>
-      apiJson<ClaudeVersionInfo>("/api/system/claude-version", { signal }),
-    // The npm-registry lookup is slow-changing and hits the network — opt out
-    // of the app-wide 5s refetch; check on mount and keep it fresh for 30m.
+      apiJson<ProviderHealth[]>("/api/system/providers", { signal }),
     refetchInterval: false,
     staleTime: 1000 * 60 * 30,
   });
@@ -45,7 +56,7 @@ export function useUpdateClaudeCode() {
         method: "POST",
       }),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["claude-code-version"] });
+      qc.invalidateQueries({ queryKey: ["provider-health"] });
     },
   });
 }
