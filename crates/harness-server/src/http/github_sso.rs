@@ -443,10 +443,18 @@ async fn complete(
     permitted(&token, &profile.login, &cfg).await?;
     let email = verified_email(&token).await?;
 
-    if test {
+    // A test in organisation mode stops here: `permitted` above was the check,
+    // and going further would create an account as a side effect of testing.
+    //
+    // Existing-accounts mode has to keep going. Its allowlist lives entirely in
+    // `link`, which never creates -- so a test that returned here would prove
+    // only that OAuth works, then arm a provider that cannot actually sign
+    // anybody in. That is the opposite of what testing before arming is for.
+    if test && matches!(cfg.audience, Audience::Org { .. }) {
         return Ok(None);
     }
-    link(state, &profile, &email, &cfg.audience).await.map(Some)
+    let user = link(state, &profile, &email, &cfg.audience).await?;
+    Ok((!test).then_some(user))
 }
 
 /// Find or create the account this identity belongs to.
