@@ -3,11 +3,21 @@ import { IconCopy, IconSend, IconTrash } from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useCreateInvite, useInvites, useRevokeInvite } from "@/lib/invites";
 import type { CreatedInvite } from "@/lib/invites";
 
-const inputCls =
-  "h-8 rounded-md border border-input bg-transparent px-2 text-[13px] outline-none focus:ring-2 focus:ring-ring";
+type Role = "member" | "admin";
+
+/** What each role is called, so the trigger and the list cannot disagree. */
+const ROLES: Record<Role, string> = { member: "Member", admin: "Admin" };
 
 /**
  * Inviting people, and the link that does it.
@@ -89,30 +99,34 @@ export function InvitePeople() {
               );
             }}
           >
-            <input
-              className={`${inputCls} min-w-0 flex-1`}
+            <Input
+              className="min-w-0 flex-1"
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="them@example.com"
               aria-label="Email address to invite"
             />
-            <select
-              className={inputCls}
+            <Select
               value={role}
-              onChange={(e) => setRole(e.target.value as "admin" | "member")}
-              aria-label="Role"
+              onValueChange={(v) => setRole(v as "admin" | "member")}
             >
-              <option value="member">Member</option>
-              <option value="admin">Admin</option>
-            </select>
+              <SelectTrigger className="w-28" aria-label="Role">
+                <SelectValue>{(v) => ROLES[v as Role]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="member">Member</SelectItem>
+                <SelectItem value="admin">Admin</SelectItem>
+              </SelectContent>
+            </Select>
+            {/* Default size, not `sm`: `sm` is h-7 and everything beside it is
+                h-8, which is the whole of why this row looked wrong. */}
             <Button
               type="submit"
-              size="sm"
               variant="outline"
               disabled={!email.trim() || create.isPending}
             >
-              <IconSend className="size-3.5" />
+              <IconSend className="size-4" />
               {create.isPending ? "Inviting…" : "Invite"}
             </Button>
           </form>
