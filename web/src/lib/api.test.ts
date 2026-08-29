@@ -52,4 +52,44 @@ describe("apiFetch", () => {
 
     unauthorizedEvents.removeEventListener("unauthorized", handler);
   });
+
+  it("surfaces the server's message instead of the status code", async () => {
+    // The case this exists for: a 502 from the mail test carries the only
+    // sentence that says what to change.
+    global.fetch = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: "the mail server refused it: certificate verify failed",
+        }),
+        { status: 502 },
+      ),
+    ) as unknown as typeof fetch;
+
+    await expect(apiFetch("/api/settings/mail/test")).rejects.toThrow(
+      "the mail server refused it: certificate verify failed",
+    );
+  });
+
+  it("falls back to the status line when the body is not ours", async () => {
+    // A proxy's HTML error page, an empty body, a blank message.
+    for (const body of ["<html>502 Bad Gateway</html>", "", '{"error":"  "}']) {
+      global.fetch = vi
+        .fn()
+        .mockResolvedValue(
+          new Response(body, { status: 502 }),
+        ) as unknown as typeof fetch;
+
+      await expect(apiFetch("/api/overview")).rejects.toThrow(/HTTP 502/);
+    }
+  });
+
+  it("reports the status for an error with no body at all", async () => {
+    global.fetch = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(null, { status: 503 }),
+      ) as unknown as typeof fetch;
+
+    await expect(apiFetch("/api/overview")).rejects.toThrow(/HTTP 503/);
+  });
 });

@@ -89,12 +89,12 @@ pub(crate) async fn summary(store: &CredentialStore) -> MailSummary {
 fn transport(cfg: &MailConfig) -> Result<AsyncSmtpTransport<Tokio1Executor>, String> {
     let builder = match cfg.encryption.as_str() {
         "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(&cfg.host)
-            .map_err(|e| format!("could not reach {}: {e}", cfg.host))?,
+            .map_err(|e| format!("could not reach {}: {}", cfg.host, error_chain(&e)))?,
         // `none` is plain SMTP — a local relay on the same network, usually.
         "none" => AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&cfg.host),
         // STARTTLS by default: the common case, and the safe one to assume.
         _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&cfg.host)
-            .map_err(|e| format!("could not reach {}: {e}", cfg.host))?,
+            .map_err(|e| format!("could not reach {}: {}", cfg.host, error_chain(&e)))?,
     };
     let builder = builder.port(cfg.port);
     let builder = match (&cfg.username, &cfg.password) {
@@ -130,9 +130,105 @@ pub(crate) async fn send(
         .body(body.to_string())
         .map_err(|e| format!("could not build the message: {e}"))?;
 
-    transport(&cfg)?
-        .send(message)
-        .await
-        .map(|_| ())
-        .map_err(|e| format!("the mail server refused it: {e}"))
+    // What was attempted, so a failure in the log can be matched to a
+    // configuration without the operator having to guess which one was live.
+    // Everything here is non-secret: the password is deliberately not a field.
+    tracing::info!(
+        host = %cfg.host,
+        port = cfg.port,
+        encryption = %cfg.encryption,
+        username = cfg.username.as_deref().unwrap_or("<none>"),
+        auth = cfg.password.is_some(),
+        from = %cfg.from,
+        to = %to,
+        "smtp: sending"
+    );
+
+    match transport(&cfg)?.send(message).await {
+        Ok(_) => {
+            tracing::info!(host = %cfg.host, to = %to, "smtp: accepted");
+            Ok(())
+        }
+        Err(e) => {
+            let detail = error_chain(&e);
+            tracing::warn!(
+                host = %cfg.host,
+                port = cfg.port,
+                encryption = %cfg.encryption,
+                auth = cfg.password.is_some(),
+                error = %detail,
+                "smtp: send failed"
+            );
+            Err(format!("the mail server refused it: {detail}"))
+        }
+    }
+}
+
+/// An error and everything underneath it, joined.
+///
+/// lettre's top-level `Display` is usually a category -- "Connection error" --
+/// and the sentence that identifies the problem ("certificate verify failed",
+/// "invalid response: 535 auth failed") lives one or two sources down. Showing
+/// only the top is the difference between a fixable report and a shrug, and
+/// this string is what both the log and the settings page get.
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> String {
+    let mut parts = vec![err.to_string()];
+    let mut source = err.source();
+    while let Some(e) = source {
+        let text = e.to_string();
+        // Skip a source that only repeats its parent.
+        if !parts.iter().any(|p| p == &text) {
+            parts.push(text);
+        }
+        source = e.source();
+    }
+    parts.join(": ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fmt;
+
+    #[derive(Debug)]
+    struct Layer(&'static str, Option<Box<Layer>>);
+
+    impl fmt::Display for Layer {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str(self.0)
+        }
+    }
+
+    impl std::error::Error for Layer {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            self.1
+                .as_deref()
+                .map(|e| e as &(dyn std::error::Error + 'static))
+        }
+    }
+
+    #[test]
+    fn keeps_the_sentence_that_identifies_the_problem() {
+        // The shape lettre actually produces: a useless category on top, the
+        // real cause underneath.
+        let err = Layer(
+            "Connection error",
+            Some(Box::new(Layer("certificate verify failed", None))),
+        );
+        assert_eq!(
+            error_chain(&err),
+            "Connection error: certificate verify failed"
+        );
+    }
+
+    #[test]
+    fn does_not_repeat_a_source_that_echoes_its_parent() {
+        let err = Layer("timed out", Some(Box::new(Layer("timed out", None))));
+        assert_eq!(error_chain(&err), "timed out");
+    }
+
+    #[test]
+    fn a_lone_error_is_just_itself() {
+        assert_eq!(error_chain(&Layer("nope", None)), "nope");
+    }
 }
