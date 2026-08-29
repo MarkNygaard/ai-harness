@@ -5,7 +5,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { GithubSso } from "@/components/settings/GithubSso";
-import { useSaveSso, useSsoConfig, useTestSso } from "@/lib/sso";
+import {
+  useSaveSso,
+  useSsoConfig,
+  useSsoOutcome,
+  useTestSso,
+} from "@/lib/sso";
 import type { SsoInput } from "@/lib/sso";
 
 const inputCls =
@@ -33,34 +38,12 @@ function Field({
   );
 }
 
-/** Read the outcome the callback appended, then strip it from the URL. */
-function useCallbackOutcome() {
-  const [outcome, setOutcome] = useState<{
-    status: string;
-    message: string | null;
-  } | null>(null);
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const status = params.get("sso");
-    if (!status) return;
-    setOutcome({ status, message: params.get("sso_message") });
-    params.delete("sso");
-    params.delete("sso_message");
-    const query = params.toString();
-    window.history.replaceState(
-      {},
-      "",
-      `${window.location.pathname}${query ? `?${query}` : ""}`,
-    );
-  }, []);
-  return outcome;
-}
 
 export function SsoSettingsPage() {
   const config = useSsoConfig(true);
   const save = useSaveSso();
   const test = useTestSso();
-  const outcome = useCallbackOutcome();
+  const outcome = useSsoOutcome();
 
   const [form, setForm] = useState<SsoInput>({});
   const [secret, setSecret] = useState("");

@@ -4,8 +4,47 @@
  * One implementation for anything speaking OIDC discovery — Entra, Google,
  * Okta, Keycloak, Authentik — configured by issuer URL.
  */
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "./api";
+
+export interface SsoOutcome {
+  /** "tested", "error", "denied" — whatever the callback reported. */
+  status: string;
+  message: string | null;
+}
+
+/**
+ * The outcome of a provider round trip, taken off the URL and then removed
+ * from it.
+ *
+ * Every page a callback can land on needs this. It used to live only on the
+ * settings page, so a refused *sign-in* — which lands on /login, not settings
+ * — dropped the explanation entirely and showed the person the form again with
+ * nothing to say why. Shared, so the two cannot drift apart again.
+ *
+ * The parameters are stripped with `replaceState` so a reload does not
+ * resurrect a stale error, and so the address is not left carrying someone's
+ * email around.
+ */
+export function useSsoOutcome(): SsoOutcome | null {
+  const [outcome, setOutcome] = useState<SsoOutcome | null>(null);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get("sso");
+    if (!status) return;
+    setOutcome({ status, message: params.get("sso_message") });
+    params.delete("sso");
+    params.delete("sso_message");
+    const query = params.toString();
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${query ? `?${query}` : ""}`,
+    );
+  }, []);
+  return outcome;
+}
 
 /** What the sign-in page may know before anybody has signed in. */
 export interface SsoPublicStatus {

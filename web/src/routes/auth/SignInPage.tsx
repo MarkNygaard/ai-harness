@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { useAuthStatus, useLogin, useSetup } from "@/lib/auth";
 import {
   useGithubSsoPublicStatus,
+  useSsoOutcome,
   useSsoPublicStatus,
   useStartGithubSso,
   useStartSso,
@@ -80,6 +81,9 @@ export function LoginPage() {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  // A provider that refused says why here. Read before the redirects below, so
+  // the hook runs on every render this component has.
+  const outcome = useSsoOutcome();
 
   // Already signed in, or this harness has no accounts at all — either way
   // there is nothing to do here.
@@ -92,6 +96,18 @@ export function LoginPage() {
       title="Sign in"
       description="Use the email and password for your account on this harness."
     >
+      {outcome?.status === "error" && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2.5 py-2 text-[11px] text-destructive">
+          {outcome.message ?? "That sign-in did not work."}
+        </p>
+      )}
+      {outcome?.status === "denied" && (
+        <p className="rounded-md border border-border bg-muted px-2.5 py-2 text-[11px] text-muted-foreground">
+          Sign-in was cancelled
+          {outcome.message ? `: ${outcome.message}` : "."}
+        </p>
+      )}
+
       <form
         className="flex flex-col gap-3"
         onSubmit={(e) => {

@@ -488,9 +488,8 @@ async fn link(
     // vouches for, and without the address there is nothing to compare.
     if *audience == Audience::Existing {
         return Err(format!(
-            "no account here uses {email}, the verified address GitHub offered for @{}. \
-             Sign in with a password and check the address on your account, or have an \
-             administrator invite {email}.",
+            "no account here uses {email}, the address GitHub verified for @{}. Ask an \
+             administrator to invite that address, or change the address on your account.",
             profile.login
         ));
     }
