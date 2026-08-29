@@ -292,22 +292,28 @@ function LinearAccounts() {
 
   return (
     <div className="flex flex-col gap-3">
-      {accounts.map((c) => (
-        <div
-          key={c.id}
-          className="flex flex-col gap-3 rounded-md border border-border p-3"
-        >
-          <LinearConnectionCard
-            connection={c}
-            removable={accounts.length > 1}
-          />
-          <ProviderCard
-            provider={providerDef("linear")}
-            configured={c.client_configured}
-            credentialKey={credentialKeyFor(c.id)}
-          />
-        </div>
-      ))}
+      {/* No box around each account. With one account -- the usual case -- it
+          duplicated the dialog's own edge and collided with the close button.
+          Several accounts are told apart by a rule between them instead, which
+          separates just as well and never fights the chrome. */}
+      <div className="flex flex-col divide-y">
+        {accounts.map((c) => (
+          <div
+            key={c.id}
+            className="flex flex-col gap-3 py-4 first:pt-0 last:pb-0"
+          >
+            <LinearConnectionCard
+              connection={c}
+              removable={accounts.length > 1}
+            />
+            <ProviderCard
+              provider={providerDef("linear")}
+              configured={c.client_configured}
+              credentialKey={credentialKeyFor(c.id)}
+            />
+          </div>
+        ))}
+      </div>
       <AddLinearConnection />
       {connections.isError && (
         <span className="text-[10px] text-destructive">
@@ -414,10 +420,11 @@ function ProviderSummary({
 }) {
   const healthQuery = useProviderHealth();
   const health = healthQuery.data?.find((h) => h.provider === provider);
-  const { status, label: statusLabel, detail } = describeProvider(
-    configured,
-    health,
-  );
+  const {
+    status,
+    label: statusLabel,
+    detail,
+  } = describeProvider(configured, health);
 
   return (
     <div className="flex flex-col gap-1 py-2.5 first:pt-1 last:pb-1">
