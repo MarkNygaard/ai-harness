@@ -15,10 +15,15 @@
 //! - `GET/PUT /api/settings/sso/github`      — configure it (administrator-only)
 //! - `POST    /api/settings/sso/github/test` — prove it works before arming it
 //!
-//! **Membership in an organisation is the allowlist.** A GitHub account is
-//! free and anyone can have one, so unlike a single-tenant OIDC issuer the
-//! provider itself is not a membership boundary — which is why an organisation
-//! is required here rather than optional.
+//! **The allowlist is never "anyone with a GitHub account".** GitHub accounts
+//! are free, so unlike a single-tenant OIDC issuer the provider itself is not a
+//! membership boundary. Two things can be one, and [`Audience`] is a choice
+//! between them, with no third option meaning everybody:
+//!
+//!   * an **organisation** you control, for a shared install; or
+//!   * the accounts that **already exist here**, for a personal one -- matched
+//!     on GitHub's verified email, and never creating an account, so the
+//!     boundary is "people who were already invited".
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -52,6 +57,12 @@ const API: &str = "https://api.github.com";
 /// which is a confusing and arbitrary line.
 const SCOPES: &str = "read:user user:email read:org";
 
+/// The same, minus the organisation read.
+///
+/// Existing-accounts mode never asks GitHub about membership, so asking the
+/// person to grant it would be requesting a permission we do not use.
+const SCOPES_NO_ORG: &str = "read:user user:email";
+
 /// Every GitHub request needs one, and a descriptive one is good manners.
 const UA: &str = "ai-harness";
 
@@ -60,12 +71,45 @@ const UA: &str = "ai-harness";
 struct Config {
     client_id: String,
     client_secret: String,
-    /// Members of this organisation may sign in. **Required** — see the module
-    /// note on why this is not optional the way OIDC's domain list is.
-    org: String,
-    /// Optionally narrow it further to one team, by slug.
-    team: Option<String>,
+    audience: Audience,
     enabled: bool,
+}
+
+/// Where the allowlist comes from. See the module note on why there is no
+/// variant meaning "anybody".
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Audience {
+    /// Members of this organisation, optionally narrowed to one team.
+    Org { org: String, team: Option<String> },
+    /// People who already have an account here. Enforced in [`link`], which
+    /// refuses to create one, so the set is exactly who has been invited.
+    Existing,
+}
+
+impl Audience {
+    /// What to ask GitHub for on the authorize URL.
+    fn scopes(&self) -> &'static str {
+        match self {
+            Audience::Org { .. } => SCOPES,
+            Audience::Existing => SCOPES_NO_ORG,
+        }
+    }
+}
+
+/// Read the audience out of stored fields.
+///
+/// `None` means *not configured* rather than *open*: the default is
+/// organisation mode, and that mode without an organisation is incomplete
+/// setup. Getting this wrong in the other direction would silently admit
+/// every GitHub user, so it is a separate function with its own test.
+fn audience_of(fields: &BTreeMap<String, String>) -> Option<Audience> {
+    match field(fields, "audience").as_deref() {
+        Some("existing") => Some(Audience::Existing),
+        _ => Some(Audience::Org {
+            org: field(fields, "org")?,
+            team: field(fields, "team"),
+        }),
+    }
 }
 
 fn field(fields: &BTreeMap<String, String>, key: &str) -> Option<String> {
@@ -81,8 +125,7 @@ async fn config(store: &CredentialStore) -> Option<Config> {
     Some(Config {
         client_id: field(&fields, "client_id")?,
         client_secret: field(&fields, "client_secret")?,
-        org: field(&fields, "org")?,
-        team: field(&fields, "team"),
+        audience: audience_of(&fields)?,
         enabled: field(&fields, "enabled").as_deref() == Some("true"),
     })
 }
@@ -165,21 +208,27 @@ async fn verified_email(token: &str) -> Result<String, String> {
 }
 
 /// Whether this account is actually in the organisation (and team) allowed.
+///
+/// Existing-accounts mode has nothing to ask GitHub here -- its boundary is
+/// enforced by [`link`] refusing to create an account -- so it passes through.
 async fn permitted(token: &str, login: &str, cfg: &Config) -> Result<(), String> {
-    let membership: GhMembership =
-        get_json(&format!("{API}/user/memberships/orgs/{}", cfg.org), token)
-            .await
-            .map_err(|_| format!("{login} is not a member of {}", cfg.org))?;
+    let Audience::Org { org, team } = &cfg.audience else {
+        return Ok(());
+    };
+
+    let membership: GhMembership = get_json(&format!("{API}/user/memberships/orgs/{org}"), token)
+        .await
+        .map_err(|_| format!("{login} is not a member of {org}"))?;
     // A pending invitation is not membership.
     if membership.state != "active" {
         return Err(format!(
-            "{login}'s membership of {} is {} rather than active",
-            cfg.org, membership.state
+            "{login}'s membership of {org} is {} rather than active",
+            membership.state
         ));
     }
 
-    if let Some(team) = &cfg.team {
-        let url = format!("{API}/orgs/{}/teams/{team}/memberships/{login}", cfg.org);
+    if let Some(team) = team {
+        let url = format!("{API}/orgs/{org}/teams/{team}/memberships/{login}");
         let team_membership: GhMembership = get_json(&url, token)
             .await
             .map_err(|_| format!("{login} is not in the {team} team"))?;
@@ -248,7 +297,7 @@ async fn authorize_url(
         "{AUTHORIZE_URL}?client_id={}&redirect_uri={}&scope={}&state={}",
         enc(&cfg.client_id),
         enc(&redirect),
-        enc(SCOPES),
+        enc(cfg.audience.scopes()),
         enc(&state_nonce),
     );
     Ok((url, cookie))
@@ -394,10 +443,18 @@ async fn complete(
     permitted(&token, &profile.login, &cfg).await?;
     let email = verified_email(&token).await?;
 
-    if test {
+    // A test in organisation mode stops here: `permitted` above was the check,
+    // and going further would create an account as a side effect of testing.
+    //
+    // Existing-accounts mode has to keep going. Its allowlist lives entirely in
+    // `link`, which never creates -- so a test that returned here would prove
+    // only that OAuth works, then arm a provider that cannot actually sign
+    // anybody in. That is the opposite of what testing before arming is for.
+    if test && matches!(cfg.audience, Audience::Org { .. }) {
         return Ok(None);
     }
-    link(state, &profile, &email).await.map(Some)
+    let user = link(state, &profile, &email, &cfg.audience).await?;
+    Ok((!test).then_some(user))
 }
 
 /// Find or create the account this identity belongs to.
@@ -409,6 +466,7 @@ async fn link(
     state: &Arc<RunsState>,
     profile: &GhUser,
     email: &str,
+    audience: &Audience,
 ) -> Result<harness_persist::User, String> {
     let users = state.user_store().await?;
     if let Some(existing) = users.get_by_email(email).await.map_err(|e| e.to_string())? {
@@ -422,6 +480,19 @@ async fn link(
     // account is deliberately made at /setup.
     if accounts::mode(state).await != Mode::Accounts {
         return Err("this harness has not been set up yet".to_string());
+    }
+
+    // Existing-accounts mode: this is the allowlist, and we have reached the
+    // end of it. Naming the address is the whole of the fix -- the usual cause
+    // is an account here under a different address from the one GitHub
+    // vouches for, and without the address there is nothing to compare.
+    if *audience == Audience::Existing {
+        return Err(format!(
+            "no account here uses {email}, the verified address GitHub offered for @{}. \
+             Sign in with a password and check the address on your account, or have an \
+             administrator invite {email}.",
+            profile.login
+        ));
     }
 
     let name = profile
@@ -467,6 +538,10 @@ pub async fn describe(_: AdminOnly, Extension(state): Extension<Arc<RunsState>>)
     Json(json!({
         "client_id": field(&fields, "client_id"),
         "client_secret_set": field(&fields, "client_secret").is_some(),
+        "audience": match audience_of(&fields) {
+            Some(Audience::Existing) => "existing",
+            _ => "org",
+        },
         "org": field(&fields, "org"),
         "team": field(&fields, "team"),
         "enabled": field(&fields, "enabled").as_deref() == Some("true"),
@@ -482,6 +557,8 @@ pub struct ConfigRequest {
     pub client_secret: Option<String>,
     pub org: Option<String>,
     pub team: Option<String>,
+    /// `"org"` (the default) or `"existing"`.
+    pub audience: Option<String>,
 }
 
 /// `PUT /api/settings/sso/github` — save the configuration.
@@ -502,6 +579,13 @@ pub async fn configure(
         ("client_id", req.client_id),
         ("org", req.org),
         ("team", req.team),
+        // Anything unrecognised stores as organisation mode, which is the
+        // mode that then demands an organisation. A typo cannot open it up.
+        (
+            "audience",
+            req.audience
+                .map(|a| if a == "existing" { a } else { "org".into() }),
+        ),
     ] {
         if let Some(v) = value {
             fields.insert(key.into(), v.trim().to_string());
@@ -522,16 +606,18 @@ pub async fn configure(
 
 /// `POST /api/settings/sso/github/test` — a round trip that arms it.
 pub async fn test_github(_: AdminOnly, Extension(state): Extension<Arc<RunsState>>) -> Response {
-    // An organisation is required rather than optional: a GitHub account is
-    // free, so without one the "allowlist" would be everybody.
-    let has_org = match state.cred_store().await {
+    // `config` returns `None` when organisation mode has no organisation, which
+    // is the case worth catching: a GitHub account is free, so a mode whose
+    // allowlist is empty would be an allowlist of everybody.
+    let ready = match state.cred_store().await {
         Ok(store) => config(store).await.is_some(),
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    if !has_org {
+    if !ready {
         return err(
             StatusCode::PRECONDITION_FAILED,
-            "set a client ID, client secret and organisation first",
+            "set a client ID and client secret, and either an organisation or \
+             existing-accounts mode, first",
         );
     }
     match authorize_url(&state, "/settings/sso".to_string(), true).await {
@@ -630,6 +716,84 @@ mod tests {
         let active: GhMembership =
             serde_json::from_str(r#"{"state":"active","role":"member"}"#).expect("parse");
         assert_eq!(active.state, "active");
+    }
+
+    fn fields(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn organisation_mode_is_the_default_and_needs_an_organisation() {
+        // The direction that matters: a half-configured install must read as
+        // unconfigured, never as "anyone with a GitHub account".
+        assert_eq!(audience_of(&fields(&[])), None);
+        assert_eq!(audience_of(&fields(&[("org", "   ")])), None);
+        assert_eq!(
+            audience_of(&fields(&[("audience", "org")])),
+            None,
+            "organisation mode without an organisation is not configured"
+        );
+        assert_eq!(
+            audience_of(&fields(&[("org", "acme")])),
+            Some(Audience::Org {
+                org: "acme".into(),
+                team: None
+            })
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_audience_falls_back_to_needing_an_organisation() {
+        // A typo, an old value, a hand-edited row: none of them may open it up.
+        for odd in ["", "everyone", "any", "EXISTING", "true"] {
+            assert_eq!(
+                audience_of(&fields(&[("audience", odd)])),
+                None,
+                "audience={odd:?} must not be usable without an organisation"
+            );
+        }
+    }
+
+    #[test]
+    fn existing_mode_needs_no_organisation() {
+        assert_eq!(
+            audience_of(&fields(&[("audience", "existing")])),
+            Some(Audience::Existing)
+        );
+        // A leftover organisation from a previous mode is ignored rather than
+        // quietly still applying.
+        assert_eq!(
+            audience_of(&fields(&[("audience", "existing"), ("org", "acme")])),
+            Some(Audience::Existing)
+        );
+    }
+
+    #[test]
+    fn a_team_narrows_only_organisation_mode() {
+        assert_eq!(
+            audience_of(&fields(&[("org", "acme"), ("team", "eng")])),
+            Some(Audience::Org {
+                org: "acme".into(),
+                team: Some("eng".into())
+            })
+        );
+    }
+
+    #[test]
+    fn existing_mode_does_not_ask_for_permissions_it_will_not_use() {
+        // Nothing consults organisation membership in this mode, so nothing
+        // should be requesting the right to read it.
+        assert!(!Audience::Existing.scopes().contains("read:org"));
+        assert!(Audience::Existing.scopes().contains("user:email"));
+        assert!(Audience::Org {
+            org: "acme".into(),
+            team: None
+        }
+        .scopes()
+        .contains("read:org"));
     }
 
     #[test]
