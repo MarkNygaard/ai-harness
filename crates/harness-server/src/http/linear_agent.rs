@@ -1339,6 +1339,7 @@ mod tests {
             state_id: Some(state_id.into()),
             state_name: Some(state_name.into()),
             delegate_id: Some("app-user-1".into()),
+            ..Default::default()
         }
     }
 
@@ -1428,6 +1429,7 @@ mod tests {
             state_id: None,
             state_name: None,
             delegate_id: Some("app-user-1".into()),
+            ..Default::default()
         };
         match choose_target(&bindings, &ctx) {
             Target::WrongStatus { current, .. } => assert_eq!(current, "an unknown status"),
@@ -1506,6 +1508,7 @@ mod tests {
             state_id: Some("todo".into()),
             state_name: Some("Todo".into()),
             delegate_id: None,
+            ..Default::default()
         };
         let bindings = vec![
             disabled_binding("ecom", "idea-to-pr", "todo"),
@@ -1555,6 +1558,7 @@ mod tests {
             state_id: Some("todo".into()),
             state_name: Some("To Do".into()),
             delegate_id: None,
+            ..Default::default()
         };
         assert!(matches!(
             choose_target(&bindings, &unknown_team),
@@ -1566,6 +1570,7 @@ mod tests {
             state_id: Some("done".into()),
             state_name: Some("Done".into()),
             delegate_id: None,
+            ..Default::default()
         };
         assert!(matches!(
             choose_target(&bindings, &wrong),

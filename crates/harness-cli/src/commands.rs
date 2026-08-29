@@ -90,6 +90,13 @@ pub enum LinearAction {
         #[arg(long)]
         body_file: Option<PathBuf>,
     },
+    /// Print one issue's team, state, parent and labels as JSON
+    Issue {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        issue: String,
+    },
     /// Print an epic's sub-issues as JSON, in board order
     Children {
         #[arg(long)]
@@ -1596,6 +1603,9 @@ async fn run_linear_action(db: &str, key: &str, action: LinearAction) -> anyhow:
         } => {
             let md = markdown_arg(body, body_file, "body")?;
             harness_server::linear_cli::comment(db, key, &project, &issue, &md).await
+        }
+        LinearAction::Issue { project, issue } => {
+            harness_server::linear_cli::issue(db, key, &project, &issue).await
         }
         LinearAction::Children { project, issue } => {
             harness_server::linear_cli::children(db, key, &project, &issue).await
