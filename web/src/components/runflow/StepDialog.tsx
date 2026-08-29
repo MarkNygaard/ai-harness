@@ -287,11 +287,9 @@ function ArtifactView({
         {name}
       </div>
       {!content ? (
-        <p className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-          No artifact produced for this step.
-        </p>
+        <p className={EMPTY}>No artifact produced for this step.</p>
       ) : isMarkdown ? (
-        <div className="rounded-md bg-muted p-3">
+        <div className={PROSE}>
           <Markdown>{content}</Markdown>
         </div>
       ) : (
@@ -304,6 +302,26 @@ function ArtifactView({
 }
 
 /**
+ * Where a tint belongs, now that a surface is the brightest thing on it.
+ *
+ * Since #318 a panel is white and the page behind it is grey, so a filled box
+ * *inside* a dialog reads as content sunk below its own container — which is
+ * backwards for the thing you opened the dialog to read.
+ *
+ * The line is prose versus machine text. An agent's summary and a rendered
+ * `.md` artifact are what you came for: they sit on the surface, bounded by a
+ * rule so you can see where the document starts and stops. Raw output, JSON and
+ * the activity log are quoted material, and keep `bg-muted` — the same tint
+ * `.markdown code` and `.markdown pre` already use, so an inline snippet inside
+ * a prose block still reads as quoted.
+ */
+const PROSE = "rounded-md border border-border p-3";
+
+/** Nothing to show. Outlined rather than filled, for the same reason. */
+const EMPTY =
+  "rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground";
+
+/**
  * A step's textual output: rendered as markdown (agents usually emit prose /
  * markdown), except JSON outputs (e.g. `output_format` verdicts) which stay a
  * formatted code block since markdown would mangle them. Read-only info, so no
@@ -311,11 +329,7 @@ function ArtifactView({
  */
 function OutputView({ text }: { text: string | null }) {
   if (!text) {
-    return (
-      <p className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
-        No textual output for this step.
-      </p>
-    );
+    return <p className={EMPTY}>No textual output for this step.</p>;
   }
   const json = asPrettyJson(text);
   if (json !== null) {
@@ -326,7 +340,7 @@ function OutputView({ text }: { text: string | null }) {
     );
   }
   return (
-    <div className="rounded-md bg-muted p-3">
+    <div className={PROSE}>
       <Markdown>{text}</Markdown>
     </div>
   );
