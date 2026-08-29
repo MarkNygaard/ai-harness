@@ -67,14 +67,15 @@ export function RunDetailPage() {
               Live
             </span>
           )}
-          <div className="min-w-0">
-            <div className="truncate text-sm font-semibold">
-              {run.title ?? run.workflow ?? "Workflow"}
-            </div>
-            <div className="truncate font-mono text-[11px] text-muted-foreground">
-              {run.title && run.workflow ? `${run.workflow} · ` : ""}
-              {id}
-            </div>
+          {/* The title is in the header bar above, which is this page's one
+              place for it. This line carries only what that bar cannot: which
+              workflow ran, and the run's own id. */}
+          <div
+            className="min-w-0 truncate font-mono text-[11px] text-muted-foreground"
+            title={run.title ?? undefined}
+          >
+            {run.title && run.workflow ? `${run.workflow} · ` : ""}
+            {id}
           </div>
           <div className="ml-auto text-xs text-muted-foreground">
             {done}/{run.nodes.length} steps
