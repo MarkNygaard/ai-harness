@@ -1,3 +1,4 @@
+import { InvitePeople } from "@/components/settings/InvitePeople";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -190,13 +191,16 @@ export function MembersPage() {
               </CardContent>
             </Card>
 
+            <InvitePeople />
+
             <p className="text-[11px] text-muted-foreground">
-              Inviting people arrives with mail settings. Until then, someone
-              with a shell on the server can add an account with{" "}
+              An invitation always produces a link you can paste, whether or not
+              mail is configured. Someone with a shell on the server can also
+              add an account with{" "}
               <code className="font-mono">
                 harness admin create --email … --password …
               </code>{" "}
-              — which is also how you get back in if you are locked out.
+              — which is how you get back in if you are locked out.
             </p>
           </>
         )}
