@@ -504,6 +504,7 @@ async fn start_delegated_run(
         workflow: binding.workflow.clone(),
         title,
         description,
+        issue_id: event.issue_id.clone(),
         args: String::new(),
         real: true,
         base_branch: binding.base_branch.clone(),

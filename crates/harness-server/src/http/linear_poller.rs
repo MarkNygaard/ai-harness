@@ -454,6 +454,7 @@ async fn claim_and_fire(
         triggered_by: Some("linear".to_string()),
         workflow: b.workflow.clone(),
         title: Some(format!("{} {}", issue.identifier, issue.title)),
+        issue_id: Some(issue.id.clone()),
         // Images pasted into the issue or its comments are downloaded and the
         // links rewritten to local paths, so the agent can actually see them.
         description: super::linear_attachments::localize(

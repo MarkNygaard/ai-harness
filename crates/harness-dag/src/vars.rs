@@ -34,6 +34,16 @@ pub const RECOGNIZED_VARS: &[&str] = &[
     "LOOP_USER_INPUT",
     "LOOP_PREV_OUTPUT",
     "REJECTION_REASON",
+    // The run's own identity. `PROJECT` is what `harness linear` resolves a
+    // Linear workspace from, and `ISSUE_ID` is the issue a run was triggered
+    // by — empty for a run that came from anywhere else.
+    "PROJECT",
+    "ISSUE_ID",
+    // Set on every run since runs were added, but never listed here, so
+    // `$TASK_TITLE` was passed through verbatim instead of substituted. No
+    // workflow used it, which is why nobody noticed.
+    "TASK_TITLE",
+    "TASK_DESCRIPTION",
 ];
 
 /// Values available for substitution in the current run/node context.
@@ -347,5 +357,43 @@ mod tests {
         let ids =
             referenced_node_ids("use $a.output and ${b-two.output.field} but not $UPPER or $x");
         assert_eq!(ids, vec!["a".to_string(), "b-two".to_string()]);
+    }
+
+    #[test]
+    fn a_run_can_name_its_own_project_and_issue() {
+        // What the epic orchestrator's shell steps are built on: `harness
+        // linear` needs both, and neither was substitutable before.
+        let ctx = VarContext::new()
+            .set("PROJECT", "ai-harness")
+            .set("ISSUE_ID", "9f3c-1a2b");
+        assert_eq!(
+            substitute(
+                "harness linear children --project $PROJECT --issue $ISSUE_ID",
+                &ctx
+            )
+            .unwrap(),
+            "harness linear children --project ai-harness --issue 9f3c-1a2b"
+        );
+    }
+
+    #[test]
+    fn a_run_from_outside_linear_has_an_empty_issue_not_a_failure() {
+        // A recognized-but-unset variable errors, so the caller sets it to the
+        // empty string; a workflow tests for that rather than exploding.
+        let ctx = VarContext::new().set("PROJECT", "p").set("ISSUE_ID", "");
+        assert_eq!(substitute("[$ISSUE_ID]", &ctx).unwrap(), "[]");
+    }
+
+    #[test]
+    fn the_task_title_finally_substitutes() {
+        // Set on every run since runs existed, but absent from RECOGNIZED_VARS,
+        // so `$TASK_TITLE` was passed through verbatim.
+        let ctx = VarContext::new()
+            .set("TASK_TITLE", "Route through Bedrock")
+            .set("TASK_DESCRIPTION", "the long form");
+        assert_eq!(
+            substitute("$TASK_TITLE — $TASK_DESCRIPTION", &ctx).unwrap(),
+            "Route through Bedrock — the long form"
+        );
     }
 }

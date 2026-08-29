@@ -145,6 +145,8 @@ async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args
         // ── Run control ─────────────────────────────────────────────────────
         "run_trigger" => {
             let req = CreateRunRequest {
+                // An editor triggering a run is not acting on a Linear issue.
+                issue_id: None,
                 triggered_by: actor.map(str::to_string),
                 workflow: s("workflow"),
                 title: args
