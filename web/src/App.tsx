@@ -16,6 +16,8 @@ import { EditorConnectionPage } from "./routes/settings/EditorConnectionPage";
 import { MembersPage } from "./routes/settings/MembersPage";
 import { GeneralPage } from "./routes/settings/GeneralPage";
 import { EmailPage } from "./routes/settings/EmailPage";
+import { AcceptInvitePage } from "./routes/auth/AcceptInvitePage";
+import { ForgotPasswordPage } from "./routes/auth/ForgotPasswordPage";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { TokenPrompt } from "./components/TokenPrompt";
 import { LoginPage, SetupPage } from "./routes/auth/SignInPage";
@@ -62,6 +64,9 @@ export function App() {
           />
           <Route path="/settings/preferences" element={<PreferencesPage />} />
           <Route path="/settings/mcp" element={<EditorConnectionPage />} />
+          {/* Public: whoever holds one of these links has not signed in yet. */}
+          <Route path="/invite/:token" element={<AcceptInvitePage />} />
+          <Route path="/forgot" element={<ForgotPasswordPage />} />
           <Route path="/settings/general" element={<GeneralPage />} />
           <Route path="/settings/members" element={<MembersPage />} />
           <Route path="/settings/email" element={<EmailPage />} />

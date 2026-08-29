@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use super::{
     auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
-    health_check, linear_agent, linear_connections, linear_oauth, linear_routes,
+    health_check, invites_routes, linear_agent, linear_connections, linear_oauth, linear_routes,
     linear_source_routes, mcp_routes, password_reset, runs_routes, settings_routes,
     state::AppState, system_routes, tokens_routes, users_routes, workflows_routes,
 };
@@ -107,6 +107,17 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(settings_routes::mail_settings).put(settings_routes::set_mail),
         )
         .route("/api/settings/mail/test", post(settings_routes::test_mail))
+        // ── Invitations, and the links that redeem them ────────────────────
+        .route(
+            "/api/invites",
+            get(invites_routes::list_invites).post(invites_routes::create_invite),
+        )
+        .route("/api/invites/{id}", delete(invites_routes::revoke_invite))
+        // Redeeming is public: whoever holds the link has not signed in yet.
+        .route(
+            "/api/invites/token/{token}",
+            get(invites_routes::describe_invite).post(invites_routes::accept_invite),
+        )
         .route("/api/users", get(users_routes::list_users))
         .route("/api/users/{id}/role", put(users_routes::set_role))
         .route("/api/users/{id}/disabled", put(users_routes::set_disabled))

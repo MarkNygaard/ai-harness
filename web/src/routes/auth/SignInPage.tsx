@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { IconHexagonalPrism } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -117,6 +117,12 @@ export function LoginPage() {
         <Button type="submit" disabled={login.isPending}>
           {login.isPending ? "Signing in…" : "Sign in"}
         </Button>
+        <Link
+          to="/forgot"
+          className="text-center text-[11px] text-muted-foreground underline"
+        >
+          Forgot your password?
+        </Link>
       </form>
     </Frame>
   );
