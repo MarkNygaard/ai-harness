@@ -80,6 +80,30 @@ pub struct Issue {
     pub body: Option<String>,
     pub labels: Vec<String>,
 }
+/// A sub-issue of an epic, in board order.
+///
+/// Ordered because the epic orchestrator builds them one at a time and has to
+/// know which is next; `state` because the board *is* the progress ledger, so
+/// "which column is this in" is the only record of what has been done.
+#[derive(Debug, Clone, Serialize)]
+pub struct SubIssue {
+    /// Linear internal id (what mutations take).
+    pub id: String,
+    /// Human identifier, e.g. `AIH-12`.
+    pub identifier: String,
+    pub title: String,
+    pub url: String,
+    /// Acceptance criteria live in the body — the supervisor grades against it.
+    pub body: Option<String>,
+    /// Workflow state id, for moving it on.
+    pub state_id: String,
+    /// Workflow state name, e.g. `Queued`.
+    pub state: String,
+    pub labels: Vec<String>,
+    /// Linear's own ordering within the parent. Ascending is board order.
+    pub sort_order: f64,
+}
+
 /// A comment on a Linear issue (reviewer feedback fed to `revise-pr`).
 #[derive(Debug, Clone, Serialize)]
 pub struct Comment {
@@ -163,6 +187,39 @@ struct IssueNode {
 struct IssueLabelNode {
     name: String,
 }
+#[derive(Deserialize)]
+struct ChildrenData {
+    // `issue` is null when the id doesn't resolve.
+    #[serde(default)]
+    issue: Option<IssueChildrenNode>,
+}
+#[derive(Deserialize)]
+struct IssueChildrenNode {
+    children: Conn<ChildNode>,
+}
+#[derive(Deserialize)]
+struct ChildNode {
+    id: String,
+    identifier: String,
+    title: String,
+    url: String,
+    #[serde(default)]
+    description: Option<String>,
+    // A sub-issue always has a state in practice; treated as optional so one
+    // malformed node cannot fail the whole epic read.
+    #[serde(default)]
+    state: Option<ChildStateNode>,
+    #[serde(default)]
+    labels: Option<Conn<IssueLabelNode>>,
+    #[serde(rename = "sortOrder", default)]
+    sort_order: f64,
+}
+#[derive(Deserialize)]
+struct ChildStateNode {
+    id: String,
+    name: String,
+}
+
 #[derive(Deserialize)]
 struct CommentsData {
     // `issue` is null when the id doesn't resolve.
@@ -277,6 +334,22 @@ query Comments($id: String!) {
   issue(id: $id) {
     comments(first: 50) {
       nodes { body createdAt user { name } }
+    }
+  }
+}"#;
+
+// An epic's sub-issues. `first: 100` because an epic that decomposes into more
+// than a hundred pieces is a planning failure, not a paging problem — and the
+// orchestrator caps corrective sub-issues well below that.
+const CHILDREN_QUERY: &str = r#"
+query Children($id: String!) {
+  issue(id: $id) {
+    children(first: 100) {
+      nodes {
+        id identifier title url description sortOrder
+        state { id name }
+        labels { nodes { name } }
+      }
     }
   }
 }"#;
@@ -417,6 +490,45 @@ pub fn parse_comments(json: &[u8]) -> Result<Vec<Comment>, LinearError> {
         })
         .collect();
     Ok(comments)
+}
+
+/// Parse an epic's `children` connection into board-ordered [`SubIssue`]s.
+///
+/// Sorted here rather than trusted from the response: Linear returns children in
+/// creation order, and the orchestrator's whole model is "build them in the
+/// order the plan set", which is `sortOrder`.
+pub fn parse_children(json: &[u8]) -> Result<Vec<SubIssue>, LinearError> {
+    let data: ChildrenData = gql_data(json)?;
+    let mut out: Vec<SubIssue> = data
+        .issue
+        .map(|i| i.children.nodes)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|c| {
+            let (state_id, state) = c
+                .state
+                .map(|s| (s.id, s.name))
+                .unwrap_or_else(|| (String::new(), "unknown".into()));
+            SubIssue {
+                id: c.id,
+                identifier: c.identifier,
+                title: c.title,
+                url: c.url,
+                body: c.description.filter(|d| !d.trim().is_empty()),
+                state_id,
+                state,
+                labels: c
+                    .labels
+                    .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
+                    .unwrap_or_default(),
+                sort_order: c.sort_order,
+            }
+        })
+        .collect();
+    // `total_cmp`, not `partial_cmp().unwrap()`: a NaN from a malformed
+    // response would panic, and an epic read must not.
+    out.sort_by(|a, b| a.sort_order.total_cmp(&b.sort_order));
+    Ok(out)
 }
 
 // ── Agent sessions (delegation / @-mention) ──────────────────────────────────
@@ -1010,6 +1122,18 @@ impl LinearClient {
         parse_comments(&self.post(body).await?)
     }
 
+    /// An epic's sub-issues, in board order.
+    ///
+    /// The epic orchestrator's only memory: which pieces exist, which column
+    /// each is in, and which is next.
+    pub async fn list_children(&self, issue_id: &str) -> Result<Vec<SubIssue>, LinearError> {
+        let body = serde_json::json!({
+            "query": CHILDREN_QUERY,
+            "variables": { "id": issue_id },
+        });
+        parse_children(&self.post(body).await?)
+    }
+
     /// Move an issue to a workflow state (write). `issue_id` is the Linear
     /// internal id (the `id` field from a previewed [`Issue`]), not the
     /// identifier (`COR-12`).
@@ -1070,6 +1194,11 @@ impl LinearClient {
     /// Create an issue in `team_id` (write), with an optional initial workflow
     /// state and labels. `state_id` / `label_ids` are Linear internal ids
     /// (resolve label names via [`Self::discover`]). Returns the new issue.
+    /// File an issue. `parent_id` makes it a sub-issue of that epic.
+    ///
+    /// `parentId` is sent as a nullable variable rather than by building two
+    /// query strings: Linear treats an explicit `null` as "no parent", which is
+    /// what every caller outside the epic orchestrator wants.
     pub async fn create_issue(
         &self,
         team_id: &str,
@@ -1077,14 +1206,15 @@ impl LinearClient {
         description: &str,
         state_id: Option<&str>,
         label_ids: &[String],
+        parent_id: Option<&str>,
     ) -> Result<CreatedIssue, LinearError> {
         let body = serde_json::json!({
-            "query": "mutation($t:String!,$ti:String!,$d:String!,$s:String,$l:[String!]){ \
-                issueCreate(input:{teamId:$t, title:$ti, description:$d, stateId:$s, labelIds:$l}){ \
+            "query": "mutation($t:String!,$ti:String!,$d:String!,$s:String,$l:[String!],$p:String){ \
+                issueCreate(input:{teamId:$t, title:$ti, description:$d, stateId:$s, labelIds:$l, parentId:$p}){ \
                 success issue { id identifier url } } }",
             "variables": {
                 "t": team_id, "ti": title, "d": description,
-                "s": state_id, "l": label_ids,
+                "s": state_id, "l": label_ids, "p": parent_id,
             },
         });
         parse_created_issue(&self.post(body).await?)
@@ -1686,6 +1816,90 @@ mod tests {
         assert_eq!(issues.len(), 1);
         assert!(issues[0].labels.is_empty());
     }
+    fn children(raw: &str) -> Vec<SubIssue> {
+        parse_children(
+            format!(r#"{{"data":{{"issue":{{"children":{{"nodes":{raw}}}}}}}}}"#).as_bytes(),
+        )
+        .expect("parse")
+    }
+
+    #[test]
+    fn children_come_back_in_board_order_not_response_order() {
+        // The orchestrator builds them one at a time, so "which is next" is the
+        // whole question — and Linear returns children in creation order.
+        let list = children(
+            r#"[
+              {"id":"c","identifier":"AIH-3","title":"Third","url":"u3","sortOrder":3.5,
+               "state":{"id":"s1","name":"Queued"},"labels":{"nodes":[]}},
+              {"id":"a","identifier":"AIH-1","title":"First","url":"u1","sortOrder":1.0,
+               "state":{"id":"s2","name":"Done"},"labels":{"nodes":[]}},
+              {"id":"b","identifier":"AIH-2","title":"Second","url":"u2","sortOrder":2.25,
+               "state":{"id":"s1","name":"Queued"},"labels":{"nodes":[]}}
+            ]"#,
+        );
+        assert_eq!(
+            list.iter()
+                .map(|c| c.identifier.as_str())
+                .collect::<Vec<_>>(),
+            ["AIH-1", "AIH-2", "AIH-3"]
+        );
+        // The next piece to build is the first one not yet finished.
+        let next = list.iter().find(|c| c.state == "Queued").unwrap();
+        assert_eq!(next.identifier, "AIH-2");
+    }
+
+    #[test]
+    fn a_child_carries_what_the_supervisor_grades_against() {
+        let list = children(
+            r#"[{"id":"x","identifier":"AIH-9","title":"Add the thing",
+                 "url":"https://l/x","sortOrder":1.0,
+                 "description":"Acceptance:\n- it works",
+                 "state":{"id":"st","name":"Built"},
+                 "labels":{"nodes":[{"name":"corrective"},{"name":"AI Eligible"}]}}]"#,
+        );
+        let c = &list[0];
+        assert_eq!(c.id, "x");
+        assert_eq!(c.state_id, "st");
+        assert_eq!(c.state, "Built");
+        assert_eq!(c.body.as_deref(), Some("Acceptance:\n- it works"));
+        assert_eq!(c.labels, ["corrective", "AI Eligible"]);
+    }
+
+    #[test]
+    fn an_epic_with_no_children_is_empty_not_an_error() {
+        assert!(children("[]").is_empty());
+        // And an id that resolves to nothing at all.
+        assert!(parse_children(br#"{"data":{"issue":null}}"#)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn one_malformed_child_does_not_fail_the_epic_read() {
+        // A missing state or label set must not cost the caller every other
+        // sub-issue: the orchestrator would lose its entire memory of the epic.
+        let list = children(
+            r#"[{"id":"y","identifier":"AIH-4","title":"Odd one","url":"u","sortOrder":1.0}]"#,
+        );
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].state, "unknown");
+        assert!(list[0].state_id.is_empty());
+        assert!(list[0].labels.is_empty());
+        assert!(list[0].body.is_none());
+    }
+
+    #[test]
+    fn an_empty_description_reads_as_absent() {
+        // "no acceptance criteria" and "whitespace" must not be different cases
+        // to the supervisor.
+        let list = children(
+            r#"[{"id":"z","identifier":"AIH-5","title":"T","url":"u","sortOrder":1.0,
+                 "description":"   ","state":{"id":"s","name":"Queued"},
+                 "labels":{"nodes":[]}}]"#,
+        );
+        assert!(list[0].body.is_none());
+    }
+
     #[test]
     fn parse_comments_maps_body_author_and_time() {
         let json = br#"{"data":{"issue":{"comments":{"nodes":[

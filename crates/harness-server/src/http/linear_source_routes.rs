@@ -208,6 +208,9 @@ pub async fn create_issue(
             &body.description,
             Some(&binding.source_state_id),
             &[],
+            // Top-level: this route files a standalone issue for a human to
+            // triage, not a piece of an epic.
+            None,
         )
         .await
     {
