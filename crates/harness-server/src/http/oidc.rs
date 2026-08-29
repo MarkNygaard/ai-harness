@@ -38,7 +38,7 @@ use super::accounts::{self, AdminOnly, Mode, ROLE_MEMBER};
 use super::runs_routes::RunsState;
 use super::sso_flow::{
     back, binding_cookie, binding_matches, clear_binding_cookie, enc, err, hash, issue_state,
-    random_token, safe_next, take_state, Attempt, Pending, Provider,
+    random_token, safe_next, take_state, with_cookies, Attempt, Pending, Provider,
 };
 
 /// Credential provider the configuration lives under.
@@ -337,14 +337,10 @@ pub async fn callback(
     }
 
     match complete(&state, code, &pending).await {
-        Ok(Some(cookie)) => (
-            [
-                (header::SET_COOKIE, cookie),
-                (header::SET_COOKIE, clear_binding_cookie(secure)),
-            ],
+        Ok(Some(cookie)) => with_cookies(
             back(&pending.next, "ok", None),
-        )
-            .into_response(),
+            [cookie, clear_binding_cookie(secure)],
+        ),
         // A test proves the round trip without signing anybody in — and only
         // then is the provider offered on the sign-in page.
         Ok(None) => {

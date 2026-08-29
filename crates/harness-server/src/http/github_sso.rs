@@ -40,7 +40,7 @@ use super::accounts::{self, AdminOnly, Mode, ROLE_MEMBER};
 use super::runs_routes::RunsState;
 use super::sso_flow::{
     back, binding_cookie, binding_matches, clear_binding_cookie, enc, err, hash, issue_state,
-    random_token, safe_next, take_state, Attempt, Provider,
+    random_token, safe_next, take_state, with_cookies, Attempt, Provider,
 };
 
 /// Credential provider the configuration lives under.
@@ -368,14 +368,10 @@ pub async fn callback(
         )
         .await
         {
-            Ok(cookie) => (
-                [
-                    (header::SET_COOKIE, cookie),
-                    (header::SET_COOKIE, clear_binding_cookie(secure)),
-                ],
+            Ok(cookie) => with_cookies(
                 back(&pending.next, "ok", None),
-            )
-                .into_response(),
+                [cookie, clear_binding_cookie(secure)],
+            ),
             Err(e) => back(landing, "error", Some(&e)),
         },
         Ok(None) => {
