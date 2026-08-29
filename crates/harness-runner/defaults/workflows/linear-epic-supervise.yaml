@@ -36,8 +36,15 @@ description: |
     * `EPIC_CORRECTIVE_LABEL` — a label id put on correctives, for looks.
 
   It also **starts** an epic. Hand it the epic itself — an issue with
-  sub-issues and no parent — and it moves the first piece into the build
-  column. Hand it a merged piece and it grades that piece. The two are told
+  sub-issues and no parent — and it creates the integration branch
+  `epic/<identifier>` and moves the first piece into the build column.
+
+  **Every piece is built on that branch and merged into it**, so the feature
+  accumulates in one place and `main` sees it once, finished, rather than in
+  pieces. Piece N+1 branches from something that already contains 1..N. The
+  poller derives the branch name from a piece's parent, so nothing has to be
+  configured for this — but it does mean the branch must exist before the first
+  piece starts, which is why it is created here. Hand it a merged piece and it grades that piece. The two are told
   apart by whether the issue has a parent, which needs no configuration and
   cannot be set wrong.
 
@@ -88,8 +95,16 @@ nodes:
         # once, so "first by board order" is the one that has not run.
         first_id="$(jq -r 'sort_by(.sortOrder) | .[0].id' "$ARTIFACTS_DIR/children.json")"
         first_ident="$(jq -r 'sort_by(.sortOrder) | .[0].identifier' "$ARTIFACTS_DIR/children.json")"
-        jq -n --arg id "$first_id" --arg ident "$first_ident" --argjson kids "$kids" \
-          '{mode: "epic", first_id: $id, first_ident: $ident, pieces: $kids}'
+        # The epic's own identifier names its integration branch, and the poller
+        # derives the same name when it bases each piece on it.
+        epic_ident="$(jq -r '.identifier // empty' "$ARTIFACTS_DIR/piece.json")"
+        if [ -z "$epic_ident" ]; then
+          echo "Linear did not return this epic's identifier, so its branch cannot be named." >&2
+          exit 1
+        fi
+        jq -n --arg id "$first_id" --arg ident "$first_ident" --arg epic "$epic_ident" \
+              --argjson kids "$kids" \
+          '{mode: "epic", first_id: $id, first_ident: $ident, epic_ident: $epic, pieces: $kids}'
         exit 0
       fi
 
@@ -142,12 +157,34 @@ nodes:
       epic="$ISSUE_ID"
       first_id="$context.output.first_id"
       first_ident="$context.output.first_ident"
+      branch="epic/$context.output.epic_ident"
       ready="${EPIC_READY_STATE:-}"
       note="$ARTIFACTS_DIR/note.md"
+
+      # The integration branch. Every piece of this epic is built on it and
+      # merged into it, so `main` sees the feature once, finished, rather than
+      # in pieces — and piece N+1 branches from something that already contains
+      # 1..N. It must exist before the first piece starts, because the poller
+      # bases that run on it by name.
+      #
+      # Pushed empty, straight off the base branch. This run's worktree is
+      # already cut from that base, so the branch is exactly `main` at this
+      # moment plus nothing.
+      if git ls-remote --exit-code --heads origin "$branch" > /dev/null 2>&1; then
+        echo "$branch already exists — leaving it alone"
+      elif git push origin "HEAD:refs/heads/$branch" 2>"$ARTIFACTS_DIR/push.err"; then
+        echo "created $branch"
+      else
+        echo "Could not create $branch — the epic cannot start without it:" >&2
+        cat "$ARTIFACTS_DIR/push.err" >&2
+        exit 1
+      fi
 
       if [ -z "$ready" ]; then
         {
           echo "**This epic has $context.output.pieces pieces.** First up is $first_ident."
+          echo
+          echo "The feature will accumulate on \`$branch\`."
           echo
           echo "_EPIC_READY_STATE is not set on this project, so start it by hand._"
         } > "$note"
@@ -155,7 +192,9 @@ nodes:
         {
           echo "**Started $first_ident**, the first of $context.output.pieces pieces."
           echo
-          echo "Each one is reviewed against its own acceptance criteria before the next begins."
+          echo "The feature accumulates on \`$branch\`. Each piece is built on that"
+          echo "branch and reviewed against its own acceptance criteria before the"
+          echo "next begins; \`main\` sees it once, finished."
         } > "$note"
       else
         {
