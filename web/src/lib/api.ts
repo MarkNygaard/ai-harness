@@ -40,12 +40,35 @@ export async function apiFetch(
   const resp = await fetch(path, merged);
   if (resp.status === 401) {
     unauthorizedEvents.dispatchEvent(new Event("unauthorized"));
-    throw new ApiError(401, `${path} → 401`);
+    throw new ApiError(401, await errorMessage(resp, path));
   }
   if (!resp.ok) {
-    throw new ApiError(resp.status, `${path} → HTTP ${resp.status}`);
+    throw new ApiError(resp.status, await errorMessage(resp, path));
   }
   return resp;
+}
+
+/**
+ * What the server said went wrong, when it said anything.
+ *
+ * Routes report failures as `{"error": "..."}`, and those messages are written
+ * for whoever is configuring the thing: "the mail server refused it:
+ * certificate verify failed" is a problem you can go and fix, where
+ * `HTTP 502` is only a shrug. Discarding the body meant every such message in
+ * the app was written and then thrown away at the door.
+ *
+ * Falls back to the status line for anything that is not one of ours — a
+ * proxy's HTML error page, an empty body, a truncated response.
+ */
+async function errorMessage(resp: Response, path: string): Promise<string> {
+  const fallback = `${path} → HTTP ${resp.status}`;
+  try {
+    const body: unknown = await resp.json();
+    const message = (body as { error?: unknown })?.error;
+    return typeof message === "string" && message.trim() ? message : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 export async function apiJson<T>(path: string, init?: RequestInit): Promise<T> {
