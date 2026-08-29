@@ -242,6 +242,33 @@ pub(crate) fn safe_next(raw: Option<&str>) -> String {
 /// bound.
 const MAX_DETAIL: usize = 300;
 
+/// Attach cookies to a response, keeping every one of them.
+///
+/// **`[(SET_COOKIE, a), (SET_COOKIE, b)]` does not do this.** axum's array
+/// `IntoResponseParts` calls `HeaderMap::insert`, which *replaces* the previous
+/// value rather than adding to it, so of any number of cookies written that way
+/// only the last survives.
+///
+/// That silently threw away the session cookie on every successful provider
+/// sign-in: it was written first, then overwritten by the one clearing the
+/// binding cookie. The browser was redirected to the dashboard holding no
+/// session, rendered it, asked who it was, and was sent back to the login page.
+/// Set-Cookie is the one header where this matters, because it is the one that
+/// is legitimately repeated.
+pub(crate) fn with_cookies(mut resp: Response, cookies: [String; 2]) -> Response {
+    for cookie in cookies {
+        match axum::http::HeaderValue::from_str(&cookie) {
+            Ok(value) => {
+                resp.headers_mut().append(header::SET_COOKIE, value);
+            }
+            // A cookie we built ourselves cannot fail to parse; if one somehow
+            // did, dropping it silently is better than losing the response.
+            Err(e) => tracing::error!("sso: unusable cookie header ({e})"),
+        }
+    }
+    resp
+}
+
 /// Send the browser back with an outcome. Relative `Location`: it is already on
 /// this origin.
 pub(crate) fn back(to: &str, status: &str, detail: Option<&str>) -> Response {
@@ -445,5 +472,40 @@ mod tests {
                     verified for @somebody. Ask an administrator to invite that \
                     address, or change the address on your account.";
         assert_eq!(shorten(real), real, "this message must survive intact");
+    }
+
+    #[test]
+    fn both_cookies_reach_the_browser() {
+        // The bug this exists for: written as one array, the second Set-Cookie
+        // replaced the first and the session was lost on every SSO sign-in.
+        let resp = with_cookies(
+            back("/", "ok", None),
+            [
+                "harness_session=abc123; Path=/; HttpOnly".to_string(),
+                "harness_sso=; Path=/api/auth; Max-Age=0".to_string(),
+            ],
+        );
+        let set: Vec<_> = resp
+            .headers()
+            .get_all(header::SET_COOKIE)
+            .iter()
+            .map(|v| v.to_str().unwrap().to_string())
+            .collect();
+        assert_eq!(set.len(), 2, "both cookies must survive: {set:?}");
+        assert!(set.iter().any(|c| c.starts_with("harness_session=abc123")));
+        assert!(set.iter().any(|c| c.starts_with("harness_sso=;")));
+    }
+
+    #[test]
+    fn the_outcome_still_rides_along() {
+        let resp = with_cookies(
+            back("/next", "ok", None),
+            ["a=1".to_string(), "b=2".to_string()],
+        );
+        assert_eq!(resp.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            resp.headers().get(header::LOCATION).unwrap(),
+            "/next?sso=ok"
+        );
     }
 }
