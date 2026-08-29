@@ -6,12 +6,12 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 import {
-  Menu,
-  MenuContent,
-  MenuItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "@/components/ui/menu";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAuthStatus, useLogout } from "@/lib/auth";
 
 /**
@@ -50,8 +50,8 @@ export function AccountMenu() {
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <Menu>
-          <MenuTrigger
+        <DropdownMenu>
+          <DropdownMenuTrigger
             render={<SidebarMenuButton size="lg" tooltip={user.email} />}
           >
             <div className="flex min-w-0 flex-1 flex-col text-left">
@@ -62,21 +62,23 @@ export function AccountMenu() {
               </span>
             </div>
             <IconChevronUp className="shrink-0 text-muted-foreground" />
-          </MenuTrigger>
+          </DropdownMenuTrigger>
 
-          <MenuContent>
-            <MenuItem render={<Link to="/settings/preferences" />}>
+          {/* Upwards: this sits at the bottom of the sidebar, and the default
+              downward placement would open off the end of the screen. */}
+          <DropdownMenuContent side="top" sideOffset={6}>
+            <DropdownMenuItem render={<Link to="/settings/preferences" />}>
               Settings
-            </MenuItem>
+            </DropdownMenuItem>
             {/* Members is administrator-only, so offering it to everyone else
                 would be a route to a page they cannot open. */}
             {isAdmin && (
-              <MenuItem render={<Link to="/settings/members" />}>
+              <DropdownMenuItem render={<Link to="/settings/members" />}>
                 Invite and manage members
-              </MenuItem>
+              </DropdownMenuItem>
             )}
-            <MenuSeparator />
-            <MenuItem
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
               onClick={() => logout.mutate()}
               disabled={logout.isPending}
               // Signing out is a request in flight, not a navigation: keep the
@@ -84,9 +86,9 @@ export function AccountMenu() {
               closeOnClick={false}
             >
               {logout.isPending ? "Signing out…" : "Sign out"}
-            </MenuItem>
-          </MenuContent>
-        </Menu>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </SidebarMenuItem>
     </SidebarMenu>
   );
