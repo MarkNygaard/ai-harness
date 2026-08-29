@@ -127,8 +127,14 @@ Or, for an editor that reads a config file:
 > user-level config. Keys are prefixed `hrn_mcp_` so secret scanners can catch
 > one that slips into a repo.
 
+**With sign-in enabled, mint a personal access token** on that same page instead
+of using the shared key. The snippet then carries your token, so a run triggered
+from your editor is attributed to you rather than to the install -- and revoking
+one person's access does not disturb anybody else's editor. A minted token is
+shown in the clear only while the page is open.
+
 A deployment that still sets `HARNESS_API_TOKEN` can keep using it as the bearer
-token instead; both are accepted.
+token instead; all three are accepted.
 
 ## Documentation
 
