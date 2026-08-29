@@ -47,10 +47,6 @@ const WORKFLOWS: &[(&str, &str)] = &[
         include_str!("../defaults/workflows/review-area.yaml"),
     ),
     (
-        "linear-epic-plan",
-        include_str!("../defaults/workflows/linear-epic-plan.yaml"),
-    ),
-    (
         "linear-epic-supervise",
         include_str!("../defaults/workflows/linear-epic-supervise.yaml"),
     ),
@@ -195,34 +191,24 @@ mod tests {
             Some("$review.output.passed != 'true'")
         );
 
-        // An issue with no epic above it is cancelled, not failed: the likely
-        // cause is a binding on a column that also holds ordinary work, and
-        // that should not read as a broken run.
+        // An issue that is neither a piece nor an epic is cancelled, not
+        // failed: the likely cause is a column that also holds ordinary work,
+        // and that should not read as a broken run.
         assert!(matches!(
             node("not-a-piece").kind,
             harness_dag::NodeKind::Cancel(_)
         ));
 
+        // The three cases are mutually exclusive, so exactly one path runs:
+        // grade a merged piece, start an epic, or cancel.
+        let gate = |id: &str| node(id).when.clone().expect(id);
+        assert_eq!(gate("review"), "$context.output.mode == 'piece'");
+        assert_eq!(gate("start-epic"), "$context.output.mode == 'epic'");
+        assert_eq!(gate("not-a-piece"), "$context.output.mode == 'neither'");
+
         // The reviewer is the expensive one on purpose; everything else is shell.
         let review = node("review");
         assert_eq!(review.model.as_deref(), Some("opus"));
-    }
-
-    #[test]
-    fn the_epic_planner_parses_and_refuses_before_it_writes() {
-        let yaml = default_workflow("linear-epic-plan").expect("registered");
-        let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow must parse");
-
-        let ids: Vec<&str> = wf.nodes.iter().map(|n| n.id.as_str()).collect();
-        assert_eq!(ids, ["guard", "plan", "file-sub-issues", "ledger"]);
-
-        // The order is the safety property: nothing is filed until the guard
-        // has established that this epic has no sub-issues yet, so a second
-        // trigger cannot file a duplicate of every piece.
-        let filing = wf.nodes.iter().find(|n| n.id == "file-sub-issues").unwrap();
-        assert_eq!(filing.depends_on, ["plan"]);
-        let plan = wf.nodes.iter().find(|n| n.id == "plan").unwrap();
-        assert_eq!(plan.depends_on, ["guard"]);
     }
 
     #[test]
