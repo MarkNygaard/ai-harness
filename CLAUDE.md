@@ -75,6 +75,34 @@ Always: `cargo fmt --all` (or `cd web && bunx prettier`) before committing.
   `bun` and a built `web/dist`. The `web/` app depends on `sdk/typescript` for
   shared API types.
 
+## Web UI
+
+**Use the shadcn component if one exists.** `web/src/components/ui/` is the
+source of truth for what a control looks like — `Button`, `Input`, `Select`,
+`Card`, `Dialog`, `DropdownMenu`, `Badge`, `Tabs`, and the rest. Import from
+there rather than styling a raw `<input>`, `<select>` or `<button>`.
+
+- **Missing a primitive?** Add it: `cd web && bunx shadcn@latest add <name>`.
+  The project is configured for the `base-nova` style over `@base-ui/react`
+  (see `web/components.json`), so the registry version fits the theme and the
+  existing components. Hand-writing a wrapper is a last resort, and only when
+  the registry genuinely has no equivalent.
+- **Never copy a class string between files.** Local `inputCls`-style constants
+  are how two controls end up 4px apart with nothing saying which is right —
+  they are a duplicate definition of something `ui/` already defines. Several
+  files still carry one; do not add another, and prefer removing the one you
+  touch.
+- Sizes come from the component's own variants. Mixing `size="sm"` (h-7) with a
+  default-size control (h-8) in the same row is the usual cause of a row that
+  looks subtly wrong.
+- Theme tokens, not literal colours: `bg-card`, `text-muted-foreground`,
+  `border-border`. Both themes are defined in `web/src/styles/globals.css`, and
+  a hard-coded hex only works in one of them. A brand mark is the exception,
+  and only when the colour reads on both grounds.
+- `web/` is **not** prettier-clean as committed. Scope formatting to the files
+  you changed (`bunx prettier --write <paths>`); a bare `--write` reformats
+  dozens of untouched files into your diff.
+
 ## Architecture & glossary
 
 The harness builds prompts and manages lifecycle; agents execute. Key crates:
