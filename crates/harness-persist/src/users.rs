@@ -307,15 +307,31 @@ impl UserStore {
     /// The account behind a session cookie, if the session is live and the
     /// account can still sign in.
     ///
-    /// Touches `last_seen_at` so an idle session can be told from an active one.
-    pub async fn user_for_session(&self, session_id: &str) -> Result<Option<User>, PersistError> {
+    /// **Using a session extends it.** `idle` is the window measured from this
+    /// moment, so someone who visits daily is never signed out; `max_age` is
+    /// measured from when the session was opened and is the ceiling that window
+    /// cannot pass. Without the ceiling a stolen cookie would live forever,
+    /// since an attacker holding one can keep it warm as easily as its owner.
+    ///
+    /// The write happens in the same statement that touches `last_seen_at`,
+    /// which this already did on every request, so extending costs nothing.
+    pub async fn user_for_session(
+        &self,
+        session_id: &str,
+        idle: Duration,
+        max_age: Duration,
+    ) -> Result<Option<User>, PersistError> {
         let hash = hash_session_id(session_id);
         let row: Option<(String,)> = sqlx::query_as(
-            "UPDATE harness_sessions SET last_seen_at = now()
+            "UPDATE harness_sessions
+                SET last_seen_at = now(),
+                    expires_at = least($2, created_at + ($3::double precision * interval '1 second'))
              WHERE id_hash = $1 AND expires_at > now()
              RETURNING user_id",
         )
         .bind(&hash)
+        .bind(Utc::now() + idle)
+        .bind(max_age.num_seconds() as f64)
         .fetch_optional(&self.pool)
         .await?;
         let Some((user_id,)) = row else {
@@ -361,6 +377,10 @@ impl UserStore {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Windows long enough not to interfere with whatever a line is checking.
+    const HOUR: Duration = Duration::hours(1);
+    const NINETY_DAYS: Duration = Duration::days(90);
 
     fn db_url() -> Option<String> {
         let url = std::env::var("HARNESS_DATABASE_URL").ok()?;
@@ -463,7 +483,11 @@ mod tests {
             .await
             .expect("open");
 
-        let who = store.user_for_session(&sid).await.unwrap().expect("live");
+        let who = store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .expect("live");
         assert_eq!(who.id, user.id);
         // Opening a session records the login.
         assert!(store
@@ -475,22 +499,38 @@ mod tests {
             .is_some());
 
         // An unknown id is not a session, and the raw id is not the stored key.
-        assert!(store.user_for_session("nope").await.unwrap().is_none());
         assert!(store
-            .user_for_session(&hash_session_id(&sid))
+            .user_for_session("nope", HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .user_for_session(&hash_session_id(&sid), HOUR, NINETY_DAYS)
             .await
             .unwrap()
             .is_none());
 
         // Disabling the account takes its sessions with it, effectively.
         store.set_disabled(&user.id, true).await.unwrap();
-        assert!(store.user_for_session(&sid).await.unwrap().is_none());
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
         store.set_disabled(&user.id, false).await.unwrap();
-        assert!(store.user_for_session(&sid).await.unwrap().is_some());
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
 
         // Signing out actually signs out.
         store.close_session(&sid).await.unwrap();
-        assert!(store.user_for_session(&sid).await.unwrap().is_none());
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
 
         // An expired session is not a session, and pruning removes it.
         let expired = uuid::Uuid::new_v4().to_string();
@@ -498,7 +538,11 @@ mod tests {
             .open_session(&expired, &user.id, Duration::seconds(-1))
             .await
             .unwrap();
-        assert!(store.user_for_session(&expired).await.unwrap().is_none());
+        assert!(store
+            .user_for_session(&expired, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
         assert!(store.prune_sessions().await.unwrap() >= 1);
 
         // Deleting the account cascades to its sessions.
@@ -508,7 +552,76 @@ mod tests {
             .await
             .unwrap();
         store.delete(&user.id).await.unwrap();
-        assert!(store.user_for_session(&live).await.unwrap().is_none());
+        assert!(store
+            .user_for_session(&live, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
+    }
+
+    /// Using a session carries it forward, up to a ceiling.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_session_slides_while_it_is_used_but_not_past_its_ceiling() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let user = store
+            .create(&NewUser {
+                email: unique_email("slider"),
+                name: "Slider".into(),
+                role: "member".into(),
+                password_hash: Some("hash".into()),
+            })
+            .await
+            .expect("create");
+
+        // This one would lapse in a second if using it did nothing.
+        let carried = uuid::Uuid::new_v4().to_string();
+        store
+            .open_session(&carried, &user.id, Duration::seconds(1))
+            .await
+            .unwrap();
+        store
+            .user_for_session(&carried, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .expect("live when first used");
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+        assert!(
+            store
+                .user_for_session(&carried, HOUR, NINETY_DAYS)
+                .await
+                .unwrap()
+                .is_some(),
+            "using it should have pushed the window past the original second"
+        );
+
+        // The ceiling wins over the slide. With a zero maximum age the window
+        // cannot move past the moment the session was opened, so the very next
+        // request finds it expired however recently it was used.
+        let capped = uuid::Uuid::new_v4().to_string();
+        store
+            .open_session(&capped, &user.id, Duration::hours(1))
+            .await
+            .unwrap();
+        assert!(store
+            .user_for_session(&capped, HOUR, Duration::seconds(0))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(
+            store
+                .user_for_session(&capped, HOUR, Duration::seconds(0))
+                .await
+                .unwrap()
+                .is_none(),
+            "the ceiling should have clamped the window back to creation time"
+        );
+
+        store.delete(&user.id).await.unwrap();
     }
 
     #[tokio::test]
