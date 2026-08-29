@@ -304,10 +304,11 @@ mutation AgentSessionCreateOnIssue($input: AgentSessionCreateOnIssue!) {
 const ISSUE_CONTEXT_QUERY: &str = r#"
 query IssueContext($id: String!) {
   issue(id: $id) {
+    identifier
     team { id }
     state { id name }
     delegate { id }
-    parent { id }
+    parent { id identifier }
     labels { nodes { name } }
   }
 }"#;
@@ -747,6 +748,8 @@ pub fn parse_agent_session_event(json: &[u8]) -> Result<Option<AgentSessionEvent
 /// id degrades instead of erroring.
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct IssueContext {
+    /// Human identifier, e.g. `AIH-12`. Names the epic's integration branch.
+    pub identifier: Option<String>,
     pub team_id: Option<String>,
     pub state_id: Option<String>,
     /// Human-readable status name, for messages ("… is in Backlog").
@@ -759,6 +762,10 @@ pub struct IssueContext {
     /// count what else is under it, and to file a corrective beside it. Nothing
     /// else in the client goes upward.
     pub parent_id: Option<String>,
+    /// The epic's human identifier, which is what its branch is named
+    /// after. Carried beside `parent_id` so naming a branch costs no
+    /// second read.
+    pub parent_identifier: Option<String>,
     /// Label names on the issue. `corrective` is how a fix round is counted,
     /// since the count lives in Linear rather than in a table here.
     pub labels: Vec<String>,
@@ -775,19 +782,27 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
     #[derive(Deserialize)]
     struct IssueNode {
         #[serde(default)]
+        identifier: Option<String>,
+        #[serde(default)]
         team: Option<IdRef>,
         #[serde(default)]
         state: Option<StateRef>,
         #[serde(default)]
         delegate: Option<IdRef>,
         #[serde(default)]
-        parent: Option<IdRef>,
+        parent: Option<NamedRef>,
         #[serde(default)]
         labels: Option<Conn<IssueLabelNode>>,
     }
     #[derive(Deserialize)]
     struct IdRef {
         id: String,
+    }
+    #[derive(Deserialize)]
+    struct NamedRef {
+        id: String,
+        #[serde(default)]
+        identifier: Option<String>,
     }
     #[derive(Deserialize)]
     struct StateRef {
@@ -799,12 +814,15 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
     let Some(issue) = data.issue else {
         return Ok(IssueContext::default());
     };
+    let parent = issue.parent;
     Ok(IssueContext {
+        identifier: issue.identifier,
         team_id: issue.team.map(|t| t.id),
         state_id: issue.state.as_ref().map(|s| s.id.clone()),
         state_name: issue.state.and_then(|s| s.name),
         delegate_id: issue.delegate.map(|d| d.id),
-        parent_id: issue.parent.map(|p| p.id),
+        parent_identifier: parent.as_ref().and_then(|p| p.identifier.clone()),
+        parent_id: parent.map(|p| p.id),
         labels: issue
             .labels
             .map(|l| l.nodes.into_iter().map(|n| n.name).collect())

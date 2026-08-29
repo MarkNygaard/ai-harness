@@ -450,9 +450,22 @@ async fn claim_and_fire(
         );
         Vec::new()
     });
+    // An epic's pieces build on the epic's branch, not on the binding's base:
+    // the feature accumulates in one place and `main` is left alone.
+    let route = super::linear_agent::route_issue(state, client, b, &issue.id).await;
+    let (workflow, base_branch) = match &route {
+        super::linear_agent::Route::Supervise => (
+            super::linear_agent::EPIC_SUPERVISOR.to_string(),
+            b.base_branch.clone(),
+        ),
+        super::linear_agent::Route::BuildOnEpic(branch) => {
+            (b.workflow.clone(), Some(branch.clone()))
+        }
+        super::linear_agent::Route::Build => (b.workflow.clone(), b.base_branch.clone()),
+    };
     let req = CreateRunRequest {
         triggered_by: Some("linear".to_string()),
-        workflow: super::linear_agent::workflow_for_issue(state, client, b, &issue.id).await,
+        workflow,
         title: Some(format!("{} {}", issue.identifier, issue.title)),
         issue_id: Some(issue.id.clone()),
         // Images pasted into the issue or its comments are downloaded and the
@@ -466,7 +479,7 @@ async fn claim_and_fire(
         .await,
         args: String::new(),
         real: true,
-        base_branch: b.base_branch.clone(),
+        base_branch,
         project: Some(b.project.clone()),
         swap_from: None,
         swap_to: None,

@@ -499,18 +499,27 @@ async fn start_delegated_run(
         }
     }
 
+    // One decision, two fields: which workflow, and which base branch. A piece
+    // of an epic is built on the epic's branch so the feature accumulates
+    // there; the supervisor reviewing a piece needs that same branch, or it
+    // would grade a worktree without the code in it.
+    let route = match event.issue_id.as_deref() {
+        Some(id) => match route_issue(state, &client, &binding, id).await {
+            Route::Supervise => (EPIC_SUPERVISOR.to_string(), binding.base_branch.clone()),
+            Route::BuildOnEpic(branch) => (binding.workflow.clone(), Some(branch)),
+            Route::Build => (binding.workflow.clone(), binding.base_branch.clone()),
+        },
+        None => (binding.workflow.clone(), binding.base_branch.clone()),
+    };
     let req = CreateRunRequest {
         triggered_by: Some("linear".to_string()),
-        workflow: match event.issue_id.as_deref() {
-            Some(id) => workflow_for_issue(state, &client, &binding, id).await,
-            None => binding.workflow.clone(),
-        },
+        workflow: route.0.clone(),
         title,
         description,
         issue_id: event.issue_id.clone(),
         args: String::new(),
         real: true,
-        base_branch: binding.base_branch.clone(),
+        base_branch: route.1.clone(),
         project: Some(binding.project.clone()),
         swap_from: None,
         swap_to: None,
@@ -906,87 +915,155 @@ async fn resolve_target(
 /// The workflow that supervises an epic rather than building it.
 pub(crate) const EPIC_SUPERVISOR: &str = "linear-epic-supervise";
 
-/// Which workflow this issue should actually run.
+/// What should happen to an issue the poller has just claimed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Route {
+    /// Build it on the binding's own base branch. The ordinary case.
+    Build,
+    /// Build it on an epic's integration branch, because it is a piece of one.
+    BuildOnEpic(String),
+    /// Hand it to the supervisor instead of building it.
+    Supervise,
+}
+
+/// Where an epic's work accumulates.
 ///
-/// **An issue with sub-issues must not be built.** Building it means putting a
-/// whole feature into one pull request, which is the thing decomposing it was
-/// meant to avoid. So when a delegated issue turns out to have children, the
-/// run goes to the epic supervisor instead — it starts the first piece, and
-/// each piece is then built by this very binding in turn.
+/// `None` for an identifier that could not safely name a branch. Linear's are
+/// `AIH-12` and always could, but a branch name is a path: one containing a
+/// slash, a space or `..` would silently land the work somewhere else, and
+/// there is no reason to find out the hard way.
+pub(crate) fn epic_branch(identifier: &str) -> Option<String> {
+    let id = identifier.trim();
+    let usable = !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    usable.then(|| format!("epic/{id}"))
+}
+
+/// The whole routing decision, with the network already done.
 ///
-/// **Derived, not configured.** "Has children" is a fact about the board, and
-/// a second setting saying the same thing would be one more thing to get wrong
-/// — and to forget. The opt-in is having bound the supervisor at all: a project
-/// without that binding is untouched, and pays nothing for this check.
+/// Split out because every branch of it is a way an epic goes wrong quietly,
+/// and none of them need Linear to demonstrate:
 ///
-/// Order matters for cost. The two cheap local tests come first, then one
-/// database read, and only then a Linear round trip.
-pub(crate) async fn workflow_for_issue(
+///   * a **piece** builds on its epic's branch, never on `main` — that is what
+///     makes the feature accumulate in one place, and what lets piece N+1 see
+///     everything in 1..N;
+///   * the **supervisor reviewing a piece** needs that same branch, or it would
+///     grade a worktree that does not contain the code it is grading;
+///   * an **epic** goes to the supervisor rather than being built, since
+///     building it means the whole feature in one pull request;
+///   * the supervisor **starting** an epic builds nothing and stays on the
+///     binding's base, because the epic branch does not exist yet — it is about
+///     to create it.
+pub(crate) fn decide_route(
+    binding_workflow: &str,
+    epics_enabled: bool,
+    parent_identifier: Option<&str>,
+    has_children: bool,
+) -> Route {
+    if !epics_enabled {
+        return Route::Build;
+    }
+    // A piece of an epic, whoever is about to run: build it there, review it
+    // there. Falls through to `Build` if the identifier cannot name a branch.
+    if let Some(branch) = parent_identifier.and_then(epic_branch) {
+        return Route::BuildOnEpic(branch);
+    }
+    // Not a piece. The supervisor's own binding must not re-route to itself, or
+    // an epic handed to it would bounce forever.
+    if binding_workflow == EPIC_SUPERVISOR {
+        return Route::Build;
+    }
+    if has_children {
+        return Route::Supervise;
+    }
+    Route::Build
+}
+
+/// Whether epics are in play for this binding at all.
+///
+/// The opt-in is having bound the supervisor to the same team: without it
+/// nothing here changes, and no extra Linear read is made.
+fn epics_enabled(binding: &LinearSource, supervisor: Option<&LinearSource>) -> bool {
+    match supervisor {
+        Some(s) => s.enabled && s.team_id == binding.team_id,
+        None => false,
+    }
+}
+
+/// Route one claimed issue: which workflow, and on which base branch.
+///
+/// Reads are ordered by what they can rule out. `issue_context` answers "is
+/// this a piece?" and costs one round trip; only an issue with no parent needs
+/// the second read to ask "is this an epic?".
+pub(crate) async fn route_issue(
     state: &Arc<RunsState>,
     client: &LinearClient,
     binding: &LinearSource,
     issue_id: &str,
-) -> String {
-    let build = binding.workflow.clone();
-
+) -> Route {
     let Ok(store) = state.linear_source_store().await else {
-        return build;
+        return Route::Build;
     };
     let supervisor = store
         .get(&binding.project, EPIC_SUPERVISOR)
         .await
         .ok()
         .flatten();
-    if !may_route_to_supervisor(binding, supervisor.as_ref()) {
-        return build;
+    if !epics_enabled(binding, supervisor.as_ref()) {
+        return Route::Build;
     }
 
-    match client.list_children(issue_id).await {
-        Ok(kids) if !kids.is_empty() => {
-            tracing::info!(
-                "linear: {} has {} sub-issues — routing to {} instead of {}",
-                issue_id,
-                kids.len(),
-                EPIC_SUPERVISOR,
-                build
-            );
-            EPIC_SUPERVISOR.to_string()
-        }
-        Ok(_) => build,
-        // A failed read must not silently build an epic as one pull request.
-        // Refusing the run is not an option here (the caller has already
-        // claimed the issue), so build is the honest fallback — logged loudly.
+    let ctx = match client.issue_context(issue_id).await {
+        Ok(c) => c,
+        // A failed read must not silently build an epic as one pull request,
+        // but the issue is already claimed so refusing is not available. Build
+        // is the honest fallback, and the log is how it is noticed.
         Err(e) => {
             tracing::warn!(
-                "linear: could not read {}'s sub-issues ({}) — building it as an ordinary issue",
+                "linear: could not read {} ({}) — treating it as an ordinary issue",
                 issue_id,
                 e.0
             );
-            build
+            return Route::Build;
         }
-    }
-}
+    };
 
-/// Whether this binding is allowed to hand an epic to the supervisor.
-///
-/// Split from [`workflow_for_issue`] so the gate is testable without a Linear
-/// workspace — every condition here is local, and each one is a way the routing
-/// could go wrong rather than a detail:
-///
-///   * the supervisor's own binding must not re-route to itself, or an epic
-///     handed to it would bounce forever;
-///   * a **disabled** supervisor binding is not a supervisor, and its epics must
-///     keep being built the way they were yesterday;
-///   * a supervisor bound to a **different team** cannot see these issues, so
-///     routing to it would strand them.
-fn may_route_to_supervisor(binding: &LinearSource, supervisor: Option<&LinearSource>) -> bool {
-    if binding.workflow == EPIC_SUPERVISOR {
-        return false;
+    // Only ask about children when the parent answer did not settle it.
+    let has_children = if ctx.parent_identifier.is_none() && binding.workflow != EPIC_SUPERVISOR {
+        client
+            .list_children(issue_id)
+            .await
+            .map(|k| !k.is_empty())
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
+    let route = decide_route(
+        &binding.workflow,
+        true,
+        ctx.parent_identifier.as_deref(),
+        has_children,
+    );
+    match &route {
+        Route::BuildOnEpic(branch) => {
+            tracing::info!(
+                "linear: {} is a piece of an epic — building on {}",
+                issue_id,
+                branch
+            )
+        }
+        Route::Supervise => tracing::info!(
+            "linear: {} has sub-issues — routing to {}",
+            issue_id,
+            EPIC_SUPERVISOR
+        ),
+        Route::Build => {}
     }
-    match supervisor {
-        Some(s) => s.enabled && s.team_id == binding.team_id,
-        None => false,
-    }
+    route
 }
 
 fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
@@ -1388,45 +1465,112 @@ mod tests {
     }
 
     #[test]
-    fn an_epic_routes_to_the_supervisor_when_one_is_bound_to_the_same_team() {
-        let build = binding("team-a", "idea-to-pr", "todo");
-        let sup = binding("team-a", EPIC_SUPERVISOR, "todo");
-        assert!(may_route_to_supervisor(&build, Some(&sup)));
+    fn a_project_with_no_supervisor_builds_everything_as_before() {
+        // The opt-in. An install that never set epics up is untouched, even
+        // when its issues have sub-issues of their own.
+        assert_eq!(decide_route("idea-to-pr", false, None, true), Route::Build);
+        assert_eq!(
+            decide_route("idea-to-pr", false, Some("AIH-4"), false),
+            Route::Build
+        );
     }
 
     #[test]
-    fn a_project_with_no_supervisor_keeps_building_everything() {
-        // The opt-in. Nothing changes for an install that never set this up,
-        // including one whose ordinary issues have sub-issues.
-        let build = binding("team-a", "idea-to-pr", "todo");
-        assert!(!may_route_to_supervisor(&build, None));
+    fn a_piece_builds_on_its_epics_branch() {
+        // The whole point of the integration branch: the feature accumulates in
+        // one place, and piece N+1 branches from something containing 1..N.
+        assert_eq!(
+            decide_route("idea-to-pr", true, Some("AIH-12"), false),
+            Route::BuildOnEpic("epic/AIH-12".into())
+        );
     }
 
     #[test]
-    fn a_disabled_supervisor_is_not_a_supervisor() {
-        // Disabling a binding must put the behaviour back exactly as it was,
-        // not leave epics routed at something switched off.
-        let build = binding("team-a", "idea-to-pr", "todo");
-        let sup = disabled_binding("team-a", EPIC_SUPERVISOR, "todo");
-        assert!(!may_route_to_supervisor(&build, Some(&sup)));
+    fn the_supervisor_reviews_a_piece_on_that_same_branch() {
+        // Reviewing on the binding's base would grade a worktree that does not
+        // contain the code being graded.
+        assert_eq!(
+            decide_route(EPIC_SUPERVISOR, true, Some("AIH-12"), false),
+            Route::BuildOnEpic("epic/AIH-12".into())
+        );
     }
 
     #[test]
-    fn a_supervisor_on_another_team_cannot_be_routed_to() {
-        // It cannot see these issues, so handing it one would strand the epic
-        // in a column nothing watches.
-        let build = binding("team-a", "idea-to-pr", "todo");
-        let sup = binding("team-b", EPIC_SUPERVISOR, "todo");
-        assert!(!may_route_to_supervisor(&build, Some(&sup)));
+    fn an_epic_goes_to_the_supervisor_instead_of_being_built() {
+        assert_eq!(
+            decide_route("idea-to-pr", true, None, true),
+            Route::Supervise
+        );
     }
 
     #[test]
-    fn the_supervisors_own_binding_never_re_routes() {
-        // An epic handed to the supervisor would otherwise bounce to itself
-        // forever, one Linear read per hop.
-        let sup = binding("team-a", EPIC_SUPERVISOR, "merged");
-        let other = binding("team-a", EPIC_SUPERVISOR, "merged");
-        assert!(!may_route_to_supervisor(&sup, Some(&other)));
+    fn the_supervisor_starting_an_epic_stays_on_the_binding_base() {
+        // The epic branch does not exist yet — this run is about to create it.
+        // And it must not re-route to itself, or an epic would bounce forever.
+        assert_eq!(
+            decide_route(EPIC_SUPERVISOR, true, None, true),
+            Route::Build
+        );
+    }
+
+    #[test]
+    fn an_ordinary_issue_is_still_just_built() {
+        assert_eq!(decide_route("idea-to-pr", true, None, false), Route::Build);
+    }
+
+    #[test]
+    fn a_branch_name_that_is_not_a_branch_name_is_refused() {
+        // A branch name is a path. One with a slash or `..` in it would land
+        // the work somewhere other than where it was meant to go, and an
+        // identifier arrives from outside this process.
+        assert_eq!(epic_branch("AIH-12").as_deref(), Some("epic/AIH-12"));
+        assert_eq!(epic_branch("AIH_12").as_deref(), Some("epic/AIH_12"));
+        for bad in [
+            "",
+            "   ",
+            "a/b",
+            "..",
+            "a..b",
+            "a b",
+            "a~b",
+            "a^b",
+            "-".repeat(65).as_str(),
+        ] {
+            assert_eq!(epic_branch(bad), None, "{bad:?} must not name a branch");
+        }
+    }
+
+    #[test]
+    fn a_piece_whose_identifier_is_unusable_falls_back_to_building() {
+        // Refusing outright would strand the piece; building it on the
+        // binding's base is wrong but visible, and the branch check is what
+        // stops it going somewhere unintended.
+        assert_eq!(
+            decide_route("idea-to-pr", true, Some("bad/name"), false),
+            Route::Build
+        );
+    }
+
+    #[test]
+    fn epics_are_only_enabled_by_an_enabled_supervisor_on_the_same_team() {
+        let build = binding("team-a", "idea-to-pr", "todo");
+        assert!(epics_enabled(
+            &build,
+            Some(&binding("team-a", EPIC_SUPERVISOR, "merged"))
+        ));
+        // Switching the binding off has to restore yesterday's behaviour
+        // exactly, not leave epics routed at something that is off.
+        assert!(!epics_enabled(
+            &build,
+            Some(&disabled_binding("team-a", EPIC_SUPERVISOR, "merged"))
+        ));
+        // A supervisor on another team cannot see these issues, so routing to
+        // it would strand the epic in a column nothing watches.
+        assert!(!epics_enabled(
+            &build,
+            Some(&binding("team-b", EPIC_SUPERVISOR, "merged"))
+        ));
+        assert!(!epics_enabled(&build, None));
     }
 
     /// A binding with a full status map, as the UI produces.
