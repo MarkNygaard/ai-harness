@@ -519,6 +519,14 @@ async fn link(
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
+/// Whether GitHub sign-in is armed, for callers that only need the answer.
+pub(crate) async fn is_enabled(state: &Arc<RunsState>) -> bool {
+    match state.cred_store().await {
+        Ok(store) => config(store).await.is_some_and(|c| c.enabled),
+        Err(_) => false,
+    }
+}
+
 /// What the sign-in page may know before anybody has signed in.
 pub async fn public_status(Extension(state): Extension<Arc<RunsState>>) -> Response {
     let enabled = match state.cred_store().await {
