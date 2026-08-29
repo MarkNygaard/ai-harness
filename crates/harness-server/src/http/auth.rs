@@ -125,6 +125,13 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             // `Authorization` header. Authenticated instead by the single-use,
             // unguessable `state` nonce the server minted (see `linear_oauth`).
             | "/api/linear/oauth/callback"
+            // The identity provider's redirect, and what the sign-in page needs
+            // before anybody has signed in. Both are browser navigations that
+            // cannot carry a bearer token; the callback is authenticated by its
+            // single-use `state` nonce.
+            | "/api/auth/oidc/callback"
+            | "/api/auth/oidc/start"
+            | "/api/auth/oidc/status"
             // Linear's agent-session webhook (delegation / @-mention). Also a
             // third party we cannot hand a bearer token; authenticated by the
             // `Linear-Signature` HMAC over the raw body (see `linear_agent`).
