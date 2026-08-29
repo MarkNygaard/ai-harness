@@ -131,6 +131,26 @@ pub async fn comment(
     Ok(format!("commented on {issue_id}"))
 }
 
+/// One issue's context as JSON: team, state, parent, labels.
+///
+/// The supervisor fires on a sub-issue and needs the epic above it — to count
+/// what else is under it, and to file a corrective beside it. `children` only
+/// goes downward, so this is the other direction.
+pub async fn issue(
+    database_url: &str,
+    secret_key_b64: &str,
+    project: &str,
+    issue_id: &str,
+) -> Result<String, String> {
+    let r = resolve(database_url, secret_key_b64, project).await?;
+    let ctx = r
+        .client
+        .issue_context(issue_id)
+        .await
+        .map_err(|e| format!("could not read the issue: {e}"))?;
+    serde_json::to_string_pretty(&ctx).map_err(|e| format!("could not encode the result: {e}"))
+}
+
 /// An epic's sub-issues as JSON on stdout, in board order.
 ///
 /// JSON because the caller is a workflow step that has to branch on it — which

@@ -307,6 +307,8 @@ query IssueContext($id: String!) {
     team { id }
     state { id name }
     delegate { id }
+    parent { id }
+    labels { nodes { name } }
   }
 }"#;
 
@@ -743,7 +745,7 @@ pub fn parse_agent_session_event(json: &[u8]) -> Result<Option<AgentSessionEvent
 /// Where an issue sits: the team it belongs to, the status it is in, and the
 /// agent (if any) it is delegated to. Every field is optional so an unresolvable
 /// id degrades instead of erroring.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct IssueContext {
     pub team_id: Option<String>,
     pub state_id: Option<String>,
@@ -751,6 +753,15 @@ pub struct IssueContext {
     pub state_name: Option<String>,
     /// The agent user delegated to this issue, if any.
     pub delegate_id: Option<String>,
+    /// The epic this is a piece of, if it is one.
+    ///
+    /// The supervisor fires on a *sub-issue* and has to reach its epic — to
+    /// count what else is under it, and to file a corrective beside it. Nothing
+    /// else in the client goes upward.
+    pub parent_id: Option<String>,
+    /// Label names on the issue. `corrective` is how a fix round is counted,
+    /// since the count lives in Linear rather than in a table here.
+    pub labels: Vec<String>,
 }
 
 /// Parse an issue's team / status / delegate. An unresolvable issue id yields a
@@ -769,6 +780,10 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
         state: Option<StateRef>,
         #[serde(default)]
         delegate: Option<IdRef>,
+        #[serde(default)]
+        parent: Option<IdRef>,
+        #[serde(default)]
+        labels: Option<Conn<IssueLabelNode>>,
     }
     #[derive(Deserialize)]
     struct IdRef {
@@ -789,6 +804,11 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
         state_id: issue.state.as_ref().map(|s| s.id.clone()),
         state_name: issue.state.and_then(|s| s.name),
         delegate_id: issue.delegate.map(|d| d.id),
+        parent_id: issue.parent.map(|p| p.id),
+        labels: issue
+            .labels
+            .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
+            .unwrap_or_default(),
     })
 }
 
@@ -1488,6 +1508,35 @@ mod tests {
         assert_eq!(ctx.state_id.as_deref(), Some("state-1"));
         assert_eq!(ctx.state_name.as_deref(), Some("To Do"));
         assert_eq!(ctx.delegate_id.as_deref(), Some("app-user-1"));
+    }
+
+    #[test]
+    fn a_sub_issue_names_the_epic_above_it() {
+        // The supervisor fires on a piece and has to reach its epic; every
+        // other read in this client goes downward.
+        let ctx = parse_issue_context(
+            br#"{"data":{"issue":{
+                 "team":{"id":"t1"},"state":{"id":"s1","name":"Built"},
+                 "parent":{"id":"epic-9"},
+                 "labels":{"nodes":[{"name":"corrective"},{"name":"AI Eligible"}]}}}}"#,
+        )
+        .unwrap();
+        assert_eq!(ctx.parent_id.as_deref(), Some("epic-9"));
+        assert_eq!(ctx.labels, ["corrective", "AI Eligible"]);
+        assert_eq!(ctx.state_name.as_deref(), Some("Built"));
+    }
+
+    #[test]
+    fn a_top_level_issue_has_no_parent_and_that_is_not_an_error() {
+        // An epic itself, or any issue filed on its own. The supervisor uses
+        // the absence to tell "this is not a piece of anything" from a read
+        // that failed.
+        let ctx = parse_issue_context(
+            br#"{"data":{"issue":{"team":{"id":"t1"},"state":{"id":"s1","name":"Todo"}}}}"#,
+        )
+        .unwrap();
+        assert!(ctx.parent_id.is_none());
+        assert!(ctx.labels.is_empty());
     }
 
     #[test]
