@@ -501,7 +501,10 @@ async fn start_delegated_run(
 
     let req = CreateRunRequest {
         triggered_by: Some("linear".to_string()),
-        workflow: binding.workflow.clone(),
+        workflow: match event.issue_id.as_deref() {
+            Some(id) => workflow_for_issue(state, &client, &binding, id).await,
+            None => binding.workflow.clone(),
+        },
         title,
         description,
         issue_id: event.issue_id.clone(),
@@ -900,6 +903,92 @@ async fn resolve_target(
 /// the disabled one could shadow the one that was meant to run. `live` remains
 /// poller-only (claim vs. dry-run), so a delegation-only setup is `enabled` on,
 /// `live` off.
+/// The workflow that supervises an epic rather than building it.
+pub(crate) const EPIC_SUPERVISOR: &str = "linear-epic-supervise";
+
+/// Which workflow this issue should actually run.
+///
+/// **An issue with sub-issues must not be built.** Building it means putting a
+/// whole feature into one pull request, which is the thing decomposing it was
+/// meant to avoid. So when a delegated issue turns out to have children, the
+/// run goes to the epic supervisor instead — it starts the first piece, and
+/// each piece is then built by this very binding in turn.
+///
+/// **Derived, not configured.** "Has children" is a fact about the board, and
+/// a second setting saying the same thing would be one more thing to get wrong
+/// — and to forget. The opt-in is having bound the supervisor at all: a project
+/// without that binding is untouched, and pays nothing for this check.
+///
+/// Order matters for cost. The two cheap local tests come first, then one
+/// database read, and only then a Linear round trip.
+pub(crate) async fn workflow_for_issue(
+    state: &Arc<RunsState>,
+    client: &LinearClient,
+    binding: &LinearSource,
+    issue_id: &str,
+) -> String {
+    let build = binding.workflow.clone();
+
+    let Ok(store) = state.linear_source_store().await else {
+        return build;
+    };
+    let supervisor = store
+        .get(&binding.project, EPIC_SUPERVISOR)
+        .await
+        .ok()
+        .flatten();
+    if !may_route_to_supervisor(binding, supervisor.as_ref()) {
+        return build;
+    }
+
+    match client.list_children(issue_id).await {
+        Ok(kids) if !kids.is_empty() => {
+            tracing::info!(
+                "linear: {} has {} sub-issues — routing to {} instead of {}",
+                issue_id,
+                kids.len(),
+                EPIC_SUPERVISOR,
+                build
+            );
+            EPIC_SUPERVISOR.to_string()
+        }
+        Ok(_) => build,
+        // A failed read must not silently build an epic as one pull request.
+        // Refusing the run is not an option here (the caller has already
+        // claimed the issue), so build is the honest fallback — logged loudly.
+        Err(e) => {
+            tracing::warn!(
+                "linear: could not read {}'s sub-issues ({}) — building it as an ordinary issue",
+                issue_id,
+                e.0
+            );
+            build
+        }
+    }
+}
+
+/// Whether this binding is allowed to hand an epic to the supervisor.
+///
+/// Split from [`workflow_for_issue`] so the gate is testable without a Linear
+/// workspace — every condition here is local, and each one is a way the routing
+/// could go wrong rather than a detail:
+///
+///   * the supervisor's own binding must not re-route to itself, or an epic
+///     handed to it would bounce forever;
+///   * a **disabled** supervisor binding is not a supervisor, and its epics must
+///     keep being built the way they were yesterday;
+///   * a supervisor bound to a **different team** cannot see these issues, so
+///     routing to it would strand them.
+fn may_route_to_supervisor(binding: &LinearSource, supervisor: Option<&LinearSource>) -> bool {
+    if binding.workflow == EPIC_SUPERVISOR {
+        return false;
+    }
+    match supervisor {
+        Some(s) => s.enabled && s.team_id == binding.team_id,
+        None => false,
+    }
+}
+
 fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
     let active: Vec<&LinearSource> = bindings.iter().filter(|b| b.enabled).collect();
     // Candidates: every active binding for the issue's team. With an unknown
@@ -1296,6 +1385,48 @@ mod tests {
             enabled: true,
             ..disabled_binding(team, workflow, source_state)
         }
+    }
+
+    #[test]
+    fn an_epic_routes_to_the_supervisor_when_one_is_bound_to_the_same_team() {
+        let build = binding("team-a", "idea-to-pr", "todo");
+        let sup = binding("team-a", EPIC_SUPERVISOR, "todo");
+        assert!(may_route_to_supervisor(&build, Some(&sup)));
+    }
+
+    #[test]
+    fn a_project_with_no_supervisor_keeps_building_everything() {
+        // The opt-in. Nothing changes for an install that never set this up,
+        // including one whose ordinary issues have sub-issues.
+        let build = binding("team-a", "idea-to-pr", "todo");
+        assert!(!may_route_to_supervisor(&build, None));
+    }
+
+    #[test]
+    fn a_disabled_supervisor_is_not_a_supervisor() {
+        // Disabling a binding must put the behaviour back exactly as it was,
+        // not leave epics routed at something switched off.
+        let build = binding("team-a", "idea-to-pr", "todo");
+        let sup = disabled_binding("team-a", EPIC_SUPERVISOR, "todo");
+        assert!(!may_route_to_supervisor(&build, Some(&sup)));
+    }
+
+    #[test]
+    fn a_supervisor_on_another_team_cannot_be_routed_to() {
+        // It cannot see these issues, so handing it one would strand the epic
+        // in a column nothing watches.
+        let build = binding("team-a", "idea-to-pr", "todo");
+        let sup = binding("team-b", EPIC_SUPERVISOR, "todo");
+        assert!(!may_route_to_supervisor(&build, Some(&sup)));
+    }
+
+    #[test]
+    fn the_supervisors_own_binding_never_re_routes() {
+        // An epic handed to the supervisor would otherwise bounce to itself
+        // forever, one Linear read per hop.
+        let sup = binding("team-a", EPIC_SUPERVISOR, "merged");
+        let other = binding("team-a", EPIC_SUPERVISOR, "merged");
+        assert!(!may_route_to_supervisor(&sup, Some(&other)));
     }
 
     /// A binding with a full status map, as the UI produces.

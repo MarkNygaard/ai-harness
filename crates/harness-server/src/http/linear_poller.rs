@@ -452,7 +452,7 @@ async fn claim_and_fire(
     });
     let req = CreateRunRequest {
         triggered_by: Some("linear".to_string()),
-        workflow: b.workflow.clone(),
+        workflow: super::linear_agent::workflow_for_issue(state, client, b, &issue.id).await,
         title: Some(format!("{} {}", issue.identifier, issue.title)),
         issue_id: Some(issue.id.clone()),
         // Images pasted into the issue or its comments are downloaded and the
