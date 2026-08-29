@@ -305,6 +305,7 @@ const ISSUE_CONTEXT_QUERY: &str = r#"
 query IssueContext($id: String!) {
   issue(id: $id) {
     identifier
+    title
     team { id }
     state { id name }
     delegate { id }
@@ -750,6 +751,8 @@ pub fn parse_agent_session_event(json: &[u8]) -> Result<Option<AgentSessionEvent
 pub struct IssueContext {
     /// Human identifier, e.g. `AIH-12`. Names the epic's integration branch.
     pub identifier: Option<String>,
+    /// The issue's title, which becomes the epic's pull request title.
+    pub title: Option<String>,
     pub team_id: Option<String>,
     pub state_id: Option<String>,
     /// Human-readable status name, for messages ("… is in Backlog").
@@ -784,6 +787,8 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
         #[serde(default)]
         identifier: Option<String>,
         #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
         team: Option<IdRef>,
         #[serde(default)]
         state: Option<StateRef>,
@@ -817,6 +822,7 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
     let parent = issue.parent;
     Ok(IssueContext {
         identifier: issue.identifier,
+        title: issue.title,
         team_id: issue.team.map(|t| t.id),
         state_id: issue.state.as_ref().map(|s| s.id.clone()),
         state_name: issue.state.and_then(|s| s.name),

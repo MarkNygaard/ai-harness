@@ -41,7 +41,10 @@ description: |
 
   **Every piece is built on that branch and merged into it**, so the feature
   accumulates in one place and `main` sees it once, finished, rather than in
-  pieces. Piece N+1 branches from something that already contains 1..N. The
+  pieces. When the last piece is accepted the branch becomes a single pull
+  request against the default branch, and the epic moves to `EPIC_REVIEW_STATE`
+  if that is set. **Nothing merges it** — it is the whole feature, and the one
+  review that was never a piece. Piece N+1 branches from something that already contains 1..N. The
   poller derives the branch name from a piece's parent, so nothing has to be
   configured for this — but it does mean the branch must exist before the first
   piece starts, which is why it is created here. Hand it a merged piece and it grades that piece. The two are told
@@ -139,11 +142,16 @@ nodes:
         '[.[] | select(.sortOrder > $o)] | sort_by(.sortOrder) | .[0].identifier // empty' \
         "$ARTIFACTS_DIR/siblings.json")"
 
+      # The epic's own name, for the pull request that lands the finished
+      # feature. Both come from the piece's context read, so no extra call.
+      epic_ident="$(jq -r '.parent_identifier // empty' "$ARTIFACTS_DIR/piece.json")"
+
       jq -n --arg parent "$parent" --arg ident "$ident" --arg subject "$subject" \
             --arg next_id "$next_id" --arg next_ident "$next_ident" \
+            --arg epic_ident "$epic_ident" \
             --argjson rounds "$rounds" --argjson epic_total "$epic_total" \
         '{mode: "piece", parent: $parent, identifier: $ident, subject: $subject,
-          next_id: $next_id, next_ident: $next_ident,
+          next_id: $next_id, next_ident: $next_ident, epic_ident: $epic_ident,
           rounds: $rounds, epic_total: $epic_total}'
 
   # ── An epic was handed over: start its first piece ───────────────────────
@@ -276,12 +284,59 @@ nodes:
       note="$ARTIFACTS_DIR/note.md"
 
       if [ -z "$next_id" ]; then
+        # Every piece is in. The epic branch now *is* the feature, so it becomes
+        # one pull request against the default branch — the first and only point
+        # at which the whole change is reviewable as a whole.
+        #
+        # `$BASE_BRANCH` is the epic branch: this run was based on it in order
+        # to review the piece that merged into it.
+        default_branch="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null)"
+        [ -n "$default_branch" ] || default_branch="main"
+
+        # Idempotent: a re-run must not open a second pull request for the same
+        # branch, and finding the existing one is as good as creating it.
+        pr="$(gh pr list --head "$BASE_BRANCH" --base "$default_branch" \
+              --state open --json url -q '.[0].url' 2>/dev/null)"
+        if [ -z "$pr" ]; then
+          body="$ARTIFACTS_DIR/epic-pr.md"
+          {
+            echo "Closes $context.output.epic_ident."
+            echo
+            echo "Built one piece at a time, each reviewed against its own"
+            echo "acceptance criteria before the next began:"
+            echo
+            jq -r 'sort_by(.sortOrder) | .[] | "- \(.identifier)  \(.title)"' \
+              "$ARTIFACTS_DIR/siblings.json"
+          } > "$body"
+          pr="$(gh pr create --base "$default_branch" --head "$BASE_BRANCH" \
+                --title "$context.output.epic_ident — the finished feature" \
+                --body-file "$body" 2>&1)" || {
+              echo "Could not open the epic's pull request:" >&2
+              echo "$pr" >&2
+              pr=""
+            }
+        fi
+
+        # Hand the epic to a human. Nothing merges this automatically: it is
+        # the whole feature, and the one review that was never a piece.
+        review_state="${EPIC_REVIEW_STATE:-}"
+        if [ -n "$review_state" ]; then
+          harness linear move-state --project "$project" --issue "$parent" --state "$review_state" \
+            || echo "could not move the epic to EPIC_REVIEW_STATE" >&2
+        fi
+
         {
           echo "**$context.output.identifier passed — and it was the last piece.**"
           echo
           echo "$review.output.summary"
           echo
-          echo "Every piece of this epic has been built and accepted."
+          if [ -n "$pr" ]; then
+            echo "Every piece is in. The feature is one pull request against"
+            echo "\`$default_branch\`: $pr"
+          else
+            echo "Every piece is in, on \`$BASE_BRANCH\`. Opening its pull"
+            echo "request failed — raise it by hand."
+          fi
         } > "$note"
       elif [ -n "$ready" ]; then
         if harness linear move-state --project "$project" --issue "$next_id" --state "$ready"; then
