@@ -2,8 +2,26 @@ import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useAuthStatus } from "@/lib/auth";
 
-/** Pages you can reach without being signed in — they are how you sign in. */
-const PUBLIC = ["/login", "/setup"];
+/**
+ * Pages reachable without being signed in.
+ *
+ * Not "pages that are how you sign in" — that framing is what made this list
+ * wrong. It is *every* page someone who has no account can legitimately be
+ * looking at, and an invitation and a password reset are exactly that: links
+ * sent to people who cannot sign in, by definition. Leaving them out sent the
+ * holder of a fresh invite straight to a login form for the account the link
+ * was going to create.
+ *
+ * The invite path carries its token as a segment, so it matches by prefix.
+ */
+export function isPublicPath(pathname: string): boolean {
+  return (
+    pathname === "/login" ||
+    pathname === "/setup" ||
+    pathname === "/forgot" ||
+    pathname.startsWith("/invite/")
+  );
+}
 
 /**
  * Send an unauthenticated visitor to the right door.
@@ -19,7 +37,7 @@ export function RequireSignIn() {
   const { pathname } = useLocation();
 
   const needsSignIn = status.data?.mode === "accounts" && !status.data.user;
-  const onPublicPage = PUBLIC.includes(pathname);
+  const onPublicPage = isPublicPath(pathname);
 
   useEffect(() => {
     if (!needsSignIn || onPublicPage) return;
