@@ -97,3 +97,83 @@ export function useStartSso() {
     onSuccess: ({ url }) => window.location.assign(url),
   });
 }
+
+// ── GitHub ───────────────────────────────────────────────────────────────────
+//
+// A separate provider, not a variant of the OIDC one: no ID token, and
+// organisation membership rather than an email domain is the allowlist.
+
+export interface GithubSsoConfig {
+  client_id: string | null;
+  client_secret_set: boolean;
+  org: string | null;
+  team: string | null;
+  enabled: boolean;
+  callback_url: string | null;
+}
+
+export function useGithubSsoConfig(enabled: boolean) {
+  return useQuery<GithubSsoConfig, Error>({
+    queryKey: ["sso", "github", "config"],
+    enabled,
+    queryFn: ({ signal }) =>
+      apiJson<GithubSsoConfig>("/api/settings/sso/github", { signal }),
+    retry: false,
+    refetchInterval: false,
+  });
+}
+
+export type GithubSsoInput = Partial<{
+  client_id: string;
+  /** Omit to leave the stored one alone. */
+  client_secret: string;
+  org: string;
+  team: string;
+}>;
+
+export function useSaveGithubSso() {
+  const qc = useQueryClient();
+  return useMutation<GithubSsoConfig, Error, GithubSsoInput>({
+    mutationFn: (body) =>
+      apiJson<GithubSsoConfig>("/api/settings/sso/github", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: (data) => {
+      qc.setQueryData(["sso", "github", "config"], data);
+      qc.invalidateQueries({ queryKey: ["sso", "github", "public"] });
+    },
+  });
+}
+
+export function useTestGithubSso() {
+  return useMutation<{ url: string }, Error, void>({
+    mutationFn: () =>
+      apiJson<{ url: string }>("/api/settings/sso/github/test", {
+        method: "POST",
+      }),
+    onSuccess: ({ url }) => window.location.assign(url),
+  });
+}
+
+export function useGithubSsoPublicStatus() {
+  return useQuery<{ enabled: boolean }, Error>({
+    queryKey: ["sso", "github", "public"],
+    queryFn: ({ signal }) =>
+      apiJson<{ enabled: boolean }>("/api/auth/github/status", { signal }),
+    retry: false,
+    refetchInterval: false,
+  });
+}
+
+export function useStartGithubSso() {
+  return useMutation<{ url: string }, Error, { next?: string } | void>({
+    mutationFn: (vars) => {
+      const next = vars && "next" in vars ? vars.next : undefined;
+      const query = next ? `?next=${encodeURIComponent(next)}` : "";
+      return apiJson<{ url: string }>(`/api/auth/github/start${query}`);
+    },
+    onSuccess: ({ url }) => window.location.assign(url),
+  });
+}

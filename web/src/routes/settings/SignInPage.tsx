@@ -4,6 +4,7 @@ import { SettingsShell } from "@/components/SettingsShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { GithubSso } from "@/components/settings/GithubSso";
 import { useSaveSso, useSsoConfig, useTestSso } from "@/lib/sso";
 import type { SsoInput } from "@/lib/sso";
 
@@ -90,6 +91,10 @@ export function SsoSettingsPage() {
           OIDC discovery: Entra, Google, Okta, Keycloak, Authentik. Configured
           by issuer URL, so there is nothing provider-specific to pick.
         </p>
+
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Identity provider
+        </h2>
 
         <Card>
           <CardContent className="flex flex-col gap-3 px-4 py-3.5">
@@ -254,8 +259,10 @@ export function SsoSettingsPage() {
           </CardContent>
         </Card>
 
+        <GithubSso />
+
         <p className="text-[11px] text-muted-foreground">
-          Saving never switches the provider on — a successful test does, and
+          Saving never switches a provider on — a successful test does, and
           changing anything switches it back off. Password sign-in is never
           disabled, so a misconfiguration here costs a retry rather than locking
           everyone out.
