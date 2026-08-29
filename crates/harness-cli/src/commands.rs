@@ -40,6 +40,65 @@ pub enum AdminAction {
     },
 }
 
+/// What a workflow run may do to Linear.
+///
+/// Every action names a **project**, never a workspace or a token: the project
+/// resolves to its Linear connection exactly as the poller's would, so an
+/// epic's sub-issues cannot land in a workspace its build runs never watch.
+#[derive(Subcommand)]
+pub enum LinearAction {
+    /// File a sub-issue under an epic, in the epic's own team
+    CreateSubIssue {
+        #[arg(long)]
+        project: String,
+        /// The epic's Linear id (not its `AIH-12` identifier)
+        #[arg(long)]
+        parent: String,
+        #[arg(long)]
+        title: String,
+        /// Body markdown; use --description-file for anything with newlines
+        #[arg(long, conflicts_with = "description_file")]
+        description: Option<String>,
+        /// Read the body from a file — the usual case, since acceptance
+        /// criteria are written by a planning step into an artifact
+        #[arg(long)]
+        description_file: Option<PathBuf>,
+        /// Workflow state to file it into; omitted = the team's default
+        #[arg(long)]
+        state: Option<String>,
+        /// Label id to attach; repeatable
+        #[arg(long = "label")]
+        labels: Vec<String>,
+    },
+    /// Move an issue to a workflow state
+    MoveState {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        issue: String,
+        #[arg(long)]
+        state: String,
+    },
+    /// Comment on an issue — the epic ledger
+    Comment {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        issue: String,
+        #[arg(long, conflicts_with = "body_file")]
+        body: Option<String>,
+        #[arg(long)]
+        body_file: Option<PathBuf>,
+    },
+    /// Print an epic's sub-issues as JSON, in board order
+    Children {
+        #[arg(long)]
+        project: String,
+        #[arg(long)]
+        issue: String,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum Command {
     /// Start the App Server
@@ -72,6 +131,11 @@ pub enum Command {
     Admin {
         #[command(subcommand)]
         action: AdminAction,
+    },
+    /// Write to Linear as the harness app (used by workflow steps)
+    Linear {
+        #[command(subcommand)]
+        action: LinearAction,
     },
 
     /// Execute a prompt non-interactively
@@ -588,6 +652,23 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             )
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{message}");
+        }
+        Command::Linear { action } => {
+            let Some(db) = config.server.database_url.clone() else {
+                anyhow::bail!(
+                    "no database configured — set server.database_url or HARNESS_DATABASE_URL"
+                );
+            };
+            // The same key the server decrypts credentials with. Checked for
+            // presence here so the failure names the missing variable rather
+            // than surfacing as a decode error four calls down.
+            let Ok(key) = std::env::var("HARNESS_SECRET_KEY") else {
+                anyhow::bail!(
+                    "HARNESS_SECRET_KEY is not set — it is what decrypts the Linear credential"
+                );
+            };
+            let message = run_linear_action(&db, &key, action).await?;
             println!("{message}");
         }
         Command::Serve {
@@ -1468,5 +1549,118 @@ mod tests {
         assert_eq!(bootstrap.runtime_logs.state.as_str(), "disabled");
         assert!(bootstrap.runtime_logs.active_path.is_none());
         assert!(bootstrap.runtime_log_file.is_none());
+    }
+}
+
+/// Run one `harness linear` action.
+///
+/// Split out so the dispatch above stays a single line and the body-vs-file
+/// resolution is in one place: every write here takes its markdown either
+/// inline or from a file, because a planning step writes acceptance criteria to
+/// an artifact and passing that through a shell argument would be an escaping
+/// bug waiting to happen.
+async fn run_linear_action(db: &str, key: &str, action: LinearAction) -> anyhow::Result<String> {
+    let out = match action {
+        LinearAction::CreateSubIssue {
+            project,
+            parent,
+            title,
+            description,
+            description_file,
+            state,
+            labels,
+        } => {
+            let body = markdown_arg(description, description_file, "description")?;
+            harness_server::linear_cli::create_sub_issue(
+                db,
+                key,
+                &project,
+                &parent,
+                &title,
+                &body,
+                state.as_deref(),
+                &labels,
+            )
+            .await
+        }
+        LinearAction::MoveState {
+            project,
+            issue,
+            state,
+        } => harness_server::linear_cli::move_state(db, key, &project, &issue, &state).await,
+        LinearAction::Comment {
+            project,
+            issue,
+            body,
+            body_file,
+        } => {
+            let md = markdown_arg(body, body_file, "body")?;
+            harness_server::linear_cli::comment(db, key, &project, &issue, &md).await
+        }
+        LinearAction::Children { project, issue } => {
+            harness_server::linear_cli::children(db, key, &project, &issue).await
+        }
+    };
+    out.map_err(|e| anyhow::anyhow!(e))
+}
+
+/// Markdown for a Linear write, taken inline or from a file.
+///
+/// Both forms exist because a planning step writes acceptance criteria into an
+/// artifact, and pushing a multi-line markdown body through a shell argument is
+/// an escaping bug waiting to happen. Clap rejects passing both; this covers
+/// the rest.
+fn markdown_arg(
+    inline: Option<String>,
+    file: Option<PathBuf>,
+    what: &str,
+) -> anyhow::Result<String> {
+    match (inline, file) {
+        (Some(s), _) => Ok(s),
+        (None, Some(p)) => std::fs::read_to_string(&p)
+            .map_err(|e| anyhow::anyhow!("could not read {}: {e}", p.display())),
+        (None, None) => anyhow::bail!("provide --{what} or --{what}-file"),
+    }
+}
+
+#[cfg(test)]
+mod linear_cli_args {
+    use super::*;
+
+    #[test]
+    fn inline_markdown_is_used_as_given() {
+        let out = markdown_arg(Some("## Plan".into()), None, "description").unwrap();
+        assert_eq!(out, "## Plan");
+    }
+
+    #[test]
+    fn a_file_is_read_whole() {
+        // The usual path: a planning node wrote this and the shell never sees
+        // its newlines.
+        let dir = std::env::temp_dir().join(format!("harness-md-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("task.md");
+        std::fs::write(&path, "line one\nline two\n").unwrap();
+        let out = markdown_arg(None, Some(path.clone()), "description").unwrap();
+        assert_eq!(out, "line one\nline two\n");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn neither_form_names_both_flags() {
+        // This lands in a run log, so it has to say what to pass.
+        let err = markdown_arg(None, None, "description")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("--description"), "{err}");
+        assert!(err.contains("--description-file"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_file_names_the_path() {
+        let err = markdown_arg(None, Some(PathBuf::from("no/such/plan.md")), "body")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("plan.md"), "{err}");
     }
 }

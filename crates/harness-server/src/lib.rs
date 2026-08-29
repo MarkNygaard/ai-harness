@@ -20,6 +20,7 @@ pub mod dashboard;
 pub mod db;
 pub mod handlers;
 pub mod http;
+pub mod linear_cli;
 /// Credential detection for the authoring catalog (shared with `harness-cli`).
 pub use http::credentials_routes::connected_clis;
 pub mod notify;
