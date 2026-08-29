@@ -206,6 +206,31 @@ mod tests {
         assert_eq!(gate("start-epic"), "$context.output.mode == 'epic'");
         assert_eq!(gate("not-a-piece"), "$context.output.mode == 'neither'");
 
+        // The last piece turns the epic branch into one pull request and hands
+        // the epic to a human. Asserted on the source because the branch only
+        // runs at the end of a whole epic: nothing else would catch it going
+        // missing in an edit.
+        let advance = &node("advance").kind;
+        let harness_dag::NodeKind::Bash(script) = advance else {
+            panic!("advance should be a shell step");
+        };
+        assert!(
+            script.contains("gh pr create"),
+            "the finished epic opens a PR"
+        );
+        assert!(
+            script.contains("gh pr list"),
+            "a re-run must find the existing PR rather than open a second"
+        );
+        assert!(
+            script.contains("EPIC_REVIEW_STATE"),
+            "the finished epic is handed to a human"
+        );
+        assert!(
+            !script.contains("gh pr merge"),
+            "the whole feature is never merged automatically"
+        );
+
         // The reviewer is the expensive one on purpose; everything else is shell.
         let review = node("review");
         assert_eq!(review.model.as_deref(), Some("opus"));
