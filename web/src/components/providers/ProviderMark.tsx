@@ -109,7 +109,7 @@ export function ProviderMark({
       </span>
       <span
         aria-hidden="true"
-        className={`absolute -left-1 -top-1 size-1.5 rounded-full ring-2 ring-background ${DOT[status]}`}
+        className={`absolute -left-1 -top-1 size-1.5 rounded-full ring-2 ring-card ${DOT[status]}`}
       />
     </span>
   );
