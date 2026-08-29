@@ -35,8 +35,15 @@ description: |
     * `EPIC_BLOCKED_STATE` — where a stalled epic goes.
     * `EPIC_CORRECTIVE_LABEL` — a label id put on correctives, for looks.
 
-  The epic's pieces are written by hand, as sub-issues, and delegated to the
-  harness. This starts each one after the last is accepted; you start the first.
+  It also **starts** an epic. Hand it the epic itself — an issue with
+  sub-issues and no parent — and it moves the first piece into the build
+  column. Hand it a merged piece and it grades that piece. The two are told
+  apart by whether the issue has a parent, which needs no configuration and
+  cannot be set wrong.
+
+  An issue that is neither — no parent, no children — cancels cleanly rather
+  than failing, since the likely cause is a column that also holds ordinary
+  work.
 
   NOT for: building a piece — that is `idea-to-pr`, bound to whichever column
   you park pieces in.
@@ -63,10 +70,26 @@ nodes:
         > "$ARTIFACTS_DIR/piece.json" || exit 1
       parent="$(jq -r '.parent_id // empty' "$ARTIFACTS_DIR/piece.json")"
 
+      # Three things can arrive here, and only one of them is a merged piece.
       if [ -z "$parent" ]; then
-        # Not a piece of an epic. Reported as a fact, not a failure: the likely
-        # cause is a binding pointed at a column that also holds ordinary work.
-        echo '{"is_piece": false}'
+        # No parent: either an epic that has just been handed over to be
+        # started, or an ordinary issue that does not belong here at all. Its
+        # own children are what tells them apart.
+        harness linear children --project "$project" --issue "$issue" \
+          > "$ARTIFACTS_DIR/children.json" || exit 1
+        kids="$(jq 'length' "$ARTIFACTS_DIR/children.json")"
+
+        if [ "$kids" -eq 0 ]; then
+          echo '{"mode": "neither"}'
+          exit 0
+        fi
+
+        # An epic is started at its first piece. It only reaches this column
+        # once, so "first by board order" is the one that has not run.
+        first_id="$(jq -r 'sort_by(.sortOrder) | .[0].id' "$ARTIFACTS_DIR/children.json")"
+        first_ident="$(jq -r 'sort_by(.sortOrder) | .[0].identifier' "$ARTIFACTS_DIR/children.json")"
+        jq -n --arg id "$first_id" --arg ident "$first_ident" --argjson kids "$kids" \
+          '{mode: "epic", first_id: $id, first_ident: $ident, pieces: $kids}'
         exit 0
       fi
 
@@ -104,15 +127,51 @@ nodes:
       jq -n --arg parent "$parent" --arg ident "$ident" --arg subject "$subject" \
             --arg next_id "$next_id" --arg next_ident "$next_ident" \
             --argjson rounds "$rounds" --argjson epic_total "$epic_total" \
-        '{is_piece: true, parent: $parent, identifier: $ident, subject: $subject,
+        '{mode: "piece", parent: $parent, identifier: $ident, subject: $subject,
           next_id: $next_id, next_ident: $next_ident,
           rounds: $rounds, epic_total: $epic_total}'
+
+  # ── An epic was handed over: start its first piece ───────────────────────
+  - id: start-epic
+    category: delivery
+    depends_on: [context]
+    when: "$context.output.mode == 'epic'"
+    bash: |
+      set -uo pipefail
+      project="$PROJECT"
+      epic="$ISSUE_ID"
+      first_id="$context.output.first_id"
+      first_ident="$context.output.first_ident"
+      ready="${EPIC_READY_STATE:-}"
+      note="$ARTIFACTS_DIR/note.md"
+
+      if [ -z "$ready" ]; then
+        {
+          echo "**This epic has $context.output.pieces pieces.** First up is $first_ident."
+          echo
+          echo "_EPIC_READY_STATE is not set on this project, so start it by hand._"
+        } > "$note"
+      elif harness linear move-state --project "$project" --issue "$first_id" --state "$ready"; then
+        {
+          echo "**Started $first_ident**, the first of $context.output.pieces pieces."
+          echo
+          echo "Each one is reviewed against its own acceptance criteria before the next begins."
+        } > "$note"
+      else
+        {
+          echo "**Could not start $first_ident.** Move it by hand to begin the epic."
+        } > "$note"
+      fi
+
+      harness linear comment --project "$project" --issue "$epic" --body-file "$note" \
+        || echo "could not write the ledger comment; the state change stands" >&2
+      cat "$note"
 
   - id: not-a-piece
     category: setup
     depends_on: [context]
-    when: "$context.output.is_piece != 'true'"
-    cancel: "This issue has no parent epic, so there is nothing to supervise. Check that the binding's column only holds epic pieces."
+    when: "$context.output.mode == 'neither'"
+    cancel: "This issue is neither a piece of an epic nor an epic with pieces, so there is nothing to supervise."
 
   # ── The judgement ────────────────────────────────────────────────────────
   #
@@ -126,7 +185,7 @@ nodes:
     effort: max
     context: fresh
     depends_on: [context]
-    when: "$context.output.is_piece == 'true'"
+    when: "$context.output.mode == 'piece'"
     prompt: |
       A piece of an epic ($context.output.identifier) was built and merged into
       this branch. Decide whether it actually does what it was supposed to.

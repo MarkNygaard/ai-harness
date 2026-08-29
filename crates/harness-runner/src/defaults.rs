@@ -191,13 +191,20 @@ mod tests {
             Some("$review.output.passed != 'true'")
         );
 
-        // An issue with no epic above it is cancelled, not failed: the likely
-        // cause is a binding on a column that also holds ordinary work, and
-        // that should not read as a broken run.
+        // An issue that is neither a piece nor an epic is cancelled, not
+        // failed: the likely cause is a column that also holds ordinary work,
+        // and that should not read as a broken run.
         assert!(matches!(
             node("not-a-piece").kind,
             harness_dag::NodeKind::Cancel(_)
         ));
+
+        // The three cases are mutually exclusive, so exactly one path runs:
+        // grade a merged piece, start an epic, or cancel.
+        let gate = |id: &str| node(id).when.clone().expect(id);
+        assert_eq!(gate("review"), "$context.output.mode == 'piece'");
+        assert_eq!(gate("start-epic"), "$context.output.mode == 'epic'");
+        assert_eq!(gate("not-a-piece"), "$context.output.mode == 'neither'");
 
         // The reviewer is the expensive one on purpose; everything else is shell.
         let review = node("review");
