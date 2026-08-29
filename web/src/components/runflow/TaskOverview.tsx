@@ -95,7 +95,7 @@ export function TaskOverview({
   return (
     <div className="flex w-full flex-col gap-6">
       {/* Headline metrics */}
-      <div className="grid grid-cols-2 gap-px border border-border bg-border sm:grid-cols-5">
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border border-border bg-border sm:grid-cols-5">
         <Metric label="Total time" value={formatDuration(wallMs)} />
         <Metric label="Total tokens" value={formatTokens(totalTok)} />
         <Metric
@@ -117,8 +117,8 @@ export function TaskOverview({
         <div className="flex flex-col gap-6">
           {catTotal > 0 && (
             <Section title="Time by category">
-              <div className="border border-border p-3">
-                <div className="flex h-4 w-full overflow-hidden bg-secondary/50">
+              <div className="rounded-xl border border-border p-3">
+                <div className="flex h-4 w-full overflow-hidden rounded-sm bg-secondary/50">
                   {catBar.map((c) => (
                     <div
                       key={c.id}
@@ -152,7 +152,7 @@ export function TaskOverview({
             {bars.length === 0 ? (
               <Empty>No timing recorded yet.</Empty>
             ) : (
-              <div className="flex flex-col gap-1 border border-border p-3">
+              <div className="flex flex-col gap-1 rounded-xl border border-border p-3">
                 {bars.map((b) => (
                   <WaterfallBar
                     key={b.id}
@@ -168,7 +168,7 @@ export function TaskOverview({
             {steps.length === 0 ? (
               <Empty>No timing recorded yet.</Empty>
             ) : (
-              <div className="flex flex-col gap-2 border border-border p-3">
+              <div className="flex flex-col gap-2 rounded-xl border border-border p-3">
                 {steps.map((s) => (
                   <div
                     key={s.id}
@@ -180,7 +180,7 @@ export function TaskOverview({
                     >
                       {s.id}
                     </div>
-                    <div className="h-3 flex-1 overflow-hidden bg-secondary/50">
+                    <div className="h-3 flex-1 overflow-hidden rounded-sm bg-secondary/50">
                       <div
                         className="h-full"
                         style={{
@@ -208,8 +208,8 @@ export function TaskOverview({
             {segTotal === 0 ? (
               <Empty>No token usage reported yet.</Empty>
             ) : (
-              <div className="border border-border p-3">
-                <div className="flex h-4 w-full overflow-hidden bg-secondary/50">
+              <div className="rounded-xl border border-border p-3">
+                <div className="flex h-4 w-full overflow-hidden rounded-sm bg-secondary/50">
                   {segments.map((s) => (
                     <div
                       key={s.key}
@@ -243,7 +243,7 @@ export function TaskOverview({
             {tokenSteps.length === 0 ? (
               <Empty>No token usage reported yet.</Empty>
             ) : (
-              <div className="border border-border p-3">
+              <div className="rounded-xl border border-border p-3">
                 <div className="flex flex-col gap-2">
                   {tokenSteps.map((s) => (
                     <div
@@ -256,7 +256,7 @@ export function TaskOverview({
                       >
                         {s.id}
                       </div>
-                      <div className="h-3 flex-1 overflow-hidden bg-secondary/50">
+                      <div className="h-3 flex-1 overflow-hidden rounded-sm bg-secondary/50">
                         <div
                           className="flex h-full"
                           style={{
@@ -309,7 +309,7 @@ export function TaskOverview({
             {byModel.length === 0 ? (
               <Empty>No token usage reported yet.</Empty>
             ) : (
-              <div className="overflow-hidden border border-border">
+              <div className="overflow-hidden rounded-xl border border-border">
                 <table className="w-full text-[12px]">
                   <thead className="bg-secondary/50 text-muted-foreground">
                     <tr>
@@ -356,7 +356,7 @@ export function TaskOverview({
 
       {/* By step (full-width detail table) */}
       <Section title="By step">
-        <div className="overflow-hidden border border-border">
+        <div className="overflow-hidden rounded-xl border border-border">
           <table className="w-full text-[12px]">
             <thead className="bg-secondary/50 text-muted-foreground">
               <tr>
