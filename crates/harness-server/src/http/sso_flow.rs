@@ -235,16 +235,38 @@ pub(crate) fn safe_next(raw: Option<&str>) -> String {
     }
 }
 
+/// How much of a refusal survives the trip back.
+///
+/// These messages exist to say what to do about the refusal, which takes a
+/// sentence; the cap is only here to keep the address from growing without
+/// bound.
+const MAX_DETAIL: usize = 300;
+
 /// Send the browser back with an outcome. Relative `Location`: it is already on
 /// this origin.
 pub(crate) fn back(to: &str, status: &str, detail: Option<&str>) -> Response {
     let sep = if to.contains('?') { '&' } else { '?' };
     let mut location = format!("{to}{sep}sso={}", enc(status));
     if let Some(d) = detail {
-        let short: String = d.chars().take(200).collect();
-        location.push_str(&format!("&sso_message={}", enc(&short)));
+        location.push_str(&format!("&sso_message={}", enc(&shorten(d))));
     }
     (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response()
+}
+
+/// Cut an over-long message at a word boundary, marked as cut.
+///
+/// The previous version took the first 200 characters and stopped wherever
+/// that landed, which in practice was the middle of the email address in the
+/// closing sentence -- leaving the reader unable to tell a truncated address
+/// from a wrong one. An ellipsis at least says the sentence continues.
+fn shorten(detail: &str) -> String {
+    if detail.chars().count() <= MAX_DETAIL {
+        return detail.to_string();
+    }
+    let head: String = detail.chars().take(MAX_DETAIL).collect();
+    // `rfind` gives a byte index, and a space is always a char boundary.
+    let cut = head.rfind(' ').unwrap_or(head.len());
+    format!("{}…", head[..cut].trim_end())
 }
 
 #[cfg(test)]
@@ -395,5 +417,33 @@ mod tests {
         );
         // An `&` that survived would let a redirect_uri smuggle a parameter.
         assert_eq!(enc("a&b=c"), "a%26b%3Dc");
+    }
+
+    #[test]
+    fn a_short_message_is_left_alone() {
+        assert_eq!(
+            shorten("no account here uses a@b.test"),
+            "no account here uses a@b.test"
+        );
+    }
+
+    #[test]
+    fn an_over_long_message_is_cut_between_words() {
+        let long = format!("{} tail", "word ".repeat(80));
+        let out = shorten(&long);
+        assert!(out.ends_with('\u{2026}'), "{out}");
+        // The cut lands on a boundary, so no half-word is left behind.
+        assert!(!out.contains("wor\u{2026}"), "{out}");
+        assert!(out.chars().count() <= MAX_DETAIL + 1);
+    }
+
+    #[test]
+    fn the_refusal_that_prompted_this_now_fits_whole() {
+        // The real one: a GitHub identity with no matching account. It was
+        // being cut mid-address, which is what made it useless.
+        let real = "no account here uses somebody@example.test, the address GitHub \
+                    verified for @somebody. Ask an administrator to invite that \
+                    address, or change the address on your account.";
+        assert_eq!(shorten(real), real, "this message must survive intact");
     }
 }
