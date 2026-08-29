@@ -55,6 +55,9 @@ toml = "0.8"
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "sqlite", "chrono", "uuid"] }
 
+# OIDC ID-token validation (signature + claims, against the issuer's JWKS)
+jsonwebtoken = "9"
+
 # Mail (SMTP, for invites and password resets)
 lettre = { version = "0.11", default-features = false, features = [
     "smtp-transport",

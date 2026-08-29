@@ -8,7 +8,7 @@ use std::sync::Arc;
 use super::{
     auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
     health_check, invites_routes, linear_agent, linear_connections, linear_oauth, linear_routes,
-    linear_source_routes, mcp_routes, password_reset, runs_routes, settings_routes,
+    linear_source_routes, mcp_routes, oidc, password_reset, runs_routes, settings_routes,
     state::AppState, system_routes, tokens_routes, users_routes, workflows_routes,
 };
 
@@ -107,6 +107,16 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(settings_routes::mail_settings).put(settings_routes::set_mail),
         )
         .route("/api/settings/mail/test", post(settings_routes::test_mail))
+        // ── Signing in with an identity provider ───────────────────────────
+        .route(
+            "/api/settings/sso",
+            get(oidc::describe).put(oidc::configure),
+        )
+        .route("/api/settings/sso/test", post(oidc::test_sso))
+        .route("/api/auth/oidc/start", get(oidc::start))
+        // What the sign-in page may know before anyone has signed in.
+        .route("/api/auth/oidc/status", get(oidc::public_status))
+        .route(oidc::CALLBACK_PATH, get(oidc::callback))
         // ── Invitations, and the links that redeem them ────────────────────
         .route(
             "/api/invites",

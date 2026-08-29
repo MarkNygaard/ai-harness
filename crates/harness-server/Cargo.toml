@@ -41,6 +41,7 @@ argon2 = { workspace = true }
 base64 = { workspace = true }
 reqwest = { workspace = true }
 lettre = { workspace = true }
+jsonwebtoken = { workspace = true }
 tempfile = { workspace = true }
 sysinfo = { workspace = true }
 regex = { workspace = true }

@@ -4,6 +4,7 @@ import { IconHexagonalPrism } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAuthStatus, useLogin, useSetup } from "@/lib/auth";
+import { useSsoPublicStatus, useStartSso } from "@/lib/sso";
 
 const inputCls =
   "h-9 w-full rounded-md border border-input bg-transparent px-2.5 text-[13px] outline-none focus:ring-2 focus:ring-ring";
@@ -66,6 +67,8 @@ function Frame({
 export function LoginPage() {
   const status = useAuthStatus();
   const login = useLogin();
+  const sso = useSsoPublicStatus();
+  const startSso = useStartSso();
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -117,6 +120,30 @@ export function LoginPage() {
         <Button type="submit" disabled={login.isPending}>
           {login.isPending ? "Signing in…" : "Sign in"}
         </Button>
+        {sso.data?.enabled && (
+          <>
+            <div className="flex items-center gap-2 py-0.5">
+              <span className="h-px flex-1 bg-border" />
+              <span className="text-[10px] text-muted-foreground">or</span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={startSso.isPending}
+              onClick={() => startSso.mutate({ next: "/" })}
+            >
+              {startSso.isPending
+                ? "Redirecting…"
+                : `Continue with ${sso.data.label?.trim() || "your provider"}`}
+            </Button>
+            {startSso.isError && (
+              <p className="text-[11px] text-destructive">
+                {startSso.error.message}
+              </p>
+            )}
+          </>
+        )}
         <Link
           to="/forgot"
           className="text-center text-[11px] text-muted-foreground underline"

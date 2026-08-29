@@ -8,6 +8,7 @@ import {
   IconMail,
   IconPlugConnected,
   IconSettings2,
+  IconShieldLock,
   IconTags,
   IconUsers,
   IconWorld,
@@ -79,6 +80,13 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
         label: "Members",
         icon: IconUsers,
         keywords: "users people accounts admin role invite team",
+        adminOnly: true,
+      },
+      {
+        href: "/settings/sso",
+        label: "Sign-in",
+        icon: IconShieldLock,
+        keywords: "sso oidc entra google okta keycloak login provider",
         adminOnly: true,
       },
       {
