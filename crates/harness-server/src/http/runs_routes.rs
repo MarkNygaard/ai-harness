@@ -520,6 +520,14 @@ pub struct CreateRunRequest {
     /// Deprecated alias for `description` (back-compat).
     #[serde(default)]
     pub args: String,
+    /// The Linear issue this run was triggered by, exposed as `$ISSUE_ID`.
+    ///
+    /// Set by the poller and the agent-session path; absent for a run started
+    /// from the UI or MCP. The epic orchestrator needs it because filing a
+    /// sub-issue means naming a parent, and the issue is otherwise only present
+    /// as prose inside `$ARGUMENTS`.
+    #[serde(default)]
+    pub issue_id: Option<String>,
     #[serde(default)]
     pub real: bool,
     #[serde(default)]
@@ -1273,6 +1281,8 @@ pub async fn judge_run_pair(
     let run_req = CreateRunRequest {
         triggered_by: triggered_by.clone(),
         workflow: "judge-ab".to_string(),
+        // The judge grades two runs; it is not itself about an issue.
+        issue_id: None,
         title: Some(title),
         description: evidence,
         args: String::new(),
@@ -1353,6 +1363,9 @@ pub async fn rerun_run(
         triggered_by: triggered_by.clone(),
         workflow: detail.run.workflow_name.clone(),
         title: detail.run.title.clone(),
+        // A rerun does not inherit one: the issue a run came from is not kept
+        // on the row, and inventing it here would be a guess.
+        issue_id: None,
         description: detail.run.description.clone().unwrap_or_default(),
         args: String::new(),
         real: true,
@@ -1439,6 +1452,9 @@ pub(crate) async fn start_run_pair(
         triggered_by: req.triggered_by.clone(),
         workflow: req.workflow.clone(),
         title: req.title.clone(),
+        // An A/B pair compares models on a task; neither arm should write to an
+        // issue, and both would write the same thing twice if they did.
+        issue_id: None,
         description: req.description.clone(),
         args: req.args.clone(),
         real: req.real,
@@ -1599,6 +1615,7 @@ pub(crate) async fn start_run(
         req.description
     };
     let title = req.title.filter(|t| !t.trim().is_empty());
+    let issue_id = req.issue_id.clone();
     let live_project = project.clone();
     let handle = tokio::spawn(async move {
         execute_run_task(
@@ -1608,6 +1625,7 @@ pub(crate) async fn start_run(
             real,
             title,
             description,
+            issue_id,
             base_branch,
             external_url,
             project,
@@ -1640,6 +1658,8 @@ async fn execute_run_task(
     real: bool,
     title: Option<String>,
     description: String,
+    // The Linear issue this run came from, or None. Becomes $ISSUE_ID.
+    issue_id: Option<String>,
     base_branch: String,
     external_url: Option<String>,
     project: String,
@@ -1830,6 +1850,8 @@ async fn execute_run_task(
         .set("DOCS_DIR", "docs")
         .set("TASK_TITLE", title.clone().unwrap_or_default())
         .set("TASK_DESCRIPTION", description.clone())
+        .set("PROJECT", project.clone())
+        .set("ISSUE_ID", issue_id.clone().unwrap_or_default())
         .set("ARGUMENTS", description.clone())
         .set("USER_MESSAGE", description.clone());
     // Bridge the driver's futures-channel events → the tokio broadcast, and
