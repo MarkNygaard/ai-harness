@@ -82,44 +82,61 @@
 
 :root {
   color-scheme: light;
-  /* Surface ladder. Light mode had `--background` and `--card` both at pure
-     white, which left every panel with nothing but its 1px ring to separate it
-     from the page. These are the two values swapped: the page is white and the
-     panels are tinted, so a card reads as a distinct surface *on* the page
-     rather than a raised slab above it. Steps are ~0.03 apart, the same
-     spacing dark mode uses.
+  /* Surface ladder, modelled on Linear's light theme.
 
-       recessed fills 0.94  <  panels / popovers / sidebar 0.97  <  canvas 1.00
+     The direction here was wrong twice before. First `--background` and
+     `--card` were both pure white, so a panel had nothing but its ring to
+     separate it from the page. Then the two were swapped -- white page, tinted
+     panels -- which separated them but put the tint on the wrong surface: a
+     card is the thing you are reading, and it should be the brightest thing on
+     screen, not the dimmest.
 
-     Note this inverts dark's direction, where panels sit *lighter* than the
-     canvas. That is deliberate rather than an oversight: there is no room
-     above white, so a light theme separates surfaces by tinting them down. */
-  --background: oklch(1 0 0);
-  --foreground: oklch(0.145 0 0);
-  --card: oklch(0.97 0 0);
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(0.97 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: oklch(0.205 0 0);
-  --primary-foreground: oklch(0.985 0 0);
-  --secondary: oklch(0.94 0 0);
-  --secondary-foreground: oklch(0.205 0 0);
-  --muted: oklch(0.94 0 0);
-  /* Stays darkened. Most secondary text sits on the 0.97 panels now, where
-     the original 0.556 reads at only 4.34:1 — below AA. 0.52 gives 5.05:1
-     there and 5.50:1 on the white canvas. */
-  --muted-foreground: oklch(0.52 0 0);
-  --accent: oklch(0.94 0 0);
-  --accent-foreground: oklch(0.205 0 0);
+     Linear does it the other way round, and it is right: the page recedes and
+     the cards sit on it in white.
+
+       hover fills 0.94  <  recessed 0.95  <  sidebar 0.965  <  canvas 0.975  <  cards / popovers 1.00
+
+     This now matches dark mode's direction as well, where panels also sit
+     *above* the canvas. The earlier note claiming a light theme has to invert
+     that was reasoning from "there is no room above white" -- true only if the
+     canvas is white, which is the assumption worth dropping.
+
+     Every grey carries a trace of blue (chroma 0.002-0.006 at hue ~286) rather
+     than being neutral. It is far too little to read as a colour; it is what
+     keeps a large field of grey from looking like dead newsprint. */
+  --background: oklch(0.975 0.0015 286);
+  /* Not black. Linear's body text is a very dark blue-grey, and at 16.0:1 on
+     a card and 14.9:1 on the canvas there is contrast to spare -- the softness
+     is the point, not a compromise. */
+  --foreground: oklch(0.25 0.006 285);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.25 0.006 285);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.25 0.006 285);
+  --primary: oklch(0.25 0.006 285);
+  --primary-foreground: oklch(0.99 0 0);
+  --secondary: oklch(0.95 0.002 286);
+  --secondary-foreground: oklch(0.25 0.006 285);
+  --muted: oklch(0.95 0.002 286);
+  /* Held at 0.52 rather than moved to Linear's ~0.55. Secondary text lands on
+     three grounds now, and 0.55 clears AA on the canvas by 0.01 (4.51:1) --
+     technically a pass, and no margin at all for a token this widely used.
+     0.52 gives 5.5:1 on a card, 5.1:1 on the canvas, 5.0:1 on the sidebar. The
+     three-hundredths of lightness is not visible; the margin is worth having. */
+  --muted-foreground: oklch(0.52 0.006 285);
+  --accent: oklch(0.94 0.003 286);
+  --accent-foreground: oklch(0.25 0.006 285);
   /* Darker than the dark-mode accent on purpose: 18 of its 28 uses are
      `text-accent-orange`, and the dark-mode value reads at only 3.79:1 on white
-     — below AA. This lands at 5.14:1 and keeps the hue. */
+     -- below AA. This lands at 5.14:1 and keeps the hue. */
   --accent-orange: oklch(0.54 0.0737 67.86);
   --accent-orange-light: oklch(0.9649 0.0471 100.71);
   --accent-orange-foreground: oklch(1 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
+  /* A hairline. Cards are separated by being brighter than the page now, so
+     the border is confirming an edge rather than drawing one. */
+  --border: oklch(0.93 0.003 286);
+  --input: oklch(0.93 0.003 286);
   --ring: oklch(0.708 0 0);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -127,15 +144,16 @@
   --chart-4: oklch(0.371 0 0);
   --chart-5: oklch(0.269 0 0);
   --radius: 0.2rem;
-  --sidebar: oklch(0.97 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: oklch(0.205 0 0);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  /* The selected nav item, one step below the sidebar — the same 0.06 gap dark
-     mode puts between `--sidebar` and `--sidebar-accent`. */
-  --sidebar-accent: oklch(0.94 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
+  /* One step below the canvas: the sidebar is chrome, and it should sit behind
+     the page rather than beside it. */
+  --sidebar: oklch(0.965 0.002 288);
+  --sidebar-foreground: oklch(0.25 0.006 285);
+  --sidebar-primary: oklch(0.25 0.006 285);
+  --sidebar-primary-foreground: oklch(0.99 0 0);
+  /* The selected nav item, clear of the sidebar it sits on. */
+  --sidebar-accent: oklch(0.93 0.003 286);
+  --sidebar-accent-foreground: oklch(0.25 0.006 285);
+  --sidebar-border: oklch(0.93 0.003 286);
   --sidebar-ring: oklch(0.708 0 0);
 
   /* Fonts (Geist via @fontsource-variable, imported in main.tsx). */
