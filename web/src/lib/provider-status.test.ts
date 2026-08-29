@@ -20,9 +20,29 @@ describe("describeProvider", () => {
     // GitHub and Linear are not a CLI at all.
     expect(describeProvider(true)).toEqual({
       status: "ok",
-      detail: "Connected.",
+      label: "Connected",
+      detail: null,
     });
     expect(describeProvider(false).status).toBe("off");
+  });
+
+  it("says nothing in words when the dot already says it", () => {
+    // The row people see six of. Repeating "Connected." under each green dot
+    // is the same fact twice and buries the row that is not fine.
+    expect(describeProvider(true, health()).detail).toBeNull();
+    expect(describeProvider(true).detail).toBeNull();
+  });
+
+  it("still names the state for anyone who cannot see the dot", () => {
+    // Every state, including the quiet one, has to be readable without colour.
+    for (const state of [
+      describeProvider(true, health()),
+      describeProvider(false, health()),
+      describeProvider(false, health({ on_path: false })),
+      describeProvider(false),
+    ]) {
+      expect(state.label.length).toBeGreaterThan(0);
+    }
   });
 
   it("does not call a provider connected when its CLI is missing", () => {
@@ -56,6 +76,6 @@ describe("describeProvider", () => {
   });
 
   it("stays quiet about updates when there is none", () => {
-    expect(describeProvider(true, health()).detail).toBe("Connected.");
+    expect(describeProvider(true, health()).detail).toBeNull();
   });
 });
