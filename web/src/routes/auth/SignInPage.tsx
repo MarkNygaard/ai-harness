@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, Navigate, useNavigate } from "react-router-dom";
 import { IconBrandGithub, IconHexagonalPrism } from "@tabler/icons-react";
+import { PasswordField } from "@/components/auth/PasswordField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAuthStatus, useLogin, useSetup } from "@/lib/auth";
@@ -185,6 +186,7 @@ export function SetupPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [passwordOk, setPasswordOk] = useState(false);
   const minLen = status.data?.min_password_len ?? 12;
 
   // Claiming is a one-way door, so once it is shut this page is meaningless.
@@ -236,24 +238,22 @@ export function SetupPage() {
             required
           />
         </Field>
-        <Field label="Password" hint={`At least ${minLen} characters.`}>
-          <input
-            className={inputCls}
-            type="password"
-            autoComplete="new-password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            required
-            minLength={minLen}
-          />
-        </Field>
+        <PasswordField
+          value={password}
+          onChange={setPassword}
+          minLength={minLen}
+          // So the meter can say when the password is just their own details
+          // back at them — the two fields above are the ones it would be.
+          identity={[name, email]}
+          onValidChange={setPasswordOk}
+        />
         {setup.isError && (
           <p className="text-[11px] text-destructive">{setup.error.message}</p>
         )}
         <p className="text-[10px] text-muted-foreground">
           After this, signing in is required and cannot be turned off again.
         </p>
-        <Button type="submit" disabled={setup.isPending}>
+        <Button type="submit" disabled={setup.isPending || !passwordOk}>
           {setup.isPending ? "Claiming…" : "Claim and sign in"}
         </Button>
       </form>

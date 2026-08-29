@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { PasswordField } from "@/components/auth/PasswordField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useAcceptInvite, useInviteDetails } from "@/lib/invites";
+import { useAuthStatus } from "@/lib/auth";
 
 const inputCls =
   "h-9 w-full rounded-md border border-input bg-transparent px-2.5 text-[13px] outline-none focus:ring-2 focus:ring-ring";
@@ -19,12 +21,13 @@ export function AcceptInvitePage() {
   const details = useInviteDetails(token ?? null);
   const accept = useAcceptInvite(token ?? null);
 
+  const status = useAuthStatus();
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
+  const [passwordOk, setPasswordOk] = useState(false);
 
   const isReset = details.data?.kind === "reset";
-  const mismatch = confirm.length > 0 && password !== confirm;
+  const minLen = status.data?.min_password_len ?? 12;
 
   return (
     <div className="flex min-h-svh items-center justify-center p-6">
@@ -70,7 +73,7 @@ export function AcceptInvitePage() {
                 className="flex flex-col gap-3"
                 onSubmit={(e) => {
                   e.preventDefault();
-                  if (mismatch) return;
+                  if (!passwordOk) return;
                   accept.mutate(
                     isReset ? { password } : { name: name.trim(), password },
                   );
@@ -95,39 +98,16 @@ export function AcceptInvitePage() {
                   </label>
                 )}
 
-                <label className="flex flex-col gap-1">
-                  <span className="text-[11px] font-medium text-muted-foreground">
-                    Password
-                  </span>
-                  <input
-                    className={inputCls}
-                    type="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    autoComplete="new-password"
-                    required
-                  />
-                </label>
+                <PasswordField
+                  value={password}
+                  onChange={setPassword}
+                  minLength={minLen}
+                  // The address is already known from the link; the name is
+                  // only asked for on an invitation.
+                  identity={[details.data.email, name]}
+                  onValidChange={setPasswordOk}
+                />
 
-                <label className="flex flex-col gap-1">
-                  <span className="text-[11px] font-medium text-muted-foreground">
-                    Confirm
-                  </span>
-                  <input
-                    className={inputCls}
-                    type="password"
-                    value={confirm}
-                    onChange={(e) => setConfirm(e.target.value)}
-                    autoComplete="new-password"
-                    required
-                  />
-                </label>
-
-                {mismatch && (
-                  <span className="text-[11px] text-destructive">
-                    Those do not match.
-                  </span>
-                )}
                 {accept.isError && (
                   <span className="text-[11px] text-destructive">
                     {accept.error.message}
@@ -136,7 +116,7 @@ export function AcceptInvitePage() {
 
                 <Button
                   type="submit"
-                  disabled={!password || mismatch || accept.isPending}
+                  disabled={!passwordOk || accept.isPending}
                 >
                   {accept.isPending
                     ? "Setting…"
