@@ -50,6 +50,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "linear-epic-plan",
         include_str!("../defaults/workflows/linear-epic-plan.yaml"),
     ),
+    (
+        "linear-epic-supervise",
+        include_str!("../defaults/workflows/linear-epic-supervise.yaml"),
+    ),
 ];
 
 /// Bundled command bodies by (de-prefixed) name.
@@ -166,6 +170,42 @@ mod tests {
             );
         }
         assert!(default_command("nope").is_none());
+    }
+
+    #[test]
+    fn the_epic_supervisor_parses_and_branches_on_the_verdict() {
+        let yaml = default_workflow("linear-epic-supervise").expect("registered");
+        let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow must parse");
+
+        let node = |id: &str| wf.nodes.iter().find(|n| n.id == id).expect(id);
+
+        // Nothing writes to Linear until the review has spoken, and the two
+        // write paths are gated on opposite verdicts — so a run can advance the
+        // epic or file a corrective, never both.
+        let advance = node("advance");
+        let correct = node("correct");
+        assert_eq!(advance.depends_on, ["review"]);
+        assert_eq!(correct.depends_on, ["review"]);
+        assert_eq!(
+            advance.when.as_deref(),
+            Some("$review.output.passed == 'true'")
+        );
+        assert_eq!(
+            correct.when.as_deref(),
+            Some("$review.output.passed != 'true'")
+        );
+
+        // An issue with no epic above it is cancelled, not failed: the likely
+        // cause is a binding on a column that also holds ordinary work, and
+        // that should not read as a broken run.
+        assert!(matches!(
+            node("not-a-piece").kind,
+            harness_dag::NodeKind::Cancel(_)
+        ));
+
+        // The reviewer is the expensive one on purpose; everything else is shell.
+        let review = node("review");
+        assert_eq!(review.model.as_deref(), Some("opus"));
     }
 
     #[test]
