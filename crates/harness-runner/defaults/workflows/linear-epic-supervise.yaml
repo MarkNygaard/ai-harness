@@ -1,0 +1,285 @@
+name: linear-epic-supervise
+description: |
+  Grade a merged epic piece against its own acceptance criteria, then advance
+  the next one — or file a corrective.
+
+  Bind this to the column a piece lands in once its PR is merged. It reads the
+  sub-issue's acceptance criteria, judges the code that is now on the base
+  branch, and does one of three things: start the next piece, file a corrective
+  sub-issue, or stop and ask for a human.
+
+  **The verdict is the gate.** A piece that was built but built wrong does not
+  advance the epic, because everything after it is written against what it was
+  supposed to do.
+
+  **Nothing is stored here.** The epic's memory is its board: the pieces, their
+  order, their columns, and a `Corrects: AIH-12` line in each corrective's body.
+  That line is what counts fix rounds — a label would be prettier, but it would
+  make the cap depend on configuration, and an uncountable cap is no cap.
+
+  Bounded, per the design's decided defaults:
+
+    * **2 corrective rounds per piece** (the build plus two fixes). Three
+      failures is almost always a specification problem, and a fourth attempt
+      spends money to prove it again.
+    * **15 correctives per epic**, as a runaway backstop.
+
+  On either limit the epic stops and says so, rather than continuing to spend.
+
+  Project env vars, all optional — without them the workflow reports what it
+  would have done instead of doing it, which is the right failure for something
+  that writes to your board:
+
+    * `EPIC_READY_STATE` — the state your build binding watches. Set it and the
+      next piece starts by itself.
+    * `EPIC_BLOCKED_STATE` — where a stalled epic goes.
+    * `EPIC_CORRECTIVE_LABEL` — a label id put on correctives, for looks.
+
+  NOT for: building a piece (`idea-to-pr`), or decomposing an epic
+  (`linear-epic-plan`).
+
+provider: claude
+model: opus
+
+nodes:
+  # ── What is this, and what is around it ──────────────────────────────────
+  - id: context
+    category: setup
+    bash: |
+      set -uo pipefail
+      issue="$ISSUE_ID"
+      project="$PROJECT"
+      mkdir -p "$ARTIFACTS_DIR"
+
+      if [ -z "$issue" ] || [ -z "$project" ]; then
+        echo "linear-epic-supervise is triggered by a Linear binding; this run has no issue or project." >&2
+        exit 1
+      fi
+
+      harness linear issue --project "$project" --issue "$issue" \
+        > "$ARTIFACTS_DIR/piece.json" || exit 1
+      parent="$(jq -r '.parent_id // empty' "$ARTIFACTS_DIR/piece.json")"
+
+      if [ -z "$parent" ]; then
+        # Not a piece of an epic. Reported as a fact, not a failure: the likely
+        # cause is a binding pointed at a column that also holds ordinary work.
+        echo '{"is_piece": false}'
+        exit 0
+      fi
+
+      harness linear children --project "$project" --issue "$parent" \
+        > "$ARTIFACTS_DIR/siblings.json" || exit 1
+
+      me="$(jq -r --arg id "$issue" '.[] | select(.id == $id)' "$ARTIFACTS_DIR/siblings.json")"
+      if [ -z "$me" ]; then
+        echo "This issue is not among its own parent's children — refusing to guess." >&2
+        exit 1
+      fi
+      ident="$(printf '%s' "$me" | jq -r '.identifier')"
+      order="$(printf '%s' "$me" | jq -r '.sortOrder')"
+      printf '%s' "$me" | jq -r '.body // ""' > "$ARTIFACTS_DIR/criteria.md"
+
+      # A corrective names what it corrects; the rounds belong to that original,
+      # not to the corrective. A piece with no such line is itself the original.
+      subject="$(grep -m1 -oE '^Corrects: [A-Za-z]+-[0-9]+' "$ARTIFACTS_DIR/criteria.md" \
+        | awk '{print $2}')"
+      [ -n "$subject" ] || subject="$ident"
+
+      rounds="$(jq --arg s "Corrects: $subject" \
+        '[.[] | select((.body // "") | contains($s))] | length' "$ARTIFACTS_DIR/siblings.json")"
+      epic_total="$(jq '[.[] | select((.body // "") | test("^Corrects: "; "m"))] | length' \
+        "$ARTIFACTS_DIR/siblings.json")"
+
+      # Strictly sequential, so "next" is simply the next by board order.
+      next_id="$(jq -r --argjson o "$order" \
+        '[.[] | select(.sortOrder > $o)] | sort_by(.sortOrder) | .[0].id // empty' \
+        "$ARTIFACTS_DIR/siblings.json")"
+      next_ident="$(jq -r --argjson o "$order" \
+        '[.[] | select(.sortOrder > $o)] | sort_by(.sortOrder) | .[0].identifier // empty' \
+        "$ARTIFACTS_DIR/siblings.json")"
+
+      jq -n --arg parent "$parent" --arg ident "$ident" --arg subject "$subject" \
+            --arg next_id "$next_id" --arg next_ident "$next_ident" \
+            --argjson rounds "$rounds" --argjson epic_total "$epic_total" \
+        '{is_piece: true, parent: $parent, identifier: $ident, subject: $subject,
+          next_id: $next_id, next_ident: $next_ident,
+          rounds: $rounds, epic_total: $epic_total}'
+
+  - id: not-a-piece
+    category: setup
+    depends_on: [context]
+    when: "$context.output.is_piece != 'true'"
+    cancel: "This issue has no parent epic, so there is nothing to supervise. Check that the binding's column only holds epic pieces."
+
+  # ── The judgement ────────────────────────────────────────────────────────
+  #
+  # No checkout step: the run's worktree is already cut from the base branch,
+  # which is where this piece was merged. The code under review is the code in
+  # the working directory.
+  - id: review
+    category: validation
+    provider: claude
+    model: opus
+    effort: max
+    context: fresh
+    depends_on: [context]
+    when: "$context.output.is_piece == 'true'"
+    prompt: |
+      A piece of an epic ($context.output.identifier) was built and merged into
+      this branch. Decide whether it actually does what it was supposed to.
+
+      Its acceptance criteria are in `$ARTIFACTS_DIR/criteria.md`. Read that
+      first, then read the code. Judge **against those criteria and nothing
+      else** — not against what you would have built, not against style, not
+      against work the criteria assign to a later piece.
+
+      What a failure means here: the next piece is written against this one
+      having worked, so passing something broken costs more than one wasted
+      round. What a false failure costs: a corrective sub-issue and another
+      build. Neither is free; be accurate rather than cautious.
+
+      Look for the criteria being *met*, not merely *addressed*. A function that
+      exists but is never called, a flag that is parsed but not read, a test
+      that asserts nothing — these are the failures worth catching, because a
+      reviewer skimming the diff will not.
+
+      If it falls short, say precisely what is missing, in terms someone could
+      build from without re-deriving the whole task. That text becomes the body
+      of the corrective sub-issue.
+    output_format:
+      type: object
+      properties:
+        passed:
+          type: boolean
+          description: "True only if every acceptance criterion is genuinely met."
+        summary:
+          type: string
+          description: "2-4 sentences: what was built, and the basis for the verdict."
+        shortfall:
+          type: string
+          description: "When failing: what is missing and what would fix it, as a task. Empty when passing."
+      required: [passed, summary]
+
+  # ── It worked: start the next piece ──────────────────────────────────────
+  - id: advance
+    category: delivery
+    depends_on: [review]
+    when: "$review.output.passed == 'true'"
+    bash: |
+      set -uo pipefail
+      project="$PROJECT"
+      parent="$context.output.parent"
+      next_id="$context.output.next_id"
+      next_ident="$context.output.next_ident"
+      ready="${EPIC_READY_STATE:-}"
+      note="$ARTIFACTS_DIR/note.md"
+
+      if [ -z "$next_id" ]; then
+        {
+          echo "**$context.output.identifier passed — and it was the last piece.**"
+          echo
+          echo "$review.output.summary"
+          echo
+          echo "Every piece of this epic has been built and accepted."
+        } > "$note"
+      elif [ -n "$ready" ]; then
+        if harness linear move-state --project "$project" --issue "$next_id" --state "$ready"; then
+          started="started $next_ident"
+        else
+          started="could not start $next_ident — move it by hand"
+        fi
+        {
+          echo "**$context.output.identifier passed.** $started."
+          echo
+          echo "$review.output.summary"
+        } > "$note"
+      else
+        {
+          echo "**$context.output.identifier passed.** Next up is $next_ident."
+          echo
+          echo "$review.output.summary"
+          echo
+          echo "_EPIC_READY_STATE is not set on this project, so start it by hand._"
+        } > "$note"
+      fi
+
+      harness linear comment --project "$project" --issue "$parent" --body-file "$note" \
+        || echo "could not write the ledger comment; the state change stands" >&2
+      cat "$note"
+
+  # ── It did not: correct it, or stop ──────────────────────────────────────
+  - id: correct
+    category: delivery
+    depends_on: [review]
+    when: "$review.output.passed != 'true'"
+    bash: |
+      set -uo pipefail
+      project="$PROJECT"
+      parent="$context.output.parent"
+      subject="$context.output.subject"
+      rounds="$context.output.rounds"
+      epic_total="$context.output.epic_total"
+      note="$ARTIFACTS_DIR/note.md"
+
+      # Two caps, both from the design. The first says this piece is
+      # underspecified; the second says the epic is.
+      stop=""
+      if [ "$rounds" -ge 2 ]; then
+        stop="$subject has had $rounds corrective rounds already. Three failures is a specification problem, not an effort problem."
+      elif [ "$epic_total" -ge 15 ]; then
+        stop="This epic has produced $epic_total correctives. Stopping before it produces more."
+      fi
+
+      if [ -n "$stop" ]; then
+        {
+          echo "**Stopped on $context.output.identifier.**"
+          echo
+          echo "$stop"
+          echo
+          echo "What the review found:"
+          echo
+          echo "$review.output.shortfall"
+        } > "$note"
+        harness linear comment --project "$project" --issue "$parent" --body-file "$note" || true
+        blocked="${EPIC_BLOCKED_STATE:-}"
+        if [ -n "$blocked" ]; then
+          harness linear move-state --project "$project" --issue "$parent" --state "$blocked" \
+            || echo "could not move the epic to EPIC_BLOCKED_STATE" >&2
+        fi
+        cat "$note"
+        # A stop is an outcome, not a crash: the epic is paused deliberately and
+        # the run has done its job.
+        exit 0
+      fi
+
+      # `Corrects:` on the first line is what the next round counts. It is the
+      # mechanism, not decoration — keep it first and keep the format.
+      body="$ARTIFACTS_DIR/corrective.md"
+      {
+        echo "Corrects: $subject"
+        echo
+        echo "$review.output.shortfall"
+        echo
+        echo "---"
+        echo "_Filed by the epic supervisor after reviewing $context.output.identifier._"
+      } > "$body"
+
+      label="${EPIC_CORRECTIVE_LABEL:-}"
+      if [ -n "$label" ]; then
+        out="$(harness linear create-sub-issue --project "$project" --parent "$parent" \
+          --title "Fix: $subject" --description-file "$body" --label "$label" 2>&1)" || {
+            echo "could not file the corrective:" >&2; echo "$out" >&2; exit 1; }
+      else
+        out="$(harness linear create-sub-issue --project "$project" --parent "$parent" \
+          --title "Fix: $subject" --description-file "$body" 2>&1)" || {
+            echo "could not file the corrective:" >&2; echo "$out" >&2; exit 1; }
+      fi
+
+      {
+        echo "**$context.output.identifier did not pass.** Filed $out as round $((rounds + 1)) of 2."
+        echo
+        echo "$review.output.summary"
+      } > "$note"
+      harness linear comment --project "$project" --issue "$parent" --body-file "$note" \
+        || echo "could not write the ledger comment; the corrective is filed regardless" >&2
+      cat "$note"
