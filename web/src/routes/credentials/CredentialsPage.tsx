@@ -414,12 +414,15 @@ function ProviderSummary({
 }) {
   const healthQuery = useProviderHealth();
   const health = healthQuery.data?.find((h) => h.provider === provider);
-  const { status, detail } = describeProvider(configured, health);
+  const { status, label: statusLabel, detail } = describeProvider(
+    configured,
+    health,
+  );
 
   return (
-    <div className="flex flex-col gap-1 py-3 first:pt-1 last:pb-1">
+    <div className="flex flex-col gap-1 py-2.5 first:pt-1 last:pb-1">
       <div className="flex items-center gap-2">
-        <ProviderMark provider={provider} status={status} />
+        <ProviderMark provider={provider} status={status} label={statusLabel} />
         <span className="truncate text-sm font-medium">{label}</span>
         {health?.version && (
           <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
@@ -456,7 +459,8 @@ function ProviderSummary({
           </Dialog>
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">{detail}</p>
+      {/* Only when there is something the dot cannot say. */}
+      {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
     </div>
   );
 }
