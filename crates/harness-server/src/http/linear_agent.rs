@@ -535,10 +535,7 @@ async fn start_delegated_run(
                     tracing::warn!("linear webhook: failed to record claim for {run_id}: {e}");
                 }
             }
-            let run_link = state
-                .public_url
-                .as_deref()
-                .map(|b| format!("{b}/runs/{run_id}"));
+            let run_link = state.public_url().map(|b| format!("{b}/runs/{run_id}"));
             let _ = client
                 .create_agent_activity(
                     &session,

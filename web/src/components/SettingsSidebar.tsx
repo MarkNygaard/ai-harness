@@ -5,10 +5,12 @@ import {
   IconBinaryTree2,
   IconFolderCog,
   IconKey,
+  IconMail,
   IconPlugConnected,
   IconSettings2,
   IconTags,
   IconUsers,
+  IconWorld,
 } from "@tabler/icons-react";
 import { useAuthStatus } from "@/lib/auth";
 import {
@@ -66,10 +68,24 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
     label: "Workspace",
     items: [
       {
+        href: "/settings/general",
+        label: "General",
+        icon: IconWorld,
+        keywords: "domain public url address hostname",
+        adminOnly: true,
+      },
+      {
         href: "/settings/members",
         label: "Members",
         icon: IconUsers,
         keywords: "users people accounts admin role invite team",
+        adminOnly: true,
+      },
+      {
+        href: "/settings/email",
+        label: "Email",
+        icon: IconMail,
+        keywords: "smtp mail invite password reset relay",
         adminOnly: true,
       },
       {

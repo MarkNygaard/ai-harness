@@ -516,8 +516,7 @@ async fn claim_and_fire(
                 tracing::warn!("linear poller: failed to record claim for {}: {e}", run_id);
             }
             let run_url = state
-                .public_url
-                .as_deref()
+                .public_url()
                 .map(|base| format!("{base}/runs/{run_id}"));
             match session.as_deref() {
                 // With a session, progress belongs in the thread — a comment as
@@ -548,7 +547,7 @@ async fn claim_and_fire(
                         .await;
                 }
             }
-            if let Some(base) = &state.public_url {
+            if let Some(base) = &state.public_url() {
                 let run_url = format!("{base}/runs/{run_id}");
                 if let Err(e) = client
                     .add_attachment(&issue.id, &run_url, "ai-harness run")

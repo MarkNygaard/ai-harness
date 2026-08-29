@@ -55,6 +55,16 @@ toml = "0.8"
 # Database
 sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls-ring-webpki", "postgres", "sqlite", "chrono", "uuid"] }
 
+# Mail (SMTP, for invites and password resets)
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "tokio1-rustls",
+    "ring",
+    "webpki-roots",
+    "builder",
+    "hostname",
+] }
+
 # CLI
 clap = { version = "4", features = ["derive"] }
 

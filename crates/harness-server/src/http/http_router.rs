@@ -8,8 +8,8 @@ use std::sync::Arc;
 use super::{
     auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
     health_check, linear_agent, linear_connections, linear_oauth, linear_routes,
-    linear_source_routes, mcp_routes, password_reset, runs_routes, state::AppState, system_routes,
-    tokens_routes, users_routes, workflows_routes,
+    linear_source_routes, mcp_routes, password_reset, runs_routes, settings_routes,
+    state::AppState, system_routes, tokens_routes, users_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -66,6 +66,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // Generate the MCP key now, so `/mcp` is guarded from the first request
     // rather than from whenever someone first opens its settings page.
     super::mcp_key::spawn_ensure(runs_state.clone());
+    // A stored public URL overrides the environment, so a typo is a form field
+    // rather than a redeploy.
+    super::settings_routes::spawn_load_public_url(runs_state.clone());
     // Announce a one-time setup token while nobody has claimed this install.
     super::accounts::spawn_setup_token(runs_state.clone());
     Router::new()
@@ -94,6 +97,16 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(tokens_routes::list_tokens).post(tokens_routes::create_token),
         )
         .route("/api/tokens/{id}", delete(tokens_routes::revoke_token))
+        // ── How the harness itself is configured. Administrator-only. ──────
+        .route(
+            "/api/settings/general",
+            get(settings_routes::general).put(settings_routes::set_general),
+        )
+        .route(
+            "/api/settings/mail",
+            get(settings_routes::mail_settings).put(settings_routes::set_mail),
+        )
+        .route("/api/settings/mail/test", post(settings_routes::test_mail))
         .route("/api/users", get(users_routes::list_users))
         .route("/api/users/{id}/role", put(users_routes::set_role))
         .route("/api/users/{id}/disabled", put(users_routes::set_disabled))

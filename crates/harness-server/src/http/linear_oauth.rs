@@ -196,7 +196,7 @@ fn build_authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> Stri
 /// The absolute callback URL to register in the Linear OAuth app. Requires
 /// `HARNESS_PUBLIC_URL` / `server.public_url` — Linear needs an exact match.
 fn redirect_uri(state: &Arc<RunsState>) -> Result<String, String> {
-    let base = state.public_url.as_deref().ok_or(
+    let base = state.public_url().ok_or(
         "no public URL configured — set `HARNESS_PUBLIC_URL` (or `server.public_url`) \
          so Linear has a callback address to redirect to",
     )?;
@@ -810,8 +810,7 @@ pub async fn status(
         "agent_scopes_granted": has_agent_scopes(token_scope.as_deref()),
         "webhook_secret_configured": field(&fields, "webhook_secret").is_some(),
         "webhook_url": state
-            .public_url
-            .as_deref()
+            .public_url()
             .map(|b| format!("{b}{WEBHOOK_PATH}")),
         "app_user_id": field(&fields, "app_user_id"),
     }))
