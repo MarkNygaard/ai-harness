@@ -53,7 +53,7 @@ export function MemberProfileDialog({
     e.preventDefault();
     const n = name.trim();
     const m = email.trim();
-    if (!n || !m) return;
+    if (save.isPending || !n || !m) return;
     save.mutate(
       { id: user.id, name: n, email: m },
       { onSuccess: () => onOpenChange(false) },
@@ -61,7 +61,19 @@ export function MemberProfileDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog
+      open={open}
+      onOpenChange={(next, details) => {
+        // Keep the modal boundary intact until the request settles. Otherwise
+        // closing and reopening can start a second write while the first is
+        // still in flight, and the responses can apply out of order.
+        if (!next && save.isPending) {
+          details.cancel();
+          return;
+        }
+        onOpenChange(next);
+      }}
+    >
       <DialogTrigger
         render={
           <Button
@@ -74,7 +86,7 @@ export function MemberProfileDialog({
       >
         Edit
       </DialogTrigger>
-      <DialogContent>
+      <DialogContent showCloseButton={!save.isPending}>
         <DialogHeader>
           <DialogTitle>Edit member</DialogTitle>
           <DialogDescription>
@@ -117,7 +129,15 @@ export function MemberProfileDialog({
             </p>
           )}
           <DialogFooter>
-            <DialogClose render={<Button type="button" variant="outline" />}>
+            <DialogClose
+              render={
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={save.isPending}
+                />
+              }
+            >
               Cancel
             </DialogClose>
             {/* Mirrors the server's empty-field 400s so the Save is disabled

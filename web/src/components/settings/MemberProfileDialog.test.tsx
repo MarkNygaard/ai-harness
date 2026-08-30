@@ -80,6 +80,34 @@ describe("<MemberProfileDialog>", () => {
     );
   });
 
+  it("keeps the modal open while a save is pending", async () => {
+    let resolveResponse!: (response: Response) => void;
+    const mock = vi.fn().mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveResponse = resolve;
+      }),
+    );
+    global.fetch = mock;
+    const u = userEvent.setup();
+    renderWithClient(<MemberProfileDialog user={userFixture} busy={false} />);
+
+    await u.click(screen.getByRole("button", { name: /edit/i }));
+    await u.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(mock).toHaveBeenCalledOnce());
+
+    expect(screen.getByRole("button", { name: /cancel/i })).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: /^close$/i }),
+    ).not.toBeInTheDocument();
+    await u.keyboard("{Escape}");
+    expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
+
+    resolveResponse(new Response(JSON.stringify(userFixture)));
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument(),
+    );
+  });
+
   it("renders the server's 409 sentence and keeps the dialog open", async () => {
     const mock = vi.fn().mockResolvedValue(
       new Response(
