@@ -454,6 +454,24 @@ export function liveReducer(state: LiveState, action: LiveAction): LiveState {
   return reduceEvent(state, action.event, action.now);
 }
 
+/**
+ * Record a step in the render order, if it is not there already.
+ *
+ * `order` used to be set only by `run_started`, which fires once at the very
+ * beginning. Any session that connected to the stream *after* that — a page
+ * opened mid-run, or a reconnect — therefore had an empty order and fell back
+ * to whichever nodes happened to have arrived since, so the graph could render
+ * a single step and drop the rest.
+ *
+ * Execution order is not declaration order, so this is a fallback rather than
+ * a substitute: the persisted topology still wins whenever it is available.
+ * What it guarantees is that the live path alone never renders *fewer* steps
+ * than it has seen.
+ */
+function withOrder(order: string[], id: string): string[] {
+  return order.includes(id) ? order : [...order, id];
+}
+
 /** Reduce one live [`RunEvent`] into the accumulated view. Pure (now injected). */
 function reduceEvent(
   state: LiveState,
@@ -477,6 +495,7 @@ function reduceEvent(
         seedNode({ id: event.node_id, depends_on: [] });
       return {
         ...state,
+        order: withOrder(state.order, event.node_id),
         nodes: {
           ...state.nodes,
           [event.node_id]: {
@@ -508,6 +527,7 @@ function reduceEvent(
         parseLiveProgress(event.activity) ?? prev.liveProgress;
       return {
         ...state,
+        order: withOrder(state.order, event.node_id),
         nodes: {
           ...state.nodes,
           [event.node_id]: {
@@ -524,6 +544,7 @@ function reduceEvent(
       const prev = state.nodes[n.id] ?? seedNode({ id: n.id, depends_on: [] });
       return {
         ...state,
+        order: withOrder(state.order, n.id),
         nodes: {
           ...state.nodes,
           [n.id]: {
@@ -679,25 +700,51 @@ export function useRunView(id: string | null): RunView {
     ? detail.data.status !== "running"
     : false;
   useRunActivity(id, !(liveTerminal || persistedTerminal), handleActivity);
-  return useRunViewMemo(state, detail.data, liveTerminal);
+  return useRunViewMemo(state, detail.data, liveTerminal, id);
 }
 
 function useRunViewMemo(
   state: LiveState,
   d: RunDetail | undefined,
   liveTerminal: boolean,
+  id: string | null,
 ): RunView {
+  // The steps rendered last time, so a render can never show fewer than the one
+  // before it. Held in a ref rather than state: it is a floor on the output, not
+  // an input anyone should re-render on.
+  const known = useRef<string[]>([]);
+  const knownFor = useRef<string | null>(null);
+  // A floor is only meaningful within one run — carried across, the previous
+  // run's steps would haunt the next one. Cleared during render rather than in
+  // an effect, so the first render of a new run is already correct.
+  if (knownFor.current !== id) {
+    knownFor.current = id;
+    known.current = [];
+  }
+  const keepKnown = useCallback((order: string[]) => {
+    const merged = order.length
+      ? [...order, ...known.current.filter((id) => !order.includes(id))]
+      : known.current;
+    known.current = merged;
+    return merged;
+  }, []);
   return useMemo<RunView>(() => {
     // Persisted view always carries the full topology (unstarted steps included).
     const persisted = d ? nodesFromDetail(d) : [];
     const persistedById = new Map(persisted.map((n) => [n.id, n]));
 
     // Render order: the full topology when we have it, else the live order.
-    const order = persisted.length
-      ? persisted.map((n) => n.id)
-      : state.order.length
-        ? state.order
-        : Object.keys(state.nodes);
+    //
+    // Unioned with whatever was rendered a moment ago, because **a run's
+    // topology only ever grows**. Losing a step is always a bug, and the
+    // symptom — the graph collapsing to just the running step, restored by a
+    // refresh — is indistinguishable from the run itself going wrong. If the
+    // persisted detail is briefly unavailable, keeping the steps already on
+    // screen is strictly better than dropping them.
+    const live = state.order.length ? state.order : Object.keys(state.nodes);
+    const order = keepKnown(
+      persisted.length ? persisted.map((n) => n.id) : live,
+    );
 
     // Merge per node: keep whichever source is furthest along. Live carries the
     // realtime `running` state; the persisted row carries finished output/usage.
@@ -741,5 +788,5 @@ function useRunViewMemo(
       project: d?.project ?? null,
       recordedAt: d?.recorded_at ?? null,
     };
-  }, [d, state, liveTerminal]);
+  }, [d, state, liveTerminal, keepKnown, id]);
 }
