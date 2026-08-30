@@ -144,6 +144,9 @@ token instead; all three are accepted.
 - [docs/authoring-workflows.md](docs/authoring-workflows.md) — authoring
   workflow DAGs (node types, `when:` / `$node.output` / `output_format`,
   `trigger_rule`, and good practices).
+- [docs/linear-epics.md](docs/linear-epics.md) — building an issue with
+  sub-issues one piece at a time on a shared branch: the relay of columns, the
+  bindings it needs, and what stalls it.
 
 ## Acknowledgements
 
