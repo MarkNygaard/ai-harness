@@ -10,54 +10,27 @@ import { CliUpdateButton, Section } from "./parts";
  * What a workflow node can pick, and what backs it.
  *
  * `provider` is the value a workflow author types in `provider:`, which is why
- * this page is keyed on it rather than on the subscription: the question it
- * answers is "can `provider: pi` run", and that needs the CLI *and* a
- * credential.
+ * this page is keyed on it: the question it answers is "can `provider: pi`
+ * run", and that needs the CLI *and* a credential.
  *
- * `subscriptions` is a list because the two dimensions genuinely cross. Pi runs
- * `kimi-code/*` on a Kimi plan and `openai-codex/gpt-5.5` on a ChatGPT one, so
- * one agent is backed by two accounts — and that same ChatGPT account also
- * backs the separate `codex` CLI. A row showing one subscription would have to
- * pick a side and be wrong about the other.
+ * `subscriptions` is a list because the two dimensions cross. Pi runs
+ * `kimi-code/*` on a Kimi plan and `openai-codex/*` on a ChatGPT one, so one
+ * agent is backed by two accounts, and either alone is enough to run it.
  *
- * The label is **Pi**, not omp: `build_args` sends only plain Pi flags and the
- * harness supplies its own `--plugin-dir`, so omp is the distribution it
- * happens to be installed from, not the agent. The binary name still reaches
- * the user through the CLI-missing status, which is where it matters.
+ * No descriptions. What an agent is *used for* is a property of the workflows,
+ * which change; a sentence here would be a claim nothing keeps true, and was
+ * already drifting — Claude was described as the planning-and-review agent
+ * while Kimi did the implementing.
  */
 export const AGENTS: {
   provider: string;
   label: string;
-  what: string;
-  subscriptions: { credential: string; label: string }[];
+  subscriptions: string[];
 }[] = [
-  {
-    provider: "claude",
-    label: "Claude Code",
-    what: "Anthropic's coding CLI. The default for planning and review nodes.",
-    subscriptions: [{ credential: "claude", label: "Claude" }],
-  },
-  {
-    provider: "codex",
-    label: "Codex",
-    what: "OpenAI's coding CLI, for gpt-5.x review steps.",
-    subscriptions: [{ credential: "codex", label: "ChatGPT" }],
-  },
-  {
-    provider: "pi",
-    label: "Pi",
-    what: "Installed as `omp`, a Pi distribution bundling the extensions the harness uses. The model a node names decides which account it runs on.",
-    subscriptions: [
-      { credential: "pi", label: "Kimi-for-Coding" },
-      { credential: "codex", label: "ChatGPT" },
-    ],
-  },
-  {
-    provider: "cursor",
-    label: "Cursor",
-    what: "Cursor's headless agent.",
-    subscriptions: [{ credential: "cursor", label: "Cursor" }],
-  },
+  { provider: "claude", label: "Claude Code", subscriptions: ["claude"] },
+  { provider: "codex", label: "Codex", subscriptions: ["codex"] },
+  { provider: "pi", label: "Pi", subscriptions: ["pi", "codex"] },
+  { provider: "cursor", label: "Cursor", subscriptions: ["cursor"] },
 ];
 
 /**
@@ -107,11 +80,12 @@ export function AgentsPage() {
 }
 
 /**
- * One agent, and whether it can run.
+ * One agent: whether it can run, what it is called, what version, and a way to
+ * update it when there is a newer one.
  *
- * The status merges credential and CLI on purpose — see `describeProvider`. An
- * agent with a stored credential and no binary on PATH reads as connected right
- * up until the node fails, which is exactly the case this row exists to catch.
+ * The dot carries the state and `detail` speaks only when something is wrong —
+ * a stored credential with no binary on PATH reads as working right up until
+ * the node fails, and that is the one thing this row must not stay quiet about.
  */
 function AgentRow({
   agent,
@@ -123,12 +97,9 @@ function AgentRow({
   const health = useProviderHealth().data?.find(
     (h) => h.provider === agent.provider,
   );
-  // Any one of an agent's subscriptions is enough to run it: Pi with only a
-  // Kimi plan runs kimi-code/* perfectly well, and saying "not connected"
-  // because ChatGPT is absent would be false.
-  const backed = agent.subscriptions.some(
-    (s) => configured.get(s.credential) ?? false,
-  );
+  // Any one account is enough: Pi with only a Kimi plan runs `kimi-code/*`
+  // perfectly well, and calling that "not connected" would be false.
+  const backed = agent.subscriptions.some((s) => configured.get(s) ?? false);
   const {
     status,
     label: statusLabel,
@@ -144,6 +115,8 @@ function AgentRow({
           label={statusLabel}
         />
         <span className="truncate text-sm font-medium">{agent.label}</span>
+        {/* The value a workflow types. Worth keeping: the name does not give it
+            away — Claude Code is `claude`, Pi is `pi`. */}
         <code className="shrink-0 rounded bg-muted px-1 py-0.5 font-mono text-[11px] text-muted-foreground">
           provider: {agent.provider}
         </code>
@@ -162,26 +135,6 @@ function AgentRow({
           )}
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">{agent.what}</p>
-      <p className="text-xs text-muted-foreground">
-        Backed by{" "}
-        {agent.subscriptions.map((s, i) => (
-          <span key={s.credential}>
-            {i > 0 && " or "}
-            <span
-              className={
-                configured.get(s.credential)
-                  ? "text-foreground"
-                  : "line-through opacity-60"
-              }
-            >
-              {s.label}
-            </span>
-          </span>
-        ))}
-        {!backed && " — connect one on Subscriptions."}
-      </p>
-      {/* Only when there is something the dot cannot say. */}
       {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
     </div>
   );
