@@ -15,6 +15,8 @@ const user: AuthUser = {
   disabled_at: null,
 };
 
+const unchangedEnvelope = { user, sessions_closed: false };
+
 describe("useSetUserProfile", () => {
   const originalFetch = global.fetch;
 
@@ -38,7 +40,9 @@ describe("useSetUserProfile", () => {
   }
 
   it("PUTs the name and email to the encoded user URL", async () => {
-    const mock = vi.fn().mockResolvedValue(new Response(JSON.stringify(user)));
+    const mock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(unchangedEnvelope)));
     global.fetch = mock as unknown as typeof fetch;
 
     const { result } = renderHook(() => useSetUserProfile(), { wrapper });
@@ -88,7 +92,9 @@ describe("useSetUserProfile", () => {
   });
 
   it("invalidates the users and auth/status queries on success", async () => {
-    const mock = vi.fn().mockResolvedValue(new Response(JSON.stringify(user)));
+    const mock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(unchangedEnvelope)));
     global.fetch = mock as unknown as typeof fetch;
 
     const client = new QueryClient({
@@ -114,5 +120,23 @@ describe("useSetUserProfile", () => {
     expect(invalidateQueries).toHaveBeenCalledWith({
       queryKey: ["auth", "status"],
     });
+  });
+
+  it("surfaces sessions_closed and the nested user from the response", async () => {
+    const updated = { ...user, email: "new@x.dev" };
+    const mock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ user: updated, sessions_closed: true })),
+      );
+    global.fetch = mock as unknown as typeof fetch;
+
+    const { result } = renderHook(() => useSetUserProfile(), { wrapper });
+    result.current.mutate({ id: "u/1", name: "Ada", email: "new@x.dev" });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.sessions_closed).toBe(true);
+    expect(result.current.data?.user.email).toBe("new@x.dev");
   });
 });

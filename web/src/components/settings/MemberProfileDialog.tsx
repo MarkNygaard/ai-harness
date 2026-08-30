@@ -21,14 +21,19 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { AuthUser } from "@/lib/auth";
+import type { ProfileUpdate } from "@/lib/users";
 import { useSetUserProfile } from "@/lib/users";
 
 export function MemberProfileDialog({
   user,
   busy,
+  isMe,
+  onSaved,
 }: {
   user: AuthUser;
   busy: boolean;
+  isMe: boolean;
+  onSaved: (result: ProfileUpdate) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(user.name);
@@ -56,7 +61,12 @@ export function MemberProfileDialog({
     if (save.isPending || !n || !m) return;
     save.mutate(
       { id: user.id, name: n, email: m },
-      { onSuccess: () => onOpenChange(false) },
+      {
+        onSuccess: (result) => {
+          onSaved(result);
+          onOpenChange(false);
+        },
+      },
     );
   }
 
@@ -123,6 +133,13 @@ export function MemberProfileDialog({
               onChange={(e) => setEmail(e.target.value)}
             />
           </div>
+          {email.trim().toLowerCase() !== user.email.trim().toLowerCase() && (
+            <p className="text-[11px] text-muted-foreground">
+              {isMe
+                ? "Changing your own address ends this session too — you will have to sign in again with the new address."
+                : `Changing the address ends every session this account holds, so ${user.name} will have to sign in again.`}
+            </p>
+          )}
           {save.isError && (
             <p role="alert" className="text-[11px] text-destructive">
               {save.error.message}

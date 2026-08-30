@@ -43,7 +43,14 @@ describe("<MemberProfileDialog>", () => {
   it("opens pre-filled with the member's name and email", async () => {
     global.fetch = vi.fn().mockResolvedValue(new Response("{}"));
     const u = userEvent.setup();
-    renderWithClient(<MemberProfileDialog user={userFixture} busy={false} />);
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe={false}
+        onSaved={vi.fn()}
+      />,
+    );
 
     await u.click(screen.getByRole("button", { name: /edit/i }));
 
@@ -52,13 +59,23 @@ describe("<MemberProfileDialog>", () => {
   });
 
   it("saves, PUTs the new email, and closes", async () => {
-    const updated: AuthUser = { ...userFixture, email: "new@x.dev" };
+    const updated = { ...userFixture, email: "new@x.dev" };
     const mock = vi
       .fn()
-      .mockResolvedValue(new Response(JSON.stringify(updated)));
+      .mockResolvedValue(
+        new Response(JSON.stringify({ user: updated, sessions_closed: true })),
+      );
     global.fetch = mock;
     const u = userEvent.setup();
-    renderWithClient(<MemberProfileDialog user={userFixture} busy={false} />);
+    const onSaved = vi.fn();
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe={false}
+        onSaved={onSaved}
+      />,
+    );
 
     await u.click(screen.getByRole("button", { name: /edit/i }));
     const emailInput = await screen.findByLabelText(/email/i);
@@ -89,7 +106,14 @@ describe("<MemberProfileDialog>", () => {
     );
     global.fetch = mock;
     const u = userEvent.setup();
-    renderWithClient(<MemberProfileDialog user={userFixture} busy={false} />);
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe={false}
+        onSaved={vi.fn()}
+      />,
+    );
 
     await u.click(screen.getByRole("button", { name: /edit/i }));
     await u.click(screen.getByRole("button", { name: /save changes/i }));
@@ -102,7 +126,11 @@ describe("<MemberProfileDialog>", () => {
     await u.keyboard("{Escape}");
     expect(screen.getByLabelText(/email/i)).toBeInTheDocument();
 
-    resolveResponse(new Response(JSON.stringify(userFixture)));
+    resolveResponse(
+      new Response(
+        JSON.stringify({ user: userFixture, sessions_closed: false }),
+      ),
+    );
     await waitFor(() =>
       expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument(),
     );
@@ -119,7 +147,14 @@ describe("<MemberProfileDialog>", () => {
     );
     global.fetch = mock;
     const u = userEvent.setup();
-    renderWithClient(<MemberProfileDialog user={userFixture} busy={false} />);
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe={false}
+        onSaved={vi.fn()}
+      />,
+    );
 
     await u.click(screen.getByRole("button", { name: /edit/i }));
     const emailInput = await screen.findByLabelText(/email/i);
@@ -138,7 +173,14 @@ describe("<MemberProfileDialog>", () => {
     const mock = vi.fn().mockResolvedValue(new Response("{}"));
     global.fetch = mock;
     const u = userEvent.setup();
-    renderWithClient(<MemberProfileDialog user={userFixture} busy={false} />);
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe={false}
+        onSaved={vi.fn()}
+      />,
+    );
 
     await u.click(screen.getByRole("button", { name: /edit/i }));
     const emailInput = await screen.findByLabelText(/email/i);
@@ -162,7 +204,14 @@ describe("<MemberProfileDialog>", () => {
     );
     global.fetch = mock;
     const u = userEvent.setup();
-    renderWithClient(<MemberProfileDialog user={userFixture} busy={false} />);
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe={false}
+        onSaved={vi.fn()}
+      />,
+    );
 
     await u.click(screen.getByRole("button", { name: /edit/i }));
     const emailInput = await screen.findByLabelText(/email/i);
@@ -184,5 +233,94 @@ describe("<MemberProfileDialog>", () => {
     expect(
       screen.queryByText(/already belongs to another account/i),
     ).not.toBeInTheDocument();
+  });
+
+  it("reports the closed sessions to the page", async () => {
+    const updated = { ...userFixture, email: "new@x.dev" };
+    const envelope = { user: updated, sessions_closed: true };
+    const mock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(envelope)));
+    global.fetch = mock;
+    const u = userEvent.setup();
+    const onSaved = vi.fn();
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe={false}
+        onSaved={onSaved}
+      />,
+    );
+
+    await u.click(screen.getByRole("button", { name: /edit/i }));
+    const emailInput = await screen.findByLabelText(/email/i);
+    await u.clear(emailInput);
+    await u.type(emailInput, "new@x.dev");
+    await u.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(onSaved).toHaveBeenCalledWith(envelope);
+    await waitFor(() =>
+      expect(screen.queryByLabelText(/email/i)).not.toBeInTheDocument(),
+    );
+  });
+
+  it("warns before saving that a new address signs the member out", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response("{}"));
+    const u = userEvent.setup();
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe={false}
+        onSaved={vi.fn()}
+      />,
+    );
+
+    await u.click(screen.getByRole("button", { name: /edit/i }));
+    const emailInput = await screen.findByLabelText(/email/i);
+
+    await u.clear(emailInput);
+    await u.type(emailInput, "new@x.dev");
+    expect(
+      await screen.findByText(/will have to sign in again/i),
+    ).toBeInTheDocument();
+
+    await u.clear(emailInput);
+    await u.type(emailInput, "ada@x.dev");
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/will have to sign in again/i),
+      ).not.toBeInTheDocument(),
+    );
+
+    await u.clear(emailInput);
+    await u.type(emailInput, "ADA@X.DEV");
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/will have to sign in again/i),
+      ).not.toBeInTheDocument(),
+    );
+  });
+
+  it("warns you when the address is your own", async () => {
+    global.fetch = vi.fn().mockResolvedValue(new Response("{}"));
+    const u = userEvent.setup();
+    renderWithClient(
+      <MemberProfileDialog
+        user={userFixture}
+        busy={false}
+        isMe
+        onSaved={vi.fn()}
+      />,
+    );
+
+    await u.click(screen.getByRole("button", { name: /edit/i }));
+    const emailInput = await screen.findByLabelText(/email/i);
+    await u.clear(emailInput);
+    await u.type(emailInput, "new@x.dev");
+
+    expect(await screen.findByText(/this session too/i)).toBeInTheDocument();
   });
 });

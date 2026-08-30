@@ -69,6 +69,20 @@ pub struct User {
 
 const USER_COLUMNS: &str = "id, email, name, role, created_at, last_login_at, disabled_at";
 
+/// What a profile write did: the account as it now stands, and whether its
+/// sessions were ended.
+///
+/// `sessions_closed` is true when the address changed — an address is an
+/// identity, so every session the account held was deleted in the same
+/// transaction. It stays true when there was nothing to delete: what the
+/// caller needs to know is that the account has to sign in again, not how
+/// many browsers it had open.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileUpdate {
+    pub user: User,
+    pub sessions_closed: bool,
+}
+
 /// Fields accepted when creating an account.
 #[derive(Debug, Clone)]
 pub struct NewUser {
@@ -248,23 +262,71 @@ impl UserStore {
         Ok(())
     }
 
-    /// Update the display name and email on an account.
+    /// Update the display name and email on an account, ending every session it
+    /// holds when the address changed.
+    ///
+    /// An address is an identity, not a label: sign-in matches on it, invitations
+    /// match on it, and both SSO providers link an account by it. A session
+    /// opened under an address the account no longer holds belongs to an identity
+    /// that no longer exists. So the rename and the sign-out are one transaction —
+    /// a session cannot survive because a follow-up statement failed, and a
+    /// refused rename (a lost race for a taken address) cannot sign anyone out.
+    ///
+    /// Changing only the name ends nothing. Signing someone out over a corrected
+    /// spelling would be a worse bug than the one this prevents.
+    ///
+    /// `None` means no account holds `id`.
     pub async fn set_profile(
         &self,
         id: &str,
         name: &str,
         email: &str,
-    ) -> Result<Option<User>, PersistError> {
+    ) -> Result<Option<ProfileUpdate>, PersistError> {
+        let name = name.trim();
+        let email = email.trim();
+        let mut tx = self.pool.begin().await?;
+        // Lock the row and compare in the same breath, using the same `lower()`
+        // the write below uses. Reading the old address in an earlier statement
+        // would compare against a value another administrator may already have
+        // replaced — and concluding "unchanged" about a write that does change
+        // the address is exactly the bug this method exists to prevent.
+        let found: Option<(bool,)> = sqlx::query_as(
+            "SELECT lower(email) IS DISTINCT FROM lower($2) FROM harness_users
+             WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .bind(email)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((email_changed,)) = found else {
+            return Ok(None);
+        };
         let sql = format!(
             "UPDATE harness_users SET name = $2, email = lower($3), updated_at = now()
              WHERE id = $1 RETURNING {USER_COLUMNS}"
         );
-        Ok(sqlx::query_as::<_, User>(&sql)
+        // Cannot be `None` while the row above is locked, but the contract says
+        // `None` means no such account, so honour it rather than assume.
+        let Some(user) = sqlx::query_as::<_, User>(&sql)
             .bind(id)
-            .bind(name.trim())
-            .bind(email.trim())
-            .fetch_optional(&self.pool)
-            .await?)
+            .bind(name)
+            .bind(email)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if email_changed {
+            sqlx::query("DELETE FROM harness_sessions WHERE user_id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(Some(ProfileUpdate {
+            user,
+            sessions_closed: email_changed,
+        }))
     }
 
     /// Remove an account and every session it holds.
@@ -278,16 +340,33 @@ impl UserStore {
 
     // ── Sessions ────────────────────────────────────────────────────────────
 
-    /// Open a session for `user_id`, returning the id to put in the cookie.
+    /// Open a session for the current identity of `user_id`, returning whether
+    /// the account still holds `expected_email`.
     ///
     /// The caller supplies the id so the raw value never has to travel back out
-    /// of this store; only its hash is written.
+    /// of this store; only its hash is written. The account write is deliberately
+    /// first: it locks the row and re-checks the email after any concurrent
+    /// profile change commits. If this transaction wins the lock, a following
+    /// email change waits and then deletes the session before it commits.
     pub async fn open_session(
         &self,
         session_id: &str,
         user_id: &str,
+        expected_email: &str,
         ttl: Duration,
-    ) -> Result<(), PersistError> {
+    ) -> Result<bool, PersistError> {
+        let mut tx = self.pool.begin().await?;
+        let current = sqlx::query(
+            "UPDATE harness_users SET last_login_at = now()
+             WHERE id = $1 AND lower(email) = lower($2) AND disabled_at IS NULL",
+        )
+        .bind(user_id)
+        .bind(expected_email)
+        .execute(&mut *tx)
+        .await?;
+        if current.rows_affected() == 0 {
+            return Ok(false);
+        }
         sqlx::query(
             "INSERT INTO harness_sessions (id_hash, user_id, expires_at)
              VALUES ($1, $2, $3)",
@@ -295,13 +374,10 @@ impl UserStore {
         .bind(hash_session_id(session_id))
         .bind(user_id)
         .bind(Utc::now() + ttl)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
-        sqlx::query("UPDATE harness_users SET last_login_at = now() WHERE id = $1")
-            .bind(user_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
+        tx.commit().await?;
+        Ok(true)
     }
 
     /// The account behind a session cookie, if the session is live and the
@@ -479,7 +555,7 @@ mod tests {
 
         let sid = uuid::Uuid::new_v4().to_string();
         store
-            .open_session(&sid, &user.id, Duration::hours(1))
+            .open_session(&sid, &user.id, &user.email, Duration::hours(1))
             .await
             .expect("open");
 
@@ -535,7 +611,7 @@ mod tests {
         // An expired session is not a session, and pruning removes it.
         let expired = uuid::Uuid::new_v4().to_string();
         store
-            .open_session(&expired, &user.id, Duration::seconds(-1))
+            .open_session(&expired, &user.id, &user.email, Duration::seconds(-1))
             .await
             .unwrap();
         assert!(store
@@ -548,7 +624,7 @@ mod tests {
         // Deleting the account cascades to its sessions.
         let live = uuid::Uuid::new_v4().to_string();
         store
-            .open_session(&live, &user.id, Duration::hours(1))
+            .open_session(&live, &user.id, &user.email, Duration::hours(1))
             .await
             .unwrap();
         store.delete(&user.id).await.unwrap();
@@ -581,7 +657,7 @@ mod tests {
         // This one would lapse in a second if using it did nothing.
         let carried = uuid::Uuid::new_v4().to_string();
         store
-            .open_session(&carried, &user.id, Duration::seconds(1))
+            .open_session(&carried, &user.id, &user.email, Duration::seconds(1))
             .await
             .unwrap();
         store
@@ -604,7 +680,7 @@ mod tests {
         // request finds it expired however recently it was used.
         let capped = uuid::Uuid::new_v4().to_string();
         store
-            .open_session(&capped, &user.id, Duration::hours(1))
+            .open_session(&capped, &user.id, &user.email, Duration::hours(1))
             .await
             .unwrap();
         assert!(store
@@ -650,5 +726,192 @@ mod tests {
         assert_eq!(store.active_admin_count().await.unwrap(), before);
 
         store.delete(&admin.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn changing_the_email_ends_every_session() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let user = store
+            .create(&NewUser {
+                email: unique_email("mover"),
+                name: "Mover".into(),
+                role: "member".into(),
+                password_hash: Some("hash".into()),
+            })
+            .await
+            .expect("create");
+
+        let sid1 = uuid::Uuid::new_v4().to_string();
+        let sid2 = uuid::Uuid::new_v4().to_string();
+        store
+            .open_session(&sid1, &user.id, &user.email, Duration::hours(1))
+            .await
+            .expect("open first session");
+        store
+            .open_session(&sid2, &user.id, &user.email, Duration::hours(1))
+            .await
+            .expect("open second session");
+        assert!(store
+            .user_for_session(&sid1, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(store
+            .user_for_session(&sid2, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        let new_email = unique_email("moved");
+        let update = store
+            .set_profile(&user.id, "Moved", &new_email)
+            .await
+            .expect("set_profile")
+            .expect("user exists");
+        assert!(update.sessions_closed);
+        assert_eq!(update.user.email, new_email.to_lowercase());
+        assert_eq!(update.user.name, "Moved");
+
+        assert!(store
+            .user_for_session(&sid1, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .user_for_session(&sid2, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(store.close_sessions_for(&user.id).await.unwrap(), 0);
+
+        store.delete(&user.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_stale_identity_cannot_open_a_session() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let user = store
+            .create(&NewUser {
+                email: unique_email("stale-session"),
+                name: "Stale".into(),
+                role: "member".into(),
+                password_hash: Some("hash".into()),
+            })
+            .await
+            .expect("create");
+
+        let new_email = unique_email("current-session");
+        let update = store
+            .set_profile(&user.id, &user.name, &new_email)
+            .await
+            .expect("set_profile")
+            .expect("user exists");
+        assert!(update.sessions_closed);
+
+        let stale_sid = uuid::Uuid::new_v4().to_string();
+        assert!(!store
+            .open_session(&stale_sid, &user.id, &user.email, Duration::hours(1),)
+            .await
+            .expect("reject stale identity"));
+        assert!(store
+            .user_for_session(&stale_sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
+
+        let current_sid = uuid::Uuid::new_v4().to_string();
+        assert!(store
+            .open_session(
+                &current_sid,
+                &user.id,
+                &update.user.email,
+                Duration::hours(1),
+            )
+            .await
+            .expect("open current identity"));
+        assert!(store
+            .user_for_session(&current_sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        store.delete(&user.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn changing_only_the_name_keeps_sessions() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let email = unique_email("keeper");
+        let user = store
+            .create(&NewUser {
+                email: email.clone(),
+                name: "Keeper".into(),
+                role: "member".into(),
+                password_hash: Some("hash".into()),
+            })
+            .await
+            .expect("create");
+
+        let sid = uuid::Uuid::new_v4().to_string();
+        store
+            .open_session(&sid, &user.id, &user.email, Duration::hours(1))
+            .await
+            .expect("open session");
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        // A new name with the same address ends nothing.
+        let update = store
+            .set_profile(&user.id, "Renamed", &email)
+            .await
+            .expect("set_profile")
+            .expect("user exists");
+        assert!(!update.sessions_closed);
+        assert_eq!(update.user.name, "Renamed");
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        // Re-typing the same address in another case is also not a change.
+        let update = store
+            .set_profile(&user.id, "Renamed Again", &email.to_uppercase())
+            .await
+            .expect("set_profile")
+            .expect("user exists");
+        assert!(!update.sessions_closed);
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        // A missing account returns None, not an error.
+        assert!(store
+            .set_profile("no-such-id", "X", "x@example.test")
+            .await
+            .unwrap()
+            .is_none());
+
+        store.delete(&user.id).await.unwrap();
     }
 }
