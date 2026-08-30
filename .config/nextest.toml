@@ -10,7 +10,13 @@ serial-db = { max-threads = 1 }
 [[profile.default.overrides]]
 # All harness-persist tests (the #[serial_test::serial] DB tests) + harness-core's
 # db::tests and db_pg::tests modules (both use an in-process process_env_lock()
-# that does NOT help across nextest processes). Both packages create schemas;
-# serialize them together.
-filter = 'package(harness-persist) | (package(harness-core) & (test(db::) | test(db_pg)))'
+# that does NOT help across nextest processes) + harness-server's users_routes
+# tests, which open a UserStore and so run the same `CREATE TABLE ... IF NOT
+# EXISTS`. All three create schemas; serialize them together.
+#
+# `IF NOT EXISTS` is not a defence here: two sessions running it at once still
+# collide in `pg_type`, which surfaces as `type "harness_sessions" already
+# exists` from whichever loses. That is what CI hit the moment harness-server
+# gained its first database-backed test.
+filter = 'package(harness-persist) | (package(harness-core) & (test(db::) | test(db_pg))) | (package(harness-server) & test(users_routes::))'
 test-group = 'serial-db'
