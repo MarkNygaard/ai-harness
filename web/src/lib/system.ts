@@ -48,13 +48,21 @@ export function useProviderHealth() {
   });
 }
 
-export function useUpdateClaudeCode() {
+/**
+ * Install the latest CLI for one provider.
+ *
+ * Claude Code and Codex are both npm packages installed the same way, so one
+ * mutation covers both; `omp` and `cursor-agent` come from elsewhere and report
+ * `update_available: false`, so no button is ever offered for them.
+ */
+export function useUpdateAgentCli() {
   const qc = useQueryClient();
-  return useMutation<ClaudeUpdateResult, Error, void>({
-    mutationFn: () =>
-      apiJson<ClaudeUpdateResult>("/api/system/claude-update", {
-        method: "POST",
-      }),
+  return useMutation<ClaudeUpdateResult, Error, string>({
+    mutationFn: (provider: string) =>
+      apiJson<ClaudeUpdateResult>(
+        `/api/system/cli-update/${encodeURIComponent(provider)}`,
+        { method: "POST" },
+      ),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["provider-health"] });
     },
