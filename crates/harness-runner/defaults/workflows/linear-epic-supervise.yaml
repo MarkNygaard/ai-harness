@@ -30,8 +30,9 @@ description: |
   would have done instead of doing it, which is the right failure for something
   that writes to your board:
 
-    * `EPIC_READY_STATE` — the state your build binding watches. Set it and the
-      next piece starts by itself.
+    * `EPIC_READY_STATE` — normally unnecessary. The column a piece starts in
+      is derived from the claims the poller already records, so this is only
+      an override for a board that wants somewhere else.
     * `EPIC_BLOCKED_STATE` — where a stalled epic goes.
     * `EPIC_CORRECTIVE_LABEL` — a label id put on correctives, for looks.
 
@@ -200,7 +201,15 @@ nodes:
       first_id="$context.output.first_id"
       first_ident="$context.output.first_ident"
       branch="epic/$context.output.epic_ident"
+      # Where a piece goes to be built. Derived, not configured: the poller
+      # records the column every issue was claimed from, and an epic is picked
+      # up by the same binding its pieces are, so the epic's own claim already
+      # says where the first piece belongs. The environment variable stays as
+      # an override for a board that wants somewhere else.
       ready="${EPIC_READY_STATE:-}"
+      if [ -z "$ready" ]; then
+        ready="$(harness linear ready-state 2>/dev/null | jq -r '.state // empty')"
+      fi
       note="$ARTIFACTS_DIR/note.md"
 
       # The integration branch. Every piece of this epic is built on it and
@@ -228,7 +237,7 @@ nodes:
           echo
           echo "The feature will accumulate on \`$branch\`."
           echo
-          echo "_EPIC_READY_STATE is not set on this project, so start it by hand._"
+          echo "_Could not work out which column starts a build, so start it by hand. Set EPIC_READY_STATE on the project to say explicitly._"
         } > "$note"
       elif harness linear move-state --issue "$first_id" --state "$ready"; then
         {
@@ -351,7 +360,13 @@ nodes:
       parent="$context.output.parent"
       next_id="$context.output.next_id"
       next_ident="$context.output.next_ident"
+      # Same derivation as start-epic, from the piece just reviewed: it was
+      # built by the binding we are looking for, so its own claim names the
+      # column.
       ready="${EPIC_READY_STATE:-}"
+      if [ -z "$ready" ]; then
+        ready="$(harness linear ready-state --issue "$ISSUE_ID" 2>/dev/null | jq -r '.state // empty')"
+      fi
       note="$ARTIFACTS_DIR/note.md"
 
       if [ -z "$next_id" ]; then
@@ -426,7 +441,7 @@ nodes:
           echo
           cat "$ARTIFACTS_DIR/summary.md"
           echo
-          echo "_EPIC_READY_STATE is not set on this project, so start it by hand._"
+          echo "_Could not work out which column starts a build, so start it by hand. Set EPIC_READY_STATE on the project to say explicitly._"
         } > "$note"
       fi
 

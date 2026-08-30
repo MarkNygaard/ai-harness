@@ -195,6 +195,66 @@ pub async fn move_state(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ReadyStateRequest {
+    /// The piece whose build column to read. Optional: without it the answer
+    /// comes from the asking run's own claim, which is what an epic being
+    /// started has.
+    #[serde(default)]
+    pub issue: Option<String>,
+}
+
+/// `POST /api/run/linear/ready-state` — the column a piece must be moved to in
+/// order to be built.
+///
+/// Exists so nobody has to paste a Linear state UUID into a project environment
+/// variable. The poller writes `original_state_id` on every claim, so the column
+/// that triggers a build is already recorded: for an epic, the column the epic
+/// itself was claimed from; for a merged piece, the column that piece was
+/// claimed from. One binding picks up both, so the two agree.
+///
+/// The supervisor's own claims are excluded — it triggers from the column a
+/// merged piece rests in, and handing that back would move the next piece
+/// straight to Done.
+pub async fn ready_state(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Json(req): Json<ReadyStateRequest>,
+) -> Response {
+    let g = match grant(&headers) {
+        Ok(g) => g,
+        Err((s, m)) => return err(s, m),
+    };
+    let claims = match state.linear_claim_store().await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+    };
+    let supervisor = super::linear_agent::EPIC_SUPERVISOR;
+
+    // The named piece first: it was built by the binding we are looking for.
+    if let Some(issue) = req.issue.as_deref().filter(|s| !s.trim().is_empty()) {
+        if let Ok(Some(found)) = claims.build_state_for_issue(issue, supervisor).await {
+            return Json(serde_json::json!({ "state": found })).into_response();
+        }
+    }
+    // Otherwise this run's own claim — an epic being started was itself picked
+    // up from the column its pieces start in.
+    match claims.claim_for_run(&g.run_id).await {
+        Ok(Some(c)) if c.workflow != supervisor && !c.original_state_id.is_empty() => {
+            Json(serde_json::json!({ "state": c.original_state_id })).into_response()
+        }
+        Ok(Some(c)) => match claims.build_state_for_issue(&c.issue_id, supervisor).await {
+            Ok(Some(found)) => Json(serde_json::json!({ "state": found })).into_response(),
+            _ => err(
+                StatusCode::NOT_FOUND,
+                "no build column recorded for this issue yet",
+            ),
+        },
+        Ok(None) => err(StatusCode::NOT_FOUND, "this run has no Linear claim"),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
+    }
+}
+
 /// `POST /api/run/linear/release` — give up an issue by clearing its delegate.
 ///
 /// What a workflow calls when it is finished with an issue it deliberately left
