@@ -146,6 +146,28 @@ nodes:
       epic_total="$(jq '[.[] | select((.body // "") | test("^Corrects: "; "m"))] | length' \
         "$ARTIFACTS_DIR/siblings.json")"
 
+      # Has the epic already moved past this piece? A piece is judged once.
+      # Nothing moves an issue out of the column a merged piece rests in, so
+      # the poller keeps offering it: this same piece was reviewed six times in
+      # half an hour, and each review ran `advance` again — which is how a
+      # later piece was started while the one before it was still building.
+      #
+      # `release` below is the real fix; this is the guard for the window
+      # between a review finishing and the delegate actually clearing, and for
+      # any issue re-delegated by hand after the fact.
+      #
+      # Build order is ascending `sortOrder`, so a *later* piece is a higher
+      # one. If any later piece has begun, this piece's verdict was already
+      # acted on.
+      ahead="$(jq -r --argjson o "$order" \
+        '[.[] | select(.sortOrder > $o)
+              | select(.state_type == "started" or .state_type == "completed")]
+         | length' "$ARTIFACTS_DIR/siblings.json")"
+      if [ "$ahead" -gt 0 ]; then
+        jq -n --arg ident "$ident" '{mode: "already-judged", identifier: $ident}'
+        exit 0
+      fi
+
       # The next piece is the next one that has not begun — not the next by
       # order. Two things depend on that difference: a corrective filed later
       # sorts *above* the piece it corrects (Linear gives new issues the lowest
@@ -238,6 +260,20 @@ nodes:
     when: "$context.output.mode == 'nothing-to-start'"
     cancel: "Every piece of this epic is already under way or finished. Nothing to start — the epic advances when a piece is reviewed, not when the epic is handed over again."
 
+  - id: already-judged
+    category: setup
+    depends_on: [context]
+    when: "$context.output.mode == 'already-judged'"
+    bash: |
+      set -uo pipefail
+      # Judged already, and the epic has moved on. Give the issue up so the
+      # poller stops offering it, then say so and stop — re-reviewing a merged
+      # piece costs an Opus run and can start the piece after the one that is
+      # already building.
+      harness linear release --issue "$ISSUE_ID" \
+        || echo "could not release this piece; it may be offered again" >&2
+      echo "$context.output.identifier was already judged and the epic has moved past it."
+
   # ── The judgement ────────────────────────────────────────────────────────
   #
   # No checkout step: the run's worktree is already cut from the base branch,
@@ -273,6 +309,18 @@ nodes:
       If it falls short, say precisely what is missing, in terms someone could
       build from without re-deriving the whole task. That text becomes the body
       of the corrective sub-issue.
+
+      **Write your prose to files, not into the JSON.** Put the verdict summary
+      in `$ARTIFACTS_DIR/summary.md`, and — only when failing — what is missing
+      in `$ARTIFACTS_DIR/shortfall.md`. Both are copied verbatim into a Linear
+      comment, so: prose and markdown only, a few short paragraphs at most, and
+      never pasted command or test output. Say the suite passed; do not
+      reproduce what it printed.
+
+      This is not a formatting preference. The JSON fields are substituted into
+      a shell script, where a backtick runs as a command — an earlier verdict
+      reached Linear with its code spans silently executed away. Keep `summary`
+      to a single plain sentence and put everything else in the files.
     output_format:
       type: object
       properties:
@@ -281,7 +329,7 @@ nodes:
           description: "True only if every acceptance criterion is genuinely met."
         summary:
           type: string
-          description: "2-4 sentences: what was built, and the basis for the verdict."
+          description: "2-4 sentences: what was built, and the basis for the verdict. Prose only -- never paste command or test output; say that the suite passed, not what it printed."
         shortfall:
           type: string
           description: "When failing: what is missing and what would fix it, as a task. Empty when passing."
@@ -294,6 +342,12 @@ nodes:
     when: "$review.output.passed == 'true'"
     bash: |
       set -uo pipefail
+      # The verdict prose is read from the files the reviewer wrote, never
+      # from the JSON: those fields are substituted into this script, where a
+      # backtick would run as a command.
+      [ -s "$ARTIFACTS_DIR/summary.md" ] || echo "_The reviewer left no summary._" > "$ARTIFACTS_DIR/summary.md"
+      [ -s "$ARTIFACTS_DIR/shortfall.md" ] || echo "_The reviewer left no detail._" > "$ARTIFACTS_DIR/shortfall.md"
+
       parent="$context.output.parent"
       next_id="$context.output.next_id"
       next_ident="$context.output.next_ident"
@@ -345,7 +399,7 @@ nodes:
         {
           echo "**$context.output.identifier passed — and it was the last piece.**"
           echo
-          echo "$review.output.summary"
+          cat "$ARTIFACTS_DIR/summary.md"
           echo
           if [ -n "$pr" ]; then
             echo "Every piece is in. The feature is one pull request against"
@@ -364,17 +418,25 @@ nodes:
         {
           echo "**$context.output.identifier passed.** $started."
           echo
-          echo "$review.output.summary"
+          cat "$ARTIFACTS_DIR/summary.md"
         } > "$note"
       else
         {
           echo "**$context.output.identifier passed.** Next up is $next_ident."
           echo
-          echo "$review.output.summary"
+          cat "$ARTIFACTS_DIR/summary.md"
           echo
           echo "_EPIC_READY_STATE is not set on this project, so start it by hand._"
         } > "$note"
       fi
+
+      # Done with this piece. Nothing moved it out of the column a merged
+      # piece rests in, so without giving up the delegate the poller offers it
+      # again every tick -- the same piece was reviewed six times in half an
+      # hour, and every repeat ran this node again, starting a later piece
+      # while the one before it was still building.
+      harness linear release --issue "$ISSUE_ID" \
+        || echo "could not release this piece; it may be judged again" >&2
 
       harness linear comment --issue "$parent" --body-file "$note" \
         || echo "could not write the ledger comment; the state change stands" >&2
@@ -387,6 +449,12 @@ nodes:
     when: "$review.output.passed != 'true'"
     bash: |
       set -uo pipefail
+      # The verdict prose is read from the files the reviewer wrote, never
+      # from the JSON: those fields are substituted into this script, where a
+      # backtick would run as a command.
+      [ -s "$ARTIFACTS_DIR/summary.md" ] || echo "_The reviewer left no summary._" > "$ARTIFACTS_DIR/summary.md"
+      [ -s "$ARTIFACTS_DIR/shortfall.md" ] || echo "_The reviewer left no detail._" > "$ARTIFACTS_DIR/shortfall.md"
+
       parent="$context.output.parent"
       subject="$context.output.subject"
       rounds="$context.output.rounds"
@@ -410,7 +478,7 @@ nodes:
           echo
           echo "What the review found:"
           echo
-          echo "$review.output.shortfall"
+          cat "$ARTIFACTS_DIR/shortfall.md"
         } > "$note"
         harness linear comment --issue "$parent" --body-file "$note" || true
         blocked="${EPIC_BLOCKED_STATE:-}"
@@ -418,6 +486,8 @@ nodes:
           harness linear move-state --issue "$parent" --state "$blocked" \
             || echo "could not move the epic to EPIC_BLOCKED_STATE" >&2
         fi
+        harness linear release --issue "$ISSUE_ID" \
+          || echo "could not release this piece; it may be judged again" >&2
         cat "$note"
         # A stop is an outcome, not a crash: the epic is paused deliberately and
         # the run has done its job.
@@ -430,7 +500,7 @@ nodes:
       {
         echo "Corrects: $subject"
         echo
-        echo "$review.output.shortfall"
+        cat "$ARTIFACTS_DIR/shortfall.md"
         echo
         echo "---"
         echo "_Filed by the epic supervisor after reviewing $context.output.identifier._"
@@ -450,8 +520,16 @@ nodes:
       {
         echo "**$context.output.identifier did not pass.** Filed $out as round $((rounds + 1)) of 2."
         echo
-        echo "$review.output.summary"
+        cat "$ARTIFACTS_DIR/summary.md"
       } > "$note"
+      # Done with this piece. Nothing moved it out of the column a merged
+      # piece rests in, so without giving up the delegate the poller offers it
+      # again every tick -- the same piece was reviewed six times in half an
+      # hour, and every repeat ran this node again, starting a later piece
+      # while the one before it was still building.
+      harness linear release --issue "$ISSUE_ID" \
+        || echo "could not release this piece; it may be judged again" >&2
+
       harness linear comment --issue "$parent" --body-file "$note" \
         || echo "could not write the ledger comment; the corrective is filed regardless" >&2
       cat "$note"

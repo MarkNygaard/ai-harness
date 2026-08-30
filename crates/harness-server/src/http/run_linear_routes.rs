@@ -195,6 +195,32 @@ pub async fn move_state(
     }
 }
 
+/// `POST /api/run/linear/release` — give up an issue by clearing its delegate.
+///
+/// What a workflow calls when it is finished with an issue it deliberately left
+/// where it found it. The poller selects on the delegate field, so without this
+/// such an issue is re-picked every tick: the epic supervisor reviewed one
+/// merged piece six times before anyone noticed, each review an Opus run, and
+/// each one advanced the epic another piece.
+pub async fn release(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Json(req): Json<IssueRef>,
+) -> Response {
+    let g = match grant(&headers) {
+        Ok(g) => g,
+        Err((s, m)) => return err(s, m),
+    };
+    let c = match client(&state, &g).await {
+        Ok(c) => c,
+        Err((s, m)) => return err(s, m),
+    };
+    match c.clear_delegate(&req.issue).await {
+        Ok(()) => Json(serde_json::json!({ "released": req.issue })).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CommentRequest {
     pub issue: String,
