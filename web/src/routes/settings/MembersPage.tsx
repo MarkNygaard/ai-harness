@@ -1,3 +1,4 @@
+import { MemberProfileDialog } from "@/components/settings/MemberProfileDialog";
 import { InvitePeople } from "@/components/settings/InvitePeople";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Badge } from "@/components/ui/badge";
@@ -11,6 +12,8 @@ import {
   useSetUserRole,
   useUsers,
 } from "@/lib/users";
+import type { ProfileUpdate } from "@/lib/users";
+import { useState } from "react";
 
 function whenever(iso: string | null): string {
   if (!iso) return "never";
@@ -29,6 +32,7 @@ function Row({
   onRole,
   onDisabled,
   onDelete,
+  onSaved,
 }: {
   user: AuthUser;
   isMe: boolean;
@@ -37,6 +41,7 @@ function Row({
   onRole: (role: "admin" | "member") => void;
   onDisabled: (disabled: boolean) => void;
   onDelete: () => void;
+  onSaved: (result: ProfileUpdate) => void;
 }) {
   const disabled = !!user.disabled_at;
   // Mirrors the server's guard so the button is disabled rather than the click
@@ -68,6 +73,12 @@ function Row({
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
+        <MemberProfileDialog
+          user={user}
+          busy={busy}
+          isMe={isMe}
+          onSaved={onSaved}
+        />
         <Button
           variant="ghost"
           size="sm"
@@ -142,6 +153,17 @@ export function MembersPage() {
     (u) => u.role === "admin" && !u.disabled_at,
   ).length;
 
+  // The last profile save that signed someone out, held so the administrator
+  // is told after the dialog closes. Rendered from the response rather than
+  // the list, because the ["users"] refetch has not landed yet and the list
+  // still holds the old address.
+  const [signedOut, setSignedOut] = useState<AuthUser | null>(null);
+
+  // Drop the notice if the account is gone — a removed member has no sign-in
+  // to come back to.
+  const notice =
+    signedOut && list.some((u) => u.id === signedOut.id) ? signedOut : null;
+
   return (
     <SettingsShell title="Members">
       <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
@@ -167,6 +189,13 @@ export function MembersPage() {
               <p className="text-xs text-destructive">{error.message}</p>
             )}
 
+            {notice && (
+              <p role="status" className="text-xs text-muted-foreground">
+                {notice.name} now signs in as {notice.email}. Any session opened
+                under the old address has ended, so they have to sign in again.
+              </p>
+            )}
+
             <Card>
               <CardContent className="p-0">
                 {users.isLoading && (
@@ -186,6 +215,9 @@ export function MembersPage() {
                       disable.mutate({ id: u.id, disabled: d })
                     }
                     onDelete={() => remove.mutate({ id: u.id })}
+                    onSaved={(r) =>
+                      setSignedOut(r.sessions_closed ? r.user : null)
+                    }
                   />
                 ))}
               </CardContent>

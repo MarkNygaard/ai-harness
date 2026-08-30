@@ -37,7 +37,7 @@ mod settings;
 pub use settings::SettingsStore;
 
 mod users;
-pub use users::{NewUser, User, UserStore};
+pub use users::{NewUser, ProfileUpdate, User, UserStore};
 
 mod tokens;
 pub use tokens::{AccessToken, TokenStore};
