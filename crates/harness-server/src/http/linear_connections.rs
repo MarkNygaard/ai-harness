@@ -164,27 +164,6 @@ pub(crate) async fn resolve_for_project(
     )
 }
 
-/// [`resolve_for_project`] for a caller holding the stores but no server state.
-///
-/// Same rule, same [`choose`] — the `harness linear` CLI must route a project to
-/// the workspace the poller would have used, or an epic's sub-issues land
-/// somewhere its build runs will never look.
-pub(crate) async fn resolve_with_stores(
-    creds: &CredentialStore,
-    projects: &harness_persist::ProjectStore,
-    project: &str,
-) -> Result<ConnectionId, String> {
-    let available = list_ids(creds).await?;
-    let pinned = projects
-        .get(project)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|row| row.linear_connection)
-        .filter(|c| !c.trim().is_empty());
-    choose(pinned.as_deref(), &available)
-}
-
 /// Resolve many projects in one pass, reusing a single connection listing.
 ///
 /// The webhook path needs this: attributing a delivery means filtering every

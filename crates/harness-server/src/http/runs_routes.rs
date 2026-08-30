@@ -1740,6 +1740,26 @@ async fn execute_run_task(
         ("CARGO_PROFILE_TEST_DEBUG".to_string(), "1".to_string()),
     ]);
 
+    // What this run may ask the server to do on its behalf — a capability
+    // scoped to this run and this project, never a credential.
+    //
+    // `strip_control_plane_env` removes the database URL and the encryption key
+    // at every spawn point on purpose: an agent's environment reaches its
+    // context, so a secret placed here would reach a model provider and a run
+    // log by accident. A grant is safe there because a leaked one buys a
+    // handful of Linear operations on one project until it expires.
+    //
+    // Addressed by the public URL rather than a loopback port: it is what the
+    // server already knows about itself, and a run that cannot reach it has a
+    // problem worth failing on rather than working around.
+    if let Some(base) = state.public_url() {
+        run_env.insert("HARNESS_RUN_URL".to_string(), base);
+        run_env.insert(
+            "HARNESS_RUN_TOKEN".to_string(),
+            super::run_grants::mint(&run_id, &project),
+        );
+    }
+
     // Multi-repo project: tell the run where each repo is checked out (folder +
     // url + branch + role) so a repo-aware workflow can enumerate them. Empty
     // for single-repo runs (the variable is simply absent).
@@ -1983,6 +2003,10 @@ async fn execute_run_task(
     drop(tx); // end the forwarder
     let _ = forwarder.await;
     heartbeat.abort();
+    // The run is over, so its capability should be too. The grant's TTL is a
+    // backstop for a crash, not the mechanism: a token that outlives the run it
+    // was minted for is a capability nobody is watching.
+    super::run_grants::revoke_for_run(&run_id);
     // Capture declared artifact contents while the worktree still exists.
     if let Ok(report) = &mut report {
         for node in &mut report.nodes {
