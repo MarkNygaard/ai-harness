@@ -149,6 +149,12 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // ── System: agent-CLI version + in-app update ───────────────────────
         .route("/api/system/providers", get(system_routes::providers))
         .route(
+            "/api/system/cli-update/{provider}",
+            post(system_routes::cli_update),
+        )
+        // Kept so a browser still holding the previous bundle keeps working
+        // through the window where the server has deployed and the UI has not.
+        .route(
             "/api/system/claude-update",
             post(system_routes::claude_update),
         )

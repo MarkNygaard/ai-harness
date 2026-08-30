@@ -3,15 +3,21 @@
 //! [`providers`] reports what each agent provider's CLI actually is in this
 //! image -- present or missing, and at what version -- which the credentials
 //! page needs in order to say anything truthful about whether a provider can
-//! run. Updating is **Claude Code** only. The image bakes a copy via
+//! run. Updating covers the CLIs installed **from npm** -- Claude Code and
+//! Codex -- because they share one mechanism. `omp` comes from bun and
+//! `cursor-agent` from a vendor installer, so neither can use this path and
+//! both report version only. The image bakes a copy via
 //! `npm install -g` as root, but that global dir isn't writable by the non-root
 //! `harness` user, so an in-place update can't touch it (and wouldn't survive a
 //! redeploy anyway). Instead we install/update into `$HOME/.local`, whose `bin`
 //! is first on `PATH` (so it shadows the image copy) and which is expected to be
 //! a persistent volume (so the update sticks across restarts). A best-effort
-//! [`bootstrap_claude_code`] seeds that location on startup when it's empty.
+//! [`bootstrap_agent_clis`] seeds that location on startup when it's empty.
 
-use axum::{extract::State, Json};
+use axum::{
+    extract::{Path as AxumPath, State},
+    Json,
+};
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -20,20 +26,52 @@ use std::time::Duration;
 use super::accounts::AdminOnly;
 use super::state::AppState;
 
-const PKG: &str = "@anthropic-ai/claude-code";
-const REGISTRY_LATEST: &str = "https://registry.npmjs.org/@anthropic-ai/claude-code/latest";
-
-/// The agent providers that run through a CLI, and the executable each needs.
+/// The agent providers that run through a CLI: the executable each needs, and
+/// the npm package it comes from when it has one.
 ///
 /// Mirrors the dispatch table in `harness-runner`: a provider whose binary is
 /// missing from the image cannot run a node, and that is worth saying on the
 /// credentials page rather than at the first failed run.
-const AGENT_CLIS: &[(&str, &str)] = &[
-    ("claude", "claude"),
-    ("codex", "codex"),
-    ("pi", "omp"),
-    ("cursor", "cursor-agent"),
+///
+/// The package is what makes a CLI updatable here. `None` is not "we haven't
+/// got round to it" -- `omp` is installed by bun into `/opt/bun` and
+/// `cursor-agent` by a vendor script, so `npm install --prefix` cannot manage
+/// either, and offering the button would be a lie.
+const AGENT_CLIS: &[AgentCli] = &[
+    AgentCli {
+        provider: "claude",
+        binary: "claude",
+        package: Some("@anthropic-ai/claude-code"),
+    },
+    AgentCli {
+        provider: "codex",
+        binary: "codex",
+        package: Some("@openai/codex"),
+    },
+    AgentCli {
+        provider: "pi",
+        binary: "omp",
+        package: None,
+    },
+    AgentCli {
+        provider: "cursor",
+        binary: "cursor-agent",
+        package: None,
+    },
 ];
+
+/// One provider's CLI as this image ships it.
+struct AgentCli {
+    provider: &'static str,
+    binary: &'static str,
+    /// npm package, when that is how it is installed.
+    package: Option<&'static str>,
+}
+
+/// The CLI a provider key names, if the harness knows one.
+fn agent_cli(provider: &str) -> Option<&'static AgentCli> {
+    AGENT_CLIS.iter().find(|c| c.provider == provider)
+}
 
 /// What we can tell about one provider's CLI without running a job.
 #[derive(Serialize)]
@@ -46,7 +84,8 @@ pub(crate) struct ProviderHealth {
     on_path: bool,
     /// Version it reports, when it is there to be asked.
     version: Option<String>,
-    /// Newer version available. Claude Code only, since it is the one we can install.
+    /// Newer version available. Only for a CLI this can install, so the UI
+    /// never offers a button that has nothing behind it.
     latest: Option<String>,
     update_available: bool,
     /// Why the update check came back empty (offline, registry down).
@@ -62,42 +101,46 @@ pub(crate) async fn providers(
     _: AdminOnly,
     State(_state): State<Arc<AppState>>,
 ) -> Json<Vec<ProviderHealth>> {
-    let (probes, latest) = tokio::join!(
-        futures::future::join_all(AGENT_CLIS.iter().map(|(provider, binary)| async move {
-            let found = which(binary);
-            let version = if found {
-                cli_version(binary).await
-            } else {
-                None
-            };
-            (*provider, *binary, found, version)
-        })),
-        latest_version(),
-    );
-    let (latest, error) = match latest {
-        Ok(v) => (Some(v), None),
-        Err(e) => (None, Some(e)),
-    };
+    // Each probe spawns a process and each registry lookup is a round trip;
+    // they have nothing to say to each other, so the whole page's worth runs at
+    // once rather than one provider at a time.
+    let probes = futures::future::join_all(AGENT_CLIS.iter().map(|cli| async move {
+        let on_path = which(cli.binary);
+        let version = if on_path {
+            cli_version(cli.binary).await
+        } else {
+            None
+        };
+        // A CLI with no package cannot be updated from here, so it is not worth
+        // a request to ask what the newest one would be.
+        let latest = match cli.package {
+            Some(pkg) => Some(latest_version(pkg).await),
+            None => None,
+        };
+        (cli, on_path, version, latest)
+    }))
+    .await;
 
     Json(
         probes
             .into_iter()
-            .map(|(provider, binary, on_path, version)| {
-                // Only Claude Code has an updater here, so only it carries the
-                // comparison; on the rest it would advertise a button that
-                // does not exist.
-                let claude = provider == "claude";
+            .map(|(cli, on_path, version, latest)| {
+                let (latest, error) = match latest {
+                    Some(Ok(v)) => (Some(v), None),
+                    Some(Err(e)) => (None, Some(e)),
+                    // No package: not an error, just nothing to say.
+                    None => (None, None),
+                };
                 ProviderHealth {
-                    provider: provider.to_string(),
-                    binary: binary.to_string(),
+                    provider: cli.provider.to_string(),
+                    binary: cli.binary.to_string(),
                     on_path,
-                    update_available: claude
-                        && matches!(
-                            (version.as_deref(), latest.as_deref()),
-                            (Some(i), Some(l)) if is_newer(l, i)
-                        ),
-                    latest: if claude { latest.clone() } else { None },
-                    error: if claude { error.clone() } else { None },
+                    update_available: matches!(
+                        (version.as_deref(), latest.as_deref()),
+                        (Some(i), Some(l)) if is_newer(l, i)
+                    ),
+                    latest,
+                    error,
                     version,
                 }
             })
@@ -173,14 +216,54 @@ pub(crate) struct ClaudeUpdateResult {
     message: String,
 }
 
-/// POST /api/system/claude-update — install the latest Claude Code into
-/// `$HOME/.local` (user-writable, PATH-priority, volume-persistent).
+/// POST /api/system/cli-update/{provider} — install that provider's CLI at
+/// latest into `$HOME/.local` (user-writable, PATH-priority, volume-persistent).
+///
+/// `POST /api/system/claude-update` stays as an alias: a browser holding the
+/// previous bundle keeps working through the window where the server has
+/// deployed and the UI has not.
+pub(crate) async fn cli_update(
+    State(state): State<Arc<AppState>>,
+    AxumPath(provider): AxumPath<String>,
+) -> Json<ClaudeUpdateResult> {
+    update_provider(&state, &provider).await
+}
+
+/// POST /api/system/claude-update — the original route, now one case of
+/// [`cli_update`].
 pub(crate) async fn claude_update(State(state): State<Arc<AppState>>) -> Json<ClaudeUpdateResult> {
+    update_provider(&state, "claude").await
+}
+
+async fn update_provider(state: &Arc<AppState>, provider: &str) -> Json<ClaudeUpdateResult> {
+    // An unknown provider, or one installed by something other than npm, is
+    // refused here rather than silently reinstalling Claude Code.
+    let Some(cli) = agent_cli(provider) else {
+        return Json(ClaudeUpdateResult {
+            ok: false,
+            installed: None,
+            latest: None,
+            update_available: false,
+            message: format!("no agent CLI named `{provider}`"),
+        });
+    };
+    let Some(pkg) = cli.package else {
+        return Json(ClaudeUpdateResult {
+            ok: false,
+            installed: cli_version(cli.binary).await,
+            latest: None,
+            update_available: false,
+            message: format!(
+                "`{}` is not installed from npm, so it cannot be updated here",
+                cli.binary
+            ),
+        });
+    };
     let prefix = state.core.home_dir.join(".local");
-    match run_npm_install_latest(&prefix).await {
+    match run_npm_install_latest(&prefix, pkg).await {
         Ok(log) => {
-            let installed = installed_version().await;
-            let latest = latest_version().await.ok();
+            let installed = cli_version(cli.binary).await;
+            let latest = latest_version(pkg).await.ok();
             let update_available = match (installed.as_deref(), latest.as_deref()) {
                 (Some(i), Some(l)) => is_newer(l, i),
                 _ => false,
@@ -195,51 +278,51 @@ pub(crate) async fn claude_update(State(state): State<Arc<AppState>>) -> Json<Cl
         }
         Err(e) => Json(ClaudeUpdateResult {
             ok: false,
-            installed: installed_version().await,
-            latest: latest_version().await.ok(),
+            installed: cli_version(cli.binary).await,
+            latest: latest_version(pkg).await.ok(),
             update_available: false,
             message: e,
         }),
     }
 }
 
-/// Best-effort startup seed: if there's no user-local `claude` in `$HOME/.local`,
-/// install the latest there so the in-app updater has a writable target and the
-/// on-PATH binary is the updatable one. No-op when it already exists (preserves
-/// whatever version the user updated to). The image's root-owned copy remains as
-/// a fallback while this runs.
-pub(crate) async fn bootstrap_claude_code(home_dir: PathBuf) {
+/// Best-effort startup seed for every npm-installed CLI: if there is no
+/// user-local copy in `$HOME/.local`, install the latest there so the in-app
+/// updater has a writable target and the on-PATH binary is the updatable one.
+///
+/// No-op per CLI when it already exists, which preserves whatever version the
+/// user updated to. The image's root-owned copies remain as a fallback while
+/// this runs. Sequential on purpose: two concurrent `npm install --prefix` runs
+/// against one prefix contend over the same `lib/node_modules` tree, and this
+/// is startup work nobody is waiting on.
+pub(crate) async fn bootstrap_agent_clis(home_dir: PathBuf) {
     let prefix = home_dir.join(".local");
-    let claude_bin = prefix.join("bin").join("claude");
-    if claude_bin.exists() {
-        return;
-    }
-    tracing::info!(
-        target = %claude_bin.display(),
-        "claude-code: no user-local install — bootstrapping latest into $HOME/.local"
-    );
-    match run_npm_install_latest(&prefix).await {
-        Ok(_) => tracing::info!("claude-code: bootstrap install complete"),
-        Err(e) => {
-            tracing::warn!("claude-code: bootstrap install failed (using image copy): {e}")
+    for cli in AGENT_CLIS {
+        let Some(pkg) = cli.package else { continue };
+        let bin = prefix.join("bin").join(cli.binary);
+        if bin.exists() {
+            continue;
+        }
+        tracing::info!(
+            target = %bin.display(),
+            "{pkg}: no user-local install — bootstrapping latest into $HOME/.local"
+        );
+        match run_npm_install_latest(&prefix, pkg).await {
+            Ok(_) => tracing::info!("{pkg}: bootstrap install complete"),
+            Err(e) => tracing::warn!("{pkg}: bootstrap install failed (using image copy): {e}"),
         }
     }
 }
 
-/// Version reported by the on-PATH `claude` binary.
-async fn installed_version() -> Option<String> {
-    cli_version("claude").await
-}
-
-/// Latest published version from the npm registry. Parsed via `text()` +
-/// `serde_json` so we don't depend on reqwest's `json` feature.
-async fn latest_version() -> Result<String, String> {
+/// Latest published version of `pkg` from the npm registry. Parsed via `text()`
+/// + `serde_json` so we don't depend on reqwest's `json` feature.
+async fn latest_version(pkg: &str) -> Result<String, String> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .map_err(|e| format!("http client: {e}"))?;
     let resp = client
-        .get(REGISTRY_LATEST)
+        .get(format!("https://registry.npmjs.org/{pkg}/latest"))
         .send()
         .await
         .map_err(|e| format!("reach npm registry: {e}"))?;
@@ -258,10 +341,10 @@ async fn latest_version() -> Result<String, String> {
         .ok_or_else(|| "npm response missing `version`".to_string())
 }
 
-/// `npm install -g --prefix <prefix> @anthropic-ai/claude-code@latest`.
+/// `npm install -g --prefix <prefix> <pkg>@latest`.
 /// Targets a user-writable prefix whose `bin` is first on PATH.
-async fn run_npm_install_latest(prefix: &Path) -> Result<String, String> {
-    let spec = format!("{PKG}@latest");
+async fn run_npm_install_latest(prefix: &Path, pkg: &str) -> Result<String, String> {
+    let spec = format!("{pkg}@latest");
     let out = tokio::time::timeout(
         Duration::from_secs(180),
         tokio::process::Command::new("npm")
@@ -321,6 +404,38 @@ mod tests {
         assert_eq!(parse_semver("3.0.0-beta.1"), Some((3, 0, 0)));
         assert_eq!(parse_semver("2.1"), Some((2, 1, 0)));
         assert_eq!(parse_semver("not-a-version"), None);
+    }
+
+    /// Which CLIs can be updated is decided by one column of the table, and
+    /// the UI shows a button wherever the server reports an update. So a
+    /// package added here without an installer to match -- or removed while a
+    /// button still expects it -- is a button that does nothing.
+    #[test]
+    fn only_the_npm_installed_clis_offer_an_update() {
+        let updatable: Vec<&str> = AGENT_CLIS
+            .iter()
+            .filter(|c| c.package.is_some())
+            .map(|c| c.provider)
+            .collect();
+        assert_eq!(updatable, vec!["claude", "codex"]);
+
+        // omp comes from bun and cursor-agent from a vendor script; neither can
+        // be reached by `npm install --prefix`.
+        for provider in ["pi", "cursor"] {
+            assert!(
+                agent_cli(provider).expect(provider).package.is_none(),
+                "{provider} is not installed from npm"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_provider_names_no_cli() {
+        assert!(agent_cli("gpt").is_none());
+        assert!(agent_cli("").is_none());
+        // The binary is not the key: the credential store keys on the provider.
+        assert!(agent_cli("cursor-agent").is_none());
+        assert_eq!(agent_cli("cursor").unwrap().binary, "cursor-agent");
     }
 
     #[test]

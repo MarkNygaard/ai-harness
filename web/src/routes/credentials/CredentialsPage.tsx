@@ -14,7 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ProviderMark } from "@/components/providers/ProviderMark";
 import { describeProvider } from "@/lib/provider-status";
-import { useProviderHealth, useUpdateClaudeCode } from "@/lib/system";
+import { useProviderHealth, useUpdateAgentCli } from "@/lib/system";
 import {
   startKimiConnect,
   pollKimiConnect,
@@ -438,7 +438,11 @@ function ProviderSummary({
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {health?.update_available && (
-            <ClaudeUpdateButton to={health.latest} />
+            <CliUpdateButton
+              provider={provider}
+              label={label}
+              to={health.latest}
+            />
           )}
           <Dialog>
             <DialogTrigger
@@ -473,15 +477,26 @@ function ProviderSummary({
 }
 
 /**
- * Install the newer Claude Code the row just reported.
+ * Install the newer CLI the row just reported.
  *
  * This used to live in the sidebar footer, where it was permanently visible to
  * everyone and actionable by nobody but an admin. It belongs beside the version
  * it is updating. The install goes into the container's persistent
  * `$HOME/.local` (see `system_routes.rs`), so it survives restarts.
+ *
+ * Shown for any provider the server says has an update, which is any CLI it can
+ * actually install -- Claude Code and Codex today.
  */
-function ClaudeUpdateButton({ to }: { to: string | null }) {
-  const update = useUpdateClaudeCode();
+function CliUpdateButton({
+  provider,
+  label,
+  to,
+}: {
+  provider: string;
+  label: string;
+  to: string | null;
+}) {
+  const update = useUpdateAgentCli();
   const failed = update.isError
     ? update.error.message
     : update.data && !update.data.ok
@@ -503,8 +518,8 @@ function ClaudeUpdateButton({ to }: { to: string | null }) {
       variant="outline"
       className="gap-1"
       disabled={update.isPending}
-      onClick={() => update.mutate()}
-      title={`Update Claude Code to ${to}`}
+      onClick={() => update.mutate(provider)}
+      title={`Update ${label} to ${to}`}
     >
       {update.isPending ? (
         <>

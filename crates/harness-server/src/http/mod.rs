@@ -64,7 +64,7 @@ pub async fn serve(server: Arc<HarnessServer>, addr: SocketAddr) -> anyhow::Resu
     // Best-effort: seed an updatable Claude Code into $HOME/.local so the in-app
     // updater has a user-writable, PATH-priority target (the image copy is
     // root-owned). Spawned so it never blocks accepting connections.
-    tokio::spawn(system_routes::bootstrap_claude_code(
+    tokio::spawn(system_routes::bootstrap_agent_clis(
         state.core.home_dir.clone(),
     ));
 
