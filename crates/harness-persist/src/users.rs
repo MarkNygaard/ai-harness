@@ -69,6 +69,20 @@ pub struct User {
 
 const USER_COLUMNS: &str = "id, email, name, role, created_at, last_login_at, disabled_at";
 
+/// What a profile write did: the account as it now stands, and whether its
+/// sessions were ended.
+///
+/// `sessions_closed` is true when the address changed — an address is an
+/// identity, so every session the account held was deleted in the same
+/// transaction. It stays true when there was nothing to delete: what the
+/// caller needs to know is that the account has to sign in again, not how
+/// many browsers it had open.
+#[derive(Debug, Clone, Serialize)]
+pub struct ProfileUpdate {
+    pub user: User,
+    pub sessions_closed: bool,
+}
+
 /// Fields accepted when creating an account.
 #[derive(Debug, Clone)]
 pub struct NewUser {
@@ -248,23 +262,71 @@ impl UserStore {
         Ok(())
     }
 
-    /// Update the display name and email on an account.
+    /// Update the display name and email on an account, ending every session it
+    /// holds when the address changed.
+    ///
+    /// An address is an identity, not a label: sign-in matches on it, invitations
+    /// match on it, and both SSO providers link an account by it. A session
+    /// opened under an address the account no longer holds belongs to an identity
+    /// that no longer exists. So the rename and the sign-out are one transaction —
+    /// a session cannot survive because a follow-up statement failed, and a
+    /// refused rename (a lost race for a taken address) cannot sign anyone out.
+    ///
+    /// Changing only the name ends nothing. Signing someone out over a corrected
+    /// spelling would be a worse bug than the one this prevents.
+    ///
+    /// `None` means no account holds `id`.
     pub async fn set_profile(
         &self,
         id: &str,
         name: &str,
         email: &str,
-    ) -> Result<Option<User>, PersistError> {
+    ) -> Result<Option<ProfileUpdate>, PersistError> {
+        let name = name.trim();
+        let email = email.trim();
+        let mut tx = self.pool.begin().await?;
+        // Lock the row and compare in the same breath, using the same `lower()`
+        // the write below uses. Reading the old address in an earlier statement
+        // would compare against a value another administrator may already have
+        // replaced — and concluding "unchanged" about a write that does change
+        // the address is exactly the bug this method exists to prevent.
+        let found: Option<(bool,)> = sqlx::query_as(
+            "SELECT lower(email) IS DISTINCT FROM lower($2) FROM harness_users
+             WHERE id = $1 FOR UPDATE",
+        )
+        .bind(id)
+        .bind(email)
+        .fetch_optional(&mut *tx)
+        .await?;
+        let Some((email_changed,)) = found else {
+            return Ok(None);
+        };
         let sql = format!(
             "UPDATE harness_users SET name = $2, email = lower($3), updated_at = now()
              WHERE id = $1 RETURNING {USER_COLUMNS}"
         );
-        Ok(sqlx::query_as::<_, User>(&sql)
+        // Cannot be `None` while the row above is locked, but the contract says
+        // `None` means no such account, so honour it rather than assume.
+        let Some(user) = sqlx::query_as::<_, User>(&sql)
             .bind(id)
-            .bind(name.trim())
-            .bind(email.trim())
-            .fetch_optional(&self.pool)
-            .await?)
+            .bind(name)
+            .bind(email)
+            .fetch_optional(&mut *tx)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if email_changed {
+            sqlx::query("DELETE FROM harness_sessions WHERE user_id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(Some(ProfileUpdate {
+            user,
+            sessions_closed: email_changed,
+        }))
     }
 
     /// Remove an account and every session it holds.
@@ -650,5 +712,136 @@ mod tests {
         assert_eq!(store.active_admin_count().await.unwrap(), before);
 
         store.delete(&admin.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn changing_the_email_ends_every_session() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let user = store
+            .create(&NewUser {
+                email: unique_email("mover"),
+                name: "Mover".into(),
+                role: "member".into(),
+                password_hash: Some("hash".into()),
+            })
+            .await
+            .expect("create");
+
+        let sid1 = uuid::Uuid::new_v4().to_string();
+        let sid2 = uuid::Uuid::new_v4().to_string();
+        store
+            .open_session(&sid1, &user.id, Duration::hours(1))
+            .await
+            .expect("open first session");
+        store
+            .open_session(&sid2, &user.id, Duration::hours(1))
+            .await
+            .expect("open second session");
+        assert!(store
+            .user_for_session(&sid1, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+        assert!(store
+            .user_for_session(&sid2, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        let new_email = unique_email("moved");
+        let update = store
+            .set_profile(&user.id, "Moved", &new_email)
+            .await
+            .expect("set_profile")
+            .expect("user exists");
+        assert!(update.sessions_closed);
+        assert_eq!(update.user.email, new_email.to_lowercase());
+        assert_eq!(update.user.name, "Moved");
+
+        assert!(store
+            .user_for_session(&sid1, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
+        assert!(store
+            .user_for_session(&sid2, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(store.close_sessions_for(&user.id).await.unwrap(), 0);
+
+        store.delete(&user.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn changing_only_the_name_keeps_sessions() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let email = unique_email("keeper");
+        let user = store
+            .create(&NewUser {
+                email: email.clone(),
+                name: "Keeper".into(),
+                role: "member".into(),
+                password_hash: Some("hash".into()),
+            })
+            .await
+            .expect("create");
+
+        let sid = uuid::Uuid::new_v4().to_string();
+        store
+            .open_session(&sid, &user.id, Duration::hours(1))
+            .await
+            .expect("open session");
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        // A new name with the same address ends nothing.
+        let update = store
+            .set_profile(&user.id, "Renamed", &email)
+            .await
+            .expect("set_profile")
+            .expect("user exists");
+        assert!(!update.sessions_closed);
+        assert_eq!(update.user.name, "Renamed");
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        // Re-typing the same address in another case is also not a change.
+        let update = store
+            .set_profile(&user.id, "Renamed Again", &email.to_uppercase())
+            .await
+            .expect("set_profile")
+            .expect("user exists");
+        assert!(!update.sessions_closed);
+        assert!(store
+            .user_for_session(&sid, HOUR, NINETY_DAYS)
+            .await
+            .unwrap()
+            .is_some());
+
+        // A missing account returns None, not an error.
+        assert!(store
+            .set_profile("no-such-id", "X", "x@example.test")
+            .await
+            .unwrap()
+            .is_none());
+
+        store.delete(&user.id).await.unwrap();
     }
 }

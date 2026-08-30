@@ -1,7 +1,7 @@
 //! Managing who has an account here.
 //!
 //! - `GET    /api/users`            — everyone, with their role and last sign-in
-//! - `PUT    /api/users/{id}`       — change a display name and email
+//! - `PUT    /api/users/{id}`       — change a display name and email (a new address ends its sessions)
 //! - `PUT    /api/users/{id}/role`  — promote or demote
 //! - `PUT    /api/users/{id}/disabled` — suspend or restore
 //! - `DELETE /api/users/{id}`       — remove
@@ -195,6 +195,15 @@ pub struct ProfileRequest {
 ///
 /// The address is what sign-in and invitations match on, so it is held to the
 /// same rule they assume: one account per address, stored lower-cased.
+///
+/// Changing the address also ends every session the account holds, in the
+/// same transaction as the change: a session opened under an address the
+/// account no longer holds belongs to an identity that no longer exists.
+/// Changing only the name ends nothing.
+///
+/// The response is `{"user": …, "sessions_closed": …}` rather than the bare
+/// account, so an administrator is told the member has to sign in again
+/// instead of hearing it from the member.
 pub async fn set_profile(
     _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
@@ -235,7 +244,7 @@ pub async fn set_profile(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
     match users.set_profile(&id, name, &email).await {
-        Ok(Some(user)) => Json(user).into_response(),
+        Ok(Some(update)) => Json(update).into_response(),
         Ok(None) => err(StatusCode::NOT_FOUND, "no such account"),
         Err(e) if is_email_taken(&e) => err(StatusCode::CONFLICT, email_taken_message(&email)),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -283,7 +292,7 @@ mod tests {
     use super::*;
     use axum::extract::Extension;
     use axum::Json;
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use harness_agents::registry::AgentRegistry;
     use std::sync::Arc;
 
@@ -332,10 +341,192 @@ mod tests {
 
     fn unique_email(tag: &str) -> String {
         format!(
-            "aih37-{}-{}@example.test",
+            "aih-users-{}-{}@example.test",
             tag,
             Utc::now().timestamp_nanos_opt().unwrap()
         )
+    }
+
+    /// The status and decoded body of a handler's response, so a test can
+    /// assert on what the administrator is actually told, not only on the code.
+    async fn read_json(resp: Response) -> (StatusCode, serde_json::Value) {
+        let status = resp.status();
+        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        (status, serde_json::from_slice(&bytes).expect("json"))
+    }
+
+    #[tokio::test]
+    async fn email_change_signs_the_member_out() {
+        let Ok(url) = std::env::var("HARNESS_DATABASE_URL") else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        if !is_test_db(&url) {
+            eprintln!("skipping: HARNESS_DATABASE_URL is not a test database");
+            return;
+        }
+
+        let state = Arc::new(RunsState::new(
+            Some(url),
+            Arc::new(AgentRegistry::new("codex")),
+            std::path::PathBuf::from("/tmp"),
+            None,
+            None,
+        ));
+
+        let users = state.user_store().await.expect("store");
+
+        let original = unique_email("out");
+        let user = users
+            .create(&harness_persist::NewUser {
+                email: original.clone(),
+                name: "Out".to_string(),
+                role: "member".to_string(),
+                password_hash: None,
+            })
+            .await
+            .expect("create user");
+
+        let sid1 = Utc::now().timestamp_nanos_opt().unwrap().to_string();
+        let sid2 = Utc::now().timestamp_nanos_opt().unwrap().to_string();
+        users
+            .open_session(&sid1, &user.id, Duration::hours(1))
+            .await
+            .expect("open first session");
+        users
+            .open_session(&sid2, &user.id, Duration::hours(1))
+            .await
+            .expect("open second session");
+        assert!(users
+            .user_for_session(&sid1, Duration::hours(1), Duration::days(90))
+            .await
+            .unwrap()
+            .is_some());
+        assert!(users
+            .user_for_session(&sid2, Duration::hours(1), Duration::days(90))
+            .await
+            .unwrap()
+            .is_some());
+
+        let new_email = unique_email("out-new");
+        let resp = set_profile(
+            AdminOnly,
+            Extension(state.clone()),
+            AxumPath(user.id.clone()),
+            Json(ProfileRequest {
+                name: user.name.clone(),
+                email: new_email.clone(),
+            }),
+        )
+        .await;
+
+        let (status, body) = read_json(resp).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["sessions_closed"], true);
+        assert_eq!(body["user"]["email"], new_email.to_lowercase());
+        assert_eq!(body["user"]["id"], user.id);
+
+        assert!(users
+            .user_for_session(&sid1, Duration::hours(1), Duration::days(90))
+            .await
+            .unwrap()
+            .is_none());
+        assert!(users
+            .user_for_session(&sid2, Duration::hours(1), Duration::days(90))
+            .await
+            .unwrap()
+            .is_none());
+
+        let _ = users.delete(&user.id).await;
+    }
+
+    #[tokio::test]
+    async fn name_only_change_leaves_sessions_alone() {
+        let Ok(url) = std::env::var("HARNESS_DATABASE_URL") else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        if !is_test_db(&url) {
+            eprintln!("skipping: HARNESS_DATABASE_URL is not a test database");
+            return;
+        }
+
+        let state = Arc::new(RunsState::new(
+            Some(url),
+            Arc::new(AgentRegistry::new("codex")),
+            std::path::PathBuf::from("/tmp"),
+            None,
+            None,
+        ));
+
+        let users = state.user_store().await.expect("store");
+
+        let original = unique_email("same");
+        let user = users
+            .create(&harness_persist::NewUser {
+                email: original.clone(),
+                name: "Same".to_string(),
+                role: "member".to_string(),
+                password_hash: None,
+            })
+            .await
+            .expect("create user");
+
+        let sid = Utc::now().timestamp_nanos_opt().unwrap().to_string();
+        users
+            .open_session(&sid, &user.id, Duration::hours(1))
+            .await
+            .expect("open session");
+        assert!(users
+            .user_for_session(&sid, Duration::hours(1), Duration::days(90))
+            .await
+            .unwrap()
+            .is_some());
+
+        // Changing only the name must not touch sessions.
+        let resp = set_profile(
+            AdminOnly,
+            Extension(state.clone()),
+            AxumPath(user.id.clone()),
+            Json(ProfileRequest {
+                name: "Renamed".to_string(),
+                email: user.email.clone(),
+            }),
+        )
+        .await;
+        let (status, body) = read_json(resp).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["sessions_closed"], false);
+        assert_eq!(body["user"]["name"], "Renamed");
+        assert!(users
+            .user_for_session(&sid, Duration::hours(1), Duration::days(90))
+            .await
+            .unwrap()
+            .is_some());
+
+        // Re-typing the same address in another case is also not a change.
+        let resp = set_profile(
+            AdminOnly,
+            Extension(state.clone()),
+            AxumPath(user.id.clone()),
+            Json(ProfileRequest {
+                name: "Renamed Again".to_string(),
+                email: user.email.to_uppercase(),
+            }),
+        )
+        .await;
+        let (status, body) = read_json(resp).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["sessions_closed"], false);
+        assert!(users
+            .user_for_session(&sid, Duration::hours(1), Duration::days(90))
+            .await
+            .unwrap()
+            .is_some());
+
+        let _ = users.delete(&user.id).await;
     }
 
     #[tokio::test]
