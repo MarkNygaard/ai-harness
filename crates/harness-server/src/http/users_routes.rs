@@ -165,11 +165,13 @@ pub struct ProfileRequest {
 /// Kept separate from the query so the rule can be read in one place, and so
 /// the case that actually matters — an account keeping its own address, or
 /// only changing its case — is provably not a conflict with itself.
+fn email_taken_message(email: &str) -> String {
+    format!("{email} already belongs to another account")
+}
+
 fn email_conflict(found: Option<&harness_persist::User>, id: &str, email: &str) -> Option<String> {
     match found {
-        Some(other) if other.id != id => {
-            Some(format!("{email} already belongs to another account"))
-        }
+        Some(other) if other.id != id => Some(email_taken_message(email)),
         _ => None,
     }
 }
@@ -235,10 +237,7 @@ pub async fn set_profile(
     match users.set_profile(&id, name, &email).await {
         Ok(Some(user)) => Json(user).into_response(),
         Ok(None) => err(StatusCode::NOT_FOUND, "no such account"),
-        Err(e) if is_email_taken(&e) => err(
-            StatusCode::CONFLICT,
-            format!("{email} already belongs to another account"),
-        ),
+        Err(e) if is_email_taken(&e) => err(StatusCode::CONFLICT, email_taken_message(&email)),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
