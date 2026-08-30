@@ -1,3 +1,4 @@
+import { MemberProfileDialog } from "@/components/settings/MemberProfileDialog";
 import { InvitePeople } from "@/components/settings/InvitePeople";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Badge } from "@/components/ui/badge";
@@ -68,6 +69,7 @@ function Row({
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
+        <MemberProfileDialog user={user} busy={busy} />
         <Button
           variant="ghost"
           size="sm"
