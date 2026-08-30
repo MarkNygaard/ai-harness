@@ -26,42 +26,45 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
 }
 
+/// Why a request was refused, before it becomes a response.
+///
+/// The helpers below return this rather than a built `Response`: an axum
+/// response is 128 bytes, and carrying one in an `Err` costs that on every
+/// call, including the overwhelming majority that succeed.
+type Refusal = (StatusCode, String);
+
 /// The grant behind this request, or a refusal.
 ///
 /// Not an extractor: every handler needs the grant's *project*, so returning it
 /// is the point rather than a side effect of admission.
-fn grant(headers: &HeaderMap) -> Result<Grant, Response> {
+fn grant(headers: &HeaderMap) -> Result<Grant, Refusal> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(str::trim)
         .filter(|t| !t.is_empty())
-        .ok_or_else(|| {
-            err(
-                StatusCode::UNAUTHORIZED,
-                "this endpoint is for a workflow run — send its run token",
-            )
-        })?;
-    run_grants::redeem(token).ok_or_else(|| {
-        err(
+        .ok_or((
             StatusCode::UNAUTHORIZED,
-            "that run token is unknown or has expired",
-        )
-    })
+            "this endpoint is for a workflow run — send its run token".to_string(),
+        ))?;
+    run_grants::redeem(token).ok_or((
+        StatusCode::UNAUTHORIZED,
+        "that run token is unknown or has expired".to_string(),
+    ))
 }
 
 /// Build a Linear client for the grant's project.
 async fn client(
     state: &Arc<RunsState>,
     g: &Grant,
-) -> Result<harness_sources::linear::LinearClient, Response> {
+) -> Result<harness_sources::linear::LinearClient, Refusal> {
     let conn = super::linear_connections::resolve_for_project(state, &g.project)
         .await
-        .map_err(|e| err(StatusCode::CONFLICT, e))?;
+        .map_err(|e| (StatusCode::CONFLICT, e))?;
     super::linear_oauth::linear_client(state, &conn)
         .await
-        .map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, e))
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))
 }
 
 #[derive(Debug, Deserialize)]
@@ -77,11 +80,11 @@ pub async fn issue(
 ) -> Response {
     let g = match grant(&headers) {
         Ok(g) => g,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     let c = match client(&state, &g).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     match c.issue_context(&req.issue).await {
         Ok(ctx) => Json(ctx).into_response(),
@@ -97,11 +100,11 @@ pub async fn children(
 ) -> Response {
     let g = match grant(&headers) {
         Ok(g) => g,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     let c = match client(&state, &g).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     match c.list_children(&req.issue).await {
         Ok(kids) => Json(kids).into_response(),
@@ -132,11 +135,11 @@ pub async fn sub_issue(
 ) -> Response {
     let g = match grant(&headers) {
         Ok(g) => g,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     let c = match client(&state, &g).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     let team = match c.issue_context(&req.parent).await {
         Ok(ctx) => match ctx.team_id {
@@ -180,11 +183,11 @@ pub async fn move_state(
 ) -> Response {
     let g = match grant(&headers) {
         Ok(g) => g,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     let c = match client(&state, &g).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     match c.set_issue_state(&req.issue, &req.state).await {
         Ok(()) => Json(serde_json::json!({ "moved": req.issue })).into_response(),
@@ -206,7 +209,7 @@ pub async fn comment(
 ) -> Response {
     let g = match grant(&headers) {
         Ok(g) => g,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     // Ahead of everything else: a step that produced nothing should fail loudly
     // rather than post a blank comment on somebody's epic.
@@ -215,7 +218,7 @@ pub async fn comment(
     }
     let c = match client(&state, &g).await {
         Ok(c) => c,
-        Err(r) => return r,
+        Err((s, m)) => return err(s, m),
     };
     match c.add_comment(&req.issue, &req.body).await {
         Ok(()) => Json(serde_json::json!({ "commented": req.issue })).into_response(),
