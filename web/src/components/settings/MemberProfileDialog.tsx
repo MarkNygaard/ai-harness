@@ -32,6 +32,8 @@ export function MemberProfileDialog({
   const [name, setName] = useState(user.name);
   const [email, setEmail] = useState(user.email);
   const id = useId();
+  const trimmedName = name.trim();
+  const trimmedEmail = email.trim();
 
   function onOpenChange(next: boolean) {
     // Re-seed from the current prop on open. The component stays mounted
@@ -49,8 +51,6 @@ export function MemberProfileDialog({
   }
 
   function submit() {
-    const trimmedName = name.trim();
-    const trimmedEmail = email.trim();
     if (!trimmedName || !trimmedEmail) return;
 
     save.mutate(
@@ -117,7 +117,7 @@ export function MemberProfileDialog({
           <div className="flex flex-col items-end gap-1.5">
             <Button
               type="submit"
-              disabled={!name.trim() || !email.trim() || save.isPending}
+              disabled={!trimmedName || !trimmedEmail || save.isPending}
             >
               {save.isPending ? "Saving…" : "Save"}
             </Button>

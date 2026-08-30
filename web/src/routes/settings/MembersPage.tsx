@@ -44,6 +44,24 @@ function Row({
   // being refused — the server still decides, this only saves a round trip.
   const lastAdmin = user.role === "admin" && !disabled && admins <= 1;
 
+  let roleTitle: string;
+  if (lastAdmin) {
+    roleTitle = "This is the only administrator — promote someone else first";
+  } else if (user.role === "admin") {
+    roleTitle = "Make this account a member";
+  } else {
+    roleTitle = "Make this account an administrator";
+  }
+
+  let disabledTitle: string;
+  if (isMe) {
+    disabledTitle = "You cannot suspend your own account";
+  } else if (disabled) {
+    disabledTitle = "Let this account sign in again";
+  } else {
+    disabledTitle = "Sign this account out and stop it signing back in";
+  }
+
   return (
     <div className="flex flex-col gap-2 border-t border-border px-4 py-3 first:border-t-0 sm:flex-row sm:items-center sm:justify-between">
       <div className="min-w-0">
@@ -74,13 +92,7 @@ function Row({
           variant="ghost"
           size="sm"
           disabled={busy || lastAdmin}
-          title={
-            lastAdmin
-              ? "This is the only administrator — promote someone else first"
-              : user.role === "admin"
-                ? "Make this account a member"
-                : "Make this account an administrator"
-          }
+          title={roleTitle}
           onClick={() => onRole(user.role === "admin" ? "member" : "admin")}
         >
           {user.role === "admin" ? "Demote" : "Make admin"}
@@ -89,13 +101,7 @@ function Row({
           variant="ghost"
           size="sm"
           disabled={busy || isMe || lastAdmin}
-          title={
-            isMe
-              ? "You cannot suspend your own account"
-              : disabled
-                ? "Let this account sign in again"
-                : "Sign this account out and stop it signing back in"
-          }
+          title={disabledTitle}
           onClick={() => onDisabled(!disabled)}
         >
           {disabled ? "Restore" : "Suspend"}

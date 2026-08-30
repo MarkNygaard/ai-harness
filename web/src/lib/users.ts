@@ -1,7 +1,12 @@
 /**
  * Who has an account on this harness. Administrator-only, at the route.
  */
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from "@tanstack/react-query";
 import { apiJson } from "./api";
 import type { AuthUser } from "./auth";
 
@@ -13,6 +18,12 @@ export function useUsers(enabled: boolean) {
     retry: false,
     refetchInterval: false,
   });
+}
+
+function invalidateUserQueries(qc: QueryClient) {
+  qc.invalidateQueries({ queryKey: ["users"] });
+  // Demoting, suspending, or editing yourself changes what the header/nav shows.
+  qc.invalidateQueries({ queryKey: ["auth", "status"] });
 }
 
 function useUserMutation<TBody>(
@@ -31,11 +42,7 @@ function useUserMutation<TBody>(
             }
           : {}),
       }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["users"] });
-      // Demoting or suspending yourself changes what you can see.
-      qc.invalidateQueries({ queryKey: ["auth", "status"] });
-    },
+    onSuccess: () => invalidateUserQueries(qc),
   });
 }
 
@@ -63,6 +70,7 @@ export function useSetUserProfile() {
     "PUT",
   );
 }
+
 export function useDeleteUser() {
   const qc = useQueryClient();
   return useMutation<{ deleted: boolean; id: string }, Error, { id: string }>({
@@ -71,9 +79,6 @@ export function useDeleteUser() {
         `/api/users/${encodeURIComponent(id)}`,
         { method: "DELETE" },
       ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["users"] });
-      qc.invalidateQueries({ queryKey: ["auth", "status"] });
-    },
+    onSuccess: () => invalidateUserQueries(qc),
   });
 }
