@@ -577,19 +577,7 @@ pub(crate) async fn linear_client(
     state: &Arc<RunsState>,
     conn: &ConnectionId,
 ) -> Result<LinearClient, String> {
-    client_for_store(state.cred_store().await?, conn).await
-}
-
-/// [`linear_client`] for a caller holding the store but no server state.
-///
-/// The `harness linear` CLI builds a `CredentialStore` from a database URL and
-/// has no `RunsState` to offer. Splitting here rather than changing
-/// `linear_client`'s signature keeps nine existing call sites — every one of
-/// them on a credentialed path — exactly as they are.
-pub(crate) async fn client_for_store(
-    store: &CredentialStore,
-    conn: &ConnectionId,
-) -> Result<LinearClient, String> {
+    let store = state.cred_store().await?;
     let fields = credential(store, conn)
         .await
         .filter(has_usable_auth)
