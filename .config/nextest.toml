@@ -10,7 +10,8 @@ serial-db = { max-threads = 1 }
 [[profile.default.overrides]]
 # All harness-persist tests (the #[serial_test::serial] DB tests) + harness-core's
 # db::tests and db_pg::tests modules (both use an in-process process_env_lock()
-# that does NOT help across nextest processes). Both packages create schemas;
-# serialize them together.
-filter = 'package(harness-persist) | (package(harness-core) & (test(db::) | test(db_pg)))'
+# that does NOT help across nextest processes), plus harness-server's users_routes
+# tests, which connect a UserStore and so run the same IF NOT EXISTS DDL. All of
+# them create schemas; serialize them together.
+filter = 'package(harness-persist) | (package(harness-core) & (test(db::) | test(db_pg))) | (package(harness-server) & test(users_routes::))'
 test-group = 'serial-db'
