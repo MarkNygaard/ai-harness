@@ -1740,6 +1740,29 @@ async fn execute_run_task(
         ("CARGO_PROFILE_TEST_DEBUG".to_string(), "1".to_string()),
     ]);
 
+    // Let a shell step reach the harness's own CLI — `harness linear …`, which
+    // the epic workflows use to read and write Linear as the app.
+    //
+    // The CLI resolves its own configuration, and a run's working directory is a
+    // worktree with no config file in it, so without these it fails with "no
+    // database configured" before doing anything.
+    //
+    // **This is not an escalation.** Runs execute in this container as the same
+    // user as the server, so anything in a run could already read the server's
+    // environment from `/proc`. Passing them explicitly changes what is
+    // *convenient*, not what is *reachable* — and the alternative, an
+    // authenticated endpoint, would mean minting a run-scoped credential to
+    // reach a process already inside the trust boundary.
+    if let Some(db) = state.db_url.clone() {
+        run_env.insert("HARNESS_DATABASE_URL".to_string(), db);
+    }
+    // Taken from the server's own environment rather than re-encoded from the
+    // decoded key it holds: this is the exact string the operator set, so a
+    // mismatch here cannot be introduced by this line.
+    if let Ok(key) = std::env::var("HARNESS_SECRET_KEY") {
+        run_env.insert("HARNESS_SECRET_KEY".to_string(), key);
+    }
+
     // Multi-repo project: tell the run where each repo is checked out (folder +
     // url + branch + role) so a repo-aware workflow can enumerate them. Empty
     // for single-repo runs (the variable is simply absent).
