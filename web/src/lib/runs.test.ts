@@ -21,6 +21,74 @@ function reduce(events: RunEvent[]) {
 }
 
 describe("liveReducer", () => {
+  /// A session that connects mid-run never sees `run_started`, so before this
+  /// the order stayed empty and the graph fell back to whichever nodes had
+  /// arrived since — which is how a run in progress collapsed to a single step,
+  /// restored only by a refresh.
+  it("records a step's place even when run_started was missed", () => {
+    const state = reduce([
+      { type: "node_started", node_id: "b", provider: null, model: null },
+      { type: "node_started", node_id: "c", provider: null, model: null },
+    ]);
+    expect(state.order).toEqual(["b", "c"]);
+  });
+
+  it("records a step that finishes without this session seeing it start", () => {
+    const state = reduce([
+      {
+        type: "node_finished",
+        node: {
+          id: "a",
+          status: "success",
+          depends_on: [],
+          provider: null,
+          model: null,
+          iterations: 1,
+          usage: {
+            input: null,
+            output: null,
+            cache_read: null,
+            cache_write: null,
+          },
+          note: null,
+          output: null,
+          started_at: null,
+          ended_at: null,
+          artifact_content: null,
+        },
+      } as unknown as RunEvent,
+      { type: "node_started", node_id: "b", provider: null, model: null },
+    ]);
+    expect(state.order).toEqual(["a", "b"]);
+  });
+
+  it("does not record a step twice", () => {
+    const state = reduce([
+      { type: "node_started", node_id: "a", provider: null, model: null },
+      { type: "node_progress", node_id: "a", activity: act("thinking") },
+      { type: "node_started", node_id: "a", provider: null, model: null },
+    ]);
+    expect(state.order).toEqual(["a"]);
+  });
+
+  /// run_started is authoritative: it carries declaration order, which execution
+  /// order is not, so it replaces rather than appends.
+  it("lets run_started replace an order built from live events", () => {
+    const state = reduce([
+      { type: "node_started", node_id: "b", provider: null, model: null },
+      {
+        type: "run_started",
+        workflow: "demo",
+        total_nodes: 2,
+        nodes: [
+          { id: "a", depends_on: [] },
+          { id: "b", depends_on: ["a"] },
+        ],
+      },
+    ]);
+    expect(state.order).toEqual(["a", "b"]);
+  });
+
   it("seeds topology from run_started", () => {
     const state = reduce([
       {
