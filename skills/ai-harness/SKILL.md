@@ -12,7 +12,10 @@ description: >-
   failing on, or how to stop a project's runs hitting the same obstacle
   repeatedly. Covers connecting the harness MCP-over-HTTP endpoint and the
   run_trigger / run_trigger_pair / run_status / run_list / run_activity_errors /
-  workflow_* tools.
+  workflow_* tools. Also use when a Linear issue or an epic stopped for no
+  visible reason, or the user asks what triggers harness runs by itself, how
+  their Linear columns are wired, or how to set up an epic — the linear_states
+  / linear_bindings / linear_check tools.
 ---
 
 # Drive ai-harness from this project (over MCP)
@@ -75,6 +78,37 @@ Check whether `mcp__harness__*` tools are available (e.g. `mcp__harness__run_lis
 
 Confirm the exact **project name** before triggering — it must be a project the
 cluster has registered, not a local folder name.
+
+## What triggers a run by itself (Linear bindings)
+
+Runs also start without anyone asking: a **binding** ties a Linear column to a
+workflow, so an issue delegated to the harness and sitting in that column is
+picked up on the next poll. Three read-only tools, all taking `{ project }`:
+
+- `mcp__harness__linear_states` — the team's columns, with ids and categories.
+  Every stored status is an id; this is what turns one back into the column a
+  person sees.
+- `mcp__harness__linear_bindings` — what is wired up, with statuses already
+  resolved to names: which column each workflow claims from, where a completed
+  run leaves the issue, and whether the binding is enabled and live.
+- `mcp__harness__linear_check` — **the one to reach for when work stopped for no
+  visible reason.** A binding moves an issue to a column expecting a *different*
+  binding to claim it from there, and nothing enforces that the chain joins up.
+  A ready status nobody polls means the run succeeded, the move succeeded, and
+  the work is parked forever with no error anywhere. Findings come back at
+  `error` (work will be dropped or never start), `warn` (works, but probably not
+  as intended) and `ok` (the chain, so the report reads whole).
+
+Read them before explaining a setup, and run `linear_check` after any binding
+changes. **None of these write anything** — changing a binding is done by a
+person in the harness UI, and you should say which change to make rather than
+implying you can make it.
+
+An issue with **sub-issues** is an *epic*: the harness builds the sub-issues one
+at a time on a shared branch and opens a single pull request at the end. If the
+user is setting one up, `linear_check` reports the epic relay specifically —
+whether a merged piece can reach the supervisor, and whether pieces are stopping
+at a human gate meant for standalone issues.
 
 ## Trigger a run
 

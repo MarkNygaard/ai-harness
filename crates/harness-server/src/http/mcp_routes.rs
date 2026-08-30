@@ -176,6 +176,61 @@ async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args
                 Err((_status, msg)) => tool_error(msg),
             }
         }
+        // ── Reading and diagnosing what triggers a run ────────────────────
+        "linear_states" => {
+            let project = s("project");
+            if project.is_empty() {
+                return tool_error("`project` is required");
+            }
+            match linear_states(state, &project).await {
+                Ok(teams) => to_result(
+                    format!("{} team(s)", teams.as_array().map_or(0, Vec::len)),
+                    &json!({ "teams": teams }),
+                ),
+                Err(e) => tool_error(e),
+            }
+        }
+        "linear_bindings" => {
+            let project = s("project");
+            if project.is_empty() {
+                return tool_error("`project` is required");
+            }
+            match linear_bindings(state, &project).await {
+                Ok(rows) => to_result(
+                    format!("{} binding(s)", rows.len()),
+                    &json!({ "bindings": rows }),
+                ),
+                Err(e) => tool_error(e),
+            }
+        }
+        "linear_check" => {
+            let project = s("project");
+            if project.is_empty() {
+                return tool_error("`project` is required");
+            }
+            match linear_check(state, &project).await {
+                Ok(findings) => {
+                    // Lead with the count that decides whether anything needs
+                    // doing, so a caller that only reads the summary is not
+                    // misled by a report full of `ok` lines.
+                    let errors = findings
+                        .iter()
+                        .filter(|f| f.level == super::linear_diagnose::Level::Error)
+                        .count();
+                    let warns = findings
+                        .iter()
+                        .filter(|f| f.level == super::linear_diagnose::Level::Warn)
+                        .count();
+                    let summary = match (errors, warns) {
+                        (0, 0) => "the wiring joins up; nothing to fix".to_string(),
+                        (0, w) => format!("{w} warning(s), no errors"),
+                        (e, w) => format!("{e} error(s), {w} warning(s)"),
+                    };
+                    to_result(summary, &json!({ "findings": findings }))
+                }
+                Err(e) => tool_error(e),
+            }
+        }
         "run_list" => {
             let store = match state.store().await {
                 Ok(s) => s,
@@ -473,6 +528,36 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "linear_states",
+            "description": "A project's Linear teams and their workflow statuses — id, name and category (backlog/unstarted/started/completed/canceled). Read-only. Use before configuring or explaining a binding: every other tool here names a status by id, and this is what turns an id into the column a person sees on their board, or tells you a column they expect does not exist.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "project": { "type": "string", "description": "Registered project whose Linear connection to read." } },
+                "required": ["project"],
+            }
+        }),
+        json!({
+            "name": "linear_bindings",
+            "description": "A project's Linear trigger bindings, with every status resolved to its column name rather than its id. Read-only. Shows which column each workflow claims from, where a completed run leaves the issue (`ready`, and `piece_ready` for a piece of an epic), and whether the binding is enabled and live. Use to answer 'what is wired up' before changing anything.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "project": { "type": "string" } },
+                "required": ["project"],
+            }
+        }),
+        json!({
+            "name": "linear_check",
+            "description": "Diagnose a project's Linear wiring: does the relay of columns actually join up? Read-only. A binding moves an issue to a column expecting a *different* binding to claim it from there — and nothing enforces that. A ready status no binding polls means the run succeeds, the move succeeds, and the work is parked forever with no error anywhere; for an epic, the feature stops advancing overnight and the only symptom is absence. Returns findings at `error` (work will be dropped or never start), `warn` (works, but probably not as intended) and `ok` (the chain, stated so the report reads whole). Run this when an issue or an epic stopped for no visible reason, and after changing any binding.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "project": { "type": "string" } },
+                "required": ["project"],
+            }
+        }),
+        json!({
             "name": "run_list",
             "description": "List recent runs (most recent first) with status and per-node rows.",
             "inputSchema": {
@@ -763,6 +848,10 @@ mod tests {
             "workflow_set_node",
             "workflow_set_ui",
             "workflow_connect",
+            // Reading and diagnosing what triggers a run.
+            "linear_states",
+            "linear_bindings",
+            "linear_check",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
@@ -822,6 +911,85 @@ mod tests {
 
 // ── Connecting an editor ─────────────────────────────────────────────────────
 
+/// A project's teams and their columns, straight from Linear.
+async fn linear_states(state: &Arc<RunsState>, project: &str) -> Result<Value, String> {
+    let conn = super::linear_connections::resolve_for_project(state, project).await?;
+    let client = super::linear_oauth::linear_client(state, &conn).await?;
+    let discovery = client.discover().await.map_err(|e| e.0)?;
+    Ok(serde_json::to_value(discovery.teams).unwrap_or_else(|_| json!([])))
+}
+
+/// Every state id this project's Linear connection knows, mapped to its column
+/// name — what turns a stored id back into something a person recognises.
+async fn state_names(
+    state: &Arc<RunsState>,
+    project: &str,
+) -> Result<super::linear_diagnose::States, String> {
+    let conn = super::linear_connections::resolve_for_project(state, project).await?;
+    let client = super::linear_oauth::linear_client(state, &conn).await?;
+    let discovery = client.discover().await.map_err(|e| e.0)?;
+    Ok(discovery
+        .teams
+        .into_iter()
+        .flat_map(|t| t.states)
+        .map(|st| (st.id, st.name))
+        .collect())
+}
+
+/// This project's bindings, with statuses named rather than left as ids.
+async fn linear_bindings(state: &Arc<RunsState>, project: &str) -> Result<Vec<Value>, String> {
+    let store = state
+        .linear_source_store()
+        .await
+        .map_err(|e| e.to_string())?;
+    let all = store.list_all().await.map_err(|e| e.to_string())?;
+    let mine: Vec<_> = all.into_iter().filter(|b| b.project == project).collect();
+    // Best-effort: a binding list is still useful when Linear is unreachable, so
+    // fall back to bare ids rather than failing the call.
+    let names = state_names(state, project).await.unwrap_or_default();
+    let show = |id: Option<&str>| -> Value {
+        match id {
+            Some(id) => json!(names.get(id).cloned().unwrap_or_else(|| id.to_string())),
+            None => Value::Null,
+        }
+    };
+    Ok(mine
+        .iter()
+        .map(|b| {
+            json!({
+                "workflow": b.workflow,
+                "team": b.team_name,
+                "claims_from": show(Some(&b.source_state_id)),
+                "in_progress": show(b.in_progress_state_id.as_deref()),
+                "review": show(b.review_state_id.as_deref()),
+                "ready": show(b.ready_state_id.as_deref()),
+                "piece_ready": show(b.piece_ready_state_id.as_deref()),
+                "base_branch": b.base_branch,
+                "enabled": b.enabled,
+                "live": b.live,
+                "max_concurrent_runs": b.max_concurrent_runs,
+            })
+        })
+        .collect())
+}
+
+/// Whether this project's relay of columns actually joins up.
+async fn linear_check(
+    state: &Arc<RunsState>,
+    project: &str,
+) -> Result<Vec<super::linear_diagnose::Finding>, String> {
+    let store = state
+        .linear_source_store()
+        .await
+        .map_err(|e| e.to_string())?;
+    let all = store.list_all().await.map_err(|e| e.to_string())?;
+    let mine: Vec<_> = all.into_iter().filter(|b| b.project == project).collect();
+    // Unlike the listing, this one needs the names: half the findings are about
+    // a status that no longer exists, which cannot be told from an id alone.
+    let names = state_names(state, project).await?;
+    Ok(super::linear_diagnose::diagnose(&mine, &names))
+}
+
 /// Tools this endpoint exposes, grouped as the settings page lists them.
 const RUN_TOOLS: &[&str] = &[
     "run_trigger",
@@ -830,6 +998,8 @@ const RUN_TOOLS: &[&str] = &[
     "run_status",
     "run_findings",
 ];
+/// Reading and diagnosing what triggers a run, as opposed to starting one.
+const LINEAR_TOOLS: &[&str] = &["linear_states", "linear_bindings", "linear_check"];
 const AUTHORING_TOOLS: &[&str] = &[
     "workflow_list",
     "workflow_get",
@@ -855,6 +1025,7 @@ fn connection_body(state: &Arc<RunsState>, token: Option<String>) -> Value {
         // worth saying out loud on the page.
         "unauthenticated": token.is_none() && state.api_token().is_none(),
         "run_tools": RUN_TOOLS,
+        "linear_tools": LINEAR_TOOLS,
         "authoring_tools": AUTHORING_TOOLS,
     })
 }
