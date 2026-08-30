@@ -18,6 +18,42 @@ import type { ModelRef } from "@/types/run";
 const modelLabel = (m: ModelRef) => `${m.provider} / ${m.model}`;
 
 /**
+ * Why the baseline arm could not run, or null when it can.
+ *
+ * Arm B is picked from the credential-gated catalog, so it is runnable by
+ * construction. **Arm A is not** — it comes from the workflow's own YAML, which
+ * nothing checks against connected credentials. A baseline whose account is
+ * missing fails while the challenger succeeds, and that reads as a *result*
+ * rather than a misconfiguration, which is the worst way for an A/B test to be
+ * wrong.
+ *
+ * Deliberately not "is this exact model in the catalog": those lists are
+ * curated, not exhaustive — Cursor's entry says outright that any model string
+ * is accepted — so membership would block workflows that run perfectly well.
+ * What can be checked without guessing is the **namespace**, which is what
+ * actually selects the backend: `pi` with `openai-codex/*` needs ChatGPT, and
+ * with `kimi-code/*` needs Kimi, and the catalog lists a namespace's models
+ * only when its account is connected.
+ */
+export function baselineRefusal(
+  baseline: ModelRef | undefined,
+  providers: { id: string; label: string; models: string[] }[],
+): string | null {
+  if (!baseline || providers.length === 0) return null;
+  const provider = providers.find((p) => p.id === baseline.provider);
+  if (!provider) {
+    return `The baseline runs on \`${baseline.provider}\`, which has no connected account — arm A would fail while arm B succeeded.`;
+  }
+  const slash = baseline.model.indexOf("/");
+  if (slash === -1) return null;
+  const namespace = baseline.model.slice(0, slash + 1);
+  if (!provider.models.some((m) => m.startsWith(namespace))) {
+    return `The baseline uses \`${baseline.model}\`, and no account backing \`${namespace}*\` is connected — arm A would fail while arm B succeeded.`;
+  }
+  return null;
+}
+
+/**
  * A/B test trigger: run the same task twice, swapping the chosen step's model
  * for a challenger. Arm A keeps the current model (baseline); arm B uses the
  * challenger. The "step under test" list is the workflow's own model pairs.
@@ -66,9 +102,13 @@ export function AbTestForm() {
     setChallengerModel(providers.find((p) => p.id === id)?.models[0] ?? "");
   }
 
+  // Refuse rather than produce a result that means nothing. See
+  // `baselineRefusal`.
+  const refusal = baselineRefusal(swapFrom, providers);
+
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!swapFrom) return;
+    if (!swapFrom || refusal) return;
     pair.mutate(
       {
         workflow,
@@ -86,6 +126,7 @@ export function AbTestForm() {
 
   const canSubmit =
     !pair.isPending &&
+    !refusal &&
     !!project &&
     !!workflow.trim() &&
     !!swapFrom &&
@@ -188,6 +229,18 @@ export function AbTestForm() {
                   </option>
                 ))}
               </select>
+            )}
+            {refusal && (
+              <p className="text-[11px] text-status-failed">
+                {refusal}{" "}
+                <Link
+                  to="/settings/subscriptions"
+                  className="text-accent-orange hover:underline"
+                >
+                  Connect it
+                </Link>
+                , or pick a different step.
+              </p>
             )}
           </div>
           <div className="flex flex-col gap-1.5">

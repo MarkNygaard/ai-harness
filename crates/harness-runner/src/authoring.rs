@@ -166,7 +166,7 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
         }
         providers.push(ProviderInfo {
             id: "pi",
-            label: "Pi / omp",
+            label: "Pi",
             models: pi_models,
         });
     }
