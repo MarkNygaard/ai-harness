@@ -171,7 +171,11 @@ export function RunDetailPage() {
 
         <div className="min-h-0 flex-1">
           {panel === "graph" ? (
-            <ReactFlowProvider>
+            // Keyed by run: this route re-renders rather than remounting when
+            // you move between runs, and without a key the next run inherits
+            // the previous one's viewport — including the fact that somebody
+            // had panned it.
+            <ReactFlowProvider key={id ?? "none"}>
               <RunFlow nodes={run.nodes} />
             </ReactFlowProvider>
           ) : panel === "report" && report && declaredReport ? (
