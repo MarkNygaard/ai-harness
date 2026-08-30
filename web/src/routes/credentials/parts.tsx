@@ -296,6 +296,7 @@ export function ProviderSummary({
   configured,
   usageCardProvider,
   credentialOnly,
+  mark,
   children,
 }: {
   /** Credential-store key — picks the brand mark and the CLI health entry. */
@@ -305,6 +306,12 @@ export function ProviderSummary({
   configured: boolean;
   /** When set, render a "show usage card" toggle for this provider id. */
   usageCardProvider?: string;
+  /**
+   * Brand to draw, when it differs from the credential key. The `pi` credential
+   * *is* Kimi-for-Coding, so on this page it wears Kimi's mark — while the
+   * agent it backs is Pi, and wears Pi's.
+   */
+  mark?: string;
   /**
    * Report the credential only, ignoring whether a CLI is installed.
    *
@@ -329,7 +336,11 @@ export function ProviderSummary({
   return (
     <div className="flex flex-col gap-1 py-2.5 first:pt-1 last:pb-1">
       <div className="flex items-center gap-2">
-        <ProviderMark provider={provider} status={status} label={statusLabel} />
+        <ProviderMark
+          provider={mark ?? provider}
+          status={status}
+          label={statusLabel}
+        />
         <span className="truncate text-sm font-medium">{label}</span>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <Dialog>

@@ -46,7 +46,7 @@ export const AGENTS: {
   {
     provider: "pi",
     label: "Pi",
-    what: "Runs kimi-code/* on a Kimi plan, and openai-codex/* on a ChatGPT one — the model namespace picks which. Installed as `omp`, a Pi distribution that ships the extensions the harness relies on.",
+    what: "Installed as `omp`, a Pi distribution bundling the extensions the harness uses. The model a node names decides which account it runs on.",
     subscriptions: [
       { credential: "pi", label: "Kimi-for-Coding" },
       { credential: "codex", label: "ChatGPT" },
