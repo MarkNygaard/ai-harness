@@ -741,9 +741,27 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                 // column is the supervisor's own business, and a piece it
                 // reviewed is already where it belongs.
                 let supervising = detail.run.workflow_name == super::linear_agent::EPIC_SUPERVISOR;
+                // A piece of an epic and a standalone issue are finished in
+                // different senses, and a binding can now say so. A standalone
+                // issue is heading for the default branch, so it stops at
+                // whatever gate the team keeps -- functional testing, review. A
+                // piece is heading for the epic's own branch, where the
+                // supervisor grades it and the whole feature is reviewed once,
+                // as a single pull request; stopping every piece at that gate
+                // reviews the same feature N times and puts a human back in the
+                // loop the epic exists to remove.
+                //
+                // Unset (the default) means the two are the same, so a binding
+                // that never mentions it behaves exactly as before.
+                let piece_ready = match binding.as_ref() {
+                    Some(b) if b.piece_ready_state_id.is_some() && !supervising => {
+                        is_epic_piece(state, &client, b, &c.issue_id).await
+                    }
+                    _ => false,
+                };
                 let ready = binding
                     .as_ref()
-                    .and_then(|b| b.ready_state_id.as_deref())
+                    .and_then(|b| ready_state_for(b, piece_ready))
                     .filter(|_| !supervising);
                 let moved = match ready {
                     Some(ready) => {
@@ -918,6 +936,41 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
             }
         }
     }
+}
+
+/// Which status a completed run's issue moves to.
+///
+/// A binding that never sets a piece state behaves exactly as it always has --
+/// that is what keeps this change invisible to every existing install -- and a
+/// piece falls back to the ordinary ready state rather than going nowhere.
+fn ready_state_for(binding: &LinearSource, is_piece: bool) -> Option<&str> {
+    if is_piece {
+        if let Some(piece) = binding.piece_ready_state_id.as_deref() {
+            return Some(piece);
+        }
+    }
+    binding.ready_state_id.as_deref()
+}
+
+/// Whether this issue was built as a piece of an epic.
+///
+/// Asks the same question the claim asked, rather than guessing from the branch
+/// name or from the issue merely having a parent: `route_issue` also requires
+/// the supervisor to be enabled for the team, so a sub-issue in a project with
+/// no epic workflow is an ordinary issue and must go to the ordinary gate.
+///
+/// Only called when a binding actually sets a piece state, so a project not
+/// using epics pays nothing.
+async fn is_epic_piece(
+    state: &Arc<RunsState>,
+    client: &LinearClient,
+    binding: &LinearSource,
+    issue_id: &str,
+) -> bool {
+    matches!(
+        super::linear_agent::route_issue(state, client, binding, issue_id).await,
+        super::linear_agent::Route::BuildOnEpic(_)
+    )
 }
 
 /// Report a run's progress into the agent session that delegated it.
@@ -1344,8 +1397,9 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_local, human_duration, is_agent_session_preamble, step_action, step_duration,
-        step_position, task_for_issue, unannounced_running_nodes, unreported_finished_nodes,
+        format_local, human_duration, is_agent_session_preamble, ready_state_for, step_action,
+        step_duration, step_position, task_for_issue, unannounced_running_nodes,
+        unreported_finished_nodes, LinearSource,
     };
     use chrono::Utc;
     use harness_sources::linear::{Comment, Issue};
@@ -1450,6 +1504,61 @@ mod tests {
     /// silence, a heartbeat — but never a start. So after "Finished explore" it
     /// read as stalled for the whole of `create-plan`, which routinely runs longer
     /// than the heartbeat interval.
+    fn ready_binding(ready: Option<&str>, piece: Option<&str>) -> LinearSource {
+        LinearSource {
+            project: "p".into(),
+            workflow: "idea-to-pr".into(),
+            team_id: "t".into(),
+            team_name: "T".into(),
+            source_state_id: "todo".into(),
+            failed_label: None,
+            in_progress_state_id: None,
+            review_state_id: None,
+            ready_state_id: ready.map(str::to_string),
+            piece_ready_state_id: piece.map(str::to_string),
+            base_branch: None,
+            poll_interval_secs: 60,
+            max_concurrent_runs: 1,
+            max_attempts: 1,
+            enabled: true,
+            live: true,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    /// A standalone issue is finished work heading for the default branch, so it
+    /// stops at whatever gate the team keeps. A piece of an epic is heading for
+    /// the epic's own branch, where the supervisor grades it and the feature is
+    /// reviewed once as a single pull request — stopping every piece at the same
+    /// gate reviews the same work N times.
+    #[test]
+    fn a_piece_and_a_standalone_issue_stop_in_different_columns() {
+        let b = ready_binding(Some("functional-testing"), Some("ready-for-merge"));
+        assert_eq!(ready_state_for(&b, false), Some("functional-testing"));
+        assert_eq!(ready_state_for(&b, true), Some("ready-for-merge"));
+    }
+
+    /// The invariant that makes this safe to ship: a binding that never mentions
+    /// the piece state behaves exactly as it did before it existed.
+    #[test]
+    fn a_binding_that_says_nothing_about_pieces_is_unchanged() {
+        let b = ready_binding(Some("ready"), None);
+        assert_eq!(ready_state_for(&b, false), Some("ready"));
+        assert_eq!(ready_state_for(&b, true), Some("ready"));
+    }
+
+    #[test]
+    fn no_ready_state_still_means_no_move() {
+        let b = ready_binding(None, None);
+        assert_eq!(ready_state_for(&b, true), None);
+        // A piece state without a ready state is a half-configured binding, but
+        // it is unambiguous about the piece, so honour it.
+        let half = ready_binding(None, Some("ready-for-merge"));
+        assert_eq!(ready_state_for(&half, true), Some("ready-for-merge"));
+        assert_eq!(ready_state_for(&half, false), None);
+    }
+
     #[test]
     fn a_running_node_is_announced_once() {
         let detail = detail_with(vec![

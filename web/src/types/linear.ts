@@ -73,6 +73,8 @@ export interface LinearSource {
   in_progress_state_id: string | null;
   review_state_id: string | null;
   ready_state_id: string | null;
+  /** Where an epic's piece goes instead; null means the same as `ready_state_id`. */
+  piece_ready_state_id: string | null;
   base_branch: string | null;
   poll_interval_secs: number;
   /** How many runs this binding may have in flight at once (default 1). */
@@ -110,6 +112,7 @@ export interface LinearSourceInput {
   in_progress_state_id?: string;
   review_state_id?: string;
   ready_state_id?: string;
+  piece_ready_state_id?: string;
   base_branch?: string;
   poll_interval_secs: number;
   max_concurrent_runs: number;

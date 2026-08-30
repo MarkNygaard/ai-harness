@@ -1600,6 +1600,7 @@ mod tests {
             in_progress_state_id: None,
             review_state_id: None,
             ready_state_id: None,
+            piece_ready_state_id: None,
             base_branch: Some("main".into()),
             poll_interval_secs: 60,
             max_concurrent_runs: 1,
