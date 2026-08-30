@@ -106,6 +106,13 @@ pub struct SubIssue {
     /// A name is whatever somebody typed; the type is what Linear means by it.
     pub state_type: String,
     pub labels: Vec<String>,
+    /// When this piece reached a completed status, if it has.
+    ///
+    /// The order pieces were *built* in, which `sortOrder` stops being: Linear
+    /// reassigns it when an issue is moved between columns, so by the time an
+    /// epic finishes it reflects where the cards ended up on the board rather
+    /// than what happened first.
+    pub completed_at: Option<String>,
     /// Linear's own ordering within the parent. Ascending is board order.
     pub sort_order: f64,
 }
@@ -219,6 +226,8 @@ struct ChildNode {
     labels: Option<Conn<IssueLabelNode>>,
     #[serde(rename = "sortOrder", default)]
     sort_order: f64,
+    #[serde(rename = "completedAt", default)]
+    completed_at: Option<String>,
 }
 #[derive(Deserialize)]
 struct ChildStateNode {
@@ -358,7 +367,7 @@ query Children($id: String!) {
   issue(id: $id) {
     children(first: 100) {
       nodes {
-        id identifier title url description sortOrder
+        id identifier title url description sortOrder completedAt
         state { id name type }
         labels { nodes { name } }
       }
@@ -535,6 +544,7 @@ pub fn parse_children(json: &[u8]) -> Result<Vec<SubIssue>, LinearError> {
                     .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
                     .unwrap_or_default(),
                 sort_order: c.sort_order,
+                completed_at: c.completed_at,
             }
         })
         .collect();
@@ -1948,6 +1958,30 @@ mod tests {
         // The next piece to build is the first one not yet finished.
         let next = list.iter().find(|c| c.state == "Queued").unwrap();
         assert_eq!(next.identifier, "AIH-2");
+    }
+
+    #[test]
+    fn a_child_carries_when_it_finished() {
+        // The order pieces were *built* in, which `sortOrder` stops describing:
+        // Linear reassigns it as cards move between columns, so by the time an
+        // epic finishes it says where the cards ended up. The first real epic's
+        // pull request listed its three pieces in exactly reverse order.
+        let list = children(
+            r#"[
+              {"id":"a","identifier":"A-1","title":"first","url":"u","sortOrder":3.0,
+               "completedAt":"2026-08-30T13:12:42.471Z",
+               "state":{"id":"s1","name":"Done","type":"completed"},"labels":{"nodes":[]}},
+              {"id":"b","identifier":"A-2","title":"still going","url":"u","sortOrder":1.0,
+               "state":{"id":"s2","name":"In Progress","type":"started"},"labels":{"nodes":[]}}
+            ]"#,
+        );
+        let by_id = |id: &str| list.iter().find(|c| c.identifier == id).unwrap();
+        assert_eq!(
+            by_id("A-1").completed_at.as_deref(),
+            Some("2026-08-30T13:12:42.471Z")
+        );
+        // Absent, not an error: a piece that has not finished has no time.
+        assert!(by_id("A-2").completed_at.is_none());
     }
 
     #[test]
