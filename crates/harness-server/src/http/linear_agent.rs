@@ -485,9 +485,32 @@ async fn start_delegated_run(
     // the source status, so the poller remains eligible to claim it — today only
     // `max_concurrent_runs` stops a second run, which stops nothing once a
     // binding raises that above 1.
+    // One decision, two fields: which workflow, and which base branch. A piece
+    // of an epic is built on the epic's branch so the feature accumulates
+    // there; the supervisor reviewing a piece needs that same branch, or it
+    // would grade a worktree without the code in it.
+    //
+    // Decided before the status move because an **epic's** column is the
+    // supervisor's to manage: this binding's state map describes a piece being
+    // built, and applying it to an epic marches it through the whole lifecycle
+    // and into whatever column the supervisor is bound to — which starts it
+    // again.
+    let route = match event.issue_id.as_deref() {
+        Some(id) => match route_issue(state, &client, &binding, id).await {
+            Route::Supervise => (EPIC_SUPERVISOR.to_string(), binding.base_branch.clone()),
+            Route::BuildOnEpic(branch) => (binding.workflow.clone(), Some(branch)),
+            Route::Build => (binding.workflow.clone(), binding.base_branch.clone()),
+        },
+        None => (binding.workflow.clone(), binding.base_branch.clone()),
+    };
+    let supervising = route.0 == EPIC_SUPERVISOR;
+
     if let (Some(issue_id), Some(in_progress)) = (
         event.issue_id.as_deref(),
-        binding.in_progress_state_id.as_deref(),
+        binding
+            .in_progress_state_id
+            .as_deref()
+            .filter(|_| !supervising),
     ) {
         if let Err(e) = client.set_issue_state(issue_id, in_progress).await {
             // Non-fatal: better to run the work than to refuse over a status move.
@@ -499,18 +522,6 @@ async fn start_delegated_run(
         }
     }
 
-    // One decision, two fields: which workflow, and which base branch. A piece
-    // of an epic is built on the epic's branch so the feature accumulates
-    // there; the supervisor reviewing a piece needs that same branch, or it
-    // would grade a worktree without the code in it.
-    let route = match event.issue_id.as_deref() {
-        Some(id) => match route_issue(state, &client, &binding, id).await {
-            Route::Supervise => (EPIC_SUPERVISOR.to_string(), binding.base_branch.clone()),
-            Route::BuildOnEpic(branch) => (binding.workflow.clone(), Some(branch)),
-            Route::Build => (binding.workflow.clone(), binding.base_branch.clone()),
-        },
-        None => (binding.workflow.clone(), binding.base_branch.clone()),
-    };
     let req = CreateRunRequest {
         triggered_by: Some("linear".to_string()),
         workflow: route.0.clone(),

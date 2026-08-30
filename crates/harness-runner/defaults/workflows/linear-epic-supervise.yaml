@@ -93,10 +93,23 @@ nodes:
           exit 0
         fi
 
-        # An epic is started at its first piece. It only reaches this column
-        # once, so "first by board order" is the one that has not run.
-        first_id="$(jq -r 'sort_by(.sortOrder) | .[0].id' "$ARTIFACTS_DIR/children.json")"
-        first_ident="$(jq -r 'sort_by(.sortOrder) | .[0].identifier' "$ARTIFACTS_DIR/children.json")"
+        # The first piece that has not **begun**, in board order — not simply
+        # the first. An epic can arrive here more than once (a re-delegation, a
+        # column it lands in again), and "first by order" would restart a piece
+        # already building every single time.
+        #
+        # Linear's own state category answers this without configuration: a
+        # piece is waiting if its state is `backlog` or `unstarted`.
+        unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sortOrder)'
+        first_id="$(jq -r "$unstarted | .[0].id // empty" "$ARTIFACTS_DIR/children.json")"
+        first_ident="$(jq -r "$unstarted | .[0].identifier // empty" "$ARTIFACTS_DIR/children.json")"
+
+        if [ -z "$first_id" ]; then
+          # Every piece is under way or finished. Nothing to start, and saying
+          # so beats starting something twice.
+          echo '{"mode": "nothing-to-start"}'
+          exit 0
+        fi
         # The epic's own identifier names its integration branch, and the poller
         # derives the same name when it bases each piece on it.
         epic_ident="$(jq -r '.identifier // empty' "$ARTIFACTS_DIR/piece.json")"
@@ -133,13 +146,14 @@ nodes:
       epic_total="$(jq '[.[] | select((.body // "") | test("^Corrects: "; "m"))] | length' \
         "$ARTIFACTS_DIR/siblings.json")"
 
-      # Strictly sequential, so "next" is simply the next by board order.
-      next_id="$(jq -r --argjson o "$order" \
-        '[.[] | select(.sortOrder > $o)] | sort_by(.sortOrder) | .[0].id // empty' \
-        "$ARTIFACTS_DIR/siblings.json")"
-      next_ident="$(jq -r --argjson o "$order" \
-        '[.[] | select(.sortOrder > $o)] | sort_by(.sortOrder) | .[0].identifier // empty' \
-        "$ARTIFACTS_DIR/siblings.json")"
+      # The next piece is the next one that has not begun — not the next by
+      # order. Two things depend on that difference: a corrective filed later
+      # sorts *above* the piece it corrects (Linear gives new issues the lowest
+      # sortOrder), so "next after this one" would skip it forever; and a piece
+      # already building must not be started again.
+      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sortOrder)'
+      next_id="$(jq -r "$unstarted | .[0].id // empty" "$ARTIFACTS_DIR/siblings.json")"
+      next_ident="$(jq -r "$unstarted | .[0].identifier // empty" "$ARTIFACTS_DIR/siblings.json")"
 
       # The epic's own name, for the pull request that lands the finished
       # feature. Both come from the piece's context read, so no extra call.
@@ -217,6 +231,12 @@ nodes:
     depends_on: [context]
     when: "$context.output.mode == 'neither'"
     cancel: "This issue is neither a piece of an epic nor an epic with pieces, so there is nothing to supervise."
+
+  - id: already-started
+    category: setup
+    depends_on: [context]
+    when: "$context.output.mode == 'nothing-to-start'"
+    cancel: "Every piece of this epic is already under way or finished. Nothing to start — the epic advances when a piece is reviewed, not when the epic is handed over again."
 
   # ── The judgement ────────────────────────────────────────────────────────
   #
