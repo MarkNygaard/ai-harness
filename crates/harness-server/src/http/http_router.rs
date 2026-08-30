@@ -145,7 +145,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/users", get(users_routes::list_users))
         .route("/api/users/{id}/role", put(users_routes::set_role))
         .route("/api/users/{id}/disabled", put(users_routes::set_disabled))
-        .route("/api/users/{id}", delete(users_routes::delete_user))
+        .route(
+            "/api/users/{id}",
+            put(users_routes::set_profile).delete(users_routes::delete_user),
+        )
         // ── System: agent-CLI version + in-app update ───────────────────────
         .route("/api/system/providers", get(system_routes::providers))
         .route(
