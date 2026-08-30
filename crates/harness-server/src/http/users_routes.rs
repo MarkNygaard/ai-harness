@@ -31,6 +31,13 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "error": msg.into() }))).into_response()
 }
 
+fn email_taken(email: &str) -> Response {
+    err(
+        StatusCode::CONFLICT,
+        format!("{email} already has an account here"),
+    )
+}
+
 /// `GET /api/users` — everyone with an account here.
 pub async fn list_users(_: AdminOnly, Extension(state): Extension<Arc<RunsState>>) -> Response {
     let users = match state.user_store().await {
@@ -174,7 +181,7 @@ pub async fn set_profile(
     AxumPath(id): AxumPath<String>,
     Json(req): Json<ProfileRequest>,
 ) -> Response {
-    let name = req.name.trim().to_string();
+    let name = req.name.trim();
     let email = req.email.trim().to_lowercase();
     if name.is_empty() {
         return err(StatusCode::BAD_REQUEST, "a name is required");
@@ -194,24 +201,20 @@ pub async fn set_profile(
     // Held by somebody else. Re-saving one's own address — in any case, with
     // any padding — is not a clash, which is why the id is compared rather
     // than just the lookup succeeding.
-    match users.get_by_email(&email).await {
-        Ok(Some(other)) if other.id != id => {
-            return err(
-                StatusCode::CONFLICT,
-                format!("{email} already has an account here"),
-            )
-        }
-        Ok(_) => {}
+    let existing = match users.get_by_email(&email).await {
+        Ok(existing) => existing,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if let Some(other) = existing {
+        if other.id != id {
+            return email_taken(&email);
+        }
     }
 
-    match users.set_profile(&id, &name, &email).await {
+    match users.set_profile(&id, name, &email).await {
         Ok(Some(user)) => Json(user).into_response(),
         Ok(None) => err(StatusCode::NOT_FOUND, "no such account"),
-        Err(e) if is_duplicate_email(&e) => err(
-            StatusCode::CONFLICT,
-            format!("{email} already has an account here"),
-        ),
+        Err(e) if is_duplicate_email(&e) => email_taken(&email),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
