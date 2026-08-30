@@ -136,6 +136,13 @@ pub async fn comment(issue_id: &str, body_md: &str) -> Result<String, String> {
     .await
 }
 
+/// Where a finished epic goes once its pull request is open, from the binding
+/// that started this run. `{"state": null}` when the binding says nothing,
+/// which means leave the epic where it is.
+pub async fn epic_review_state() -> Result<String, String> {
+    ask("/api/run/linear/epic-review-state", &serde_json::json!({})).await
+}
+
 /// The column a piece must be moved to in order to be built.
 ///
 /// Derived from the claims the poller already writes, so an epic needs no state

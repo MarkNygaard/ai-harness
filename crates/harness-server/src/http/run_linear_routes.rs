@@ -255,6 +255,42 @@ pub async fn ready_state(
     }
 }
 
+/// `POST /api/run/linear/epic-review-state` — where a finished epic goes.
+///
+/// Read off the binding that started this run, so the column is picked from a
+/// dropdown like every other one rather than pasted in as a state id.
+/// `EPIC_REVIEW_STATE` still wins in the workflow when it is set.
+pub async fn epic_review_state(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+) -> Response {
+    let g = match grant(&headers) {
+        Ok(g) => g,
+        Err((s, m)) => return err(s, m),
+    };
+    let claims = match state.linear_claim_store().await {
+        Ok(c) => c,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+    };
+    let Ok(Some(claim)) = claims.claim_for_run(&g.run_id).await else {
+        return err(StatusCode::NOT_FOUND, "this run has no Linear claim");
+    };
+    let sources = match state.linear_source_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e.to_string()),
+    };
+    match sources.get(&claim.project, &claim.workflow).await {
+        Ok(Some(b)) => match b.epic_review_state_id {
+            Some(id) => Json(serde_json::json!({ "state": id })).into_response(),
+            // Not an error: leaving the epic where it is is a valid choice, and
+            // the only other answer would be a guess.
+            None => Json(serde_json::json!({ "state": null })).into_response(),
+        },
+        Ok(None) => err(StatusCode::NOT_FOUND, "no binding started this run"),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
+    }
+}
+
 /// `POST /api/run/linear/release` — give up an issue by clearing its delegate.
 ///
 /// What a workflow calls when it is finished with an issue it deliberately left

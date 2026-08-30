@@ -97,6 +97,12 @@ that was never a piece.
 | Ready for merge | `merge-pr` | Done | — |
 | Done | `linear-epic-supervise` | — | — |
 
+The supervisor's binding takes one field of its own: **Ready (finished epic)**,
+where the epic goes once every piece is in and its pull request is open — the
+point a person picks it up. Its `Ready` and `Ready (epic piece)` are never read:
+the poller suppresses every state move for a supervise run, so an epic's columns
+stay the supervisor's business.
+
 **`Ready (epic piece)` is the field that makes epics and ordinary work
 coexist.** A team that will not merge without a human review sets `Ready` to
 something like *Functional testing*, so standalone issues stop there. A piece of
@@ -109,9 +115,9 @@ binding behaved before the field existed.
 poller already records. `EPIC_READY_STATE` remains as a project env var for a
 board that wants pieces somewhere else, but it is an override, not setup.
 
-Optional, all project env vars: `EPIC_BLOCKED_STATE` (where a stalled epic
-goes), `EPIC_REVIEW_STATE` (where the finished epic goes when its PR opens),
-`EPIC_CORRECTIVE_LABEL`.
+Optional, all project env vars and all overrides rather than setup:
+`EPIC_BLOCKED_STATE` (where a stalled epic goes), `EPIC_REVIEW_STATE` (the older
+way to say **Ready (finished epic)**), `EPIC_CORRECTIVE_LABEL`.
 
 **3. Check it.** Over MCP: `linear_check({ project })`. It walks the relay and
 reports what breaks, in column names rather than state ids.

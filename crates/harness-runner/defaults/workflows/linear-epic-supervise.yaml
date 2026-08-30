@@ -415,7 +415,13 @@ nodes:
 
         # Hand the epic to a human. Nothing merges this automatically: it is
         # the whole feature, and the one review that was never a piece.
+        # Where the finished epic goes, from the supervisor's own binding —
+        # picked from a dropdown like every other column, rather than pasted in
+        # as a state id. The environment variable stays as an override.
         review_state="${EPIC_REVIEW_STATE:-}"
+        if [ -z "$review_state" ]; then
+          review_state="$(harness linear epic-review-state 2>/dev/null | jq -r '.state // empty')"
+        fi
         if [ -n "$review_state" ]; then
           harness linear move-state --issue "$parent" --state "$review_state" \
             || echo "could not move the epic to EPIC_REVIEW_STATE" >&2

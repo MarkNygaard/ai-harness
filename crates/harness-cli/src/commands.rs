@@ -100,6 +100,8 @@ pub enum LinearAction {
         #[arg(long)]
         issue: String,
     },
+    /// Print the state id a finished epic moves to, per its binding
+    EpicReviewState,
     /// Print the state id a piece must be moved to in order to be built
     ReadyState {
         /// The piece whose build column to read; omit to use this run's own
@@ -1591,6 +1593,7 @@ async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
         LinearAction::Issue { issue } => harness_server::linear_cli::issue(&issue).await,
         LinearAction::Children { issue } => harness_server::linear_cli::children(&issue).await,
         LinearAction::Release { issue } => harness_server::linear_cli::release(&issue).await,
+        LinearAction::EpicReviewState => harness_server::linear_cli::epic_review_state().await,
         LinearAction::ReadyState { issue } => {
             harness_server::linear_cli::ready_state(issue.as_deref()).await
         }
