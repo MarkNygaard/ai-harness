@@ -318,10 +318,20 @@ pub(crate) async fn open_session(
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
     );
-    users
-        .open_session(&id, &user.id, Duration::days(SESSION_IDLE_DAYS))
+    let opened = users
+        .open_session(
+            &id,
+            &user.id,
+            &user.email,
+            Duration::days(SESSION_IDLE_DAYS),
+        )
         .await
         .map_err(|e| e.to_string())?;
+    if !opened {
+        // The account changed after its credentials were checked. Retrying
+        // re-runs authentication against the identity that is current now.
+        return Err("account changed while signing in; try again".into());
+    }
     Ok(session_cookie(&id, secure_cookies(state)))
 }
 

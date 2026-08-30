@@ -392,11 +392,11 @@ mod tests {
         let sid1 = uuid::Uuid::new_v4().to_string();
         let sid2 = uuid::Uuid::new_v4().to_string();
         users
-            .open_session(&sid1, &user.id, Duration::hours(1))
+            .open_session(&sid1, &user.id, &user.email, Duration::hours(1))
             .await
             .expect("open first session");
         users
-            .open_session(&sid2, &user.id, Duration::hours(1))
+            .open_session(&sid2, &user.id, &user.email, Duration::hours(1))
             .await
             .expect("open second session");
         assert!(users
@@ -476,7 +476,7 @@ mod tests {
 
         let sid = uuid::Uuid::new_v4().to_string();
         users
-            .open_session(&sid, &user.id, Duration::hours(1))
+            .open_session(&sid, &user.id, &user.email, Duration::hours(1))
             .await
             .expect("open session");
         assert!(users
