@@ -52,6 +52,13 @@ export function useSetUserDisabled() {
     "PUT",
   );
 }
+/** The address is what sign-in matches on, so the server holds it unique and answers 409 when it is not. */
+export function useSetUserProfile() {
+  return useUserMutation<{ name: string; email: string }>(
+    (id) => `/api/users/${encodeURIComponent(id)}`,
+    "PUT",
+  );
+}
 
 export function useDeleteUser() {
   const qc = useQueryClient();
