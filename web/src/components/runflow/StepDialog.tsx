@@ -75,7 +75,7 @@ export function StepDialog({
                 inner box on small screens. */}
             <div className="min-h-0 flex-1 overflow-auto">
               <dl className="grid grid-cols-2 gap-x-6 gap-y-1.5 border-y py-3 text-xs sm:grid-cols-3">
-                <Meta label="CLI" value={view.provider ?? "—"} />
+                <Meta label="Agent" value={view.provider ?? "—"} />
                 <Meta label="Model" value={view.model ?? "—"} />
                 <Meta
                   label="Duration"

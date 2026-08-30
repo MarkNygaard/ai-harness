@@ -60,7 +60,7 @@ export function PropertiesDrawer({
   const providerModels =
     catalog?.providers.find((p) => p.id === provider)?.models ?? [];
   // Always include the node's current model, so a value not in the catalog
-  // (a bundled workflow's model, or one whose CLI isn't connected) still shows.
+  // (a bundled workflow's model, or one whose agent isn't connected) still shows.
   const modelOptions =
     node.model && !providerModels.includes(node.model)
       ? [node.model, ...providerModels]
@@ -249,7 +249,7 @@ export function PropertiesDrawer({
         </div>
 
         <SelectField
-          label="CLI"
+          label="Agent"
           value={provider || DEFAULT_SENTINEL}
           onValueChange={(v) =>
             set({ provider: v === DEFAULT_SENTINEL ? undefined : v })
@@ -282,7 +282,9 @@ export function PropertiesDrawer({
           onValueChange={(v) =>
             set({
               effort:
-                v === DEFAULT_SENTINEL ? undefined : (v as EditorNode["effort"]),
+                v === DEFAULT_SENTINEL
+                  ? undefined
+                  : (v as EditorNode["effort"]),
             })
           }
         >
