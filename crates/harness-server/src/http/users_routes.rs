@@ -153,10 +153,8 @@ pub async fn set_disabled(
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct ProfileRequest {
-    pub name: String,
-    pub email: String,
+fn email_taken_message(email: &str) -> String {
+    format!("{email} already belongs to another account")
 }
 
 /// The refusal when `email` is already some *other* account's, or `None` when
@@ -165,10 +163,6 @@ pub struct ProfileRequest {
 /// Kept separate from the query so the rule can be read in one place, and so
 /// the case that actually matters — an account keeping its own address, or
 /// only changing its case — is provably not a conflict with itself.
-fn email_taken_message(email: &str) -> String {
-    format!("{email} already belongs to another account")
-}
-
 fn email_conflict(found: Option<&harness_persist::User>, id: &str, email: &str) -> Option<String> {
     match found {
         Some(other) if other.id != id => Some(email_taken_message(email)),
@@ -189,6 +183,12 @@ fn is_email_taken(e: &harness_persist::PersistError) -> bool {
         harness_persist::PersistError::Db(sqlx::Error::Database(db))
             if db.constraint() == Some("harness_users_email_key")
     )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProfileRequest {
+    pub name: String,
+    pub email: String,
 }
 
 /// `PUT /api/users/{id}` — change an account's display name and email.
