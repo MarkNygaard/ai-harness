@@ -53,6 +53,16 @@ export function useSetUserDisabled() {
   );
 }
 
+/**
+ * Editing yourself changes the name shown in the header/nav, which is why the
+ * shared `onSuccess` also invalidates `["auth", "status"]`.
+ */
+export function useSetUserProfile() {
+  return useUserMutation<{ name: string; email: string }>(
+    (id) => `/api/users/${encodeURIComponent(id)}`,
+    "PUT",
+  );
+}
 export function useDeleteUser() {
   const qc = useQueryClient();
   return useMutation<{ deleted: boolean; id: string }, Error, { id: string }>({

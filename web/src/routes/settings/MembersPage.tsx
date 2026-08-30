@@ -1,4 +1,5 @@
 import { InvitePeople } from "@/components/settings/InvitePeople";
+import { MemberProfileDialog } from "@/components/settings/MemberProfileDialog";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,6 +69,7 @@ function Row({
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
+        <MemberProfileDialog user={user} disabled={busy} />
         <Button
           variant="ghost"
           size="sm"
