@@ -9,7 +9,6 @@ import type { AuthUser } from "@/lib/auth";
 import {
   useDeleteUser,
   useSetUserDisabled,
-  useSetUserProfile,
   useSetUserRole,
   useUsers,
 } from "@/lib/users";
@@ -146,15 +145,9 @@ export function MembersPage() {
   const role = useSetUserRole();
   const disable = useSetUserDisabled();
   const remove = useDeleteUser();
-  const profile = useSetUserProfile();
 
-  const busy =
-    role.isPending ||
-    disable.isPending ||
-    remove.isPending ||
-    profile.isPending;
-  const error =
-    role.error ?? disable.error ?? remove.error ?? profile.error ?? users.error;
+  const busy = role.isPending || disable.isPending || remove.isPending;
+  const error = role.error ?? disable.error ?? remove.error ?? users.error;
   const list = users.data ?? [];
   const admins = list.filter(
     (u) => u.role === "admin" && !u.disabled_at,

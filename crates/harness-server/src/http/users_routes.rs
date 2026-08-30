@@ -389,8 +389,8 @@ mod tests {
             .await
             .expect("create user");
 
-        let sid1 = Utc::now().timestamp_nanos_opt().unwrap().to_string();
-        let sid2 = Utc::now().timestamp_nanos_opt().unwrap().to_string();
+        let sid1 = uuid::Uuid::new_v4().to_string();
+        let sid2 = uuid::Uuid::new_v4().to_string();
         users
             .open_session(&sid1, &user.id, Duration::hours(1))
             .await
@@ -474,7 +474,7 @@ mod tests {
             .await
             .expect("create user");
 
-        let sid = Utc::now().timestamp_nanos_opt().unwrap().to_string();
+        let sid = uuid::Uuid::new_v4().to_string();
         users
             .open_session(&sid, &user.id, Duration::hours(1))
             .await
