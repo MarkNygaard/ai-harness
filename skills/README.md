@@ -46,6 +46,22 @@ npx skills add MarkNygaard/ai-harness --skill ai-harness -a codex
 See everything this repo offers with
 `npx skills add MarkNygaard/ai-harness --list`.
 
+## Updating an installed copy
+
+Installs are **pinned** — `skills-lock.json` records the version, so a change
+here does not reach a project that already has the skill. Pull a newer one with
+`update`, not by adding again:
+
+```bash
+npx skills update ai-harness -p -y     # this project
+npx skills update ai-harness -g -y     # the global copy
+npx skills update                      # everything, asking which scope
+```
+
+Worth doing after any change to the harness's Linear or workflow tooling: the
+skill is what tells an agent which MCP tools exist, so an old copy will not
+reach for a tool added since it was installed.
+
 ## Install by hand
 
 A skill is just a folder with a `SKILL.md`; copy it into `.claude/skills/`

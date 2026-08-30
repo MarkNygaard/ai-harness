@@ -15,7 +15,9 @@ description: >-
   workflow_* tools. Also use when a Linear issue or an epic stopped for no
   visible reason, or the user asks what triggers harness runs by itself, how
   their Linear columns are wired, or how to set up an epic — the linear_states
-  / linear_bindings / linear_check tools.
+  / linear_bindings / linear_check tools. Read this before **filing work in
+  Linear** for the harness to pick up, to decide whether it is one issue or an
+  epic with sub-issues, and how to write the pieces so they can be graded.
 ---
 
 # Drive ai-harness from this project (over MCP)
@@ -78,6 +80,60 @@ Check whether `mcp__harness__*` tools are available (e.g. `mcp__harness__run_lis
 
 Confirm the exact **project name** before triggering — it must be a project the
 cluster has registered, not a local folder name.
+
+## Writing work into Linear: one issue, or an epic?
+
+When you file work in Linear for the harness to pick up, this is the decision
+that costs the most to get wrong.
+
+**Default to a single issue.** `idea-to-pr` already explores, plans and
+decomposes internally — its plan step routinely produces ten numbered tasks with
+exact file paths, and a cheap model executes them. Splitting that same work
+across sub-issues buys nothing and multiplies the cost: **each piece is a full
+pipeline** (explore, plan, implement, simplify, three review passes, verify —
+call it 45 minutes) **plus a supervisor review**. Three pieces is roughly three
+times the work and three pull requests, for something one run would have done.
+
+**Choose an epic only when one of these is true:**
+
+1. **The work exceeds one run's coherence.** Explore, plan, implement and review
+   share a single context. Past some size the plan stops being specific enough
+   to execute cheaply, which is the whole reason the pipeline is affordable.
+2. **Later pieces depend on earlier ones being *right*, not merely done.** The
+   supervisor grades each piece with fresh context against its own acceptance
+   criteria before the next starts. In one run, a wrong early step propagates
+   and the review passes see the finished diff, where it is far easier to miss.
+
+**The test:** *if you cannot say what would break if two pieces were built in
+the other order, it does not need to be an epic.*
+
+**Independent work is a poor fit even when it is large.** Several documentation
+pages, or unrelated fixes across a repo, gain nothing from an epic — the
+machinery exists so piece N+1 branches from a tree containing 1..N, and
+independent work pays that sequential cost for no benefit. File those as several
+single issues and let them run in parallel.
+
+Good epic: a frontend where component B imports component A. Poor epic: a docs
+set, or three unrelated bug fixes.
+
+### If it is an epic
+
+- **Create the sub-issues in reverse build order.** Linear gives newer issues the
+  *lower* `sortOrder` and the harness builds ascending, so create the piece that
+  should run **last** first. Otherwise the board reads backwards and somebody has
+  to drag them.
+- **Delegate every sub-issue *and* the epic** to the harness's app user. The
+  harness cannot delegate an issue to itself, so an undelegated piece is never
+  picked up no matter which column it reaches. Then put the epic in the build
+  column.
+- **Give each piece its own acceptance criteria**, and a *Demonstrated by* line
+  naming the command that proves it (`cargo test -p <crate>`, `bunx vitest run`).
+  The supervisor grades a piece against its own criteria and nothing else.
+- **Say what is out of scope**, especially work that belongs to a later piece.
+  Criteria that overlap the next piece produce a corrective for something not yet
+  due.
+- Two corrective rounds per piece, fifteen per epic, then it stops. Vague
+  criteria burn those rounds.
 
 ## What triggers a run by itself (Linear bindings)
 

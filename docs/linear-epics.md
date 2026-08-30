@@ -9,6 +9,37 @@ This page is about **setting that up**. For writing the workflows themselves see
 [authoring-workflows.md](authoring-workflows.md); for connecting a Linear
 account see [linear-connect.md](linear-connect.md).
 
+## When an epic is the wrong shape
+
+Most work is not an epic. `idea-to-pr` already explores, plans and decomposes
+inside one run — its plan step routinely produces ten numbered tasks with exact
+file paths, executed by a cheap model. Splitting the same work across sub-issues
+multiplies the cost rather than the quality: **each piece is a full pipeline**
+(explore, plan, implement, simplify, three review passes, verify) **plus a
+supervisor review**.
+
+An epic earns that when one of two things is true:
+
+1. **The work exceeds one run's coherence** — explore, plan, implement and review
+   share a single context, and past some size the plan stops being specific
+   enough to execute cheaply.
+2. **Later pieces depend on earlier ones being *right*, not merely done** — the
+   supervisor grades each piece with fresh context before the next starts, where
+   a single run's review sees the finished diff and a wrong early step has
+   already propagated.
+
+The test: *if you cannot say what would break if two pieces were built in the
+other order, it does not need to be an epic.*
+
+Independent work is a poor fit even when it is large. Several documentation
+pages, or unrelated fixes across a repo, gain nothing — the branch exists so
+piece N+1 starts from a tree containing 1..N, and independent work pays that
+sequential cost for no benefit. File those as separate issues and let them run
+in parallel.
+
+Good epic: a frontend where component B imports component A. Poor epic: a docs
+set, or three unrelated bug fixes.
+
 ## The relay
 
 Nothing in the harness "runs an epic". Bindings hand an issue from one column to
