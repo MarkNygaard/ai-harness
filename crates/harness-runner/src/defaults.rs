@@ -176,6 +176,41 @@ mod tests {
     /// `advance` must pass the piece — the supervise run's own claim was made
     /// from the column a *merged* piece rests in, and using that would move the
     /// next piece straight to Done. An earlier edit had these two swapped.
+    /// The finished epic's pull request lists its pieces in the order they were
+    /// built, which is the order they *completed*.
+    ///
+    /// Not `sortOrder`: Linear reassigns that when an issue moves between
+    /// columns, so by the time an epic finishes it describes where the cards
+    /// ended up on the board rather than what happened first. The first real
+    /// epic listed its three pieces in exactly reverse order because of it.
+    #[test]
+    fn the_epic_pull_request_lists_pieces_by_when_they_finished() {
+        let yaml = super::WORKFLOWS
+            .iter()
+            .find(|(name, _)| *name == "linear-epic-supervise")
+            .expect("bundled")
+            .1;
+        let wf = harness_dag::parse_workflow(yaml).expect("parses");
+        let advance = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "advance")
+            .and_then(|n| match &n.kind {
+                harness_dag::NodeKind::Bash(b) => Some(b.as_str()),
+                _ => None,
+            })
+            .expect("advance is a bash node");
+
+        assert!(
+            advance.contains("sort_by(.completed_at"),
+            "the epic PR must list pieces by completion"
+        );
+        assert!(
+            !advance.contains("sort_by(.sortOrder)"),
+            "sortOrder describes the board at the end, not the build order"
+        );
+    }
+
     #[test]
     fn the_supervisor_derives_the_build_column_in_both_places() {
         let yaml = super::WORKFLOWS

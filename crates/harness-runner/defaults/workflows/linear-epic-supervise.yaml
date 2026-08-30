@@ -388,10 +388,20 @@ nodes:
           {
             echo "Closes $context.output.epic_ident."
             echo
-            echo "Built one piece at a time, each reviewed against its own"
-            echo "acceptance criteria before the next began:"
+            echo "**This is the first review of the whole change.** Each piece"
+            echo "below was built on this branch and graded against its own"
+            echo "acceptance criteria before the next began, so what has *not*"
+            echo "been reviewed is how they fit together."
             echo
-            jq -r 'sort_by(.sortOrder) | .[] | "- \(.identifier)  \(.title)"' \
+            echo "Built in this order:"
+            echo
+            # By completion, not by `sortOrder`. Linear reassigns sortOrder
+            # when an issue moves between columns, so by the time an epic
+            # finishes it describes where the cards ended up rather than what
+            # happened first -- and the list came out reversed. A piece with
+            # no completion time (a cancelled corrective, say) sorts last
+            # rather than vanishing.
+            jq -r 'sort_by(.completed_at // "9999") | .[] | "- \(.identifier)  \(.title)"' \
               "$ARTIFACTS_DIR/siblings.json"
           } > "$body"
           pr="$(gh pr create --base "$default_branch" --head "$BASE_BRANCH" \
