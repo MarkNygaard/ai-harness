@@ -14,11 +14,16 @@ import { CliUpdateButton, Section } from "./parts";
  * answers is "can `provider: pi` run", and that needs the CLI *and* a
  * credential.
  *
- * `subscriptions` is a list because the two dimensions genuinely cross. `omp`
- * runs `kimi-code/*` on a Kimi plan and `openai-codex/gpt-5.5` on a ChatGPT
- * one, so one binary is backed by two accounts — and that same ChatGPT account
- * also backs the separate `codex` CLI. A row per provider showing one
- * subscription would have to pick one and be wrong about the other.
+ * `subscriptions` is a list because the two dimensions genuinely cross. Pi runs
+ * `kimi-code/*` on a Kimi plan and `openai-codex/gpt-5.5` on a ChatGPT one, so
+ * one agent is backed by two accounts — and that same ChatGPT account also
+ * backs the separate `codex` CLI. A row showing one subscription would have to
+ * pick a side and be wrong about the other.
+ *
+ * The label is **Pi**, not omp: `build_args` sends only plain Pi flags and the
+ * harness supplies its own `--plugin-dir`, so omp is the distribution it
+ * happens to be installed from, not the agent. The binary name still reaches
+ * the user through the CLI-missing status, which is where it matters.
  */
 export const AGENTS: {
   provider: string;
@@ -40,8 +45,8 @@ export const AGENTS: {
   },
   {
     provider: "pi",
-    label: "omp (Pi/Kimi)",
-    what: "Runs kimi-code/* on a Kimi plan, and openai-codex/* on a ChatGPT one — the model namespace picks which.",
+    label: "Pi",
+    what: "Runs kimi-code/* on a Kimi plan, and openai-codex/* on a ChatGPT one — the model namespace picks which. Installed as `omp`, a Pi distribution that ships the extensions the harness relies on.",
     subscriptions: [
       { credential: "pi", label: "Kimi-for-Coding" },
       { credential: "codex", label: "ChatGPT" },
@@ -118,7 +123,7 @@ function AgentRow({
   const health = useProviderHealth().data?.find(
     (h) => h.provider === agent.provider,
   );
-  // Any one of an agent's subscriptions is enough to run it: omp with only a
+  // Any one of an agent's subscriptions is enough to run it: Pi with only a
   // Kimi plan runs kimi-code/* perfectly well, and saying "not connected"
   // because ChatGPT is absent would be false.
   const backed = agent.subscriptions.some(

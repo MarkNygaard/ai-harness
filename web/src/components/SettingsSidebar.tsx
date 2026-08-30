@@ -101,7 +101,8 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
         href: "/settings/agents",
         label: "Agents",
         icon: IconRobot,
-        keywords: "claude code codex omp pi cursor cli version update provider",
+        keywords:
+          "claude code codex pi omp oh my pi cursor cli version update provider",
         adminOnly: true,
       },
       {

@@ -19,7 +19,7 @@ describe("the agent table", () => {
     ]);
   });
 
-  it("shows omp backed by both of the accounts that can run it", () => {
+  it("shows Pi backed by both of the accounts that can run it", () => {
     // The reason the page exists: omp runs kimi-code/* on a Kimi plan and
     // openai-codex/* on a ChatGPT one, so a single-subscription row would be
     // wrong about one of them.
