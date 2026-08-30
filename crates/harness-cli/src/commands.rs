@@ -95,6 +95,11 @@ pub enum LinearAction {
         #[arg(long)]
         issue: String,
     },
+    /// Give up an issue — clear its delegate so the poller stops offering it
+    Release {
+        #[arg(long)]
+        issue: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1579,6 +1584,7 @@ async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
         }
         LinearAction::Issue { issue } => harness_server::linear_cli::issue(&issue).await,
         LinearAction::Children { issue } => harness_server::linear_cli::children(&issue).await,
+        LinearAction::Release { issue } => harness_server::linear_cli::release(&issue).await,
     };
     out.map_err(|e| anyhow::anyhow!(e))
 }

@@ -1198,6 +1198,26 @@ impl LinearClient {
         expect_mutation_success(&self.post(body).await?, "issueUpdate")
     }
 
+    /// Give up an issue: clear its delegate (write).
+    ///
+    /// The poller selects on `delegate = the app user`, so this is what takes a
+    /// finished issue out of consideration for good. It exists because a
+    /// workflow that deliberately leaves an issue where it found it — the epic
+    /// supervisor grading a piece that is already `Done` — has no column move to
+    /// signal completion with, and the poller would otherwise re-pick it every
+    /// tick, forever. Six identical reviews of one merged piece is how that was
+    /// found.
+    ///
+    /// Delegation is how work arrives; releasing it is how the agent says it is
+    /// finished. A person can always delegate again, which is the retry.
+    pub async fn clear_delegate(&self, issue_id: &str) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!){ issueUpdate(id:$id, input:{delegateId:null}){ success } }",
+            "variables": { "id": issue_id },
+        });
+        expect_mutation_success(&self.post(body).await?, "issueUpdate")
+    }
+
     /// Add a comment to an issue (write).
     pub async fn add_comment(&self, issue_id: &str, body_md: &str) -> Result<(), LinearError> {
         let body = serde_json::json!({

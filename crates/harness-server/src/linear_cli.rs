@@ -136,6 +136,20 @@ pub async fn comment(issue_id: &str, body_md: &str) -> Result<String, String> {
     .await
 }
 
+/// Give up an issue — clear its delegate so the poller stops offering it.
+///
+/// What a workflow calls when it is done with an issue it left where it found
+/// it. Leaving the column is the poller's normal "finished" signal; a workflow
+/// that deliberately does not move the issue has to say so some other way, or
+/// it is handed the same issue every tick.
+pub async fn release(issue_id: &str) -> Result<String, String> {
+    ask(
+        "/api/run/linear/release",
+        &serde_json::json!({ "issue": issue_id }),
+    )
+    .await
+}
+
 /// One issue's context as JSON: identifier, team, state, parent, labels.
 pub async fn issue(issue_id: &str) -> Result<String, String> {
     ask(
