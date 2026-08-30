@@ -3,6 +3,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   IconArrowLeft,
   IconBinaryTree2,
+  IconRobot,
   IconFolderCog,
   IconKey,
   IconMail,
@@ -97,10 +98,25 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
         adminOnly: true,
       },
       {
-        href: "/settings/credentials",
-        label: "Credentials",
+        href: "/settings/agents",
+        label: "Agents",
+        icon: IconRobot,
+        keywords: "claude code codex omp pi cursor cli version update provider",
+        adminOnly: true,
+      },
+      {
+        href: "/settings/subscriptions",
+        label: "Subscriptions",
         icon: IconKey,
-        keywords: "claude codex cursor github linear token oauth api key",
+        keywords:
+          "claude chatgpt openai kimi cursor credentials token oauth api key billing usage",
+        adminOnly: true,
+      },
+      {
+        href: "/settings/integrations",
+        label: "Integrations",
+        icon: IconPlugConnected,
+        keywords: "github linear repo issue tracker oauth",
         adminOnly: true,
       },
     ],

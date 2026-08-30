@@ -9,7 +9,9 @@ import { WorkflowReportsPage } from "./routes/runs/WorkflowReportsPage";
 import { WorkflowEditor } from "./routes/editor/WorkflowEditor";
 import { WorkflowsList } from "./routes/editor/WorkflowsList";
 import { ProjectsPage } from "./routes/projects/ProjectsPage";
-import { CredentialsPage } from "./routes/credentials/CredentialsPage";
+import { AgentsPage } from "./routes/credentials/AgentsPage";
+import { SubscriptionsPage } from "./routes/credentials/SubscriptionsPage";
+import { IntegrationsPage } from "./routes/credentials/IntegrationsPage";
 import { CategoriesPage } from "./routes/categories/CategoriesPage";
 import { PreferencesPage } from "./routes/settings/PreferencesPage";
 import { EditorConnectionPage } from "./routes/settings/EditorConnectionPage";
@@ -72,7 +74,18 @@ export function App() {
           <Route path="/settings/members" element={<MembersPage />} />
           <Route path="/settings/email" element={<EmailPage />} />
           <Route path="/settings/sso" element={<SsoSettingsPage />} />
-          <Route path="/settings/credentials" element={<CredentialsPage />} />
+          <Route path="/settings/agents" element={<AgentsPage />} />
+          <Route
+            path="/settings/subscriptions"
+            element={<SubscriptionsPage />}
+          />
+          <Route path="/settings/integrations" element={<IntegrationsPage />} />
+          {/* The one page these three replaced. Bookmarks and the docs still
+              point at it. */}
+          <Route
+            path="/settings/credentials"
+            element={<Navigate to="/settings/subscriptions" replace />}
+          />
           <Route path="/settings/projects" element={<ProjectsPage />} />
           <Route path="/settings/workflows" element={<WorkflowsList />} />
           <Route path="/settings/categories" element={<CategoriesPage />} />
@@ -89,7 +102,7 @@ export function App() {
           />
           <Route
             path="/credentials"
-            element={<Navigate to="/settings/credentials" replace />}
+            element={<Navigate to="/settings/subscriptions" replace />}
           />
           <Route
             path="/categories"
