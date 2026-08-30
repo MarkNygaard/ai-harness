@@ -1,14 +1,19 @@
+/**
+ * The pieces the three credential pages are built from.
+ *
+ * Agents, Subscriptions and Integrations are three views over one credential
+ * store, so the rows, the connect flows and the provider table live here rather
+ * than being duplicated or owned by whichever page happened to come first.
+ */
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpCircle,
   Check,
   ExternalLink,
-  KeyRound,
   Loader2,
   Trash2,
 } from "lucide-react";
-import { SettingsShell } from "@/components/SettingsShell";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,7 +34,6 @@ import {
 import { LANE_FOR_CREDENTIAL } from "@/lib/billing";
 import {
   AddLinearConnection,
-  LinearCallbackBanner,
   LinearConnectionCard,
 } from "@/components/credentials/LinearConnect";
 import { useLinearConnections } from "@/lib/linear";
@@ -141,7 +145,7 @@ const PROVIDERS: ProviderDef[] = [
 ];
 
 /** Look up a field-based provider definition by id. */
-function providerDef(id: string): ProviderDef {
+export function providerDef(id: string): ProviderDef {
   const def = PROVIDERS.find((p) => p.id === id);
   if (!def) throw new Error(`no provider definition for \`${id}\``);
   return def;
@@ -151,123 +155,7 @@ function providerDef(id: string): ProviderDef {
 // expressed by the `usageCardProvider` passed per row below — it is exactly the
 // agent-provider group, which is why the page is grouped that way.
 
-export function CredentialsPage() {
-  const creds = useCredentials();
-  const configured = new Map(
-    (creds.data ?? []).map((c) => [c.provider, c.configured]),
-  );
-
-  return (
-    <SettingsShell title="Credentials">
-      <div className="mx-auto flex max-w-3xl flex-col gap-5 p-6">
-        <div>
-          <h1 className="flex items-center gap-2 text-lg font-semibold">
-            <KeyRound className="h-5 w-5 text-accent-orange" /> Provider
-            credentials
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Entered here, encrypted at rest in Postgres, and injected into the
-            agent environment at run time. Never stored in cluster secrets.
-            Values are write-only — they're never shown back.
-          </p>
-        </div>
-
-        {creds.isError && (
-          <p className="text-sm text-destructive">
-            Credentials unavailable: {creds.error.message} (is{" "}
-            <code>HARNESS_SECRET_KEY</code> set?)
-          </p>
-        )}
-
-        {/* Outcome of a returning Linear OAuth redirect, if any. */}
-        <LinearCallbackBanner />
-
-        {/* Agent backends: these run the workflow nodes, and are the ones with
-            a usage card and a billing lane. */}
-        <Section
-          title="Agent providers"
-          help="The CLIs that execute workflow nodes. Each node picks its provider and model."
-        >
-          <ProviderSummary
-            provider="claude"
-            label={providerDef("claude").label}
-            help={providerDef("claude").help}
-            configured={configured.get("claude") ?? false}
-            usageCardProvider="claude"
-          >
-            <ProviderCard
-              provider={providerDef("claude")}
-              configured={configured.get("claude") ?? false}
-            />
-          </ProviderSummary>
-          <ProviderSummary
-            provider="codex"
-            label="ChatGPT (Codex)"
-            help="Connect your ChatGPT/Codex subscription for gpt-5.5 review steps."
-            configured={configured.get("codex") ?? false}
-            usageCardProvider="codex"
-          >
-            <CodexConnectCard configured={configured.get("codex") ?? false} />
-          </ProviderSummary>
-          <ProviderSummary
-            provider="pi"
-            label="Kimi-for-Coding"
-            help="Connect your Kimi subscription for `provider: pi` nodes."
-            configured={configured.get("pi") ?? false}
-            usageCardProvider="pi"
-          >
-            <KimiConnectCard configured={configured.get("pi") ?? false} />
-          </ProviderSummary>
-          <ProviderSummary
-            provider="cursor"
-            label={providerDef("cursor").label}
-            help={providerDef("cursor").help}
-            configured={configured.get("cursor") ?? false}
-            usageCardProvider="cursor"
-          >
-            <ProviderCard
-              provider={providerDef("cursor")}
-              configured={configured.get("cursor") ?? false}
-            />
-          </ProviderSummary>
-        </Section>
-
-        {/* Where work comes from and where it goes. No usage card, no lane. */}
-        <Section
-          title="Integrations"
-          help="Where work comes from and where results land: the repos runs operate on, and the issue tracker that triggers them."
-        >
-          <ProviderSummary
-            provider="github"
-            label={providerDef("github").label}
-            help={providerDef("github").help}
-            configured={configured.get("github") ?? false}
-          >
-            <ProviderCard
-              provider={providerDef("github")}
-              configured={configured.get("github") ?? false}
-            />
-          </ProviderSummary>
-          <ProviderSummary
-            provider="linear"
-            label="Linear"
-            help="Connect each Linear account as an app so the harness's comments and status changes are authored by the app, not by a person. Projects pick which account their issues come from."
-            configured={configured.get("linear") ?? false}
-          >
-            <LinearAccounts />
-          </ProviderSummary>
-        </Section>
-      </div>
-    </SettingsShell>
-  );
-}
-
-/**
- * Every connected Linear account: its connection state, and the OAuth
- * application backing it. With one account this is the single card it has
- * always been.
- */
-function LinearAccounts() {
+export function LinearAccounts() {
   const connections = useLinearConnections();
   const list = connections.data ?? [];
   // Before the first account exists there is still the legacy row to configure,
@@ -334,7 +222,7 @@ function credentialKeyFor(id: string): string {
 }
 
 /** A titled group of provider rows, so agents and integrations read apart. */
-function Section({
+export function Section({
   title,
   help,
   children,
@@ -367,7 +255,7 @@ function Section({
  * the dashboard. Saves immediately (its own mutation, separate from the secret
  * form / connect flow) and the value reflects what's stored.
  */
-function UsageCardToggle({ provider }: { provider: string }) {
+export function UsageCardToggle({ provider }: { provider: string }) {
   const creds = useCredentials();
   const save = useSetCredential();
   const shown =
@@ -401,12 +289,13 @@ function UsageCardToggle({ provider }: { provider: string }) {
  * Everything else stays behind "Configure": the page is a list to scan, not a
  * form to fill.
  */
-function ProviderSummary({
+export function ProviderSummary({
   provider,
   label,
   help,
   configured,
   usageCardProvider,
+  credentialOnly,
   children,
 }: {
   /** Credential-store key — picks the brand mark and the CLI health entry. */
@@ -416,10 +305,21 @@ function ProviderSummary({
   configured: boolean;
   /** When set, render a "show usage card" toggle for this provider id. */
   usageCardProvider?: string;
+  /**
+   * Report the credential only, ignoring whether a CLI is installed.
+   *
+   * Subscriptions and Agents are two views over the same key, and merging CLI
+   * health into both means a missing binary is reported twice in different
+   * words. The Agents page is where "can this run" is answered; here the
+   * question is only whether the account is connected.
+   */
+  credentialOnly?: boolean;
   children: React.ReactNode;
 }) {
   const healthQuery = useProviderHealth();
-  const health = healthQuery.data?.find((h) => h.provider === provider);
+  const health = credentialOnly
+    ? undefined
+    : healthQuery.data?.find((h) => h.provider === provider);
   const {
     status,
     label: statusLabel,
@@ -431,19 +331,7 @@ function ProviderSummary({
       <div className="flex items-center gap-2">
         <ProviderMark provider={provider} status={status} label={statusLabel} />
         <span className="truncate text-sm font-medium">{label}</span>
-        {health?.version && (
-          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
-            v{health.version}
-          </span>
-        )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {health?.update_available && (
-            <CliUpdateButton
-              provider={provider}
-              label={label}
-              to={health.latest}
-            />
-          )}
           <Dialog>
             <DialogTrigger
               render={
@@ -487,7 +375,7 @@ function ProviderSummary({
  * Shown for any provider the server says has an update, which is any CLI it can
  * actually install -- Claude Code and Codex today.
  */
-function CliUpdateButton({
+export function CliUpdateButton({
   provider,
   label,
   to,
@@ -535,7 +423,7 @@ function CliUpdateButton({
 }
 
 /** Kimi-for-Coding device login: Connect → approve in browser → poll until done. */
-function KimiConnectCard({ configured }: { configured: boolean }) {
+export function KimiConnectCard({ configured }: { configured: boolean }) {
   const qc = useQueryClient();
   const [phase, setPhase] = useState<
     "idle" | "pending" | "connected" | "error"
@@ -663,7 +551,7 @@ function KimiConnectCard({ configured }: { configured: boolean }) {
  * → we exchange it for tokens. (PKCE, not device-code — device-code needs a
  * ChatGPT workspace setting many accounts don't have.)
  */
-function CodexConnectCard({ configured }: { configured: boolean }) {
+export function CodexConnectCard({ configured }: { configured: boolean }) {
   const qc = useQueryClient();
   const [phase, setPhase] = useState<
     "idle" | "await_paste" | "exchanging" | "connected" | "error"
@@ -785,7 +673,7 @@ function CodexConnectCard({ configured }: { configured: boolean }) {
   );
 }
 
-function ProviderCard({
+export function ProviderCard({
   provider,
   configured,
   credentialKey,
