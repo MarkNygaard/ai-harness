@@ -168,6 +168,58 @@ mod tests {
         assert!(default_command("nope").is_none());
     }
 
+    /// Both places that start a piece derive the column, and `advance` names the
+    /// piece it just reviewed.
+    ///
+    /// The distinction is the whole correctness of the derivation. `start-epic`
+    /// has no piece to ask about yet, so it falls back to the epic's own claim.
+    /// `advance` must pass the piece — the supervise run's own claim was made
+    /// from the column a *merged* piece rests in, and using that would move the
+    /// next piece straight to Done. An earlier edit had these two swapped.
+    #[test]
+    fn the_supervisor_derives_the_build_column_in_both_places() {
+        let yaml = super::WORKFLOWS
+            .iter()
+            .find(|(name, _)| *name == "linear-epic-supervise")
+            .expect("bundled")
+            .1;
+        let wf = harness_dag::parse_workflow(yaml).expect("parses");
+        let script = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .and_then(|n| match &n.kind {
+                    harness_dag::NodeKind::Bash(b) => Some(b.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{id} is a bash node"))
+        };
+
+        let start = script("start-epic");
+        assert!(
+            start.contains("harness linear ready-state"),
+            "start-epic must derive the column rather than require EPIC_READY_STATE"
+        );
+        assert!(
+            !start.contains("ready-state --issue"),
+            "start-epic has no piece to ask about; it uses the epic's own claim"
+        );
+
+        let advance = script("advance");
+        assert!(
+            advance.contains(r#"harness linear ready-state --issue "$ISSUE_ID""#),
+            "advance must ask about the piece it reviewed, not this run's claim"
+        );
+
+        // The override still works, in both.
+        for (id, body) in [("start-epic", &start), ("advance", &advance)] {
+            assert!(
+                body.contains("${EPIC_READY_STATE:-}"),
+                "{id} must still honour an explicit EPIC_READY_STATE"
+            );
+        }
+    }
+
     #[test]
     fn the_epic_supervisor_parses_and_branches_on_the_verdict() {
         let yaml = default_workflow("linear-epic-supervise").expect("registered");

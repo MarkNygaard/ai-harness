@@ -136,6 +136,20 @@ pub async fn comment(issue_id: &str, body_md: &str) -> Result<String, String> {
     .await
 }
 
+/// The column a piece must be moved to in order to be built.
+///
+/// Derived from the claims the poller already writes, so an epic needs no state
+/// id pasted into a project environment variable. `issue` names the piece whose
+/// build column to read; without it the answer comes from the asking run's own
+/// claim.
+pub async fn ready_state(issue_id: Option<&str>) -> Result<String, String> {
+    ask(
+        "/api/run/linear/ready-state",
+        &serde_json::json!({ "issue": issue_id }),
+    )
+    .await
+}
+
 /// Give up an issue — clear its delegate so the poller stops offering it.
 ///
 /// What a workflow calls when it is done with an issue it left where it found

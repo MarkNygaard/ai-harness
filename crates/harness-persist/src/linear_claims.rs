@@ -215,6 +215,38 @@ impl LinearClaimStore {
         Ok(row.0)
     }
 
+    /// The column an issue was last picked up from to be **built**, ignoring
+    /// claims made by `exclude_workflow`.
+    ///
+    /// This is what "where does a piece of an epic start" resolves to without
+    /// anybody configuring it. The poller records `original_state_id` on every
+    /// claim, so the column that triggers a build is a fact already written
+    /// down: for an epic it is where the epic itself was claimed from, and for a
+    /// merged piece it is where that piece was claimed from — the same binding
+    /// in both cases, because an epic and its pieces are picked up by one.
+    ///
+    /// `exclude_workflow` is the supervisor: it claims from the column a merged
+    /// piece rests in, which is where work *ends*, and returning that would send
+    /// the next piece straight to Done.
+    pub async fn build_state_for_issue(
+        &self,
+        issue_id: &str,
+        exclude_workflow: &str,
+    ) -> Result<Option<String>, PersistError> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT original_state_id
+             FROM harness_linear_claims
+             WHERE issue_id = $1 AND workflow <> $2 AND original_state_id <> ''
+             ORDER BY created_at DESC
+             LIMIT 1",
+        )
+        .bind(issue_id)
+        .bind(exclude_workflow)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
     /// Whether any claim already exists for this Linear **agent session** — the
     /// idempotency check for a redelivered `AgentSessionEvent`.
     ///
