@@ -371,6 +371,9 @@ function BindingForm({
   const [pieceReadyStateId, setPieceReadyStateId] = useState(
     source?.piece_ready_state_id ?? "",
   );
+  const [epicReviewStateId, setEpicReviewStateId] = useState(
+    source?.epic_review_state_id ?? "",
+  );
   const [baseBranch, setBaseBranch] = useState(source?.base_branch ?? "");
   const [pollIntervalSecs, setPollIntervalSecs] = useState(
     source?.poll_interval_secs ?? 60,
@@ -415,6 +418,7 @@ function BindingForm({
         review_state_id: reviewStateId.trim() || undefined,
         ready_state_id: readyStateId.trim() || undefined,
         piece_ready_state_id: pieceReadyStateId.trim() || undefined,
+        epic_review_state_id: epicReviewStateId.trim() || undefined,
         base_branch: baseBranch.trim() || undefined,
         poll_interval_secs: pollIntervalSecs,
         max_concurrent_runs: maxConcurrentRuns,
@@ -533,6 +537,21 @@ function BindingForm({
 
       {/* The exception, on its own row: it overrides one cell of the map above
           and only for a sub-issue of an epic. */}
+      <StateSelect
+        label="Ready (finished epic)"
+        value={epicReviewStateId}
+        onChange={setEpicReviewStateId}
+        options={sortedStates}
+        disabled={!teamId}
+        help={
+          <>
+            Where the <em>epic itself</em> goes once every piece is in and its
+            pull request is open — the point a person picks it up. Set this on
+            the <code>linear-epic-supervise</code> binding. Leave empty to leave
+            the epic where it is.
+          </>
+        }
+      />
       <StateSelect
         label="Ready (epic piece)"
         value={pieceReadyStateId}

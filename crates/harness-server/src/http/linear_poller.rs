@@ -1516,6 +1516,7 @@ mod tests {
             review_state_id: None,
             ready_state_id: ready.map(str::to_string),
             piece_ready_state_id: piece.map(str::to_string),
+            epic_review_state_id: None,
             base_branch: None,
             poll_interval_secs: 60,
             max_concurrent_runs: 1,

@@ -114,6 +114,49 @@ pub fn diagnose(bindings: &[LinearSource], states: &States) -> Vec<Finding> {
             });
         }
 
+        // The supervisor is the one binding whose ready targets are never
+        // read: the poller suppresses every state move for a supervise run, so
+        // an epic's columns stay the supervisor's own business. Warning that
+        // work would stall there would describe something that cannot happen.
+        if b.workflow == EPIC_SUPERVISOR {
+            for (slot, target) in [
+                ("Ready", b.ready_state_id.as_deref()),
+                ("Ready (epic piece)", b.piece_ready_state_id.as_deref()),
+            ] {
+                if let Some(target) = target {
+                    out.push(Finding {
+                        level: Level::Warn,
+                        workflow: wf.clone(),
+                        message: format!(
+                            "`{slot}` is set to {}, but the supervisor never moves the issue it                              ran for — this setting does nothing. To move the *finished epic*,                              set `Ready (finished epic)` instead.",
+                            name(states, target)
+                        ),
+                    });
+                }
+            }
+            // Where the finished epic goes is a hand-off to a person, so an
+            // unpolled column is the point rather than a problem.
+            if let Some(target) = b.epic_review_state_id.as_deref() {
+                let known = states.contains_key(target);
+                out.push(Finding {
+                    level: if known { Level::Ok } else { Level::Error },
+                    workflow: wf.clone(),
+                    message: if known {
+                        format!(
+                            "A finished epic moves to {} with its pull request open.",
+                            name(states, target)
+                        )
+                    } else {
+                        format!(
+                            "`Ready (finished epic)` points at a status that no longer exists on                              {} (id {target}).",
+                            b.team_name
+                        )
+                    },
+                });
+            }
+            continue;
+        }
+
         // Where a completed run leaves the issue, and who takes it from there.
         // A target nobody polls is the silent stall this whole check exists for.
         for (slot, target) in [
@@ -281,6 +324,7 @@ mod tests {
             review_state_id: None,
             ready_state_id: ready.map(str::to_string),
             piece_ready_state_id: None,
+            epic_review_state_id: None,
             base_branch: None,
             poll_interval_secs: 60,
             max_concurrent_runs: 1,
@@ -373,6 +417,45 @@ mod tests {
                 .any(|m| m.contains("no longer exists")),
             "{f:#?}"
         );
+    }
+
+    /// A ready status on the *supervisor's* binding does nothing, and saying it
+    /// would stall work describes something that cannot happen: the poller
+    /// suppresses every state move for a supervise run.
+    ///
+    /// Reported because someone reached for it expecting it to move the
+    /// finished epic — a reasonable thing to want, and now a field of its own.
+    #[test]
+    fn a_ready_status_on_the_supervisor_is_dead_config_not_a_stall() {
+        let mut sup = binding(EPIC_SUPERVISOR, "done", None);
+        sup.piece_ready_state_id = Some("ft".into());
+        let bindings = vec![binding("idea-to-pr", "todo", Some("done")), sup];
+        let f = diagnose(&bindings, &states());
+        let warns = messages(&f, Level::Warn);
+        assert!(
+            warns.iter().any(|m| m.contains("does nothing")),
+            "{warns:#?}"
+        );
+        assert!(
+            !warns.iter().any(|m| m.contains("silent stall")),
+            "the supervisor never moves the issue, so nothing parks there: {warns:#?}"
+        );
+    }
+
+    #[test]
+    fn a_finished_epic_says_where_it_goes() {
+        let mut sup = binding(EPIC_SUPERVISOR, "done", None);
+        sup.epic_review_state_id = Some("ft".into());
+        let bindings = vec![binding("idea-to-pr", "todo", Some("done")), sup];
+        let f = diagnose(&bindings, &states());
+        assert!(
+            messages(&f, Level::Ok)
+                .iter()
+                .any(|m| m.contains("finished epic moves to Functional testing")),
+            "{f:#?}"
+        );
+        // An unpolled column is the *point* here — a person takes over.
+        assert!(messages(&f, Level::Warn).is_empty(), "{f:#?}");
     }
 
     #[test]
