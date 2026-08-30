@@ -489,12 +489,7 @@ async fn start_delegated_run(
     // of an epic is built on the epic's branch so the feature accumulates
     // there; the supervisor reviewing a piece needs that same branch, or it
     // would grade a worktree without the code in it.
-    //
-    // Decided before the status move because an **epic's** column is the
-    // supervisor's to manage: this binding's state map describes a piece being
-    // built, and applying it to an epic marches it through the whole lifecycle
-    // and into whatever column the supervisor is bound to — which starts it
-    // again.
+
     let route = match event.issue_id.as_deref() {
         Some(id) => match route_issue(state, &client, &binding, id).await {
             Route::Supervise => (EPIC_SUPERVISOR.to_string(), binding.base_branch.clone()),
@@ -503,14 +498,13 @@ async fn start_delegated_run(
         },
         None => (binding.workflow.clone(), binding.base_branch.clone()),
     };
-    let supervising = route.0 == EPIC_SUPERVISOR;
-
+    // An epic leaves the trigger column like anything else — otherwise it stays
+    // delegated there and is picked up again on every tick. It is the rest of
+    // the lifecycle (ready, done) an epic must not inherit, and that is skipped
+    // at completion instead.
     if let (Some(issue_id), Some(in_progress)) = (
         event.issue_id.as_deref(),
-        binding
-            .in_progress_state_id
-            .as_deref()
-            .filter(|_| !supervising),
+        binding.in_progress_state_id.as_deref(),
     ) {
         if let Err(e) = client.set_issue_state(issue_id, in_progress).await {
             // Non-fatal: better to run the work than to refuse over a status move.
