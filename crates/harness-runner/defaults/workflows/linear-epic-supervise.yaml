@@ -70,8 +70,8 @@ nodes:
       issue="$ISSUE_ID"
       mkdir -p "$ARTIFACTS_DIR"
 
-      if [ -z "$issue" ] || [ -z "$project" ]; then
-        echo "linear-epic-supervise is triggered by a Linear binding; this run has no issue or project." >&2
+      if [ -z "$issue" ]; then
+        echo "linear-epic-supervise is triggered by a Linear binding; this run has no issue." >&2
         exit 1
       fi
 
