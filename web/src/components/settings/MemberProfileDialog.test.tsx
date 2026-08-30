@@ -50,14 +50,12 @@ describe("<MemberProfileDialog>", () => {
   });
 
   it("saves to PUT /api/users/{id} with a trimmed {name, email} body and closes", async () => {
-    const mock = vi
-      .fn()
-      .mockResolvedValue(
-        new Response(JSON.stringify({ ...USER, email: "grace@example.com" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        }),
-      );
+    const mock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ...USER, email: "grace@example.com" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
     global.fetch = mock as unknown as typeof fetch;
 
     renderWithClient(<MemberProfileDialog user={USER} disabled={false} />);
