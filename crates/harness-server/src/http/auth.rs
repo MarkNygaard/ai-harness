@@ -139,6 +139,16 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             // third party we cannot hand a bearer token; authenticated by the
             // `Linear-Signature` HMAC over the raw body (see `linear_agent`).
             | "/api/linear/webhook"
+            // What a workflow run asks of Linear. Exempt from *this* middleware
+            // because a run holds no session and no API token — it holds a
+            // grant scoped to its own project, which this middleware knows
+            // nothing about. Every one of these authenticates itself against
+            // that grant and refuses without one (see `run_grants`).
+            | "/api/run/linear/issue"
+            | "/api/run/linear/children"
+            | "/api/run/linear/sub-issue"
+            | "/api/run/linear/state"
+            | "/api/run/linear/comment"
             // MCP-over-HTTP. Exempt from *this* middleware so an editor holding
             // only the MCP key can reach it — a key this middleware knows
             // nothing about. `handle_mcp` then authenticates every request

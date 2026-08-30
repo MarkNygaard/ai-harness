@@ -68,7 +68,6 @@ nodes:
     bash: |
       set -uo pipefail
       issue="$ISSUE_ID"
-      project="$PROJECT"
       mkdir -p "$ARTIFACTS_DIR"
 
       if [ -z "$issue" ] || [ -z "$project" ]; then
@@ -76,7 +75,7 @@ nodes:
         exit 1
       fi
 
-      harness linear issue --project "$project" --issue "$issue" \
+      harness linear issue --issue "$issue" \
         > "$ARTIFACTS_DIR/piece.json" || exit 1
       parent="$(jq -r '.parent_id // empty' "$ARTIFACTS_DIR/piece.json")"
 
@@ -85,7 +84,7 @@ nodes:
         # No parent: either an epic that has just been handed over to be
         # started, or an ordinary issue that does not belong here at all. Its
         # own children are what tells them apart.
-        harness linear children --project "$project" --issue "$issue" \
+        harness linear children --issue "$issue" \
           > "$ARTIFACTS_DIR/children.json" || exit 1
         kids="$(jq 'length' "$ARTIFACTS_DIR/children.json")"
 
@@ -111,7 +110,7 @@ nodes:
         exit 0
       fi
 
-      harness linear children --project "$project" --issue "$parent" \
+      harness linear children --issue "$parent" \
         > "$ARTIFACTS_DIR/siblings.json" || exit 1
 
       me="$(jq -r --arg id "$issue" '.[] | select(.id == $id)' "$ARTIFACTS_DIR/siblings.json")"
@@ -161,7 +160,6 @@ nodes:
     when: "$context.output.mode == 'epic'"
     bash: |
       set -uo pipefail
-      project="$PROJECT"
       epic="$ISSUE_ID"
       first_id="$context.output.first_id"
       first_ident="$context.output.first_ident"
@@ -196,7 +194,7 @@ nodes:
           echo
           echo "_EPIC_READY_STATE is not set on this project, so start it by hand._"
         } > "$note"
-      elif harness linear move-state --project "$project" --issue "$first_id" --state "$ready"; then
+      elif harness linear move-state --issue "$first_id" --state "$ready"; then
         {
           echo "**Started $first_ident**, the first of $context.output.pieces pieces."
           echo
@@ -210,7 +208,7 @@ nodes:
         } > "$note"
       fi
 
-      harness linear comment --project "$project" --issue "$epic" --body-file "$note" \
+      harness linear comment --issue "$epic" --body-file "$note" \
         || echo "could not write the ledger comment; the state change stands" >&2
       cat "$note"
 
@@ -276,7 +274,6 @@ nodes:
     when: "$review.output.passed == 'true'"
     bash: |
       set -uo pipefail
-      project="$PROJECT"
       parent="$context.output.parent"
       next_id="$context.output.next_id"
       next_ident="$context.output.next_ident"
@@ -321,7 +318,7 @@ nodes:
         # the whole feature, and the one review that was never a piece.
         review_state="${EPIC_REVIEW_STATE:-}"
         if [ -n "$review_state" ]; then
-          harness linear move-state --project "$project" --issue "$parent" --state "$review_state" \
+          harness linear move-state --issue "$parent" --state "$review_state" \
             || echo "could not move the epic to EPIC_REVIEW_STATE" >&2
         fi
 
@@ -339,7 +336,7 @@ nodes:
           fi
         } > "$note"
       elif [ -n "$ready" ]; then
-        if harness linear move-state --project "$project" --issue "$next_id" --state "$ready"; then
+        if harness linear move-state --issue "$next_id" --state "$ready"; then
           started="started $next_ident"
         else
           started="could not start $next_ident — move it by hand"
@@ -359,7 +356,7 @@ nodes:
         } > "$note"
       fi
 
-      harness linear comment --project "$project" --issue "$parent" --body-file "$note" \
+      harness linear comment --issue "$parent" --body-file "$note" \
         || echo "could not write the ledger comment; the state change stands" >&2
       cat "$note"
 
@@ -370,7 +367,6 @@ nodes:
     when: "$review.output.passed != 'true'"
     bash: |
       set -uo pipefail
-      project="$PROJECT"
       parent="$context.output.parent"
       subject="$context.output.subject"
       rounds="$context.output.rounds"
@@ -396,10 +392,10 @@ nodes:
           echo
           echo "$review.output.shortfall"
         } > "$note"
-        harness linear comment --project "$project" --issue "$parent" --body-file "$note" || true
+        harness linear comment --issue "$parent" --body-file "$note" || true
         blocked="${EPIC_BLOCKED_STATE:-}"
         if [ -n "$blocked" ]; then
-          harness linear move-state --project "$project" --issue "$parent" --state "$blocked" \
+          harness linear move-state --issue "$parent" --state "$blocked" \
             || echo "could not move the epic to EPIC_BLOCKED_STATE" >&2
         fi
         cat "$note"
@@ -422,11 +418,11 @@ nodes:
 
       label="${EPIC_CORRECTIVE_LABEL:-}"
       if [ -n "$label" ]; then
-        out="$(harness linear create-sub-issue --project "$project" --parent "$parent" \
+        out="$(harness linear create-sub-issue --parent "$parent" \
           --title "Fix: $subject" --description-file "$body" --label "$label" 2>&1)" || {
             echo "could not file the corrective:" >&2; echo "$out" >&2; exit 1; }
       else
-        out="$(harness linear create-sub-issue --project "$project" --parent "$parent" \
+        out="$(harness linear create-sub-issue --parent "$parent" \
           --title "Fix: $subject" --description-file "$body" 2>&1)" || {
             echo "could not file the corrective:" >&2; echo "$out" >&2; exit 1; }
       fi
@@ -436,6 +432,6 @@ nodes:
         echo
         echo "$review.output.summary"
       } > "$note"
-      harness linear comment --project "$project" --issue "$parent" --body-file "$note" \
+      harness linear comment --issue "$parent" --body-file "$note" \
         || echo "could not write the ledger comment; the corrective is filed regardless" >&2
       cat "$note"

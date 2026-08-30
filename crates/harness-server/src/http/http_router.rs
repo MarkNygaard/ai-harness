@@ -8,8 +8,9 @@ use std::sync::Arc;
 use super::{
     auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
     github_sso, health_check, invites_routes, linear_agent, linear_connections, linear_oauth,
-    linear_routes, linear_source_routes, mcp_routes, oidc, password_reset, runs_routes,
-    settings_routes, state::AppState, system_routes, tokens_routes, users_routes, workflows_routes,
+    linear_routes, linear_source_routes, mcp_routes, oidc, password_reset, run_linear_routes,
+    runs_routes, settings_routes, state::AppState, system_routes, tokens_routes, users_routes,
+    workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -299,6 +300,21 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/projects/{project}/linear-issues",
             post(linear_source_routes::create_issue),
         )
+        // ── What a workflow run may ask of Linear ───────────────────────────
+        // Authenticated by the run's own grant, not by a session or an API
+        // token: a run holds a capability scoped to one project, never a
+        // credential. See `run_grants`.
+        .route("/api/run/linear/issue", post(run_linear_routes::issue))
+        .route(
+            "/api/run/linear/children",
+            post(run_linear_routes::children),
+        )
+        .route(
+            "/api/run/linear/sub-issue",
+            post(run_linear_routes::sub_issue),
+        )
+        .route("/api/run/linear/state", post(run_linear_routes::move_state))
+        .route("/api/run/linear/comment", post(run_linear_routes::comment))
         // ── Provider credentials (UI-managed, encrypted at rest) ────────────
         .route(
             "/api/credentials",

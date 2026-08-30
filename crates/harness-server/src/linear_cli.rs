@@ -4,171 +4,154 @@
 //! keep a ledger comment on the epic — from inside a run, which is a DAG of
 //! prompts and shell steps, not Rust.
 //!
-//! It goes through the harness rather than around it. A run never holds a
-//! Linear credential: it names a **project**, and this resolves that project to
-//! its connection and uses the same `actor=app` token the poller does. Two
-//! things follow from that, and both are the point:
+//! **A run never holds a credential.** It holds a *grant*: a token bound to one
+//! run and one project, handed to it in `HARNESS_RUN_TOKEN`. This asks the
+//! server to act, and the server — which does hold the credentials — decides
+//! whether to. Two things follow, and both are the point:
 //!
-//!   * **attribution** — every sub-issue and every ledger entry is authored by
-//!     the application, not by whoever's key happened to be lying around. An
-//!     orchestrator that writes for days must not read as a colleague;
-//!   * **one trusted path** — token refresh, connection resolution and the
-//!     app-actor rule are decided in exactly one place, which is already
-//!     written and already tested.
+//!   * **the blast radius is a project.** A grant recovered from a log buys the
+//!     five operations below on one project until it expires. The database URL
+//!     and encryption key it replaced would have bought every credential the
+//!     install holds — which is why `strip_control_plane_env` removes those at
+//!     every spawn point, and why putting them back was the wrong fix;
+//!   * **attribution.** The server writes as the `actor=app` install, so every
+//!     sub-issue and ledger entry is authored by the application rather than by
+//!     whoever's key was to hand.
 //!
-//! Reachable because runs execute in this container, where `/usr/local/bin/harness`
-//! is on `PATH` and the database is the one the server is using. That is why
-//! this is a subcommand rather than an HTTP endpoint: an endpoint would need a
-//! run-scoped credential invented, scoped, expired and revoked, to reach a
-//! process that is already inside the trust boundary.
-//!
-//! Deliberately narrow — file, move, comment, read. There is no delete, and no
-//! way to reach an issue outside the project's own workspace.
+//! The project is **not** sent: the server reads it from the grant. A run is
+//! never asked which project it is, so it cannot answer wrongly.
 
-use harness_persist::{CredentialStore, ProjectStore};
-use harness_sources::linear::{LinearClient, SubIssue};
+use serde::Serialize;
 
-use crate::http::linear_connections::resolve_with_stores;
-use crate::http::linear_oauth::client_for_store;
-
-/// Everything each command needs to reach Linear as the right workspace.
-struct Resolved {
-    client: LinearClient,
+/// Where to ask, and with what.
+#[derive(Debug)]
+struct Grant {
+    base: String,
+    token: String,
 }
 
-/// Connect the stores, resolve the project's workspace, build a client.
+/// Read the grant out of the environment.
+fn grant() -> Result<Grant, String> {
+    from_parts(
+        std::env::var("HARNESS_RUN_URL").ok(),
+        std::env::var("HARNESS_RUN_TOKEN").ok(),
+    )
+}
+
+/// Build a grant from what the environment offered.
 ///
-/// Errors are written for whoever is reading a failed run's log, since that is
-/// the only place they will be seen.
-async fn resolve(
-    database_url: &str,
-    secret_key_b64: &str,
-    project: &str,
-) -> Result<Resolved, String> {
-    let key = CredentialStore::key_from_base64(secret_key_b64)
-        .map_err(|e| format!("HARNESS_SECRET_KEY: {e}"))?;
-    let creds = CredentialStore::connect(database_url, key)
+/// Split from the environment read so it is testable without mutating process
+/// state. Both variables are set by the server when it starts a run; their
+/// absence means this is not running inside one, which is worth saying plainly
+/// because the command is otherwise indistinguishable from a mistyped one — and
+/// the message is read in a run log by somebody who did not write the workflow.
+fn from_parts(base: Option<String>, token: Option<String>) -> Result<Grant, String> {
+    let base = base.map(|b| b.trim().to_string()).filter(|b| !b.is_empty()).ok_or(
+        "HARNESS_RUN_URL is not set — `harness linear` runs inside a workflow run, and needs the harness's public URL (Settings -> General)",
+    )?;
+    let token = token
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .ok_or("HARNESS_RUN_TOKEN is not set — this is not a workflow run")?;
+    Ok(Grant {
+        // Trailing slash trimmed here rather than at every call site: the public
+        // URL is typed by a person, and half of them end it with one.
+        base: base.trim_end_matches('/').to_string(),
+        token,
+    })
+}
+
+/// POST one request, returning the body as text.
+///
+/// The server's error message is surfaced verbatim: it is written for whoever
+/// is reading a failed run's log, and that is the only place it will be seen.
+async fn ask<T: Serialize>(path: &str, body: &T) -> Result<String, String> {
+    let g = grant()?;
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("http client: {e}"))?;
+    let resp = client
+        .post(format!("{}{path}", g.base))
+        .bearer_auth(&g.token)
+        .json(body)
+        .send()
         .await
-        .map_err(|e| format!("could not reach the credential store: {e}"))?;
-    let projects = ProjectStore::connect(database_url)
+        .map_err(|e| format!("could not reach the harness at {}: {e}", g.base))?;
+
+    let status = resp.status();
+    let text = resp
+        .text()
         .await
-        .map_err(|e| format!("could not reach the database: {e}"))?;
-    let conn = resolve_with_stores(&creds, &projects, project).await?;
-    let client = client_for_store(&creds, &conn).await?;
-    Ok(Resolved { client })
+        .map_err(|e| format!("could not read the response: {e}"))?;
+    if status.is_success() {
+        return Ok(text);
+    }
+    let detail = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+        .unwrap_or(text);
+    Err(format!("{status}: {detail}"))
 }
 
 /// File a sub-issue under `parent`, in the parent's team.
-///
-/// The team is read from the parent rather than passed in: a sub-issue of an
-/// epic belongs to that epic's team by definition, and letting a run name a
-/// team would let a typo scatter an epic across a workspace.
 pub async fn create_sub_issue(
-    database_url: &str,
-    secret_key_b64: &str,
-    project: &str,
     parent_id: &str,
     title: &str,
     description: &str,
     state_id: Option<&str>,
     label_ids: &[String],
 ) -> Result<String, String> {
-    let r = resolve(database_url, secret_key_b64, project).await?;
-    let team_id = r
-        .client
-        .issue_context(parent_id)
-        .await
-        .map_err(|e| format!("could not read the parent issue: {e}"))?
-        .team_id
-        .ok_or("that parent issue does not resolve — check the id")?;
-    let issue = r
-        .client
-        .create_issue(
-            &team_id,
-            title,
-            description,
-            state_id,
-            label_ids,
-            Some(parent_id),
-        )
-        .await
-        .map_err(|e| format!("could not file the sub-issue: {e}"))?;
-    Ok(format!("{} {}", issue.identifier, issue.url))
+    ask(
+        "/api/run/linear/sub-issue",
+        &serde_json::json!({
+            "parent": parent_id,
+            "title": title,
+            "description": description,
+            "state": state_id,
+            "labels": label_ids,
+        }),
+    )
+    .await
 }
 
 /// Move an issue to a workflow state — how a piece advances a column.
-pub async fn move_state(
-    database_url: &str,
-    secret_key_b64: &str,
-    project: &str,
-    issue_id: &str,
-    state_id: &str,
-) -> Result<String, String> {
-    let r = resolve(database_url, secret_key_b64, project).await?;
-    r.client
-        .set_issue_state(issue_id, state_id)
-        .await
-        .map_err(|e| format!("could not move the issue: {e}"))?;
-    Ok(format!("moved {issue_id}"))
+pub async fn move_state(issue_id: &str, state_id: &str) -> Result<String, String> {
+    ask(
+        "/api/run/linear/state",
+        &serde_json::json!({ "issue": issue_id, "state": state_id }),
+    )
+    .await
 }
 
 /// Append to an issue — the epic ledger is comments on the epic.
-pub async fn comment(
-    database_url: &str,
-    secret_key_b64: &str,
-    project: &str,
-    issue_id: &str,
-    body_md: &str,
-) -> Result<String, String> {
+pub async fn comment(issue_id: &str, body_md: &str) -> Result<String, String> {
     if body_md.trim().is_empty() {
         return Err("refusing to post an empty comment".to_string());
     }
-    let r = resolve(database_url, secret_key_b64, project).await?;
-    r.client
-        .add_comment(issue_id, body_md)
-        .await
-        .map_err(|e| format!("could not comment: {e}"))?;
-    Ok(format!("commented on {issue_id}"))
+    ask(
+        "/api/run/linear/comment",
+        &serde_json::json!({ "issue": issue_id, "body": body_md }),
+    )
+    .await
 }
 
-/// One issue's context as JSON: team, state, parent, labels.
-///
-/// The supervisor fires on a sub-issue and needs the epic above it — to count
-/// what else is under it, and to file a corrective beside it. `children` only
-/// goes downward, so this is the other direction.
-pub async fn issue(
-    database_url: &str,
-    secret_key_b64: &str,
-    project: &str,
-    issue_id: &str,
-) -> Result<String, String> {
-    let r = resolve(database_url, secret_key_b64, project).await?;
-    let ctx = r
-        .client
-        .issue_context(issue_id)
-        .await
-        .map_err(|e| format!("could not read the issue: {e}"))?;
-    serde_json::to_string_pretty(&ctx).map_err(|e| format!("could not encode the result: {e}"))
+/// One issue's context as JSON: identifier, team, state, parent, labels.
+pub async fn issue(issue_id: &str) -> Result<String, String> {
+    ask(
+        "/api/run/linear/issue",
+        &serde_json::json!({ "issue": issue_id }),
+    )
+    .await
 }
 
-/// An epic's sub-issues as JSON on stdout, in board order.
-///
-/// JSON because the caller is a workflow step that has to branch on it — which
-/// piece is next, which are done — and a `jq` expression against a stable shape
-/// beats parsing prose.
-pub async fn children(
-    database_url: &str,
-    secret_key_b64: &str,
-    project: &str,
-    issue_id: &str,
-) -> Result<String, String> {
-    let r = resolve(database_url, secret_key_b64, project).await?;
-    let kids: Vec<SubIssue> = r
-        .client
-        .list_children(issue_id)
-        .await
-        .map_err(|e| format!("could not read the epic's sub-issues: {e}"))?;
-    serde_json::to_string_pretty(&kids).map_err(|e| format!("could not encode the result: {e}"))
+/// An epic's sub-issues as JSON, in board order.
+pub async fn children(issue_id: &str) -> Result<String, String> {
+    ask(
+        "/api/run/linear/children",
+        &serde_json::json!({ "issue": issue_id }),
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -177,14 +160,38 @@ mod tests {
 
     #[tokio::test]
     async fn an_empty_ledger_entry_is_refused_before_anything_is_reached() {
-        // The guard is deliberately ahead of `resolve`: a workflow step that
-        // produced nothing must fail loudly rather than post a blank comment on
-        // an epic, and it must not need a database to say so.
+        // Ahead of the network: a step that produced nothing must fail loudly
+        // rather than post a blank comment on an epic, and it must not need a
+        // server to say so.
         for blank in ["", "   ", "\n\t "] {
-            let err = comment("postgres://unused", "unused", "p", "issue", blank)
-                .await
-                .unwrap_err();
+            let err = comment("issue", blank).await.unwrap_err();
             assert!(err.contains("empty"), "{err}");
         }
+    }
+
+    #[test]
+    fn a_missing_grant_says_this_is_not_a_run() {
+        let err = from_parts(None, None).unwrap_err();
+        assert!(err.contains("HARNESS_RUN_URL"), "{err}");
+        let err = from_parts(Some("https://h.test".into()), None).unwrap_err();
+        assert!(err.contains("HARNESS_RUN_TOKEN"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_variable_is_the_same_as_an_absent_one() {
+        // A container that sets these to "" is a configuration mistake, not a
+        // grant, and must not produce a request to `https:///…`.
+        assert!(from_parts(Some("  ".into()), Some("t".into())).is_err());
+        assert!(from_parts(Some("https://h.test".into()), Some("".into())).is_err());
+    }
+
+    #[test]
+    fn a_trailing_slash_does_not_double_up() {
+        let g = from_parts(
+            Some("https://harness.example/".into()),
+            Some("hrn_run_abc".into()),
+        )
+        .unwrap();
+        assert_eq!(g.base, "https://harness.example");
     }
 }

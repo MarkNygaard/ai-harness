@@ -42,15 +42,14 @@ pub enum AdminAction {
 
 /// What a workflow run may do to Linear.
 ///
-/// Every action names a **project**, never a workspace or a token: the project
-/// resolves to its Linear connection exactly as the poller's would, so an
-/// epic's sub-issues cannot land in a workspace its build runs never watch.
+/// No action names a project, a workspace or a token. The run's grant says
+/// which project it speaks for, and the server resolves that to a connection
+/// exactly as the poller would — so an epic's sub-issues cannot land in a
+/// workspace its build runs never watch, and a run cannot name somebody else's.
 #[derive(Subcommand)]
 pub enum LinearAction {
     /// File a sub-issue under an epic, in the epic's own team
     CreateSubIssue {
-        #[arg(long)]
-        project: String,
         /// The epic's Linear id (not its `AIH-12` identifier)
         #[arg(long)]
         parent: String,
@@ -73,16 +72,12 @@ pub enum LinearAction {
     /// Move an issue to a workflow state
     MoveState {
         #[arg(long)]
-        project: String,
-        #[arg(long)]
         issue: String,
         #[arg(long)]
         state: String,
     },
     /// Comment on an issue — the epic ledger
     Comment {
-        #[arg(long)]
-        project: String,
         #[arg(long)]
         issue: String,
         #[arg(long, conflicts_with = "body_file")]
@@ -93,14 +88,10 @@ pub enum LinearAction {
     /// Print one issue's team, state, parent and labels as JSON
     Issue {
         #[arg(long)]
-        project: String,
-        #[arg(long)]
         issue: String,
     },
     /// Print an epic's sub-issues as JSON, in board order
     Children {
-        #[arg(long)]
-        project: String,
         #[arg(long)]
         issue: String,
     },
@@ -662,20 +653,9 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             println!("{message}");
         }
         Command::Linear { action } => {
-            let Some(db) = config.server.database_url.clone() else {
-                anyhow::bail!(
-                    "no database configured — set server.database_url or HARNESS_DATABASE_URL"
-                );
-            };
-            // The same key the server decrypts credentials with. Checked for
-            // presence here so the failure names the missing variable rather
-            // than surfacing as a decode error four calls down.
-            let Ok(key) = std::env::var("HARNESS_SECRET_KEY") else {
-                anyhow::bail!(
-                    "HARNESS_SECRET_KEY is not set — it is what decrypts the Linear credential"
-                );
-            };
-            let message = run_linear_action(&db, &key, action).await?;
+            // No database, no key: the run's grant is the authentication, and
+            // the server holds the credentials. See `harness_server::linear_cli`.
+            let message = run_linear_action(action).await?;
             println!("{message}");
         }
         Command::Serve {
@@ -1566,10 +1546,9 @@ mod tests {
 /// inline or from a file, because a planning step writes acceptance criteria to
 /// an artifact and passing that through a shell argument would be an escaping
 /// bug waiting to happen.
-async fn run_linear_action(db: &str, key: &str, action: LinearAction) -> anyhow::Result<String> {
+async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
     let out = match action {
         LinearAction::CreateSubIssue {
-            project,
             parent,
             title,
             description,
@@ -1579,9 +1558,6 @@ async fn run_linear_action(db: &str, key: &str, action: LinearAction) -> anyhow:
         } => {
             let body = markdown_arg(description, description_file, "description")?;
             harness_server::linear_cli::create_sub_issue(
-                db,
-                key,
-                &project,
                 &parent,
                 &title,
                 &body,
@@ -1590,26 +1566,19 @@ async fn run_linear_action(db: &str, key: &str, action: LinearAction) -> anyhow:
             )
             .await
         }
-        LinearAction::MoveState {
-            project,
-            issue,
-            state,
-        } => harness_server::linear_cli::move_state(db, key, &project, &issue, &state).await,
+        LinearAction::MoveState { issue, state } => {
+            harness_server::linear_cli::move_state(&issue, &state).await
+        }
         LinearAction::Comment {
-            project,
             issue,
             body,
             body_file,
         } => {
             let md = markdown_arg(body, body_file, "body")?;
-            harness_server::linear_cli::comment(db, key, &project, &issue, &md).await
+            harness_server::linear_cli::comment(&issue, &md).await
         }
-        LinearAction::Issue { project, issue } => {
-            harness_server::linear_cli::issue(db, key, &project, &issue).await
-        }
-        LinearAction::Children { project, issue } => {
-            harness_server::linear_cli::children(db, key, &project, &issue).await
-        }
+        LinearAction::Issue { issue } => harness_server::linear_cli::issue(&issue).await,
+        LinearAction::Children { issue } => harness_server::linear_cli::children(&issue).await,
     };
     out.map_err(|e| anyhow::anyhow!(e))
 }
