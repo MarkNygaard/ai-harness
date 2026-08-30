@@ -55,6 +55,7 @@ function StateSelect({
   options,
   disabled,
   placeholder = "(none)",
+  help,
 }: {
   label: string;
   value: string;
@@ -62,6 +63,8 @@ function StateSelect({
   options: LinearState[];
   disabled?: boolean;
   placeholder?: string;
+  /** Shown under the control, for a status whose purpose is not obvious. */
+  help?: React.ReactNode;
 }) {
   return (
     <Field label={label}>
@@ -78,6 +81,9 @@ function StateSelect({
           </option>
         ))}
       </select>
+      {help && (
+        <span className="text-[10px] text-muted-foreground">{help}</span>
+      )}
     </Field>
   );
 }
@@ -362,6 +368,9 @@ function BindingForm({
   const [readyStateId, setReadyStateId] = useState(
     source?.ready_state_id ?? "",
   );
+  const [pieceReadyStateId, setPieceReadyStateId] = useState(
+    source?.piece_ready_state_id ?? "",
+  );
   const [baseBranch, setBaseBranch] = useState(source?.base_branch ?? "");
   const [pollIntervalSecs, setPollIntervalSecs] = useState(
     source?.poll_interval_secs ?? 60,
@@ -405,6 +414,7 @@ function BindingForm({
         in_progress_state_id: inProgressStateId.trim() || undefined,
         review_state_id: reviewStateId.trim() || undefined,
         ready_state_id: readyStateId.trim() || undefined,
+        piece_ready_state_id: pieceReadyStateId.trim() || undefined,
         base_branch: baseBranch.trim() || undefined,
         poll_interval_secs: pollIntervalSecs,
         max_concurrent_runs: maxConcurrentRuns,
@@ -520,6 +530,25 @@ function BindingForm({
           disabled={!teamId}
         />
       </div>
+
+      {/* The exception, on its own row: it overrides one cell of the map above
+          and only for a sub-issue of an epic. */}
+      <StateSelect
+        label="Ready (epic piece)"
+        value={pieceReadyStateId}
+        onChange={setPieceReadyStateId}
+        options={sortedStates}
+        disabled={!teamId}
+        help={
+          <>
+            Where a sub-issue of an epic goes instead of <em>Ready</em>, so
+            pieces merge straight into the epic branch while standalone issues
+            stop at a human gate. The feature is still reviewed once, when the
+            finished epic becomes a single pull request. Leave empty to treat
+            both the same.
+          </>
+        }
+      />
 
       {/* Base branch, poll interval & concurrency cap */}
       <div className="grid grid-cols-3 gap-2">

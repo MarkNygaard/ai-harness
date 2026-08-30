@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS harness_linear_sources (
     in_progress_state_id text,
     review_state_id      text,
     ready_state_id       text,
+    piece_ready_state_id text,
     base_branch          text,
     poll_interval_secs   integer NOT NULL DEFAULT 60,
     max_concurrent_runs  integer NOT NULL DEFAULT 1,
@@ -57,6 +58,23 @@ const ALTER_LINEAR_SOURCES_MAX_ATTEMPTS: &str = "ALTER TABLE harness_linear_sour
 const ALTER_LINEAR_SOURCES_FAILED_LABEL: &str =
     "ALTER TABLE harness_linear_sources ADD COLUMN IF NOT EXISTS failed_label text";
 
+/// Where a **piece of an epic** goes when its run completes, when that differs
+/// from `ready_state_id`.
+///
+/// The two want different things. A standalone issue is finished work heading
+/// for the default branch, so it stops at whatever human gate the team keeps --
+/// functional testing, code review. A piece of an epic is heading for the
+/// epic's own integration branch, where the supervisor grades it and files a
+/// corrective if it falls short, and nothing reaches the default branch until
+/// the whole epic arrives as one reviewed pull request. Stopping each piece at
+/// the same gate reviews the same feature N times and puts a human back in a
+/// loop the epic exists to remove.
+///
+/// `NULL` (default) means "same as `ready_state_id`", so nothing changes for a
+/// binding that never mentions it.
+const ALTER_LINEAR_SOURCES_PIECE_READY_STATE: &str =
+    "ALTER TABLE harness_linear_sources ADD COLUMN IF NOT EXISTS piece_ready_state_id text";
+
 /// A persisted Linear trigger binding (matches `harness_linear_sources`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LinearSource {
@@ -71,6 +89,9 @@ pub struct LinearSource {
     pub in_progress_state_id: Option<String>,
     pub review_state_id: Option<String>,
     pub ready_state_id: Option<String>,
+    /// Where an epic's piece goes instead; `None` means the same as
+    /// [`Self::ready_state_id`].
+    pub piece_ready_state_id: Option<String>,
     pub base_branch: Option<String>,
     pub poll_interval_secs: i32,
     /// How many runs this binding may have active at once (claims with
@@ -97,6 +118,7 @@ pub struct LinearSourceInput {
     pub in_progress_state_id: Option<String>,
     pub review_state_id: Option<String>,
     pub ready_state_id: Option<String>,
+    pub piece_ready_state_id: Option<String>,
     pub base_branch: Option<String>,
     pub poll_interval_secs: i32,
     pub max_concurrent_runs: i32,
@@ -135,6 +157,9 @@ impl LinearSourceStore {
         sqlx::query(ALTER_LINEAR_SOURCES_FAILED_LABEL)
             .execute(&pool)
             .await?;
+        sqlx::query(ALTER_LINEAR_SOURCES_PIECE_READY_STATE)
+            .execute(&pool)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -146,7 +171,7 @@ impl LinearSourceStore {
     ) -> Result<Option<LinearSource>, PersistError> {
         let row = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
-                    in_progress_state_id, review_state_id, ready_state_id, base_branch,
+                    in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, base_branch,
                     poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
              FROM harness_linear_sources
              WHERE project = $1 AND workflow = $2",
@@ -162,7 +187,7 @@ impl LinearSourceStore {
     pub async fn list_by_project(&self, project: &str) -> Result<Vec<LinearSource>, PersistError> {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
-                    in_progress_state_id, review_state_id, ready_state_id, base_branch,
+                    in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, base_branch,
                     poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
              FROM harness_linear_sources
              WHERE project = $1
@@ -178,7 +203,7 @@ impl LinearSourceStore {
     pub async fn list_enabled(&self) -> Result<Vec<LinearSource>, PersistError> {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
-                    in_progress_state_id, review_state_id, ready_state_id, base_branch,
+                    in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, base_branch,
                     poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
              FROM harness_linear_sources
              WHERE enabled = true
@@ -198,7 +223,7 @@ impl LinearSourceStore {
     pub async fn list_all(&self) -> Result<Vec<LinearSource>, PersistError> {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
-                    in_progress_state_id, review_state_id, ready_state_id, base_branch,
+                    in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, base_branch,
                     poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
              FROM harness_linear_sources
              ORDER BY project, workflow",
@@ -220,9 +245,9 @@ impl LinearSourceStore {
             "INSERT INTO harness_linear_sources (
                 project, workflow, team_id, team_name, source_state_id,
                 failed_label, in_progress_state_id, review_state_id, ready_state_id,
-                base_branch, poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live,
+                piece_ready_state_id, base_branch, poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live,
                 created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), now())
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, now(), now())
             ON CONFLICT (project, workflow) DO UPDATE SET
                 team_id              = excluded.team_id,
                 team_name            = excluded.team_name,
@@ -231,6 +256,7 @@ impl LinearSourceStore {
                 in_progress_state_id = excluded.in_progress_state_id,
                 review_state_id      = excluded.review_state_id,
                 ready_state_id       = excluded.ready_state_id,
+                piece_ready_state_id = excluded.piece_ready_state_id,
                 base_branch          = excluded.base_branch,
                 poll_interval_secs   = excluded.poll_interval_secs,
                 max_concurrent_runs  = excluded.max_concurrent_runs,
@@ -239,7 +265,7 @@ impl LinearSourceStore {
                 live                 = excluded.live,
                 updated_at           = now()
             RETURNING project, workflow, team_id, team_name, source_state_id, failed_label,
-                      in_progress_state_id, review_state_id, ready_state_id, base_branch,
+                      in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, base_branch,
                       poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at",
         )
         .bind(project)
@@ -251,6 +277,7 @@ impl LinearSourceStore {
         .bind(input.in_progress_state_id.as_deref())
         .bind(input.review_state_id.as_deref())
         .bind(input.ready_state_id.as_deref())
+        .bind(input.piece_ready_state_id.as_deref())
         .bind(input.base_branch.as_deref())
         .bind(input.poll_interval_secs)
         .bind(input.max_concurrent_runs)
@@ -304,6 +331,7 @@ mod tests {
             in_progress_state_id: None,
             review_state_id: None,
             ready_state_id: None,
+            piece_ready_state_id: None,
             base_branch: Some("main".into()),
             poll_interval_secs: 120,
             max_concurrent_runs: 1,
@@ -340,6 +368,7 @@ mod tests {
             in_progress_state_id: Some("inprog".into()),
             review_state_id: Some("review".into()),
             ready_state_id: Some("ready".into()),
+            piece_ready_state_id: None,
             base_branch: None,
             poll_interval_secs: 30,
             max_concurrent_runs: 3,

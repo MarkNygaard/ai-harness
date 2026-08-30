@@ -61,6 +61,10 @@ pub struct PutSourceBody {
     pub in_progress_state_id: Option<String>,
     pub review_state_id: Option<String>,
     pub ready_state_id: Option<String>,
+    /// Where a **piece of an epic** goes instead, when its run completes.
+    /// `None`/empty means the same as `ready_state_id`, which is how every
+    /// binding behaved before this existed.
+    pub piece_ready_state_id: Option<String>,
     pub base_branch: Option<String>,
     #[serde(default = "default_poll")]
     pub poll_interval_secs: i32,
@@ -271,6 +275,7 @@ pub async fn put_source(
         ("in_progress_state_id", &body.in_progress_state_id),
         ("review_state_id", &body.review_state_id),
         ("ready_state_id", &body.ready_state_id),
+        ("piece_ready_state_id", &body.piece_ready_state_id),
     ] {
         if st.as_deref().map(str::trim) == Some(source_state_id.as_str()) {
             return err(
@@ -299,6 +304,7 @@ pub async fn put_source(
         in_progress_state_id: optional_trimmed_non_empty(body.in_progress_state_id),
         review_state_id: optional_trimmed_non_empty(body.review_state_id),
         ready_state_id: optional_trimmed_non_empty(body.ready_state_id),
+        piece_ready_state_id: optional_trimmed_non_empty(body.piece_ready_state_id),
         base_branch: optional_trimmed_non_empty(body.base_branch),
         poll_interval_secs: body.poll_interval_secs,
         max_concurrent_runs: body.max_concurrent_runs,
