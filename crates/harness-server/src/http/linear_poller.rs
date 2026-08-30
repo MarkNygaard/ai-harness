@@ -425,17 +425,16 @@ async fn claim_and_fire(
         return; // nothing eligible (or all eligible issues exhausted retries)
     };
 
-    // An epic's column is the supervisor's to manage, not this binding's. The
-    // binding's state map describes a piece being built — in progress, in
-    // review, ready to merge — and applying it to an epic marched AIH-22
-    // through the whole lifecycle into Done, where the supervisor is bound, and
-    // round again.
     let route = super::linear_agent::route_issue(state, client, b, &issue.id).await;
-    let supervising = matches!(route, super::linear_agent::Route::Supervise);
 
     // Move to In Progress first — this is also the claim signal (it leaves the
     // source column, so the next poll won't re-pick it).
-    if let Some(in_progress) = b.in_progress_state_id.as_ref().filter(|_| !supervising) {
+    //
+    // An epic needs this as much as a piece does, and for the same reason: it
+    // stays delegated and stays in the trigger column otherwise, and the poller
+    // picks it up again every tick. What an epic must *not* inherit is the rest
+    // of the binding's lifecycle — ready, done — which is handled at completion.
+    if let Some(in_progress) = &b.in_progress_state_id {
         if let Err(e) = client.set_issue_state(&issue.id, in_progress).await {
             tracing::warn!(
                 "linear poller: {}/{} — failed to move {} to In Progress: {}",
