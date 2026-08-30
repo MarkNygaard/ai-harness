@@ -425,9 +425,17 @@ async fn claim_and_fire(
         return; // nothing eligible (or all eligible issues exhausted retries)
     };
 
+    // An epic's column is the supervisor's to manage, not this binding's. The
+    // binding's state map describes a piece being built — in progress, in
+    // review, ready to merge — and applying it to an epic marched AIH-22
+    // through the whole lifecycle into Done, where the supervisor is bound, and
+    // round again.
+    let route = super::linear_agent::route_issue(state, client, b, &issue.id).await;
+    let supervising = matches!(route, super::linear_agent::Route::Supervise);
+
     // Move to In Progress first — this is also the claim signal (it leaves the
     // source column, so the next poll won't re-pick it).
-    if let Some(in_progress) = &b.in_progress_state_id {
+    if let Some(in_progress) = b.in_progress_state_id.as_ref().filter(|_| !supervising) {
         if let Err(e) = client.set_issue_state(&issue.id, in_progress).await {
             tracing::warn!(
                 "linear poller: {}/{} — failed to move {} to In Progress: {}",
@@ -452,7 +460,6 @@ async fn claim_and_fire(
     });
     // An epic's pieces build on the epic's branch, not on the binding's base:
     // the feature accumulates in one place and `main` is left alone.
-    let route = super::linear_agent::route_issue(state, client, b, &issue.id).await;
     let (workflow, base_branch) = match &route {
         super::linear_agent::Route::Supervise => (
             super::linear_agent::EPIC_SUPERVISOR.to_string(),
@@ -731,7 +738,14 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
 
         match detail.run.status.as_str() {
             "completed" => {
-                let ready = binding.as_ref().and_then(|b| b.ready_state_id.as_deref());
+                // A supervise run does not move the issue it ran for: an epic's
+                // column is the supervisor's own business, and a piece it
+                // reviewed is already where it belongs.
+                let supervising = detail.run.workflow_name == super::linear_agent::EPIC_SUPERVISOR;
+                let ready = binding
+                    .as_ref()
+                    .and_then(|b| b.ready_state_id.as_deref())
+                    .filter(|_| !supervising);
                 let moved = match ready {
                     Some(ready) => {
                         transition(&client, &c.identifier, &c.issue_id, ready, "ready").await

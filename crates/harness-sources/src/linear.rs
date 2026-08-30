@@ -99,6 +99,12 @@ pub struct SubIssue {
     pub state_id: String,
     /// Workflow state name, e.g. `Queued`.
     pub state: String,
+    /// Linear's own category for that state: `backlog`, `unstarted`, `started`,
+    /// `completed` or `canceled`.
+    ///
+    /// What makes "which piece has not begun" answerable without configuration.
+    /// A name is whatever somebody typed; the type is what Linear means by it.
+    pub state_type: String,
     pub labels: Vec<String>,
     /// Linear's own ordering within the parent. Ascending is board order.
     pub sort_order: f64,
@@ -218,6 +224,8 @@ struct ChildNode {
 struct ChildStateNode {
     id: String,
     name: String,
+    #[serde(rename = "type", default)]
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -351,7 +359,7 @@ query Children($id: String!) {
     children(first: 100) {
       nodes {
         id identifier title url description sortOrder
-        state { id name }
+        state { id name type }
         labels { nodes { name } }
       }
     }
@@ -509,10 +517,10 @@ pub fn parse_children(json: &[u8]) -> Result<Vec<SubIssue>, LinearError> {
         .unwrap_or_default()
         .into_iter()
         .map(|c| {
-            let (state_id, state) = c
+            let (state_id, state, state_type) = c
                 .state
-                .map(|s| (s.id, s.name))
-                .unwrap_or_else(|| (String::new(), "unknown".into()));
+                .map(|s| (s.id, s.name, s.kind.unwrap_or_default()))
+                .unwrap_or_else(|| (String::new(), "unknown".into(), String::new()));
             SubIssue {
                 id: c.id,
                 identifier: c.identifier,
@@ -521,6 +529,7 @@ pub fn parse_children(json: &[u8]) -> Result<Vec<SubIssue>, LinearError> {
                 body: c.description.filter(|d| !d.trim().is_empty()),
                 state_id,
                 state,
+                state_type,
                 labels: c
                     .labels
                     .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
@@ -1919,6 +1928,34 @@ mod tests {
         // The next piece to build is the first one not yet finished.
         let next = list.iter().find(|c| c.state == "Queued").unwrap();
         assert_eq!(next.identifier, "AIH-2");
+    }
+
+    #[test]
+    fn a_child_says_whether_it_has_begun() {
+        // "Which piece starts next" has to be answerable without knowing what
+        // this workspace calls its columns. Linear's own category is what makes
+        // that possible: a name is whatever somebody typed.
+        let list = children(
+            r#"[
+              {"id":"a","identifier":"A-1","title":"done","url":"u","sortOrder":1.0,
+               "state":{"id":"s1","name":"Done","type":"completed"},"labels":{"nodes":[]}},
+              {"id":"b","identifier":"A-2","title":"building","url":"u","sortOrder":2.0,
+               "state":{"id":"s2","name":"In Progress","type":"started"},"labels":{"nodes":[]}},
+              {"id":"c","identifier":"A-3","title":"waiting","url":"u","sortOrder":3.0,
+               "state":{"id":"s3","name":"Backlog","type":"backlog"},"labels":{"nodes":[]}}
+            ]"#,
+        );
+        assert_eq!(
+            list.iter()
+                .map(|c| c.state_type.as_str())
+                .collect::<Vec<_>>(),
+            ["completed", "started", "backlog"]
+        );
+        // The next piece to begin is the first that has not.
+        let next = list
+            .iter()
+            .find(|c| matches!(c.state_type.as_str(), "backlog" | "unstarted"));
+        assert_eq!(next.unwrap().identifier, "A-3");
     }
 
     #[test]
