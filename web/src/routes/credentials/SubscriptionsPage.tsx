@@ -80,6 +80,7 @@ export function SubscriptionsPage() {
           </ProviderSummary>
           <ProviderSummary
             provider="pi"
+            mark="kimi"
             label="Kimi-for-Coding"
             help="Your Kimi subscription. Backs `kimi-code/*` models on omp."
             configured={is("pi")}
