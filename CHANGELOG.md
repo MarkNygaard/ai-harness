@@ -26,6 +26,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does. At 4096 it would have spent much of the budget reasoning and truncated the
   answer. 16000 is the recommended ceiling for a non-streaming request.
 
+### Fixed
+
+- **A multi-repo project can name the primary repo's folder, and listing it no
+  longer checks it out twice.** The project's Git URL is always the first repo of
+  the layout, and its folder name was derived from the URL — so a project wanting
+  a folder called `frontend` added a row for that same repo, and got *three*
+  checkouts of two repos: the implicit primary as `frontend-monorepo`, the listed
+  one as `frontend`, and the other repo. Both folders then held the same repo on
+  the same `run/<id>` branch, where a second push either rejects as
+  non-fast-forward or clobbers the first; every planning run also spent a
+  paragraph working out that two of its three repos were the same one, and
+  `install-deps` installed that monorepo twice. A row naming the same remote as
+  the Git URL is now recognised as *being* the primary: its folder and role are
+  used and no second checkout is made. URL spelling doesn't matter — `https://`,
+  `git@`, a `.git` suffix or a trailing slash all compare equal, via the same
+  normalisation the git mirror cache uses. Not listing the primary still works
+  exactly as before; checking out only what is listed was the alternative, and it
+  would silently drop the project's own repo whenever a row was forgotten. The
+  run's base branch still wins for the primary, which is what keeps an epic run
+  (triggered with `epic/<ID>` as its base) building on the epic branch rather
+  than off `main`. Registering a project now also rejects two rows naming the
+  same remote, and the UI says the Git URL is already the first repo.
+
+
 ### Added
 
 - **A workflow can cache what only it knows is reusable — `$HARNESS_CACHE_DIR`.**

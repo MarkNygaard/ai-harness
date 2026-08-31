@@ -2180,6 +2180,64 @@ fn valid_folder(folder: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
+/// The repo layout for a multi-repo run: which repo lands in which folder, on
+/// which base branch. The primary repo is always first.
+///
+/// The primary repo (the project's Git URL) is always one of the checkouts, but
+/// its folder name is the project's to choose: **if one of the configured repos
+/// names the same remote, that row IS the primary** — its folder and role are
+/// used, and no second checkout is made. Listing it is how you get a folder
+/// called `frontend` instead of `frontend-monorepo`.
+///
+/// Not listing it still works, with the folder falling back to the repo's
+/// basename, so a config that names only the other repos behaves as it always
+/// did. The alternative — checking out only what is listed — silently drops the
+/// project's own repo whenever someone forgets to list it, which is a worse
+/// failure than an unlovely folder name.
+///
+/// The run's `base_branch` wins over the row's for the primary, and that is not
+/// a detail: an epic run is triggered with `epic/<ID>` as its base, and taking
+/// the row's configured branch instead would build every piece off `main` and
+/// quietly unpick the whole epic.
+fn plan_layout(
+    git_url: &str,
+    base_branch: &str,
+    repos: &[harness_persist::ProjectRepo],
+) -> Vec<RunRepo> {
+    let listed_primary = repos
+        .iter()
+        .position(|r| harness_runner::same_remote(&r.url, git_url));
+    let mut layout = vec![match listed_primary {
+        Some(i) => RunRepo {
+            folder: repos[i].folder.clone(),
+            url: git_url.to_string(),
+            base_branch: base_branch.to_string(),
+            role: repos[i]
+                .role
+                .clone()
+                .or_else(|| Some("primary".to_string())),
+        },
+        None => RunRepo {
+            folder: repo_basename(git_url),
+            url: git_url.to_string(),
+            base_branch: base_branch.to_string(),
+            role: Some("primary".to_string()),
+        },
+    }];
+    for (i, r) in repos.iter().enumerate() {
+        if Some(i) == listed_primary {
+            continue;
+        }
+        layout.push(RunRepo {
+            folder: r.folder.clone(),
+            url: r.url.clone(),
+            base_branch: r.base_branch.clone(),
+            role: r.role.clone(),
+        });
+    }
+    layout
+}
+
 /// Resolve a run's workspace.
 ///
 /// **Single-repo** (`repos` empty): fetch the project's checkout and cut an
@@ -2226,21 +2284,7 @@ async fn resolve_workspace(
         };
     }
 
-    // Multi-repo: primary repo first (folder derived from its URL), then linked.
-    let mut layout = vec![RunRepo {
-        folder: repo_basename(git_url),
-        url: git_url.to_string(),
-        base_branch: base_branch.to_string(),
-        role: Some("primary".to_string()),
-    }];
-    for r in repos {
-        layout.push(RunRepo {
-            folder: r.folder.clone(),
-            url: r.url.clone(),
-            base_branch: r.base_branch.clone(),
-            role: r.role.clone(),
-        });
-    }
+    let layout = plan_layout(git_url, base_branch, repos);
     // Validate folders: safe segments, no duplicates.
     let mut seen = std::collections::HashSet::new();
     for repo in &layout {
@@ -2677,6 +2721,110 @@ mod tests {
         let reg = Arc::new(AgentRegistry::new("codex"));
         let state = RunsState::new(None, reg, std::path::PathBuf::from("/tmp"), None, None);
         assert_eq!(state.public_url(), None);
+    }
+
+    fn repo(
+        folder: &str,
+        url: &str,
+        base: &str,
+        role: Option<&str>,
+    ) -> harness_persist::ProjectRepo {
+        harness_persist::ProjectRepo {
+            folder: folder.to_string(),
+            url: url.to_string(),
+            base_branch: base.to_string(),
+            role: role.map(str::to_string),
+        }
+    }
+
+    /// Listing the project's own Git URL names the primary's folder rather than
+    /// adding a second checkout of it — which is what produced three checkouts
+    /// of two repos, a doubled `pnpm install`, and two folders racing to push
+    /// the same `run/<id>` branch.
+    #[test]
+    fn listing_the_primary_repo_names_its_folder_instead_of_duplicating_it() {
+        let layout = super::plan_layout(
+            "https://github.com/me/frontend-monorepo.git",
+            "main",
+            &[
+                repo(
+                    "frontend",
+                    "https://github.com/me/frontend-monorepo.git",
+                    "main",
+                    Some("frontend"),
+                ),
+                repo(
+                    "backend",
+                    "https://github.com/me/webapi-dotnet.git",
+                    "develop",
+                    Some("backend"),
+                ),
+            ],
+        );
+        let folders: Vec<&str> = layout.iter().map(|r| r.folder.as_str()).collect();
+        assert_eq!(folders, ["frontend", "backend"], "no third checkout");
+        assert_eq!(layout[0].role.as_deref(), Some("frontend"));
+        assert_eq!(
+            layout[1].base_branch, "develop",
+            "a linked repo keeps its base"
+        );
+    }
+
+    /// The URL forms differ all the time — the UI stores what was pasted.
+    #[test]
+    fn the_primary_is_recognised_across_url_forms() {
+        for listed in [
+            "git@github.com:me/frontend-monorepo.git",
+            "https://github.com/me/frontend-monorepo",
+            "https://github.com/me/Frontend-Monorepo.git/",
+        ] {
+            let layout = super::plan_layout(
+                "https://github.com/me/frontend-monorepo.git",
+                "main",
+                &[repo("frontend", listed, "main", None)],
+            );
+            assert_eq!(layout.len(), 1, "`{listed}` should be the primary");
+            assert_eq!(layout[0].folder, "frontend");
+            // The canonical URL is kept, not whatever form the row used.
+            assert_eq!(layout[0].url, "https://github.com/me/frontend-monorepo.git");
+            assert_eq!(layout[0].role.as_deref(), Some("primary"));
+        }
+    }
+
+    /// An epic run is triggered with `epic/<ID>` as its base. If the listed row's
+    /// configured branch won, every piece would build off `main` and the epic
+    /// would come apart with nothing to show why.
+    #[test]
+    fn the_runs_base_branch_wins_for_the_primary() {
+        let layout = super::plan_layout(
+            "https://github.com/me/frontend-monorepo.git",
+            "epic/ECOM-42",
+            &[repo(
+                "frontend",
+                "https://github.com/me/frontend-monorepo.git",
+                "main",
+                None,
+            )],
+        );
+        assert_eq!(layout[0].base_branch, "epic/ECOM-42");
+    }
+
+    /// Unchanged behaviour for a config that names only the other repos.
+    #[test]
+    fn an_unlisted_primary_still_gets_a_folder_from_its_url() {
+        let layout = super::plan_layout(
+            "https://github.com/me/frontend-monorepo.git",
+            "main",
+            &[repo(
+                "backend",
+                "https://github.com/me/webapi-dotnet.git",
+                "develop",
+                None,
+            )],
+        );
+        let folders: Vec<&str> = layout.iter().map(|r| r.folder.as_str()).collect();
+        assert_eq!(folders, ["frontend-monorepo", "backend"]);
+        assert_eq!(layout[0].role.as_deref(), Some("primary"));
     }
 
     #[test]
