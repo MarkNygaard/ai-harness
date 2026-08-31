@@ -28,8 +28,11 @@ import type {
 } from "@/types/linear";
 import type { WorkflowSummary } from "@/types/authoring";
 
+// `w-full min-w-0` is load-bearing: a bare `<select>` sizes itself to its
+// widest option, so three status dropdowns in one grid row refuse to shrink and
+// push their way out of the dialog rather than fitting inside it.
 const inputCls =
-  "h-8 rounded-md border border-input bg-transparent px-2 text-[13px] outline-none focus:ring-2 focus:ring-ring";
+  "h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2 text-[13px] outline-none focus:ring-2 focus:ring-ring";
 
 function Field({
   label,
@@ -111,7 +114,7 @@ export function ProjectLinearDialog({ project }: { project: string }) {
       >
         <IconBolt className="size-3.5" />
       </DialogTrigger>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="font-mono text-base">{project}</DialogTitle>
           <DialogDescription>
@@ -242,7 +245,9 @@ function DialogBody({
   }
 
   return (
-    <div className="flex flex-col gap-3">
+    // `min-w-0`: this is a grid item of the dialog, whose track would otherwise
+    // stretch to the widest thing inside and spill past the panel.
+    <div className="flex min-w-0 flex-col gap-3">
       <AccountSelect project={project} accounts={accounts} />
       {sources.isLoading && (
         <p className="text-xs text-muted-foreground">Loading…</p>
@@ -273,13 +278,13 @@ function DialogBody({
                   </span>
                   <Badge
                     variant={s.enabled ? "success" : "outline"}
-                    className="text-[10px]"
+                    className="shrink-0 text-[10px]"
                   >
                     {s.enabled ? "enabled" : "disabled"}
                   </Badge>
                   <Badge
                     variant={s.live ? "success" : "outline"}
-                    className="text-[10px]"
+                    className="shrink-0 text-[10px]"
                   >
                     {s.live ? "live" : "dry-run"}
                   </Badge>
@@ -431,7 +436,9 @@ function BindingForm({
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    // `min-w-0`: a grid item of the dialog panel, which would otherwise stretch
+    // its track to the widest control inside and spill past the edge.
+    <div className="flex min-w-0 flex-col gap-3">
       {/* Workflow */}
       {fixedWorkflow ? (
         <Field label="Workflow">
