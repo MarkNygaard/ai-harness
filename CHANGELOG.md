@@ -28,6 +28,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A workflow can cache what only it knows is reusable — `$HARNESS_CACHE_DIR`.**
+  The caches added last release are the ones the harness can infer (package-manager
+  downloads, git objects). A project whose expensive input is none of those had no
+  way to keep anything: the worktree is thrown away after a run and `ARTIFACTS_DIR`
+  with it. Runs now inherit `HARNESS_CACHE_DIR`, a per-project directory on the
+  persistent volume, bounded by `HARNESS_PROJECT_CACHE_CAP_GB` (default 5 GiB per
+  project) and reported in the project's cache dialog. Eviction is by whole
+  immediate subdirectory, so a workflow puts its cache key in the top-level name
+  (`alpackages-<hash>/`) and one stale entry can go without taking the live one.
+  Documented for authors in `docs/authoring-workflows.md`, including the two
+  mistakes that make a cache worse than none: a directory that can be read while
+  half-written, and a key that cannot see its source change.
+- **`bc-idea-to-pr` stops re-downloading 96 MB of BC symbols every run.** The
+  setup step fetched every symbol package from the on-prem dev endpoint on every
+  run — 17 packages, `Base Application` alone 45 MB, behind a 15-minute timeout —
+  and any single failed download failed the whole run. They are now cached under a
+  key covering everything that decides their content: `app.json`'s dependency set,
+  its pinned `platform`/`application`, and the endpoint URL. Restoring is gated on
+  a completeness marker written inside a directory that is moved into place whole,
+  because a half-restored `.alpackages` is the worst outcome available here — it
+  surfaces hundreds of lines later as cryptic `AL1022` errors rather than as a
+  failure to fetch symbols. The cache also expires after 7 days
+  (`BC_SYMBOL_CACHE_TTL_DAYS`): the endpoint serves whatever the *server* has, and
+  a BC cumulative update moves the symbols without `app.json` changing, so a key
+  alone would compile against symbols older than the server indefinitely. The set
+  is stored after the AL1022 resolve loop, so the platform packages it discovers
+  are cached too. One consequence worth having: with a complete set on disk, an
+  unreachable endpoint no longer fails the run — it falls back, loudly, to symbols
+  that may be older than the server.
 - **Runs reuse dependency downloads and git objects, not just Rust build artifacts.**
   Only `CARGO_TARGET_DIR` was pointed at the persistent volume, so a project with no
   Rust in it had literally nothing cached — the cache dialog read `0` for a

@@ -846,11 +846,12 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(CACHE_CAP_GB_DEFAULT);
-    // Each cache has its own switch; only all three off means nothing to do.
+    // Each cache has its own switch; only all of them off means nothing to do.
     // A project with an explicit cap is still swept when the env default is 0.
     if env_cap_gb == 0
         && super::caches::deps_cap_gb() == 0
         && super::caches::git_mirror_ttl_days() == 0
+        && super::caches::project_cap_gb() == 0
     {
         tracing::info!("cache sweeper: disabled (all caps 0)");
         return;
@@ -884,6 +885,7 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
             let caps = caps.clone();
             let deps = super::caches::deps_root(&projects_dir);
             let mirrors = super::caches::git_mirror_root(&projects_dir);
+            let project_caches = super::caches::project_cache_all(&projects_dir);
             if let Err(e) = tokio::task::spawn_blocking(move || {
                 sweep_project_caches(&root, CACHE_SWEEP_SAFETY_FLOOR_SECS, &caps);
                 // The shared caches are bounded as a whole, not per project:
@@ -891,7 +893,7 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
                 // so no project owns an entry in them.
                 let cap_gb = super::caches::deps_cap_gb();
                 let cap = cap_gb.saturating_mul(1024 * 1024 * 1024);
-                if let Some((before, after)) = super::caches::sweep_deps_cache(
+                if let Some((before, after)) = super::caches::sweep_whole_subdirs(
                     &deps,
                     cap,
                     cap / 5 * 4,
@@ -902,6 +904,31 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
                         before as f64 / 1.073_741_824e9,
                         after as f64 / 1.073_741_824e9,
                     );
+                }
+                // Each project's workflow cache is capped on its own, by cache
+                // key (a workflow names its keys at the top level for exactly
+                // this reason).
+                let proj_cap_gb = super::caches::project_cap_gb();
+                let proj_cap = proj_cap_gb.saturating_mul(1024 * 1024 * 1024);
+                if let Ok(rd) = std::fs::read_dir(&project_caches) {
+                    for entry in rd.flatten() {
+                        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                            continue;
+                        }
+                        if let Some((before, after)) = super::caches::sweep_whole_subdirs(
+                            &entry.path(),
+                            proj_cap,
+                            proj_cap / 5 * 4,
+                            CACHE_SWEEP_SAFETY_FLOOR_SECS,
+                        ) {
+                            tracing::info!(
+                                "cache sweeper: {} workflow cache {:.1} GB -> {:.1} GB (cap {proj_cap_gb} GB)",
+                                entry.file_name().to_string_lossy(),
+                                before as f64 / 1.073_741_824e9,
+                                after as f64 / 1.073_741_824e9,
+                            );
+                        }
+                    }
                 }
                 let ttl = super::caches::git_mirror_ttl_days();
                 let dropped = super::caches::sweep_git_mirrors(&mirrors, ttl);
@@ -1779,6 +1806,18 @@ async fn execute_run_task(
     run_env.extend(super::caches::deps_env(&super::caches::deps_root(
         &state.projects_dir,
     )));
+
+    // A durable directory this project's workflows can cache into themselves —
+    // for what only the author knows is reusable (BC symbol packages keyed by
+    // `app.json`, a downloaded SDK). Nothing else survives a run: the worktree is
+    // thrown away and `ARTIFACTS_DIR` with it.
+    let project_cache = super::caches::project_cache(&state.projects_dir, &project);
+    if std::fs::create_dir_all(&project_cache).is_ok() {
+        run_env.insert(
+            "HARNESS_CACHE_DIR".to_string(),
+            project_cache.display().to_string(),
+        );
+    }
 
     // What this run may ask the server to do on its behalf — a capability
     // scoped to this run and this project, never a credential.

@@ -31,6 +31,14 @@ use super::runs_routes::dir_size;
 /// `HARNESS_DEPS_CACHE_CAP_GB`; `0` disables sweeping entirely.
 pub(crate) const DEPS_CAP_GB_DEFAULT: u64 = 20;
 
+/// Default cap for one project's workflow cache, in GiB. Override with
+/// `HARNESS_PROJECT_CACHE_CAP_GB`; `0` disables sweeping it.
+///
+/// Smaller than the dependency cap on purpose: this holds whatever a workflow
+/// decided to keep (BC symbol packages, a downloaded SDK), keyed by the author.
+/// A key that changes every run would otherwise grow without bound.
+pub(crate) const PROJECT_CAP_GB_DEFAULT: u64 = 5;
+
 /// How long an unused git mirror is kept before the sweeper drops it. Override
 /// with `HARNESS_GIT_MIRROR_TTL_DAYS`; `0` keeps mirrors forever.
 pub(crate) const GIT_MIRROR_TTL_DAYS_DEFAULT: u64 = 30;
@@ -38,6 +46,28 @@ pub(crate) const GIT_MIRROR_TTL_DAYS_DEFAULT: u64 = 30;
 /// The shared dependency cache root (`<projects_dir>/.deps-cache`).
 pub(crate) fn deps_root(projects_dir: &Path) -> PathBuf {
     projects_dir.join(".deps-cache")
+}
+
+/// Root of every project's workflow cache (`<projects_dir>/.project-cache`).
+pub(crate) fn project_cache_all(projects_dir: &Path) -> PathBuf {
+    projects_dir.join(".project-cache")
+}
+
+/// One project's workflow cache — handed to runs as `HARNESS_CACHE_DIR`.
+///
+/// For what only the workflow author knows is cacheable: BC symbol packages
+/// keyed by `app.json`, a downloaded SDK, a generated fixture that costs more to
+/// rebuild than to keep. Per project, because the contents are a project's
+/// business, and swept by whole immediate subdirectory — so a workflow should
+/// put its cache key in the *top-level* name (`alpackages-<hash>/`) rather than
+/// nesting keys, or eviction takes every key at once.
+pub(crate) fn project_cache(projects_dir: &Path, project: &str) -> PathBuf {
+    project_cache_all(projects_dir).join(project)
+}
+
+/// Effective per-project workflow-cache cap in GiB.
+pub(crate) fn project_cap_gb() -> u64 {
+    parse_env_u64("HARNESS_PROJECT_CACHE_CAP_GB").unwrap_or(PROJECT_CAP_GB_DEFAULT)
 }
 
 /// The shared git mirror root (`<projects_dir>/.git-cache`).
@@ -111,8 +141,11 @@ fn parse_env_u64(key: &str) -> Option<u64> {
     std::env::var(key).ok()?.trim().parse::<u64>().ok()
 }
 
-/// Bound the dependency cache: when it exceeds `cap` bytes, drop whole ecosystem
+/// Bound a cache directory: when it exceeds `cap` bytes, drop whole immediate
 /// subdirectories (least recently written first) until it is under `target`.
+///
+/// Serves both the shared dependency cache (subdirectory per ecosystem) and a
+/// project's workflow cache (subdirectory per cache key).
 ///
 /// Whole subdirectories, not individual files — unlike a cargo target dir, these
 /// caches are indexed. Deleting one file out of pnpm's content-addressed store
@@ -122,7 +155,7 @@ fn parse_env_u64(key: &str) -> Option<u64> {
 /// another replica) can't have the store pulled out from under it.
 ///
 /// Returns `(before, after)` bytes when it acted, else `None`.
-pub(crate) fn sweep_deps_cache(
+pub(crate) fn sweep_whole_subdirs(
     root: &Path,
     cap: u64,
     target: u64,
@@ -249,40 +282,63 @@ mod tests {
     }
 
     #[test]
-    fn sweep_deps_cache_noop_under_cap() {
+    fn sweep_whole_subdirs_noop_under_cap() {
         let dir = tempfile::TempDir::new().unwrap();
         write(&dir.path().join("pnpm-store/a"), 1024);
         assert_eq!(
-            sweep_deps_cache(dir.path(), 1024 * 1024, 512 * 1024, 0),
+            sweep_whole_subdirs(dir.path(), 1024 * 1024, 512 * 1024, 0),
             None
         );
         assert!(dir.path().join("pnpm-store").is_dir());
     }
 
     #[test]
-    fn sweep_deps_cache_drops_whole_subdirs_oldest_first() {
+    fn sweep_whole_subdirs_drops_whole_subdirs_oldest_first() {
         let dir = tempfile::TempDir::new().unwrap();
         write(&dir.path().join("nuget/a"), 400 * 1024);
         // Give the second cache a newer mtime than the first.
         std::thread::sleep(std::time::Duration::from_millis(20));
         write(&dir.path().join("pnpm-store/b"), 400 * 1024);
-        let (before, after) = sweep_deps_cache(dir.path(), 512 * 1024, 410 * 1024, 0).unwrap();
+        let (before, after) = sweep_whole_subdirs(dir.path(), 512 * 1024, 410 * 1024, 0).unwrap();
         assert!(before > after, "{before} -> {after}");
         assert!(!dir.path().join("nuget").exists(), "oldest goes first");
         assert!(dir.path().join("pnpm-store").is_dir(), "newest survives");
     }
 
     #[test]
-    fn sweep_deps_cache_safety_floor_protects_a_live_install() {
+    fn sweep_whole_subdirs_safety_floor_protects_a_live_install() {
         let dir = tempfile::TempDir::new().unwrap();
         write(&dir.path().join("pnpm-store/a"), 600 * 1024);
         assert_eq!(
-            sweep_deps_cache(dir.path(), 512 * 1024, 400 * 1024, 3600),
+            sweep_whole_subdirs(dir.path(), 512 * 1024, 400 * 1024, 3600),
             Some((600 * 1024, 600 * 1024))
         );
         assert!(dir.path().join("pnpm-store").is_dir());
     }
 
+    #[test]
+    fn project_cache_is_per_project_and_capped() {
+        let root = Path::new("/srv/projects");
+        let a = project_cache(root, "bc-customizations");
+        let b = project_cache(root, "dilling-ecom");
+        assert_ne!(a, b, "one project's cache is not another's");
+        assert!(a.starts_with(project_cache_all(root)));
+        assert_eq!(project_cap_gb(), PROJECT_CAP_GB_DEFAULT);
+    }
+
+    #[test]
+    fn a_project_cache_evicts_one_key_not_all_of_them() {
+        // Why a workflow puts its key in the top-level name: eviction is by
+        // immediate subdirectory, so `alpackages-<old>` can go while
+        // `alpackages-<new>` stays.
+        let dir = tempfile::TempDir::new().unwrap();
+        write(&dir.path().join("alpackages-old/Base.app"), 400 * 1024);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        write(&dir.path().join("alpackages-new/Base.app"), 400 * 1024);
+        sweep_whole_subdirs(dir.path(), 512 * 1024, 410 * 1024, 0).unwrap();
+        assert!(!dir.path().join("alpackages-old").exists());
+        assert!(dir.path().join("alpackages-new").is_dir());
+    }
     #[test]
     fn sweep_git_mirrors_keeps_fresh_and_is_disabled_by_zero() {
         let dir = tempfile::TempDir::new().unwrap();
