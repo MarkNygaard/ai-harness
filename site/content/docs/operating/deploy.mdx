@@ -3,8 +3,8 @@ title: "Deploying"
 description: "Running the control plane as a container: the image, the environment it needs, what has to persist, and the operational traps."
 ---
 
-The control plane is a single `harness` binary — the HTTP API with the dashboard
-bundled in — backed by Postgres. A run executes as **local child processes**
+The control plane is one `harness` binary, the HTTP API with the dashboard
+inside it, backed by Postgres. A run is a set of **local child processes**
 inside the server's container; there is no per-run Kubernetes Job, so the same
 image runs under Kubernetes *or* plain Docker.
 
@@ -12,8 +12,8 @@ image runs under Kubernetes *or* plain Docker.
 
 `ghcr.io/marknygaard/ai-harness`
 
-It bundles the agent runtimes — `bun`, `mise`, and Pi with its `pi-web-access`
-plugin — and listens on `:8080`.
+It carries the agent runtimes, `bun`, `mise`, and Pi with its `pi-web-access`
+plugin, and listens on `:8080`.
 
 | Tag | Points at | Immutable |
 | --- | --- | --- |
@@ -48,7 +48,7 @@ docker run -p 8080:8080 \
 | --- | --- |
 | `HARNESS_DATABASE_URL` | Postgres connection string. |
 | `HARNESS_SECRET_KEY` | AES-256-GCM key for credentials stored at rest. |
-| `HARNESS_DATA_DIR` | Data volume — caches, toolchains, artifacts. |
+| `HARNESS_DATA_DIR` | Data volume. Caches, toolchains, artifacts. |
 | `HARNESS_PROJECT_ROOT` | Project checkouts. |
 | `HARNESS_PUBLIC_URL` | Public origin, used to build the run links that appear in Linear and PR comments. |
 
@@ -64,7 +64,7 @@ container, and the shape is a Deployment, a Service, an Ingress and a PVC.
 | --- | --- |
 | Image | `ghcr.io/marknygaard/ai-harness`, `linux/amd64`, pinned to a version or `main-<sha>` rather than `latest`. Entrypoint is `harness serve`. |
 | Port | 8080. The image sets `HARNESS_HTTP_ADDR=0.0.0.0:8080` itself. |
-| Probes | Liveness, readiness and startup on `GET /health`. Give startup a generous `failureThreshold` — the first boot runs migrations. |
+| Probes | Liveness, readiness and startup on `GET /health`. Give startup a generous `failureThreshold`, because the first boot runs migrations. |
 | Volume | A PVC mounted at `/home/harness`, with `HARNESS_PROJECT_ROOT` pointing inside it. |
 | Secret | `HARNESS_DATABASE_URL` and `HARNESS_SECRET_KEY`. Infrastructure only. |
 | Postgres | An operator-managed cluster (CloudNativePG or equivalent). |
@@ -76,7 +76,7 @@ the dashboard and stored encrypted in Postgres, which is why the infrastructure
 secret stays infrastructure-only and why the volume has to survive restarts.
 </Callout>
 
-Runs execute as child processes **inside the pod** — there is no per-run Job — so
+Runs are child processes **inside the pod**, and there is no per-run Job, so
 size it for the agents and whatever their builds need. Requests of `100m` CPU and
 `512Mi` memory with a `4Gi` memory limit is a workable starting point; a project
 that compiles Rust will want more. Concurrency is bounded by the pod, not by the
@@ -85,7 +85,7 @@ harness.
 ## What has to persist
 
 Give the volume to `HARNESS_DATA_DIR` and `HARNESS_PROJECT_ROOT`. Both hold
-caches rather than source of truth — nothing is *lost* if they go — but every
+caches rather than the source of truth, so nothing is *lost* if they go. But every
 run then re-provisions its toolchains and re-clones its checkouts from scratch,
 which is slow and expensive rather than merely inconvenient.
 
@@ -99,12 +99,12 @@ the projects directory. Four caches, each separately bounded:
 | Directory | Holds | Cap | Default |
 | --- | --- | --- | --- |
 | `.cargo-target/<project>` | Rust build artifacts (`CARGO_TARGET_DIR`), per project | `HARNESS_CARGO_TARGET_CAP_GB` | 50 GiB **per project** |
-| `.deps-cache` | Package-manager downloads — pnpm, npm/bun/yarn, NuGet, Go modules, uv/pip/poetry, Composer — shared by all projects | `HARNESS_DEPS_CACHE_CAP_GB` | 20 GiB |
+| `.deps-cache` | Package-manager downloads, shared by all projects. pnpm, npm/bun/yarn, NuGet, Go modules, uv/pip/poetry, Composer | `HARNESS_DEPS_CACHE_CAP_GB` | 20 GiB |
 | `.git-cache` | Bare mirrors that runs clone from, shared | `HARNESS_GIT_MIRROR_TTL_DAYS` | 30 days idle |
 | `.project-cache/<project>` | Whatever a workflow caches itself via `$HARNESS_CACHE_DIR` | `HARNESS_PROJECT_CACHE_CAP_GB` | 5 GiB **per project** |
 
 `0` disables the corresponding sweep. **The defaults add up to far more than a
-small volume** — size it for the caps you actually set, plus checkouts and
+small volume**. Size it for the caps you actually set, plus checkouts and
 worktrees, or lower the caps. It is all cache: deleting these directories costs
 the next run its warm start and nothing else.
 
@@ -131,7 +131,7 @@ spawned subprocesses and cause a SIGTRAP. Use a standalone terminal.
 ## Sign-in and tokens
 
 Authentication can be turned on but **never off**. Once accounts exist, recovery
-is `harness admin create`, which needs a shell on the server — see the
+is `harness admin create`, which needs a shell on the server. See the
 [CLI reference](/docs/operating/cli#harness-admin).
 
 With sign-in enabled, people mint **personal access tokens** rather than sharing
@@ -140,6 +140,6 @@ one person's access does not disturb anybody else.
 
 ## Next
 
-- [Configuration](/docs/operating/configuration) — every setting and where it comes from.
-- [MCP endpoint](/docs/triggers/mcp) — connecting editors.
-- [Connecting Linear](/docs/triggers/linear-connect) — installing the workspace app.
+- [Configuration](/docs/operating/configuration), every setting and where it comes from.
+- [MCP endpoint](/docs/triggers/mcp), for connecting editors.
+- [Connecting Linear](/docs/triggers/linear-connect), installing the workspace app.

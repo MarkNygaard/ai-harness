@@ -17,10 +17,10 @@ A node's `provider` selects the agent. Several names route to the same one:
 | `claude` | Claude Code CLI | Run headless. The default for planning and review steps in the bundled workflows. |
 | `openai-codex` | Codex | Also reachable through Pi on a ChatGPT subscription. |
 | `pi`, `kimi`, `omp` | Pi | Three aliases for one agent. Pi's CLI binary is named `omp`, which is why that spelling is accepted. |
-| `cursor` | `cursor-agent` | Requires the binary on `PATH` — without it, `cursor` nodes fail to spawn. |
+| `cursor` | `cursor-agent` | Needs the binary on `PATH`. Without it, `cursor` nodes fail to spawn. |
 
 Anything the dispatcher does not recognise falls through to the default agent,
-so an unknown provider name degrades rather than erroring — worth knowing when a
+so an unknown provider name falls back instead of failing. Worth knowing when a
 node behaves as though its `provider:` were ignored, because it was.
 
 ## Credentials
@@ -29,12 +29,12 @@ Credentials are managed on the dashboard's **Credentials** page, encrypted at
 rest with `HARNESS_SECRET_KEY`, and can be set per project with a global
 fallback.
 
-- **Claude** — OAuth, or an API key.
-- **Cursor** — an API key, materialised into `CURSOR_API_KEY` for the
-  subprocess.
-- **OpenAI / Codex** — an API key, or a ChatGPT Plus/Pro subscription through
-  Pi. See [ChatGPT subscription](/docs/operating/chatgpt-subscription).
-- **Kimi** — the Kimi-for-Coding subscription, through Pi.
+- **Claude.** OAuth, or an API key.
+- **Cursor.** An API key, which becomes `CURSOR_API_KEY` in the subprocess.
+- **OpenAI and Codex.** An API key, or a ChatGPT Plus or Pro subscription
+  through Pi. See
+  [ChatGPT subscription](/docs/operating/chatgpt-subscription).
+- **Kimi.** The Kimi-for-Coding subscription, through Pi.
 
 Control-plane secrets are scrubbed from the processes a run spawns, so an agent
 cannot read the database URL or the encryption key out of its own environment.
@@ -59,8 +59,8 @@ implement with a cheap one.
 ```
 
 `effort` takes `low` | `medium` | `high` | `xhigh` | `max` and is passed to the
-agent CLI. Spend it on high-leverage steps — planning, architectural
-judgement — not on mechanical ones.
+agent CLI. Spend it where judgement matters, on planning and architecture, and
+not on mechanical steps.
 
 ## Why the bundled workflows mix models
 
@@ -71,7 +71,7 @@ reviewer that did not write the code catches a different class of mistake, which
 is why the bundled pipelines pay for a second and third pass rather than looping
 the author again.
 
-[`architect`](/docs/workflows/bundled#architect) takes it further — its
+[`architect`](/docs/workflows/bundled#architect) goes further. Its
 behaviour-preservation review will **revert** a change that drifted semantics,
 rather than reporting it.
 

@@ -4,8 +4,8 @@ description: "Run the container, open the dashboard, and take one task through a
 ---
 
 The harness is one container plus a Postgres database. You run it somewhere it
-can reach your git remotes, put it behind a URL, and do everything else —
-projects, credentials, workflows, runs — in the dashboard it serves.
+can reach your git remotes, put it behind a URL, and do the rest in the dashboard it serves. Projects,
+credentials, workflows, runs, all of it.
 
 There is nothing to install locally. The CLI, the config file and the build from
 source all exist, but none of them is how you use a running harness.
@@ -42,17 +42,18 @@ PersistentVolumeClaim is the whole shape:
   version or a `main-<sha>` rather than `latest`. The
   entrypoint is `harness serve` and the image already sets
   `HARNESS_HTTP_ADDR=0.0.0.0:8080`.
-- **Probes** — liveness, readiness and startup all on `GET /health` at port
-  8080. Give startup a generous `failureThreshold`; first boot runs migrations.
+- **Probes** for liveness, readiness and startup, all on `GET /health` at port
+  8080. Give startup a generous `failureThreshold`, because the first boot runs
+  migrations.
 - **PVC mounted at `/home/harness`**, with `HARNESS_PROJECT_ROOT` pointing
-  inside it. This holds checkouts and caches; see
-  [sizing](/docs/operating/deploy#sizing-the-volume).
+  inside it. It holds checkouts and caches. See
+  [sizing the volume](/docs/operating/deploy#sizing-the-volume).
 - **Secret** carrying `HARNESS_DATABASE_URL` and `HARNESS_SECRET_KEY`.
-- **Postgres** — an operator-managed cluster (CloudNativePG or equivalent) is
-  the usual choice.
+- **Postgres.** An operator-managed cluster such as CloudNativePG is the usual
+  choice.
 - **Replicas: 1.** Runs execute as child processes *inside the pod*, so the pod
-  needs headroom for agents and their builds — a memory limit of 4Gi is a
-  reasonable starting point, more if your projects compile Rust.
+  needs room for the agents and their builds. Start at a 4Gi memory limit, and
+  go higher if your projects compile Rust.
 
 <Callout>
 Provider credentials do **not** belong in the cluster secret. They are entered
@@ -65,8 +66,8 @@ stays infrastructure-only.
 
 <Callout type="warn">
 `HARNESS_SECRET_KEY` encrypts every stored credential. **Keep it stable** across
-restarts and redeploys — change it and all of them become undecryptable and have
-to be re-entered by hand. Treat it like a database password.
+restarts and redeploys. Change it and every credential becomes undecryptable
+and has to be typed in again by hand. Treat it like a database password.
 </Callout>
 
 ## 2. Open the dashboard
@@ -76,17 +77,17 @@ Go to the URL you gave it. Everything from here is in the UI.
 **Add a project** on the Projects page: a name, a git remote, a base branch.
 Runs check out an isolated worktree from that branch.
 
-**Add credentials** on the Credentials page — GitHub for pushing and opening
+**Add credentials** on the Credentials page. GitHub for pushing and opening
 PRs, plus whichever agent providers your workflow uses. They are encrypted at
 rest and can be set per project with a global fallback. See
 [Agents and models](/docs/operating/agents).
 
 ## 3. Trigger a run
 
-Pick a workflow — [`idea-to-pr`](/docs/workflows/bundled#idea-to-pr) is the
-default pipeline — describe the task, and start it. The run page shows the DAG
-executing node by node, with each node's output, duration and cost, and the
-artifacts it produced.
+Pick a workflow, describe the task, and start it.
+[`idea-to-pr`](/docs/workflows/bundled#idea-to-pr) is the default pipeline. The
+run page shows the DAG executing node by node, with each node's output,
+duration and cost, and the artifacts it produced.
 
 That is the whole loop. A finished run leaves a pull request.
 
@@ -116,8 +117,8 @@ cargo build --release
 `start-server.sh` expects `./target/release/harness` to exist and is a
 contributor convenience, not a deployment method.
 
-To execute a workflow with no server at all — the fastest way to iterate on a
-DAG — use `harness run`. Without `--real` it uses a built-in echo agent, so
+To run a workflow with no server at all, use `harness run`. It is the fastest
+way to iterate on a DAG. Without `--real` it uses a built-in echo agent, so
 shape, gating and `$node.output` wiring all execute for free:
 
 ```bash
@@ -132,6 +133,6 @@ spawned subprocesses and cause a SIGTRAP. Use a standalone terminal.
 
 ## Next
 
-- [Concepts](/docs/concepts) — the vocabulary the rest of the docs assumes.
-- [Deploying](/docs/operating/deploy) — volume sizing, caches, sign-in.
-- [Bundled workflows](/docs/workflows/bundled) — what ships in the box.
+- [Concepts](/docs/concepts), the words the rest of the docs assumes you know.
+- [Deploying](/docs/operating/deploy), for volume sizing, caches and sign-in.
+- [Bundled workflows](/docs/workflows/bundled), the nine that ship with it.

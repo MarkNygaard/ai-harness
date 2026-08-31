@@ -1,74 +1,82 @@
 ---
 title: "Introduction"
-description: "What ai-harness is, what it deliberately does not do, and how a run gets from a task to a pull request."
+description: "What ai-harness is, what it deliberately does not do, and how a run gets from a written issue to a pull request."
 ---
 
-ai-harness is a Rust-native orchestration layer for AI coding agents. It turns a
-task — typed in a UI, sent over MCP, or delegated from a Linear issue — into a
-run of a **workflow DAG** you authored, drives coding agents through it in an
-isolated git worktree, and opens a pull request at the end.
+ai-harness turns a written issue into a reviewed pull request. You describe what
+should be true when the work is done, and it plans, writes the code, reviews
+that code with a model that did not write it, and opens a pull request against
+your base branch.
+
+It runs on your own hardware. One binary, one Postgres database.
 
 ## The one design decision worth knowing
 
-**The harness builds prompts and manages lifecycle. The agents decide how to
-execute.**
+The harness writes prompts and runs the pipeline. The agents decide how to do
+the work.
 
-There is no attempt to script the edit itself, no diff-application engine, no
-tool-call interpreter. A node hands an agent a prompt and a working directory;
-what the agent does with them is the agent's business. That is why a single
-workflow can put Claude Code, Codex, Kimi and Cursor nodes in the same pipeline
-without adapters for each one, and why upgrading an agent CLI does not mean
-changing the harness.
+There is no diff-application engine here, no tool-call interpreter, no attempt
+to script the edit. A node hands an agent a prompt and a working directory, and
+what the agent does with them is the agent's business. That is why one pipeline
+can put Claude Code, Codex, Kimi and Cursor nodes side by side without an
+adapter for each, and why a new version of an agent CLI is not a change to the
+harness.
 
-The consequence is worth being explicit about: **the harness cannot make a bad
-agent good.** What it gives you is everything around the agent — isolation,
-sequencing, gating, retries, review passes by a *different* model, and a record
-of what happened.
+The cost of that decision is worth stating plainly. **A bad agent stays bad.**
+What you get is everything around it: isolation, ordering, gates, retries, a
+review pass by a different model, and a record of what happened at each step.
 
 ## How a run works
 
-1. A trigger arrives — from the dashboard, the [MCP endpoint](/docs/triggers/mcp),
+1. A trigger arrives, from the dashboard, the [MCP endpoint](/docs/triggers/mcp),
    or a [Linear issue](/docs/triggers/linear-connect) delegated to the harness.
-2. The run checks out an isolated git **worktree** off the project's base
-   branch. Nothing touches your working copy.
-3. Toolchains the project declared are provisioned on demand by `mise`, cached
-   on the data volume.
-4. The workflow DAG executes node by node. Each node picks its own agent and
-   model; `when:` gates decide what runs, `$node.output` wires one node's result
-   into the next, and `trigger_rule` decides how a node reacts to a failed
-   dependency.
-5. A final node opens a pull request. Review loops can send it back around
-   first, typically with a *different* model reviewing than the one that wrote
-   the code.
+2. The run checks out a git worktree off the project's base branch. Your working
+   copy is never touched.
+3. `mise` installs whatever toolchains the project declared, then caches them.
+4. The pipeline runs node by node. Each node picks its own agent and model.
+   `when:` decides what runs, `$node.output` passes results forward, and
+   `trigger_rule` decides what a node does when something it depends on fails.
+5. A node opens the pull request. Review loops can send the work back around
+   first, usually with a different model reviewing than wrote the code.
 
-Every node's output, timing and cost is recorded, so a finished run is
-inspectable rather than a black box.
+Every node's output, timing and cost is recorded, so you can go back and see
+what a run actually did.
+
+## Who does what
+
+Two people, checking different things.
+
+Whoever wants the change writes the issue and tests the result against their own
+acceptance criteria. A developer reviews the code and keeps the project's rules
+current. Neither has to do the other's job, which is what makes it workable for
+someone who cannot read a diff. See
+[shipping without writing code](/docs/shipping-without-code) and
+[project rules](/docs/project-rules).
 
 ## What you have to supply
 
-The harness orchestrates; it does not bring its own intelligence.
+The harness coordinates. It brings no intelligence of its own.
 
-- **Agent CLIs and their credentials.** Claude Code, Codex, Pi and Cursor
-  are driven as subprocesses; each needs its own auth. See
-  [Agents and models](/docs/operating/agents).
-- **A workflow**, or one of the [bundled ones](/docs/workflows/bundled).
-- **A Postgres database** and a persistent volume. See
-  [Deploying](/docs/operating/deploy).
+- **Agent CLIs and their credentials.** Claude Code, Codex, Pi and Cursor run as
+  subprocesses, and each needs its own account. See
+  [agents and models](/docs/operating/agents).
+- **A workflow**, or one of the [nine that ship with it](/docs/workflows/bundled).
+- **Postgres and a volume that survives restarts.** See
+  [deploying](/docs/operating/deploy).
 
 ## Where to go next
 
 <Cards>
   <Card title="Quickstart" href="/docs/quickstart">
-    Get a harness running locally and trigger your first run.
+    Run the container, open the dashboard, take one task through a workflow.
   </Card>
-  <Card title="Concepts" href="/docs/concepts">
-    Runs, workflows, nodes, projects, worktrees — the vocabulary the rest of
-    the docs assumes.
+  <Card title="Shipping without writing code" href="/docs/shipping-without-code">
+    The loop from the requesting side, for people who do not write code.
+  </Card>
+  <Card title="Project rules" href="/docs/project-rules">
+    The file every run reads, and why review gets lighter over time.
   </Card>
   <Card title="Authoring workflows" href="/docs/workflows/authoring">
-    The canonical YAML reference: node bodies, gating, variables, hooks.
-  </Card>
-  <Card title="Deploying" href="/docs/operating/deploy">
-    Running the container, the environment it needs, and connecting an editor.
+    The YAML reference. Node bodies, gating, variables, hooks.
   </Card>
 </Cards>

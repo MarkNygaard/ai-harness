@@ -8,7 +8,7 @@ The same `harness` binary serves the control plane and runs workflows locally.
 
 ## `harness serve`
 
-Start the control plane — HTTP API plus the bundled dashboard.
+Start the control plane, meaning the HTTP API and the bundled dashboard.
 
 ```bash
 harness serve --transport http --port 9800 --project-root /var/lib/harness/projects
@@ -50,7 +50,7 @@ name; omit it for the bundled standard pipeline.
 
 <Callout>
 Without `--real`, nodes run against a built-in echo agent. Shape, gating and
-`$node.output` wiring all execute for free — check a DAG behaves before spending
+`$node.output` wiring all run for free. Check a DAG behaves before spending
 tokens on it.
 </Callout>
 
@@ -92,7 +92,7 @@ node.
 | --- | --- |
 | `create-sub-issue` | File a sub-issue under an epic, in the epic's own team. |
 | `move-state` | Move an issue to a workflow state. |
-| `comment` | Comment on an issue — the epic ledger. |
+| `comment` | Comment on an issue. The epic ledger. |
 | `issue` | Print one issue's team, state, parent and labels as JSON. |
 | `children` | Print an epic's sub-issues as JSON, in board order. |
 | `release` | Give up an issue so the poller stops offering it. |
@@ -101,7 +101,7 @@ node.
 
 **No subcommand names a workspace or a token.** The run's grant says which
 project it speaks for and the server resolves that to a connection exactly as
-the poller would — so an epic's sub-issues cannot land in a workspace its runs
+the poller would, so an epic's sub-issues cannot land in a workspace its runs
 never watch, and a run cannot write as somebody else.
 
 Bodies with newlines go through `--description-file` / `--body-file` rather than
@@ -119,15 +119,16 @@ harness admin create --email you@example.com --password '<password>'
 Creates an administrator, or promotes an existing account and sets its password.
 
 <Callout type="warn">
-Signing in can be turned on but **never off** — nothing can turn it off. This
+Signing in can be turned on but **never off**. Nothing can turn it off. This
 command exists so that one-way door is a safeguard rather than a trap. It
 requires a shell on the server, which is the correct bar.
 </Callout>
 
 ## Others
 
-- `harness mcp-server` — MCP over stdio, as opposed to the server's HTTP endpoint.
-- `harness pr` — PR orchestration: implement an issue, manage the review loop.
-- `harness rule` — rule-engine commands.
-- `harness execpolicy` — Starlark exec-policy commands.
-- `harness version` — print the version.
+- `harness mcp-server` speaks MCP over stdio, as opposed to the server's HTTP
+  endpoint.
+- `harness pr` implements an issue and manages the review loop.
+- `harness rule` runs the rule engine.
+- `harness execpolicy` runs the Starlark exec-policy commands.
+- `harness version` prints the version.

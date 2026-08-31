@@ -1,6 +1,6 @@
 ---
 title: "Concepts"
-description: "Runs, workflows, nodes, projects, worktrees and artifacts — the vocabulary the rest of the documentation assumes."
+description: "Runs, workflows, nodes, projects, worktrees and artifacts. The words the rest of the documentation assumes you know."
 ---
 
 ## Project
@@ -10,10 +10,9 @@ toolchains it needs. Runs always belong to a project, and it is the project that
 decides which GitHub account pushes and which Linear workspace an issue can
 come from.
 
-A project can span **more than one repository**. Each is checked out into its
-own folder in the workspace, and `HARNESS_REPOS` describes the layout to the
-agents — which is how a review can reason about a frontend and the backend its
-logic actually lives in.
+A project can span **more than one repository**. Each gets its own folder in the
+workspace and `HARNESS_REPOS` tells the agents the layout. That is how a review
+can reason about a frontend and the backend where half its logic lives.
 
 ## Run
 
@@ -27,24 +26,22 @@ One execution of one workflow against one project. A run owns:
 ## Worktree
 
 Every run gets a `git worktree` checked out from the project's base branch, and
-it is thrown away afterwards. This is the isolation boundary: two runs on the
-same project cannot see each other's edits, and neither can touch a developer's
-working copy.
+throws it away afterwards. Two runs on the same project cannot see each other's
+edits, and neither can touch a developer's working copy.
 
 <Callout type="warn">
-A worktree is checked out **from the remote**. It does not contain unpushed
-local commits, and inside one there is no local `main` branch — only the
-remote-tracking `origin/main`. Workflow steps that diff against a bare
-`$BASE_BRANCH` silently fall back to scanning the whole repository; diff against
-`origin/$BASE_BRANCH` instead. This is the single most common authoring mistake.
+A worktree comes **from the remote**. It has none of your unpushed local
+commits, and there is no local `main` branch inside one, only the remote-tracking
+`origin/main`. A step that diffs against a bare `$BASE_BRANCH` quietly falls back
+to scanning the whole repository. Diff against `origin/$BASE_BRANCH` instead.
+This is the most common authoring mistake there is.
 </Callout>
 
 ## Workflow
 
-A DAG of nodes, written in YAML or drawn in the visual editor. Workflows resolve
-in order from the project's `.harness/workflows/`, then the server's global
-directory, then the bundled defaults — so a project can fork a bundled workflow
-by name without touching the harness.
+A DAG of nodes, written in YAML or drawn in the visual editor. A name resolves in order from the project's `.harness/workflows/`, then the
+server's global directory, then the ones that ship with the harness. A project
+can fork a bundled workflow by name without touching the harness.
 
 ## Node
 
@@ -54,35 +51,34 @@ One step. A node has a **body** that determines what it does:
 | --- | --- |
 | `prompt` | An inline AI prompt. |
 | `command` | A markdown prompt resolved from `.harness/commands/<name>.md`. |
-| `bash` | A shell script. No AI; stdout is captured as the node's output. |
+| `bash` | A shell script. No AI. Its stdout becomes the node's output. |
 | `script` | An inline script with an explicit runtime (TS/JS via `bun`, Python via `uv`) and optional dependencies. |
-| `loop` | A convergence loop — repeat until a condition holds. |
-| `approval` | A human gate; the run waits. |
+| `loop` | A convergence loop. Repeat until a condition holds. |
+| `approval` | A human gate. The run waits. |
 | `cancel` | Terminate the run with a reason. |
 
-`prompt`, `command` and `loop` are executed by an AI provider. `bash` and
-`script` are deterministic.
+An AI provider runs `prompt`, `command` and `loop`. `bash` and `script` are
+deterministic.
 
-Around the body, a node carries `depends_on`, a `when:` condition, a
-`trigger_rule` describing how it reacts to its dependencies' outcomes, per-node
-`provider` / `model` / `effort` overrides, `retries`, a `timeout`, an
-`output_format` schema, and an `artifact` it produces. All of it is covered in
-[Authoring workflows](/docs/workflows/authoring).
+A node also carries `depends_on`, a `when:` condition, a `trigger_rule` for how
+it reacts when something it depends on fails, its own `provider`, `model` and
+`effort`, `retries`, a `timeout`, an `output_format` schema, and an `artifact` it
+produces. [Authoring workflows](/docs/workflows/authoring) covers all of it.
 
 ## Provider and model
 
-A **provider** is which agent CLI runs the body — `claude`, `openai-codex`,
-`pi` (also `kimi`), `cursor`. A **model** is which model that agent
-should use. Both are set per node, so a workflow can plan with an expensive
-model and implement with a cheap one, and have a *different* model review the
-result. See [Agents and models](/docs/operating/agents).
+A **provider** is which agent CLI runs the body. `claude`, `openai-codex`,
+`pi` (also accepts `kimi`), or `cursor`. A **model** is which model that agent
+uses. Both are per node, so a workflow can plan with an expensive model, write
+the code with a cheap one, and have a third review the result. See
+[agents and models](/docs/operating/agents).
 
 ## Artifacts
 
-A node can declare an `artifact` — a path relative to the run's artifacts
-directory, like `exploration.md`. Artifacts survive the worktree and are how a
-planning step hands a document to an implementation step, and how you read back
-what a run was thinking.
+A node can declare an `artifact`, a path relative to the run's artifacts
+directory such as `exploration.md`. Artifacts outlive the worktree. They are how
+a planning step hands a document to the step that implements it, and how you read
+back what a run was thinking.
 
 ## Toolchains
 
@@ -92,7 +88,6 @@ rebuilding the image.
 
 ## Trigger
 
-What starts a run. Three of them: the dashboard, the
-[MCP endpoint](/docs/triggers/mcp), and
+What starts a run. The dashboard, the [MCP endpoint](/docs/triggers/mcp), or
 [Linear delegation](/docs/triggers/linear-connect). See
-[Triggering runs](/docs/triggers).
+[triggering runs](/docs/triggers).

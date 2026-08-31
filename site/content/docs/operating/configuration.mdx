@@ -22,17 +22,17 @@ have to think about.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `HARNESS_DATABASE_URL` | — | Postgres connection string. Required in any real deployment. |
-| `HARNESS_SECRET_KEY` | — | AES-256-GCM key encrypting stored credentials. **Keep it stable** — rotating it orphans every stored credential. |
+| `HARNESS_DATABASE_URL` | none | Postgres connection string. Required in any real deployment. |
+| `HARNESS_SECRET_KEY` | none | AES-256-GCM key encrypting stored credentials. **Keep it stable**. Rotating it orphans every stored credential. |
 | `HARNESS_HTTP_ADDR` | `127.0.0.1:9800` | Listen address. The container image sets `0.0.0.0:8080` itself. |
-| `HARNESS_DATA_DIR` | — | Data volume: caches, provisioned toolchains, artifacts. Must persist. |
-| `HARNESS_PROJECT_ROOT` | — | Where project checkouts live. Must persist. |
-| `HARNESS_PROJECTS_DIR` | — | Directory holding per-project folders. |
-| `HARNESS_PUBLIC_URL` | — | Public origin, used to build run links that appear in Linear and PR comments. |
-| `HARNESS_API_TOKEN` | — | Shared bearer token. Personal access tokens are preferred once sign-in is on. |
-| `HARNESS_DATABASE_POOL_MAX_CONNECTIONS` | — | Connection pool ceiling. |
-| `HARNESS_DATABASE_POOL_ACQUIRE_TIMEOUT_SECS` | — | How long to wait for a pooled connection. |
-| `HARNESS_DISPLAY_TZ` | — | Timezone for rendered timestamps. |
+| `HARNESS_DATA_DIR` | none | Data volume. Caches, provisioned toolchains, artifacts. Must persist. |
+| `HARNESS_PROJECT_ROOT` | none | Where project checkouts live. Must persist. |
+| `HARNESS_PROJECTS_DIR` | none | Directory holding per-project folders. |
+| `HARNESS_PUBLIC_URL` | none | Public origin, used to build run links that appear in Linear and PR comments. |
+| `HARNESS_API_TOKEN` | none | Shared bearer token. Personal access tokens are preferred once sign-in is on. |
+| `HARNESS_DATABASE_POOL_MAX_CONNECTIONS` | none | Connection pool ceiling. |
+| `HARNESS_DATABASE_POOL_ACQUIRE_TIMEOUT_SECS` | none | How long to wait for a pooled connection. |
+| `HARNESS_DISPLAY_TZ` | none | Timezone for rendered timestamps. |
 
 GitHub credentials are also read from the environment as a fallback:
 `GITHUB_TOKEN` or `GH_TOKEN`, and `GITHUB_WEBHOOK_SECRET`. Per-project
@@ -48,16 +48,16 @@ Caches live on the data volume and are garbage-collected against these caps.
 | `HARNESS_DEPS_CACHE_CAP_GB` | 20 GiB | Shared package-manager cache. |
 | `HARNESS_PROJECT_CACHE_CAP_GB` | 5 GiB per project | Whatever a workflow caches itself via `$HARNESS_CACHE_DIR`. |
 | `HARNESS_GIT_MIRROR_TTL_DAYS` | 30 | Idle time before a bare git mirror is dropped. |
-| `HARNESS_ATTACHMENTS_DIR` | — | Where Linear attachments are staged. |
-| `HARNESS_ATTACHMENTS_TTL_HOURS` | — | How long staged attachments live. |
+| `HARNESS_ATTACHMENTS_DIR` | none | Where Linear attachments are staged. |
+| `HARNESS_ATTACHMENTS_TTL_HOURS` | none | How long staged attachments live. |
 
 `0` disables the corresponding sweep. Note that the per-project caps are *per
-project* — the defaults add up quickly across several. See
+project*, so the defaults add up quickly across several. See
 [sizing the volume](/docs/operating/deploy#sizing-the-volume).
 
 ## OAuth endpoints
 
-Only needed to point at non-default identity endpoints — a proxy, or a test
+Only needed to point at non-default identity endpoints, such as a proxy or a test
 environment.
 
 `HARNESS_CLAUDE_OAUTH_CLIENT_ID`, `HARNESS_CLAUDE_OAUTH_TOKEN_URL`,
@@ -74,7 +74,7 @@ spawns. You read them in a `bash` or `script` node; you do not set them yourself
 | `HARNESS_NODE` | The id of the node currently executing. |
 | `HARNESS_PROVIDER` | The provider resolved for this node. |
 | `HARNESS_MODEL` | The model resolved for this node (empty if none). |
-| `HARNESS_CACHE_DIR` | Project-scoped cache directory on the persistent volume. It **survives the run** — everything else a run touches does not. |
+| `HARNESS_CACHE_DIR` | Project-scoped cache directory on the persistent volume. It **survives the run**. Everything else a run touches does not. |
 | `HARNESS_REPOS` | Describes the repository layout for a multi-repo project. |
 | `HARNESS_RUN_URL` | Link back to this run in the dashboard. |
 | `HARNESS_RUN_TOKEN` | Scoped token letting the step call back into the harness. |
@@ -96,7 +96,7 @@ probes should point at, and it needs no authentication.
 A project's own `.harness/` directory carries what belongs to the repository
 rather than to the deployment:
 
-- `.harness/workflows/` — workflows, shadowing the bundled ones by name.
-- `.harness/commands/` — markdown prompts referenced by `command:` node bodies.
-- `.harness/config.toml` — project settings, including `review_type`
+- `.harness/workflows/` holds workflows, shadowing the bundled ones by name.
+- `.harness/commands/` holds markdown prompts that `command:` node bodies name.
+- `.harness/config.toml` holds project settings, including `review_type`
   (`rust` | `shell` | `documentation` | `mixed`).

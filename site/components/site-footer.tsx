@@ -4,7 +4,7 @@ export function SiteFooter() {
   return (
     <footer>
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-2 px-6 py-8 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
-        <span>{siteConfig.name} — MIT licensed.</span>
+        <span>{siteConfig.name} is MIT licensed.</span>
         <span>
           The source code is available on{" "}
           <a

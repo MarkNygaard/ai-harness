@@ -7,7 +7,7 @@ import { SiteFooter } from "@/components/site-footer"
 const tagline = "Ship a feature without writing it"
 
 export const metadata: Metadata = {
-  title: { absolute: `${siteConfig.name} — ${tagline}` },
+  title: { absolute: `${siteConfig.name}. ${tagline}.` },
   description: siteConfig.description,
   alternates: { canonical: "/" },
 }
@@ -15,32 +15,32 @@ export const metadata: Metadata = {
 const features = [
   {
     title: "Workflow DAGs",
-    body: "Author multi-node pipelines — explore, plan, implement, validate, PR, review — in YAML or the visual editor. Nodes gate on conditions, wire one node's output into the next, and support loop/until constructs.",
+    body: "Write pipelines in YAML or draw them in the editor. Explore, plan, implement, validate, open the PR, review. Nodes gate on conditions and pass output to each other, and a loop can run until something is true.",
     href: "/docs/workflows/authoring",
   },
   {
     title: "Many agents, one pipeline",
-    body: "Claude Code, Codex, Pi/Kimi and Cursor nodes in the same run, each picking its own model. The harness builds the prompts and manages lifecycle; the agents decide how to execute.",
+    body: "Claude Code, Codex, Pi and Cursor nodes in the same run, each on its own model. The harness writes the prompts and runs the pipeline. The agents decide how to do the work.",
     href: "/docs/workflows/authoring",
   },
   {
     title: "Three ways to trigger",
-    body: "The web UI, an MCP-over-HTTP endpoint so a connected assistant can author and fire workflows, or Linear delegation — assign an issue and it walks the status map on its own.",
+    body: "The dashboard, an MCP endpoint so an assistant you are already talking to can start a run, or Linear. Delegate an issue and it moves through your columns on its own.",
     href: "/docs/triggers/linear-connect",
   },
   {
     title: "Isolated by default",
-    body: "Every run operates on a git worktree off the project's base branch. Credentials are encrypted at rest, and control-plane secrets are scrubbed from the agent processes a run spawns.",
+    body: "Every run works in its own git worktree off the base branch, thrown away afterwards. Credentials are encrypted at rest, and a run cannot read the database URL out of its own environment.",
     href: "/docs/operating/deploy",
   },
   {
     title: "Toolchains on demand",
-    body: "Declare a project's toolchains and mise installs them at run time, cached on the data volume. No image rebuild to add a language.",
+    body: "Declare what a project needs and mise installs it on the first run, then caches it. Adding a language does not mean rebuilding the image.",
     href: "/docs/operating/deploy",
   },
   {
     title: "One binary, one Postgres",
-    body: `The control plane is a single ${siteConfig.binary} binary with the dashboard bundled in, backed by Postgres. Runs execute as local child processes, so the same image works under Kubernetes or plain Docker.`,
+    body: `One ${siteConfig.binary} binary with the dashboard inside it, and a Postgres database. Runs are child processes of that binary, so the same image works under Kubernetes or plain Docker.`,
     href: "/docs/operating/deploy",
   },
 ]
@@ -48,27 +48,27 @@ const features = [
 const loop = [
   {
     title: "Write the issue",
-    body: "Describe what should be true when it is done, and how you will test it. That doubles as the acceptance criteria and as the instructions.",
+    body: "Describe what should be true when it is done, and how you will test it. Those are the acceptance criteria and the instructions at the same time.",
     who: "Whoever wants the change",
   },
   {
     title: "Hand it over",
-    body: "Delegate the issue. It plans, implements, and runs review passes with different models than the one that wrote the code, then opens a pull request.",
+    body: "Delegate the issue. It plans, writes the code, then reviews that code with models that did not write it, and opens a pull request.",
     who: "The harness",
   },
   {
     title: "Test it",
-    body: "Against the criteria you wrote. Trust your test over its summary — the run is usually right, and usually is exactly the failure mode to guard against.",
+    body: "Against the criteria you wrote. Trust your test over the run's own summary. It is usually right, and usually is the dangerous part.",
     who: "Whoever wrote the issue",
   },
   {
     title: "Review the code",
-    body: "A human approval is still required to merge. The obvious problems are generally gone by now, which is not the same as it being right.",
+    body: "Nothing merges without a human approving it. By now the obvious problems are gone, which is not the same as the code being right.",
     who: "A developer",
   },
   {
     title: "Write the rule",
-    body: "Made the same review comment twice? That is a missing rule. Move it into the project's CLAUDE.md and every later run gets it right the first time.",
+    body: "Made the same review comment twice? That is a missing rule. Put it in the project's CLAUDE.md and later runs get it right the first time.",
     who: "A developer",
   },
 ]
@@ -131,9 +131,9 @@ export default function HomePage() {
           {tagline}
         </h1>
         <p className="mt-5 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-          Write the issue. Hand it to {siteConfig.name}. It plans, implements,
-          reviews its own work with a different model than wrote it, and opens a
-          pull request. You test that against what you asked for — then a
+          Write the issue. Hand it to {siteConfig.name}. It plans, writes the
+          code, reviews that code with a model that did not write it, and opens
+          a pull request. You test it against what you asked for. Then a
           developer reviews the code.
         </p>
 
@@ -161,11 +161,10 @@ export default function HomePage() {
           Two people check two different things
         </h2>
         <p className="mt-3 max-w-2xl leading-relaxed text-muted-foreground">
-          The person who wrote the acceptance criteria is the person who can
-          tell whether it does the right thing. The developer is the person who
-          can tell whether it does it the right way. Neither is checking what
-          they are worse at — which is what makes it safe to let someone ship
-          who cannot read the diff.
+          The person who wrote the acceptance criteria can tell whether it
+          does the right thing. The developer can tell whether it does it the
+          right way. Those are different questions, and splitting them is what
+          makes it safe to let someone ship who cannot read a diff.
         </p>
 
         <ol className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -202,8 +201,9 @@ export default function HomePage() {
           >
             project rules
           </Link>{" "}
-          covers the developer&apos;s side — the file every run reads, and the
-          reason review effort goes down over time instead of staying flat.
+          covers the developer&apos;s side. It explains the file every run
+          reads, and why review gets lighter over time instead of staying
+          flat.
         </p>
       </section>
 
@@ -212,8 +212,8 @@ export default function HomePage() {
           Someone has to run it once
         </h2>
         <p className="mt-3 max-w-2xl leading-relaxed text-muted-foreground">
-          One container and a Postgres database, on your own infrastructure.
-          After that the loop above needs no terminal.
+          One container and a Postgres database, on your own hardware. After
+          that, nobody needs a terminal to use it.
         </p>
         <pre className="mt-6 max-w-3xl overflow-x-auto rounded-lg border border-border bg-card p-4 text-sm whitespace-pre">
           <code>{`docker run -p 8080:8080 \
@@ -228,7 +228,8 @@ export default function HomePage() {
           >
             Deploying
           </Link>{" "}
-          covers Kubernetes, what has to persist, and sizing the volume.
+          covers Kubernetes, what has to survive a restart, and how big the
+          volume needs to be.
         </p>
       </section>
 
@@ -254,7 +255,7 @@ export default function HomePage() {
           Workflows in the box
         </h2>
         <p className="mt-2 max-w-2xl text-muted-foreground">
-          Several ship ready to run, or to fork into a project&apos;s{" "}
+          Nine ship ready to run. Copy one into a project&apos;s{" "}
           <code className="rounded bg-muted px-1.5 py-0.5 text-sm">
             {siteConfig.configDir}/workflows/
           </code>

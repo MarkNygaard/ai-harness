@@ -9,14 +9,14 @@ executes.
 <Cards>
   <Card title="Deploying" href="/docs/operating/deploy">
     The image, the environment it needs, what has to persist, and the
-    operational traps — starting with the one about `HARNESS_SECRET_KEY`.
+    operational traps, starting with the one about `HARNESS_SECRET_KEY`.
   </Card>
   <Card title="Configuration" href="/docs/operating/configuration">
     Where settings come from and in what order, every environment variable the
     server reads, and the ones a run injects into your workflow steps.
   </Card>
   <Card title="CLI reference" href="/docs/operating/cli">
-    `serve`, `run`, `status`, `exec`, `linear`, `admin` — flags and defaults.
+    `serve`, `run`, `status`, `exec`, `linear` and `admin`, with flags and defaults.
   </Card>
   <Card title="Agents and models" href="/docs/operating/agents">
     The agent CLIs the harness drives, what each needs to authenticate, and why
@@ -32,4 +32,4 @@ executes.
 
 The control plane is one binary plus Postgres. Give it a persistent volume, a
 stable `HARNESS_SECRET_KEY`, and credentials for whichever agents your workflows
-name — everything else has a working default.
+name. Everything else has a working default.
