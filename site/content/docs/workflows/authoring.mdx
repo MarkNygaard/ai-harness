@@ -1,4 +1,7 @@
-# Authoring workflows
+---
+title: "Authoring workflows"
+description: "The YAML format for workflow DAGs: node types, when: gating, $node.output wiring, and the practices that keep a workflow correct against a real repo."
+---
 
 How to write an ai-harness workflow DAG. This is the canonical reference for the
 YAML format, the variable/condition machinery, and the good-practices that keep
@@ -396,7 +399,7 @@ per provider at dispatch.
   via `--settings`. A `deny` rule produces a `PreToolUse` hook that returns
   `permissionDecision: deny`; a `post_tool_use` rule produces a `PostToolUse`
   hook that injects `additionalContext`.
-- **`pi` / `omp` nodes** — hooks become the `harness-hooks` omp extension loaded
+- **Pi nodes** (`pi`) — hooks become the `harness-hooks` Pi extension loaded
   via `--plugin-dir`. The serialized config is passed in the `HARNESS_HOOKS`
   environment variable. `deny` rules block via `{ block: true, reason }`;
   `post_tool_use` rules emit `sendMessage(..., { deliverAs: "steer" })`.

@@ -1,0 +1,98 @@
+---
+title: "Concepts"
+description: "Runs, workflows, nodes, projects, worktrees and artifacts — the vocabulary the rest of the documentation assumes."
+---
+
+## Project
+
+A registered git repository: a remote, a base branch, and the credentials and
+toolchains it needs. Runs always belong to a project, and it is the project that
+decides which GitHub account pushes and which Linear workspace an issue can
+come from.
+
+A project can span **more than one repository**. Each is checked out into its
+own folder in the workspace, and `HARNESS_REPOS` describes the layout to the
+agents — which is how a review can reason about a frontend and the backend its
+logic actually lives in.
+
+## Run
+
+One execution of one workflow against one project. A run owns:
+
+- an isolated **worktree**,
+- an **artifacts** directory that outlives it,
+- a **cache** directory scoped to the project,
+- a record of every node's output, timing and cost.
+
+## Worktree
+
+Every run gets a `git worktree` checked out from the project's base branch, and
+it is thrown away afterwards. This is the isolation boundary: two runs on the
+same project cannot see each other's edits, and neither can touch a developer's
+working copy.
+
+<Callout type="warn">
+A worktree is checked out **from the remote**. It does not contain unpushed
+local commits, and inside one there is no local `main` branch — only the
+remote-tracking `origin/main`. Workflow steps that diff against a bare
+`$BASE_BRANCH` silently fall back to scanning the whole repository; diff against
+`origin/$BASE_BRANCH` instead. This is the single most common authoring mistake.
+</Callout>
+
+## Workflow
+
+A DAG of nodes, written in YAML or drawn in the visual editor. Workflows resolve
+in order from the project's `.harness/workflows/`, then the server's global
+directory, then the bundled defaults — so a project can fork a bundled workflow
+by name without touching the harness.
+
+## Node
+
+One step. A node has a **body** that determines what it does:
+
+| Body | What it is |
+| --- | --- |
+| `prompt` | An inline AI prompt. |
+| `command` | A markdown prompt resolved from `.harness/commands/<name>.md`. |
+| `bash` | A shell script. No AI; stdout is captured as the node's output. |
+| `script` | An inline script with an explicit runtime (TS/JS via `bun`, Python via `uv`) and optional dependencies. |
+| `loop` | A convergence loop — repeat until a condition holds. |
+| `approval` | A human gate; the run waits. |
+| `cancel` | Terminate the run with a reason. |
+
+`prompt`, `command` and `loop` are executed by an AI provider. `bash` and
+`script` are deterministic.
+
+Around the body, a node carries `depends_on`, a `when:` condition, a
+`trigger_rule` describing how it reacts to its dependencies' outcomes, per-node
+`provider` / `model` / `effort` overrides, `retries`, a `timeout`, an
+`output_format` schema, and an `artifact` it produces. All of it is covered in
+[Authoring workflows](/docs/workflows/authoring).
+
+## Provider and model
+
+A **provider** is which agent CLI runs the body — `claude`, `openai-codex`,
+`pi` (also `kimi`), `cursor`. A **model** is which model that agent
+should use. Both are set per node, so a workflow can plan with an expensive
+model and implement with a cheap one, and have a *different* model review the
+result. See [Agents and models](/docs/operating/agents).
+
+## Artifacts
+
+A node can declare an `artifact` — a path relative to the run's artifacts
+directory, like `exploration.md`. Artifacts survive the worktree and are how a
+planning step hands a document to an implementation step, and how you read back
+what a run was thinking.
+
+## Toolchains
+
+A project declares which toolchains it needs; `mise` installs them on demand at
+run time and caches them on the data volume. Adding a language does not mean
+rebuilding the image.
+
+## Trigger
+
+What starts a run. Three of them: the dashboard, the
+[MCP endpoint](/docs/triggers/mcp), and
+[Linear delegation](/docs/triggers/linear-connect). See
+[Triggering runs](/docs/triggers).

@@ -1,0 +1,47 @@
+---
+title: "Workflows"
+description: "What a workflow is, how one is resolved, and where to go to write or fork one."
+---
+
+A workflow is a DAG of nodes: the pipeline a run executes. You author it in YAML
+or draw it in the visual editor, and the harness walks it node by node — gating
+on conditions, wiring one node's output into the next, and deciding what to do
+when a step fails.
+
+## How a workflow is found
+
+A workflow name resolves in order:
+
+1. the project's `.harness/workflows/`,
+2. the server's global `.harness/workflows/`,
+3. the workflows bundled with the harness.
+
+The first match wins. That is the whole forking story: copy a bundled workflow
+into a project under the same name, change it, and the project's version is used
+from then on. There is nothing to register and nothing to un-register when you
+delete it again.
+
+## In this section
+
+<Cards>
+  <Card title="Authoring workflows" href="/docs/workflows/authoring">
+    The canonical reference — node bodies, `when:` conditions, `$node.output`
+    wiring, `trigger_rule`, hooks, caching, and the practices that keep a
+    workflow correct against a real repository.
+  </Card>
+  <Card title="Bundled workflows" href="/docs/workflows/bundled">
+    The nine that ship in the box: what each is for and when to reach for it.
+  </Card>
+</Cards>
+
+## Testing one without spending tokens
+
+`harness run` executes a workflow locally, and without `--real` it uses a
+built-in echo agent. Shape, gating and variable wiring all execute for free, so
+you can confirm a DAG behaves before paying for it:
+
+```bash
+harness run path/to/workflow.yaml --args "a task" --workspace .
+```
+
+See the [CLI reference](/docs/operating/cli#harness-run).

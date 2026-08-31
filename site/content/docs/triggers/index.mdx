@@ -1,0 +1,56 @@
+---
+title: "Triggering runs"
+description: "The three ways a run starts — the dashboard, the MCP endpoint, and Linear delegation — and when each one fits."
+---
+
+A run can start three ways. They differ less in what they can do than in who is
+driving.
+
+## The dashboard
+
+Pick a project, pick a workflow, describe the task, start it. The run page then
+shows the DAG executing node by node, with each node's output, duration and
+cost, and the artifacts it produced.
+
+This is the right choice when a human is choosing the work.
+
+## MCP over HTTP
+
+The harness exposes an **MCP-over-HTTP** endpoint, so an assistant you are
+already talking to can trigger a run without you leaving your editor — and can
+*author* workflows too, not just fire them.
+
+```
+run_trigger → a run starts on the cluster
+run_status  → how it is going
+run_findings → what the review passes found
+```
+
+This is the right choice when the task surfaces mid-conversation: you are
+already describing the problem to an assistant, and the harness picks it up from
+there. See [MCP endpoint](/docs/triggers/mcp) for the full tool list and how to
+connect.
+
+## Linear delegation
+
+The harness registers as a Linear **agent**. Delegate an issue to it, or
+@-mention it, and it picks the work up, walks the issue through a configurable
+status map, and reports progress inside the issue's agent-session thread.
+
+A **column poller** also remains for stage-to-stage pipelines, gated per binding
+by `live` — cards moved into a bound column start the bound workflow.
+
+This is the right choice when the work is already tracked: the issue is the
+trigger, and the status board is the progress view. See
+[Connecting Linear](/docs/triggers/linear-connect), and
+[Linear epics](/docs/triggers/linear-epics) for issues with sub-issues.
+
+## What a trigger supplies
+
+Whichever route it takes, a trigger names the same things:
+
+- the **project** to run against,
+- the **workflow** to run,
+- free-form text exposed to the workflow as `$ARGUMENTS` / `$USER_MESSAGE`,
+- optionally a **model override**, which is how A/B comparisons hold everything
+  else constant.

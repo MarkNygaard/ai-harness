@@ -1,0 +1,129 @@
+---
+title: "Bundled workflows"
+description: "The nine workflows that ship in the box, what each is for, and how to fork one into your own project."
+---
+
+These ship with the harness and are ready to run. To change one, copy it into
+the project's `.harness/workflows/` under the same name — project workflows
+resolve before the bundled defaults, so the fork wins without any registration
+step.
+
+## Task to pull request
+
+### `idea-to-pr`
+
+The default pipeline: a task (title and description, or a path to a PRD) becomes
+a reviewed pull request.
+
+Claude plans — a read-only Sonnet `explore` feeding a lean Opus `create-plan`.
+Kimi (via Pi) implements and self-reviews up to five times. Then two more review
+passes by *different* models: gpt-5.x via Pi, then Claude Sonnet, each fixing
+what it finds. A final build gate, and a workflow-summary comment carrying the
+diff and a commit breakdown across the three review-fix passes.
+
+19 nodes. The model diversity is the point — the reviewer is not the author.
+
+### `bc-idea-to-pr`
+
+`idea-to-pr` adapted for Business Central / AL repositories. The cross-platform
+AL compiler is the build gate: `al compile`, with symbols downloaded read-only
+from the BC dev endpoint.
+
+It **never publishes to a server** — read-only symbol download and local
+compilation only, so no database is touched and it cannot collide with a
+developer's environment. Deploying stays a human step.
+
+## Working on an existing PR
+
+### `revise-pr`
+
+Address reviewer feedback on an existing PR branch and push updates. No new PR
+is opened.
+
+<Callout type="warn">
+Binding configuration matters here. `ready_state_id` must be the **review
+column**, so a successful run loops the card back to review rather than to
+Done. The trigger state is typically "Changes requested".
+</Callout>
+
+### `merge-pr`
+
+Merge a ready pull request, resolving conflicts against its base branch first if
+needed, then squash-merging. `$ARGUMENTS` names the PR — a number, a URL, or a
+Linear issue whose linked PR should be merged.
+
+Linear-agnostic: works from a manual trigger or a "Ready for merge" binding.
+Project rules about merge strategy and verification live in the project's
+`CLAUDE.md` / `AGENTS.md` and are loaded into every agent's context
+automatically.
+
+## Review and analysis
+
+### `architect`
+
+A behaviour-preserving codebase-health sweep. Measures stack-aware health
+metrics, does a read-only architectural assessment, produces a tightly scoped
+plan (≤5–7 files, KISS/YAGNI/Rule-of-Three), applies hook-enforced
+simplification with per-edit verification, then runs a model-diverse
+behaviour-preservation review that **reverts any change that drifted
+semantics**.
+
+If the sweep finds nothing worth changing, no PR is opened at all.
+
+### `review-area`
+
+A read-only, cross-repo review of a specific area, in two stages to keep the
+expensive model economical. A cheap scout pass maps the area across every repo
+in the workspace into a curated dossier; a deep review then reasons *from the
+dossier* instead of re-exploring — spending the expensive tokens on judgement
+rather than navigation.
+
+Works multi-repo (via `HARNESS_REPOS`) or single-repo.
+
+### `geo-audit`
+
+Audits a live ecommerce site for Generative Engine Optimization — how ready it
+is to be cited by AI search — with traditional SEO as the foundation.
+
+Runs against the project's `external_url`, exposed as `$EXTERNAL_URL`. It audits
+**three pages, not one**: a store's homepage carries no `Product` schema, no
+price and no reviews, so auditing only it reports the same non-findings for
+every shop. It fetches the entry URL plus `robots.txt`, `llms.txt`,
+`llms-full.txt`, `sitemap.xml` and `.well-known/ucp`, then picks real pages to
+examine.
+
+### `judge-ab`
+
+A pairwise quality judge for A/B model comparisons. Given a shared task and two
+arms' results, it decides which did better and scores each 0–100.
+
+When an arm produced a PR it reads the actual diff and judges primarily on the
+code, falling back to textual evidence when there is no PR. The judge model is
+held constant across the comparison. It then does a second analysis: how much
+did the shared late-stage reviewers shape each arm?
+
+Pair it with `run_trigger_pair` over [MCP](/docs/triggers/mcp).
+
+## Epics
+
+### `linear-epic-supervise`
+
+Grades a merged epic piece against its own acceptance criteria, then advances
+the next one — or files a corrective.
+
+Bind it to the column a piece lands in once its PR is merged. It reads the
+sub-issue's acceptance criteria, judges the code now on the base branch, and
+does one of three things: start the next piece, file a corrective sub-issue, or
+stop and ask for a human.
+
+**The verdict is the gate.** A piece that was built but built wrong does not
+advance the epic, because everything after it is written against what it was
+supposed to do. See [Linear epics](/docs/triggers/linear-epics).
+
+## Bundled commands
+
+Workflows reference reusable markdown prompts by name through a `command:`
+body. These ship alongside the workflows and resolve the same way — a project's
+`.harness/commands/<name>.md` shadows the bundled one:
+
+`confirm-plan`, `finalize-pr`, `implement-tasks`, `plan-setup`, `validate`.

@@ -1,0 +1,74 @@
+---
+title: "Introduction"
+description: "What ai-harness is, what it deliberately does not do, and how a run gets from a task to a pull request."
+---
+
+ai-harness is a Rust-native orchestration layer for AI coding agents. It turns a
+task — typed in a UI, sent over MCP, or delegated from a Linear issue — into a
+run of a **workflow DAG** you authored, drives coding agents through it in an
+isolated git worktree, and opens a pull request at the end.
+
+## The one design decision worth knowing
+
+**The harness builds prompts and manages lifecycle. The agents decide how to
+execute.**
+
+There is no attempt to script the edit itself, no diff-application engine, no
+tool-call interpreter. A node hands an agent a prompt and a working directory;
+what the agent does with them is the agent's business. That is why a single
+workflow can put Claude Code, Codex, Kimi and Cursor nodes in the same pipeline
+without adapters for each one, and why upgrading an agent CLI does not mean
+changing the harness.
+
+The consequence is worth being explicit about: **the harness cannot make a bad
+agent good.** What it gives you is everything around the agent — isolation,
+sequencing, gating, retries, review passes by a *different* model, and a record
+of what happened.
+
+## How a run works
+
+1. A trigger arrives — from the dashboard, the [MCP endpoint](/docs/triggers/mcp),
+   or a [Linear issue](/docs/triggers/linear-connect) delegated to the harness.
+2. The run checks out an isolated git **worktree** off the project's base
+   branch. Nothing touches your working copy.
+3. Toolchains the project declared are provisioned on demand by `mise`, cached
+   on the data volume.
+4. The workflow DAG executes node by node. Each node picks its own agent and
+   model; `when:` gates decide what runs, `$node.output` wires one node's result
+   into the next, and `trigger_rule` decides how a node reacts to a failed
+   dependency.
+5. A final node opens a pull request. Review loops can send it back around
+   first, typically with a *different* model reviewing than the one that wrote
+   the code.
+
+Every node's output, timing and cost is recorded, so a finished run is
+inspectable rather than a black box.
+
+## What you have to supply
+
+The harness orchestrates; it does not bring its own intelligence.
+
+- **Agent CLIs and their credentials.** Claude Code, Codex, Pi and Cursor
+  are driven as subprocesses; each needs its own auth. See
+  [Agents and models](/docs/operating/agents).
+- **A workflow**, or one of the [bundled ones](/docs/workflows/bundled).
+- **A Postgres database** and a persistent volume. See
+  [Deploying](/docs/operating/deploy).
+
+## Where to go next
+
+<Cards>
+  <Card title="Quickstart" href="/docs/quickstart">
+    Get a harness running locally and trigger your first run.
+  </Card>
+  <Card title="Concepts" href="/docs/concepts">
+    Runs, workflows, nodes, projects, worktrees — the vocabulary the rest of
+    the docs assumes.
+  </Card>
+  <Card title="Authoring workflows" href="/docs/workflows/authoring">
+    The canonical YAML reference: node bodies, gating, variables, hooks.
+  </Card>
+  <Card title="Deploying" href="/docs/operating/deploy">
+    Running the container, the environment it needs, and connecting an editor.
+  </Card>
+</Cards>

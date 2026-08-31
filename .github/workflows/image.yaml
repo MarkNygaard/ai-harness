@@ -1,11 +1,19 @@
 name: Image
 
-# Builds the control-plane container image. On a push to main it builds AND
-# pushes `ghcr.io/marknygaard/ai-harness:{latest,main-<sha>}`; on a PR that
-# touches the image plumbing it builds only (validates the Dockerfile).
+# Builds the control-plane container image.
+#
+#   push to main   -> `latest` + `main-<sha>`
+#   push of a v*   -> `1.2.3`, `1.2`, and `1` (the last only from 1.0.0 on)
+#   PR touching    -> build only, to validate the Dockerfile
+#   the plumbing
+#
+# `main-<sha>` is the immutable handle and the reason a rollback is possible, so
+# it stays regardless of the version tags. Deployments should pin one of those
+# two immutable forms rather than tracking `latest`.
 on:
   push:
     branches: ["main"]
+    tags: ["v*"]
   pull_request:
     branches: ["main"]
     paths:
@@ -44,6 +52,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # A bare major tag is guarded below `1.0.0`: `0` would otherwise move
+      # across every breaking 0.x release, which is the one guarantee a major
+      # tag is supposed to make.
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
@@ -52,6 +63,9 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=main-,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}},enable=${{ !startsWith(github.ref, 'refs/tags/v0.') }}
             type=ref,event=pr
 
       - name: Build & push

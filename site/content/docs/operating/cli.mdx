@@ -1,0 +1,133 @@
+---
+title: "CLI reference"
+description: "The harness binary: serving, running a workflow locally, checking status, and recovering admin access."
+---
+
+The same `harness` binary serves the control plane and runs workflows locally.
+`--config <path>` is global to every subcommand.
+
+## `harness serve`
+
+Start the control plane — HTTP API plus the bundled dashboard.
+
+```bash
+harness serve --transport http --port 9800 --project-root /var/lib/harness/projects
+```
+
+| Flag | Purpose |
+| --- | --- |
+| `--transport` | Transport mode; defaults to the config value, else `http`. |
+| `--port` | HTTP port (http/websocket transports). |
+| `--project-root` | Project root used by server-side scans (GC, health). |
+| `--project NAME=PATH` | Register a named project at startup. Repeatable. |
+| `--default-project` | Which registered project `--project` flags default to. |
+
+## `harness run`
+
+Execute a workflow DAG locally and print a per-node summary. This is the fastest
+way to iterate on YAML.
+
+```bash
+# bundled default pipeline, echo agent, current directory
+harness run
+
+# a named workflow with real agents, in a throwaway worktree
+harness run idea-to-pr --args "add a health endpoint" --real --worktree
+```
+
+The positional argument is a `.yaml` path **or** a bundled/project workflow
+name; omit it for the bundled standard pipeline.
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--workspace` | current directory | Directory to run against. |
+| `--base-branch` | `main` | Exposed as `$BASE_BRANCH`; used for worktree isolation. |
+| `--args` | `""` | Free-form text exposed as `$ARGUMENTS` / `$USER_MESSAGE`. |
+| `--real` | off | Use real agents instead of the built-in echo agent. |
+| `--sandbox` | `danger-full-access` | Sandbox mode for real CLI agents. |
+| `--worktree` | off | Run inside an isolated git worktree, removed afterwards. |
+| `--database-url` | `$HARNESS_DATABASE_URL` | Persist the run to Postgres. |
+
+<Callout>
+Without `--real`, nodes run against a built-in echo agent. Shape, gating and
+`$node.output` wiring all execute for free — check a DAG behaves before spending
+tokens on it.
+</Callout>
+
+## `harness status`
+
+Live server health, queue depth and workflow runtime state.
+
+```bash
+harness status --json
+```
+
+| Flag | Purpose |
+| --- | --- |
+| `--url` | Server base URL; defaults to `server.http_addr` from config. |
+| `--project-id` | Filter the runtime tree to one project. |
+| `--runtime-limit` | Max workflow rows requested (default 20). |
+| `--json` | Raw combined JSON instead of the text summary. |
+
+## `harness exec`
+
+Execute a single prompt non-interactively, without a workflow.
+
+```bash
+harness exec "summarise the recent changes" --project . --agent auto
+```
+
+Notable flags: `--agent` (default `auto`), `--model`, `--sandbox-mode`
+(default `workspace-write`), `--output-file`, and the actor allow-lists
+`--allow-users` / `--allow-bots` / `--actor` used when the caller is a GitHub
+identity. `--drop-sudo` defaults on and refuses to execute from a root context.
+
+## `harness linear`
+
+Write to Linear **as the harness app**. These are the operations workflow steps
+use; they are documented because a workflow author calls them from a `bash`
+node.
+
+| Subcommand | What it does |
+| --- | --- |
+| `create-sub-issue` | File a sub-issue under an epic, in the epic's own team. |
+| `move-state` | Move an issue to a workflow state. |
+| `comment` | Comment on an issue — the epic ledger. |
+| `issue` | Print one issue's team, state, parent and labels as JSON. |
+| `children` | Print an epic's sub-issues as JSON, in board order. |
+| `release` | Give up an issue so the poller stops offering it. |
+| `epic-review-state` | The state a finished epic moves to, per its binding. |
+| `ready-state` | The state a piece must reach to be built. |
+
+**No subcommand names a workspace or a token.** The run's grant says which
+project it speaks for and the server resolves that to a connection exactly as
+the poller would — so an epic's sub-issues cannot land in a workspace its runs
+never watch, and a run cannot write as somebody else.
+
+Bodies with newlines go through `--description-file` / `--body-file` rather than
+`--description` / `--body`, which is the usual case since acceptance criteria
+are written to an artifact by a planning step.
+
+## `harness admin`
+
+Break-glass account recovery.
+
+```bash
+harness admin create --email you@example.com --password '<password>'
+```
+
+Creates an administrator, or promotes an existing account and sets its password.
+
+<Callout type="warn">
+Signing in can be turned on but **never off** — nothing can turn it off. This
+command exists so that one-way door is a safeguard rather than a trap. It
+requires a shell on the server, which is the correct bar.
+</Callout>
+
+## Others
+
+- `harness mcp-server` — MCP over stdio, as opposed to the server's HTTP endpoint.
+- `harness pr` — PR orchestration: implement an issue, manage the review loop.
+- `harness rule` — rule-engine commands.
+- `harness execpolicy` — Starlark exec-policy commands.
+- `harness version` — print the version.

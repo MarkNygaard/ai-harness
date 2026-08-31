@@ -1,0 +1,102 @@
+---
+title: "Configuration"
+description: "Where settings come from, which environment variables the server reads, and which ones a run injects into your workflow steps."
+---
+
+## Precedence
+
+Configuration resolves in a fixed order, each layer overriding the one before:
+
+**TOML config file → environment variables → CLI flags.**
+
+CLI flags always win. Point at a config file with `--config`; without one the
+server uses its defaults and whatever the environment supplies.
+
+An empty environment variable is treated as unset, so exporting `HARNESS_X=""`
+leaves the default in place rather than clearing it.
+
+## Server settings
+
+These configure the control plane. The ones without a default are the ones you
+have to think about.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HARNESS_DATABASE_URL` | — | Postgres connection string. Required in any real deployment. |
+| `HARNESS_SECRET_KEY` | — | AES-256-GCM key encrypting stored credentials. **Keep it stable** — rotating it orphans every stored credential. |
+| `HARNESS_HTTP_ADDR` | `127.0.0.1:9800` | Listen address. The container image sets `0.0.0.0:8080` itself. |
+| `HARNESS_DATA_DIR` | — | Data volume: caches, provisioned toolchains, artifacts. Must persist. |
+| `HARNESS_PROJECT_ROOT` | — | Where project checkouts live. Must persist. |
+| `HARNESS_PROJECTS_DIR` | — | Directory holding per-project folders. |
+| `HARNESS_PUBLIC_URL` | — | Public origin, used to build run links that appear in Linear and PR comments. |
+| `HARNESS_API_TOKEN` | — | Shared bearer token. Personal access tokens are preferred once sign-in is on. |
+| `HARNESS_DATABASE_POOL_MAX_CONNECTIONS` | — | Connection pool ceiling. |
+| `HARNESS_DATABASE_POOL_ACQUIRE_TIMEOUT_SECS` | — | How long to wait for a pooled connection. |
+| `HARNESS_DISPLAY_TZ` | — | Timezone for rendered timestamps. |
+
+GitHub credentials are also read from the environment as a fallback:
+`GITHUB_TOKEN` or `GH_TOKEN`, and `GITHUB_WEBHOOK_SECRET`. Per-project
+credentials configured in the dashboard take precedence.
+
+## Cache and storage limits
+
+Caches live on the data volume and are garbage-collected against these caps.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `HARNESS_CARGO_TARGET_CAP_GB` | 50 GiB per project | Cached Cargo `target` directories. |
+| `HARNESS_DEPS_CACHE_CAP_GB` | 20 GiB | Shared package-manager cache. |
+| `HARNESS_PROJECT_CACHE_CAP_GB` | 5 GiB per project | Whatever a workflow caches itself via `$HARNESS_CACHE_DIR`. |
+| `HARNESS_GIT_MIRROR_TTL_DAYS` | 30 | Idle time before a bare git mirror is dropped. |
+| `HARNESS_ATTACHMENTS_DIR` | — | Where Linear attachments are staged. |
+| `HARNESS_ATTACHMENTS_TTL_HOURS` | — | How long staged attachments live. |
+
+`0` disables the corresponding sweep. Note that the per-project caps are *per
+project* — the defaults add up quickly across several. See
+[sizing the volume](/docs/operating/deploy#sizing-the-volume).
+
+## OAuth endpoints
+
+Only needed to point at non-default identity endpoints — a proxy, or a test
+environment.
+
+`HARNESS_CLAUDE_OAUTH_CLIENT_ID`, `HARNESS_CLAUDE_OAUTH_TOKEN_URL`,
+`HARNESS_LINEAR_OAUTH_AUTHORIZE_URL`, `HARNESS_LINEAR_OAUTH_TOKEN_URL`,
+`HARNESS_LINEAR_OAUTH_REVOKE_URL`.
+
+## Variables a run injects
+
+These are set **by** the harness **into** the environment of the steps a run
+spawns. You read them in a `bash` or `script` node; you do not set them yourself.
+
+| Variable | What it holds |
+| --- | --- |
+| `HARNESS_NODE` | The id of the node currently executing. |
+| `HARNESS_PROVIDER` | The provider resolved for this node. |
+| `HARNESS_MODEL` | The model resolved for this node (empty if none). |
+| `HARNESS_CACHE_DIR` | Project-scoped cache directory on the persistent volume. It **survives the run** — everything else a run touches does not. |
+| `HARNESS_REPOS` | Describes the repository layout for a multi-repo project. |
+| `HARNESS_RUN_URL` | Link back to this run in the dashboard. |
+| `HARNESS_RUN_TOKEN` | Scoped token letting the step call back into the harness. |
+| `HARNESS_GIT_AUTHOR_EMAIL` | Author identity for commits the run makes. |
+
+<Callout>
+Control-plane secrets are **scrubbed** from the processes a run spawns. An agent
+cannot read the database URL or the encryption key out of its own environment,
+whatever it is asked to do.
+</Callout>
+
+## Health
+
+`GET /health` returns liveness plus runtime-log state. It is what Kubernetes
+probes should point at, and it needs no authentication.
+
+## Per-project configuration
+
+A project's own `.harness/` directory carries what belongs to the repository
+rather than to the deployment:
+
+- `.harness/workflows/` — workflows, shadowing the bundled ones by name.
+- `.harness/commands/` — markdown prompts referenced by `command:` node bodies.
+- `.harness/config.toml` — project settings, including `review_type`
+  (`rust` | `shell` | `documentation` | `mixed`).
