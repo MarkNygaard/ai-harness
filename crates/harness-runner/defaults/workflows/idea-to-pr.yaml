@@ -231,9 +231,67 @@ nodes:
     model: kimi-code/kimi-for-coding
     context: fresh
 
+  - id: scope
+    category: setup
+    depends_on: [implement-tasks]
+    timeout: 120000
+    bash: |
+      set -uo pipefail
+      # What this run changed, per repo, computed once and written down.
+      #
+      # Downstream nodes used to work this out themselves, and an agent that
+      # computes its own scope gets it wrong in a way that looks plausible: a
+      # diff against the wrong base, or a `git` call at the multi-repo root
+      # (which is not a repo), returns *something* rather than nothing, and the
+      # agent then "simplifies" a repo this run never opened. That has produced
+      # a stray PR against an untouched repo twice.
+      #
+      # Each repo is diffed against **its own** base branch. `$BASE_BRANCH` is
+      # the run's, which is the primary repo's — a linked repo based on
+      # `develop` compared against `origin/main` reports every difference
+      # between two release lines as this run's work.
+      out="$ARTIFACTS_DIR/scope.json"
+      rows="$ARTIFACTS_DIR/.scope-rows"
+      : > "$rows"
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        echo "$HARNESS_REPOS" | jq -c '.[] | {folder: .folder, base: .base_branch}' > "$rows"
+      else
+        jq -n -c --arg base "$BASE_BRANCH" '{folder: ".", base: $base}' > "$rows"
+      fi
+      : > "$out.tmp"
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        folder=$(printf '%s' "$row" | jq -r .folder)
+        base=$(printf '%s' "$row" | jq -r .base)
+        if [ ! -d "$folder/.git" ]; then
+          echo "[$folder] not a git checkout — skipping" >&2
+          continue
+        fi
+        # Against a stale remote ref the diff reports work that merged upstream
+        # long ago — another ticket's, and not this run's to touch.
+        git -C "$folder" fetch --quiet origin "$base" 2>/dev/null || true
+        # An unresolvable base would make the diff empty, which reads as "this
+        # repo is out of scope" — and the guard reverts out-of-scope repos. A
+        # missing base is a broken run, not an empty one, so say so and stop.
+        if ! git -C "$folder" rev-parse --verify --quiet "origin/$base" >/dev/null; then
+          echo "ERROR: [$folder] has no origin/$base — every scope decision for" \
+               "this repo would be wrong, and out-of-scope work gets reverted." >&2
+          exit 1
+        fi
+        files=$(git -C "$folder" diff --name-only "origin/$base...HEAD" 2>/dev/null || true)
+        head=$(git -C "$folder" rev-parse HEAD 2>/dev/null || true)
+        printf '%s\n' "$files" | jq -R -s -c \
+          --arg folder "$folder" --arg base "$base" --arg head "$head" \
+          '{folder: $folder, base: $base, head: $head,
+            files: (split("\n") | map(select(length > 0)))}' >> "$out.tmp"
+      done < "$rows"
+      jq -s '.' "$out.tmp" > "$out" || { echo "could not write $out" >&2; exit 1; }
+      rm -f "$out.tmp" "$rows"
+      jq -r '.[] | "\(.folder): \(.files | length) changed file(s) vs origin/\(.base)"' "$out"
+
   - id: pi-simplify
     category: implementation
-    depends_on: [implement-tasks]
+    depends_on: [scope]
     provider: pi
     model: kimi-code/kimi-for-coding
     context: fresh
@@ -243,38 +301,33 @@ nodes:
 
       ## Scope (critical — do not exceed it)
 
-      **First, list the repo folders to consider.** If `$HARNESS_REPOS` is
-      set this project spans several repos, each checked out in its own
-      folder at the workspace root — and the root itself is NOT a git repo:
+      **The in-scope file list is already computed. Read it; do not derive
+      it.** `$ARTIFACTS_DIR/scope.json` is an array, one entry per repo folder
+      of this project:
 
-          echo "${HARNESS_REPOS:-}" | jq -r '.[].folder'   # multi-repo
-          # unset → a single repo at the workspace root: the one folder is `.`
-
-      **Then, per folder, compute that repo's own changed-file set.** Run
-      inside the folder, never at the workspace root:
-
-          cd "$folder"
-          git fetch --quiet origin "$BASE_BRANCH" 2>/dev/null || true
-          git diff --name-only "origin/$BASE_BRANCH...HEAD"
-
-      The fetch matters: against a stale `origin/$BASE_BRANCH` the diff
-      reports commits that merged upstream long ago — another ticket's work,
-      which is NOT yours to simplify.
+          jq -r '.[] | "\(.folder): \(.files | length)"' $ARTIFACTS_DIR/scope.json
+          jq -r '.[] | select(.files | length > 0) | .folder' $ARTIFACTS_DIR/scope.json
+          jq -r '.[] | select(.folder == "<folder>") | .files[]' $ARTIFACTS_DIR/scope.json
 
       Those files — and ONLY those files — are in scope. Do NOT open,
-      read-for-simplification, or edit any file outside that list. You
-      are simplifying the work this PR introduced, not auditing the
-      repository.
+      read-for-simplification, or edit any file outside that list.
 
-      **An empty diff means that repo is done — not that you should go
-      looking.** Most runs touch one repo out of several, so an empty
-      list is the expected answer for the rest. Never widen the search
-      because a folder came back empty, and never fall back to scanning a
-      repo's working tree, `git log`, or another folder to find something
-      to simplify. If `git` errors because you are at a multi-repo root,
-      the fix is to `cd` into a folder from the list above — not to hunt
-      for a git repo. If every folder's diff is empty, take the no-op path
-      below and stop.
+      **Do not run `git diff` to second-guess it.** Every earlier version of
+      this step asked the agent to compute its own changed-file set, and it
+      went wrong the same way each time: a diff against the wrong base, or a
+      `git` call at the multi-repo root, returns something plausible instead of
+      nothing, and 79 files of an untouched repo get "simplified" into a stray
+      pull request. The artifact was diffed per repo against that repo's own
+      base branch. It is the answer.
+
+      **A repo with `files: []` is done — not an invitation to go looking.**
+      Most runs touch one repo out of several, so an empty list is the expected
+      answer for the rest. Never widen the search because a folder came back
+      empty, and never scan a repo's working tree, `git log`, or another folder
+      to find something to simplify. If every folder is empty, take the no-op
+      path below and stop. A later step reverts any repo you change that was
+      not in scope, so work outside the list is thrown away — it costs the run
+      time and buys nothing.
 
       ## Process
 
@@ -320,10 +373,52 @@ nodes:
       changes` — so a wrong-scope run is visible at a glance. Then:
       <promise>SIMPLIFY-DONE</promise>
 
+  - id: guard-scope
+    category: validation
+    depends_on: [pi-simplify]
+    timeout: 120000
+    bash: |
+      set -uo pipefail
+      # A repo this run did not change must still be unchanged.
+      #
+      # Instructions alone did not hold: the simplify step has twice committed
+      # in a repo whose diff was empty, and `finalize-pr` then opened a pull
+      # request for it — 42 files of formatting against an untouched service,
+      # on a ticket that changed four frontend files. Reverting is safe by
+      # construction: `files: []` means the repo carried none of this run's
+      # commits, so there is nothing of ours to lose.
+      scope="$ARTIFACTS_DIR/scope.json"
+      [ -f "$scope" ] || { echo "no scope.json — nothing to guard"; exit 0; }
+      reverted=0
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        folder=$(printf '%s' "$row" | jq -r .folder)
+        head=$(printf '%s' "$row" | jq -r .head)
+        [ -d "$folder/.git" ] || continue
+        [ -n "$head" ] || continue
+        now=$(git -C "$folder" rev-parse HEAD 2>/dev/null || true)
+        dirty=$(git -C "$folder" status --porcelain 2>/dev/null)
+        if [ "$now" = "$head" ] && [ -z "$dirty" ]; then
+          continue
+        fi
+        echo "!! $folder was not in this run's scope but has changes — reverting to $head" >&2
+        git -C "$folder" log --oneline "$head..HEAD" 2>/dev/null | sed 's/^/     dropped: /' >&2
+        # `clean -fd` leaves ignored files alone (no -x), so node_modules and
+        # other warm build state survive; only out-of-scope work goes.
+        git -C "$folder" reset --hard "$head" >/dev/null 2>&1 || true
+        git -C "$folder" clean -fd >/dev/null 2>&1 || true
+        reverted=$((reverted + 1))
+      done < <(jq -c '.[] | select(.files | length == 0)' "$scope")
+      if [ "$reverted" -gt 0 ]; then
+        echo "reverted $reverted out-of-scope repo(s) — nothing of this run's work was in them"
+      else
+        echo "every out-of-scope repo is untouched"
+      fi
+
   - id: validate
     category: validation
     command: validate
-    depends_on: [pi-simplify]
+    depends_on: [guard-scope]
     provider: pi
     model: kimi-code/kimi-for-coding
     context: fresh
@@ -498,9 +593,80 @@ nodes:
       Do NOT touch the PR body, labels, base branch, or any other
       property. Title only.
 
+  - id: gate-pr-titles
+    category: delivery
+    depends_on: [verify-pr-title]
+    timeout: 180000
+    bash: |
+      set -uo pipefail
+      # Every PR's title, checked rather than trusted.
+      #
+      # The step before this one is told, in prose, that a Linear task's title
+      # MUST end with the issue identifier — and it applied that to the first
+      # PR and declared the second "TITLE OK" with no identifier at all, so
+      # Linear never linked it. A three-part condition in a paragraph is not a
+      # gate; this is.
+      #
+      # Appending a missing identifier is mechanical, so this fixes it. A title
+      # that does not match the format at all needs a judgement about type and
+      # scope, which belongs to the step above — so that fails the node instead
+      # of being guessed at here.
+      list="$ARTIFACTS_DIR/.pr-list"
+      [ -s "$list" ] || { echo "no PRs opened by this run — nothing to gate"; exit 0; }
+
+      # The identifier comes from Linear, keyed by the run's issue id, rather
+      # than by pattern-matching the task text: a description that mentions
+      # another ticket would otherwise decide the title.
+      ident=""
+      if [ -n "${ISSUE_ID:-}" ]; then
+        ident=$(harness linear issue --issue "$ISSUE_ID" 2>/dev/null | jq -r '.identifier // empty')
+        [ -n "$ident" ] && echo "Linear issue: $ident"
+      fi
+      pattern='^(feat|fix|chore|ci|docs|refactor|perf|test)(\([^)]+\))?!?: .+'
+      failed=0
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        number=$(printf '%s' "$row" | jq -r '.number // empty')
+        url=$(printf '%s' "$row" | jq -r '.url // empty')
+        [ -n "$number" ] && [ -n "$url" ] || continue
+        # OWNER/REPO out of the PR url — `gh pr view` needs a repo context this
+        # node does not have, and `gh api` works from anywhere.
+        slug=$(printf '%s' "$url" | sed -E 's#^https?://[^/]+/([^/]+/[^/]+)/pull/.*#\1#')
+        api="repos/$slug/pulls/$number"
+        title=$(gh api "$api" --jq .title 2>/dev/null || true)
+        if [ -z "$title" ]; then
+          echo "!! could not read the title of $url" >&2
+          failed=$((failed + 1))
+          continue
+        fi
+        if ! printf '%s' "$title" | grep -qE "$pattern"; then
+          echo "!! $url — title is not conventional-commits: $title" >&2
+          failed=$((failed + 1))
+          continue
+        fi
+        if [ -n "$ident" ] && ! printf '%s' "$title" | grep -qF "($ident)"; then
+          fixed="$title ($ident)"
+          if gh api -X PATCH "$api" -f title="$fixed" >/dev/null 2>&1; then
+            echo "   $url — appended the issue identifier: $fixed"
+            title="$fixed"
+          else
+            echo "!! $url — title is missing ($ident) and it could not be set: $title" >&2
+            failed=$((failed + 1))
+            continue
+          fi
+        fi
+        echo "OK $url — $title"
+      done < "$list"
+      if [ "$failed" -ne 0 ]; then
+        echo "ERROR: $failed pull request title(s) are wrong. A title that does not" \
+             "match ^(feat|fix|chore|ci|docs|refactor|perf|test)(scope)?: <summary>" \
+             "needs a type and scope chosen for the change; fix it and re-run." >&2
+        exit 1
+      fi
+
   - id: pi-review-fix-loop
     category: validation
-    depends_on: [verify-pr-title]
+    depends_on: [gate-pr-titles]
     loop:
       provider: pi
       model: kimi-code/kimi-for-coding
