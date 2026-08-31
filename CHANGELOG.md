@@ -65,6 +65,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across 3 runs of one project). They now name the artifact the run actually
   wrote, with `plan-context.md` as the `plan-setup` variant, and say that the
   directory listing is the authority.
+- **`file` is in the container image.** No workflow asks for it — the agents reach
+  for it themselves, to tell text from binary before reading something — and
+  `error: command not found: file` was the only missing-command failure in a month
+  of recorded run activity, 10 occurrences across 8 runs in the implement,
+  validate, review and finalize steps. A standard utility costing about a megabyte
+  is a cheaper answer than instructing agents not to use one.
 - **A multi-repo project can name the primary repo's folder, and listing it no
   longer checks it out twice.** The project's Git URL is always the first repo of
   the layout, and its folder name was derived from the URL — so a project wanting

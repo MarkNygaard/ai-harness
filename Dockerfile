@@ -41,9 +41,16 @@ ENV DEBIAN_FRONTEND=noninteractive
 # it, a mise-provisioned `dotnet` FailFasts on first invocation ("Couldn't find
 # a valid ICU package"), breaking the bc-idea-to-pr (Business Central / AL)
 # compile steps.
+# `file` is not asked for by any workflow — the agents reach for it themselves,
+# to tell text from binary before reading something. `error: command not found:
+# file` is the only missing-command failure in a month of run activity (10
+# occurrences across 8 runs, in implement / validate / review / finalize
+# nodes), against roughly a megabyte for the package and its libmagic
+# dependency. Instructing agents not to use a standard utility is the losing
+# side of that trade.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl git bash xz-utils unzip jq libicu72 \
+        ca-certificates curl file git bash xz-utils unzip jq libicu72 \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI. The idea-to-pr pipeline's finalize / verify-pr-base / verify-pr-title
