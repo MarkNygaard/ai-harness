@@ -1,4 +1,13 @@
 {
   "title": "Documentation",
-  "pages": ["index", "quickstart", "concepts", "workflows", "triggers", "operating"]
+  "pages": [
+    "index",
+    "quickstart",
+    "shipping-without-code",
+    "project-rules",
+    "concepts",
+    "workflows",
+    "triggers",
+    "operating"
+  ]
 }

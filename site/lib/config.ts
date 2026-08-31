@@ -17,7 +17,7 @@ export const siteConfig = {
   name: "ai-harness",
   /** One-line positioning, used as the meta description and the hero subtitle. */
   description:
-    "A Rust-native orchestration layer for AI coding agents. Turn a task into a reviewed pull request with workflow DAGs that drive Claude Code, Codex, Pi and Cursor.",
+    "Turn a written issue into a reviewed pull request. Self-hosted orchestration for AI coding agents, so the person who writes the acceptance criteria can ship and a developer reviews the code.",
   /**
    * Public origin. Used for canonical URLs, OG images, `sitemap.xml`,
    * `robots.txt` and `llms.txt`.

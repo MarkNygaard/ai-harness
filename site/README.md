@@ -61,8 +61,11 @@ Generated at build time, all from `siteConfig` and the docs tree:
 ## Verify
 
 ```bash
-cd site && bunx tsc --noEmit && bunx next build
+cd site && bun run typecheck && bun run build
 ```
+
+Use `bun run`, not `bunx`: `bunx tsc` resolves from the network and can pull a
+different TypeScript major than the pinned devDependency.
 
 ## Docs chrome
 

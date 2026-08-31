@@ -1,0 +1,105 @@
+---
+title: "Project rules"
+description: "The AGENTS.md / CLAUDE.md cascade every run loads — how it resolves, what belongs in it, and why it is the main lever a developer has on output quality."
+---
+
+If [shipping without writing code](/docs/shipping-without-code) is what the
+person requesting work does, this is what the developers do. Setup is a one-off.
+This is the part that continues.
+
+## The developer's job changes shape
+
+Three things, and only one of them recurs:
+
+1. **Set it up once** — connect the repository, add credentials, declare
+   toolchains.
+2. **Maintain the project's rules** — the ongoing work, and the subject of this
+   page.
+3. **Review pull requests** — where your judgement is actually needed.
+
+The leverage is all in the second one. Reviewing a pull request improves one
+pull request. Writing the rule that would have prevented the comment improves
+every run after it.
+
+## What gets loaded
+
+Every run merges a cascade of instruction files into each agent's context before
+it starts. Later entries override earlier ones:
+
+1. `~/.harness/AGENTS.md` and `~/.harness/CLAUDE.md` — global, applies to every
+   project on this harness.
+2. `<project>/AGENTS.md` and `<project>/CLAUDE.md` — the usual place.
+3. `AGENTS.md` / `CLAUDE.md` in `src/`, `crates/`, `lib/`, `pkg/` — for rules
+   that only apply to part of a repository.
+
+Two things worth knowing before you rely on this:
+
+- **`AGENTS.override.md` discards everything above it.** At any level, it
+  replaces the entire accumulated set rather than adding to it. Reach for it
+  when a project genuinely must not inherit the global rules — not as a way to
+  put rules at the top.
+- **The merged result is capped at 32KB.** Past that, content is dropped. A
+  sprawling rules file is not just hard to follow; part of it silently stops
+  being loaded. Length is a real constraint, not a style preference.
+
+These are the same files your agents already read locally, so a repository that
+is pleasant to work in with Claude Code or Codex is already most of the way
+there.
+
+## What belongs in them
+
+Write the things a competent new contributor would get wrong on their first day,
+and which a reviewer would catch every time.
+
+- **How to verify a change.** The exact commands, and which to run when. This is
+  the highest-value rule in most projects: a run that can check its own work
+  fails on its own mistakes instead of yours.
+- **Conventions that are not visible from a single file.** Which layer owns
+  what, which module a new endpoint belongs in, what the project uses instead of
+  the obvious library.
+- **Prohibitions, with the reason.** "Do not add a dependency for something the
+  standard library does" travels; "no new deps" invites a workaround.
+- **Merge and branch policy.** Squash or rebase, what has to pass first.
+
+And what does not:
+
+- **Anything the code already says.** Structure, module names, past fixes — the
+  run reads the repository. Restating it burns the budget you need for the
+  things it cannot see.
+- **Task-specific instructions.** Those go in the issue, where they can differ
+  per task.
+- **Aspirations.** A rule the codebase does not follow will be applied to new
+  code and produce an inconsistent result, which is worse than either
+  convention on its own.
+
+## The loop that actually improves output
+
+**Write the same review comment twice and you have found a missing rule.**
+
+That is the whole discipline. A recurring comment is evidence of a convention
+that exists in your head and nowhere the run can read it. Move it into
+`CLAUDE.md` and you stop paying for it.
+
+Done consistently, review effort trends toward the things that genuinely need a
+human — is this the right approach, will this hurt us in six months — and away
+from the ones that do not.
+
+<Callout>
+Rules are read at the start of a run, so a change applies to the next run rather
+than to one in flight. Change them in a normal pull request and review them the
+way you would review code; they have more effect on output than most code does.
+</Callout>
+
+## When rules are not enough
+
+Some things do not belong in prose:
+
+- **A step that must always happen** belongs in the workflow, not in the rules.
+  A build gate that is a node cannot be skipped;
+  [author it into the DAG](/docs/workflows/authoring).
+- **A rule that must be enforced rather than requested** belongs in a per-node
+  hook, which can deny a tool call outright. See
+  [per-node hooks](/docs/workflows/authoring#per-node-hooks).
+- **A convention only one project has** belongs in that project's file, not in
+  the global one. The global cascade is applied to everything, including
+  repositories where it is wrong.

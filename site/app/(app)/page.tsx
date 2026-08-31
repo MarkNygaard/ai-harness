@@ -4,7 +4,7 @@ import Link from "next/link"
 import { siteConfig } from "@/lib/config"
 import { SiteFooter } from "@/components/site-footer"
 
-const tagline = "From a task to a reviewed pull request"
+const tagline = "Ship a feature without writing it"
 
 export const metadata: Metadata = {
   title: { absolute: `${siteConfig.name} — ${tagline}` },
@@ -42,6 +42,34 @@ const features = [
     title: "One binary, one Postgres",
     body: `The control plane is a single ${siteConfig.binary} binary with the dashboard bundled in, backed by Postgres. Runs execute as local child processes, so the same image works under Kubernetes or plain Docker.`,
     href: "/docs/operating/deploy",
+  },
+]
+
+const loop = [
+  {
+    title: "Write the issue",
+    body: "Describe what should be true when it is done, and how you will test it. That doubles as the acceptance criteria and as the instructions.",
+    who: "Whoever wants the change",
+  },
+  {
+    title: "Hand it over",
+    body: "Delegate the issue. It plans, implements, and runs review passes with different models than the one that wrote the code, then opens a pull request.",
+    who: "The harness",
+  },
+  {
+    title: "Test it",
+    body: "Against the criteria you wrote. Trust your test over its summary — the run is usually right, and usually is exactly the failure mode to guard against.",
+    who: "Whoever wrote the issue",
+  },
+  {
+    title: "Review the code",
+    body: "A human approval is still required to merge. The obvious problems are generally gone by now, which is not the same as it being right.",
+    who: "A developer",
+  },
+  {
+    title: "Write the rule",
+    body: "Made the same review comment twice? That is a missing rule. Move it into the project's CLAUDE.md and every later run gets it right the first time.",
+    who: "A developer",
   },
 ]
 
@@ -97,17 +125,16 @@ export default function HomePage() {
       />
       <section className="mx-auto w-full max-w-6xl px-6 pt-20 pb-16">
         <p className="text-sm font-medium text-accent-orange">
-          Rust-native · self-hosted · MIT
+          Self-hosted · open source · MIT
         </p>
         <h1 className="mt-4 max-w-3xl text-4xl font-semibold tracking-tight text-balance sm:text-5xl">
           {tagline}
         </h1>
         <p className="mt-5 max-w-2xl text-lg leading-relaxed text-muted-foreground">
-          {siteConfig.name} is an orchestration layer for AI coding agents. It
-          turns a task — typed in a UI, sent over MCP, or pulled from a Linear
-          column — into a run of a workflow DAG you authored, drives coding
-          agents through it in an isolated git worktree, and opens a pull
-          request at the end.
+          Write the issue. Hand it to {siteConfig.name}. It plans, implements,
+          reviews its own work with a different model than wrote it, and opens a
+          pull request. You test that against what you asked for — then a
+          developer reviews the code.
         </p>
 
         <div className="mt-8 flex flex-wrap items-center gap-3">
@@ -127,12 +154,82 @@ export default function HomePage() {
           </a>
         </div>
 
-        <pre className="mt-10 max-w-3xl overflow-x-auto rounded-lg border border-border bg-card p-4 text-sm whitespace-pre">
-          <code>{`docker run -p 9800:9800 \\
-  -e ${siteConfig.envPrefix}DATABASE_URL=postgres://... \\
-  -e ${siteConfig.envPrefix}SECRET_KEY=... \\
+      </section>
+
+      <section className="mx-auto w-full max-w-6xl px-6 pb-16">
+        <h2 className="text-2xl font-semibold tracking-tight">
+          Two people check two different things
+        </h2>
+        <p className="mt-3 max-w-2xl leading-relaxed text-muted-foreground">
+          The person who wrote the acceptance criteria is the person who can
+          tell whether it does the right thing. The developer is the person who
+          can tell whether it does it the right way. Neither is checking what
+          they are worse at — which is what makes it safe to let someone ship
+          who cannot read the diff.
+        </p>
+
+        <ol className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {loop.map((step, i) => (
+            <li
+              key={step.title}
+              className="rounded-lg border border-border bg-card p-5"
+            >
+              <span className="font-mono text-xs text-muted-foreground">
+                {String(i + 1).padStart(2, "0")}
+              </span>
+              <h3 className="mt-2 font-medium">{step.title}</h3>
+              <p className="mt-1.5 text-sm leading-relaxed text-muted-foreground">
+                {step.body}
+              </p>
+              <p className="mt-3 text-xs font-medium text-accent-orange">
+                {step.who}
+              </p>
+            </li>
+          ))}
+        </ol>
+
+        <p className="mt-6 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          <Link
+            href="/docs/shipping-without-code"
+            className="underline underline-offset-4 hover:text-foreground"
+          >
+            Shipping without writing code
+          </Link>{" "}
+          walks through the loop from the requesting side, and{" "}
+          <Link
+            href="/docs/project-rules"
+            className="underline underline-offset-4 hover:text-foreground"
+          >
+            project rules
+          </Link>{" "}
+          covers the developer&apos;s side — the file every run reads, and the
+          reason review effort goes down over time instead of staying flat.
+        </p>
+      </section>
+
+      <section className="mx-auto w-full max-w-6xl px-6 pb-16">
+        <h2 className="text-2xl font-semibold tracking-tight">
+          Someone has to run it once
+        </h2>
+        <p className="mt-3 max-w-2xl leading-relaxed text-muted-foreground">
+          One container and a Postgres database, on your own infrastructure.
+          After that the loop above needs no terminal.
+        </p>
+        <pre className="mt-6 max-w-3xl overflow-x-auto rounded-lg border border-border bg-card p-4 text-sm whitespace-pre">
+          <code>{`docker run -p 8080:8080 \
+  -e ${siteConfig.envPrefix}DATABASE_URL=postgres://... \
+  -e ${siteConfig.envPrefix}SECRET_KEY=... \
   ${siteConfig.image}`}</code>
         </pre>
+        <p className="mt-4 text-sm text-muted-foreground">
+          <Link
+            href="/docs/operating/deploy"
+            className="underline underline-offset-4 hover:text-foreground"
+          >
+            Deploying
+          </Link>{" "}
+          covers Kubernetes, what has to persist, and sizing the volume.
+        </p>
       </section>
 
       <section className="mx-auto w-full max-w-6xl px-6 pb-16">

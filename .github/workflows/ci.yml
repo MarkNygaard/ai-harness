@@ -164,10 +164,12 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Typecheck
         working-directory: site
-        run: bunx tsc --noEmit
+        # `bun run`, not `bunx`: bunx resolves tsc from the network and can pull
+        # a different major than the pinned devDependency.
+        run: bun run typecheck
       - name: Build
         working-directory: site
-        run: bunx next build
+        run: bun run build
 
   # ── Fan-in gate: single required check for branch protection ──────────
   ci-result:
