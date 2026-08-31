@@ -246,6 +246,13 @@ mod tests {
             scope.contains("scope.json") && scope.contains("head:"),
             "scope must record the file set and each repo's head"
         );
+        assert!(
+            scope.contains("ls-files --others --exclude-standard")
+                && scope.contains("diff --name-only HEAD"),
+            "scope must count UNCOMMITTED work: `implement-tasks` does not commit, \
+             so a committed-only diff calls the repo the run just edited untouched \
+             — and the guard then deletes it"
+        );
 
         // The consumer reads it and is told not to run its own diff.
         let simplify = body("pi-simplify");
@@ -267,6 +274,12 @@ mod tests {
         assert!(
             guard.contains("clean -fd") && !guard.contains("clean -fdx"),
             "the guard must not clean ignored files — that is the warm build state"
+        );
+        assert!(
+            guard.contains(r#"[ "$empty" -eq "$total" ]"#),
+            "the guard must refuse to revert when the scope says every repo is \
+             empty — a run always changes something, so that is a broken scope, \
+             and reverting on it destroys the work instead of protecting it"
         );
         // Ordering: nothing validates or ships before the guard has run.
         let after = |id: &str| {

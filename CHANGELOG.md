@@ -28,6 +28,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The scope guard deleted the work it was meant to protect.** #371 computed each
+  repo's changed-file set as `git diff origin/<base>...HEAD` — committed work
+  only. But `implement-tasks` leaves its work **uncommitted**; `finalize-pr` is
+  what commits. So the first real run reported `frontend: 0 changed file(s)` and
+  `backend: 0 changed file(s)` for a ticket that had just written 8 files across
+  both, `guard-scope` read that as "untouched", and `git reset --hard` plus
+  `git clean -fd` destroyed 15 minutes of implementation. `validate` caught the
+  empty tree and the run aborted rather than opening an empty PR, which is the
+  only part of that sequence that worked. Scope now counts committed, staged,
+  unstaged and untracked changes, so "empty" means the repo carries nothing of
+  this run at all. Two consequences beyond the fix: the guard now refuses to act
+  when the scope claims *every* repo is empty — a run always changes something, so
+  that is a broken scope rather than N wandering repos, and reverting on a broken
+  scope destroys work instead of protecting it — and the simplify step is shown
+  the implementation's files for the first time, which is the deeper reason it
+  used to report "0 files in scope" for the real repo and go hunting in a sibling.
 - **A run can no longer commit in a repo it never touched.** On a frontend-only
   ticket, `pi-simplify` reported *"backend: 79 files in scope, simplified"* for a
   repo whose diff was empty, rewrote analytics code there, and `finalize-pr`
