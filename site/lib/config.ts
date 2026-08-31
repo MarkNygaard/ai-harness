@@ -17,9 +17,17 @@ export const siteConfig = {
   name: "ai-harness",
   /** One-line positioning, used as the meta description and the hero subtitle. */
   description:
-    "A Rust-native orchestration layer for AI coding agents. Turn a task into a reviewed pull request with workflow DAGs that drive Claude Code, Codex, Pi/Kimi and Cursor.",
-  /** Public origin. Used for canonical URLs and OG image URLs. */
-  url: "https://example.com",
+    "A Rust-native orchestration layer for AI coding agents. Turn a task into a reviewed pull request with workflow DAGs that drive Claude Code, Codex, Pi and Cursor.",
+  /**
+   * Public origin. Used for canonical URLs, OG images, `sitemap.xml`,
+   * `robots.txt` and `llms.txt`.
+   *
+   * Set `NEXT_PUBLIC_SITE_URL` at build time. Until a real domain is wired up
+   * this falls back to a placeholder, and the fallback is not harmless: a
+   * sitemap and a set of canonicals published under someone else's domain is
+   * worse than having none.
+   */
+  url: process.env.NEXT_PUBLIC_SITE_URL ?? "https://example.com",
 
   /**
    * Interface identifiers. These appear in users' shells, config files and

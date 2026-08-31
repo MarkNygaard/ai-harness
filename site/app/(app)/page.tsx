@@ -54,9 +54,47 @@ const workflows = [
   ["judge-ab", "score an A/B model comparison"],
 ]
 
+/**
+ * WebSite plus SoftwareApplication: the first tells a crawler what this site
+ * *is* and anchors the docs' `isPartOf`; the second is what a search engine or
+ * assistant reads to answer "what is this, what does it run on, what does it
+ * cost" without inferring it from marketing prose.
+ */
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "WebSite",
+      "@id": `${siteConfig.url}/#website`,
+      url: siteConfig.url,
+      name: siteConfig.name,
+      description: siteConfig.description,
+      inLanguage: "en",
+    },
+    {
+      "@type": "SoftwareApplication",
+      "@id": `${siteConfig.url}/#software`,
+      name: siteConfig.name,
+      description: siteConfig.description,
+      applicationCategory: "DeveloperApplication",
+      operatingSystem: "Linux, Docker, Kubernetes",
+      url: siteConfig.url,
+      codeRepository: siteConfig.links.github,
+      license: "https://opensource.org/licenses/MIT",
+      isAccessibleForFree: true,
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    },
+  ],
+}
+
 export default function HomePage() {
   return (
     <>
+      <script
+        type="application/ld+json"
+        // Trusted, locally constructed values -- no user input reaches this.
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
       <section className="mx-auto w-full max-w-6xl px-6 pt-20 pb-16">
         <p className="text-sm font-medium text-accent-orange">
           Rust-native · self-hosted · MIT

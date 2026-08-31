@@ -36,6 +36,28 @@ bun install
 bun run dev      # http://localhost:4000
 ```
 
+## Before it goes live
+
+Set **`NEXT_PUBLIC_SITE_URL`** to the real origin. It is the base for canonical
+URLs, OG image URLs, `sitemap.xml`, `robots.txt` and `llms.txt`; without it they
+are all published under a placeholder domain, which is worse than not publishing
+them at all.
+
+## Discoverability
+
+Generated at build time, all from `siteConfig` and the docs tree:
+
+- `sitemap.xml` — the landing page plus every doc page.
+- `robots.txt` — open to everything, with the AI crawlers named explicitly.
+  Several of them (Google-Extended, Applebot-Extended) only read a directive
+  addressed to them by name, so a bare wildcard says nothing to those.
+- `llms.txt` — an [llmstxt.org](https://llmstxt.org) index, in sidebar reading
+  order rather than filesystem order.
+- `llms-full.txt` — every page's markdown concatenated, served from source
+  rather than from rendered HTML.
+- JSON-LD — `WebSite` + `SoftwareApplication` on the landing page, `TechArticle`
+  + `BreadcrumbList` on each doc page.
+
 ## Verify
 
 ```bash
