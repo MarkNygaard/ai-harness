@@ -278,12 +278,25 @@ nodes:
                "this repo would be wrong, and out-of-scope work gets reverted." >&2
           exit 1
         fi
-        files=$(git -C "$folder" diff --name-only "origin/$base...HEAD" 2>/dev/null || true)
+        # Three sources, because "what this run changed" is not one query.
+        #
+        # `implement-tasks` leaves its work UNCOMMITTED — `finalize-pr` is what
+        # commits — so a committed-only diff reports an empty set for the very
+        # repo the run just edited. That is not a theoretical objection: the
+        # first version of this node asked only the first question, `guard-scope`
+        # read the empty answer as "untouched", and `git reset --hard` deleted
+        # eleven files of finished work. It is also why the simplify step used to
+        # report "0 files in scope" for the real repo and then go hunting in a
+        # sibling: it had never once been shown the implementation's files.
+        committed=$(git -C "$folder" diff --name-only "origin/$base...HEAD" 2>/dev/null || true)
+        tracked=$(git -C "$folder" diff --name-only HEAD 2>/dev/null || true)
+        untracked=$(git -C "$folder" ls-files --others --exclude-standard 2>/dev/null || true)
+        files=$(printf '%s\n%s\n%s\n' "$committed" "$tracked" "$untracked")
         head=$(git -C "$folder" rev-parse HEAD 2>/dev/null || true)
         printf '%s\n' "$files" | jq -R -s -c \
           --arg folder "$folder" --arg base "$base" --arg head "$head" \
           '{folder: $folder, base: $base, head: $head,
-            files: (split("\n") | map(select(length > 0)))}' >> "$out.tmp"
+            files: (split("\n") | map(select(length > 0)) | unique)}' >> "$out.tmp"
       done < "$rows"
       jq -s '.' "$out.tmp" > "$out" || { echo "could not write $out" >&2; exit 1; }
       rm -f "$out.tmp" "$rows"
@@ -385,10 +398,25 @@ nodes:
       # in a repo whose diff was empty, and `finalize-pr` then opened a pull
       # request for it — 42 files of formatting against an untouched service,
       # on a ticket that changed four frontend files. Reverting is safe by
-      # construction: `files: []` means the repo carried none of this run's
-      # commits, so there is nothing of ours to lose.
+      # construction: `files: []` counts committed, staged, unstaged and
+      # untracked changes, so an empty set means the repo carries nothing of
+      # this run at all.
       scope="$ARTIFACTS_DIR/scope.json"
       [ -f "$scope" ] || { echo "no scope.json — nothing to guard"; exit 0; }
+      # A run always changes at least one repo. If the scope says none of them
+      # did, the scope is wrong — and reverting on a wrong scope destroys the
+      # work rather than protecting it, which is exactly what happened the first
+      # time this node ran for real. Refuse, loudly, and let `validate` judge the
+      # tree as it stands.
+      total=$(jq 'length' "$scope")
+      empty=$(jq '[.[] | select(.files | length == 0)] | length' "$scope")
+      if [ "$total" -gt 0 ] && [ "$empty" -eq "$total" ]; then
+        echo "ERROR: scope.json says this run changed nothing in any of its" \
+             "$total repo(s), which cannot be right — refusing to revert" \
+             "anything. Something is wrong with the scope step, not with the" \
+             "repos." >&2
+        exit 1
+      fi
       reverted=0
       while IFS= read -r row; do
         [ -n "$row" ] || continue
