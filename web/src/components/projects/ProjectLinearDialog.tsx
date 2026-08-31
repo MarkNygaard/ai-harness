@@ -114,7 +114,7 @@ export function ProjectLinearDialog({ project }: { project: string }) {
       >
         <IconBolt className="size-3.5" />
       </DialogTrigger>
-      <DialogContent className="sm:max-w-xl">
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle className="font-mono text-base">{project}</DialogTitle>
           <DialogDescription>
@@ -127,12 +127,7 @@ export function ProjectLinearDialog({ project }: { project: string }) {
             One binding per workflow.
           </DialogDescription>
         </DialogHeader>
-        {/* The scroll lives here, not on DialogContent: the close button is
-            positioned against the panel, so scrolling the panel scrolls it away.
-            `min-w-0` keeps a wide control inside the panel instead of spilling. */}
-        <div className="max-h-[65vh] min-w-0 overflow-y-auto">
-          <DialogBody project={project} accounts={accounts} />
-        </div>
+        <DialogBody project={project} accounts={accounts} />
       </DialogContent>
     </Dialog>
   );
@@ -441,7 +436,9 @@ function BindingForm({
   };
 
   return (
-    <div className="flex flex-col gap-3">
+    // `min-w-0`: a grid item of the dialog panel, which would otherwise stretch
+    // its track to the widest control inside and spill past the edge.
+    <div className="flex min-w-0 flex-col gap-3">
       {/* Workflow */}
       {fixedWorkflow ? (
         <Field label="Workflow">
