@@ -54,6 +54,12 @@ export interface RegisterProjectRequest {
 }
 
 export interface CacheSize {
+  /** This project's Rust build cache (`CARGO_TARGET_DIR`). */
   bytes: number;
   cap_gb: number;
+  /** Package-manager downloads (pnpm store, NuGet, …) — shared by all projects. */
+  deps_bytes: number;
+  deps_cap_gb: number;
+  /** Bare git mirrors runs clone from — shared by all projects. */
+  git_bytes: number;
 }

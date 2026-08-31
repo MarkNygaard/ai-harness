@@ -265,18 +265,40 @@ function ProjectCacheDialog({ project }: { project: Project }) {
           </DialogTitle>
           <DialogDescription>
             View size, set a per-project cap, or clear the build cache. Blank
-            cap falls back to the server default.
+            cap falls back to the server default. The dependency and git caches
+            below are shared by every project — a pnpm store or NuGet folder is
+            content-addressed, so no project owns an entry in it.
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-col gap-4">
-          <div className="text-sm">
-            <span className="text-muted-foreground">Build cache: </span>
-            <span className="font-medium">
-              {size.isLoading || size.data == null
-                ? "—"
-                : `${gb(size.data.bytes)} GB / ${size.data.cap_gb} GB`}
-            </span>
-          </div>
+          <dl className="flex flex-col gap-1 text-sm">
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">
+                Build cache (this project)
+              </dt>
+              <dd className="font-medium">
+                {size.isLoading || size.data == null
+                  ? "—"
+                  : `${gb(size.data.bytes)} GB / ${size.data.cap_gb} GB`}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Dependencies (shared)</dt>
+              <dd className="font-medium">
+                {size.isLoading || size.data == null
+                  ? "—"
+                  : `${gb(size.data.deps_bytes)} GB / ${size.data.deps_cap_gb} GB`}
+              </dd>
+            </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">Git mirrors (shared)</dt>
+              <dd className="font-medium">
+                {size.isLoading || size.data == null
+                  ? "—"
+                  : `${gb(size.data.git_bytes)} GB`}
+              </dd>
+            </div>
+          </dl>
           <div className="flex flex-col gap-1">
             <label
               className="text-xs text-muted-foreground"
@@ -332,7 +354,7 @@ function ProjectCacheDialog({ project }: { project: Project }) {
               }
             }}
           >
-            <IconTrash className="size-3.5" /> Clear cache
+            <IconTrash className="size-3.5" /> Clear build cache
           </Button>
           {clear.error && (
             <div className="text-xs text-destructive">

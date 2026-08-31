@@ -296,7 +296,21 @@ pub async fn get_cache_size(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
     let dir = state.projects_dir.join(".cargo-target").join(&name);
-    let bytes = match spawn_blocking(move || cache::dir_size(&dir)).await {
+    // The dependency and git caches are shared by every project (see `caches`),
+    // so they are reported alongside the project's own build cache rather than
+    // folded into it — a JS/.NET project has no build cache and used to read as
+    // "0 cached" even with a warm pnpm store behind it.
+    let deps = super::caches::deps_root(&state.projects_dir);
+    let mirrors = super::caches::git_mirror_root(&state.projects_dir);
+    let sizes = spawn_blocking(move || {
+        (
+            cache::dir_size(&dir),
+            cache::dir_size(&deps),
+            cache::dir_size(&mirrors),
+        )
+    })
+    .await;
+    let (bytes, deps_bytes, git_bytes) = match sizes {
         Ok(n) => n,
         Err(e) => {
             return err(
@@ -308,6 +322,9 @@ pub async fn get_cache_size(
     Json(serde_json::json!({
         "bytes": bytes,
         "cap_gb": cache::resolve_cap_gb(project.cargo_target_cap_gb),
+        "deps_bytes": deps_bytes,
+        "deps_cap_gb": super::caches::deps_cap_gb(),
+        "git_bytes": git_bytes,
     }))
     .into_response()
 }
