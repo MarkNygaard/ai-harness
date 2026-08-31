@@ -28,6 +28,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A run can no longer commit in a repo it never touched.** On a frontend-only
+  ticket, `pi-simplify` reported *"backend: 79 files in scope, simplified"* for a
+  repo whose diff was empty, rewrote analytics code there, and `finalize-pr`
+  opened a 42-file pull request against an untouched service. It had happened
+  before, in the same step, on a different ticket — its prompt already forbade it
+  in bold, which is the evidence that prose is not a mechanism: an agent that
+  computes its own changed-file set gets a plausible answer from the wrong base
+  or from a `git` call at the multi-repo root, and plausible is worse than an
+  error. The set is now computed once by a `scope` node — per repo, against
+  **that repo's own** base branch rather than the run's, which is a second bug in
+  the same place (a repo based on `develop` diffed against `origin/main` reports
+  two release lines of work as this run's) — and written to `scope.json` with
+  each repo's head. `pi-simplify` reads it and is told not to re-derive it, and a
+  `guard-scope` node then reverts any repo whose file set was empty but whose
+  tree moved, before `validate` sees it. Reverting is safe by construction: an
+  empty set means the repo carried none of this run's commits. Ignored files are
+  left alone, so the warm build state survives.
+- **Every pull request title is now gated, not requested.** `verify-pr-title` is
+  told that a Linear task's title must end with the issue identifier; on a
+  two-PR run it renamed the first and declared the second *"TITLE OK"* with no
+  identifier, so Linear never linked it — a three-part condition in a paragraph,
+  applied to one PR out of two. A `gate-pr-titles` node now checks every entry in
+  `.pr-list`: the conventional-commits format, and the identifier read from
+  Linear by issue id rather than pattern-matched out of the task text. Appending
+  a missing identifier is mechanical, so the gate does it (via `gh api`, which
+  also sidesteps the `read:org` scope `gh pr edit` needs and this deployment's
+  token lacks); a title that does not match the format at all needs a type and
+  scope chosen for the change, so that fails the node instead of being guessed
+  at. Nothing proceeds to review with a wrong title.
+- **Commands stop reading an artifact the default pipeline never writes.**
+  `plan-context.md` is written by `plan-setup`, which no bundled workflow uses —
+  the default planner writes `plan.md` — so `implement-tasks`, `validate` and
+  `finalize-pr` named a file that was reliably absent, and the resulting misses
+  were among the most frequent entries in `run_activity_errors` (10 occurrences
+  across 3 runs of one project). They now name the artifact the run actually
+  wrote, with `plan-context.md` as the `plan-setup` variant, and say that the
+  directory listing is the authority.
 - **A multi-repo project can name the primary repo's folder, and listing it no
   longer checks it out twice.** The project's Git URL is always the first repo of
   the layout, and its folder name was derived from the URL — so a project wanting

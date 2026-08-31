@@ -62,7 +62,7 @@ is a shorter upstream workflow, not an error to report or stop on:
 
 ```bash
 ls $ARTIFACTS_DIR
-for f in plan-context.md plan.md implementation.md validation.md; do
+for f in plan.md plan-context.md implementation.md validation.md; do
   [ -f "$ARTIFACTS_DIR/$f" ] && { echo "--- $f"; cat "$ARTIFACTS_DIR/$f"; }
 done
 ```

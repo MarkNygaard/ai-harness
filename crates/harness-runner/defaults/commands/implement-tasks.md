@@ -42,7 +42,13 @@ report and not a reason to stop. Only the plan itself (1.3) is required.
 ls $ARTIFACTS_DIR
 ```
 
-### 1.1 Load Plan Context (if present)
+### 1.1 Load Plan Context (only if the listing shows it)
+
+`plan-context.md` exists only when a `plan-setup` step ran. The default
+pipeline's planner writes `plan.md` instead, so reading `plan-context.md`
+there is a guaranteed miss that lands in the run's error feed and tells the
+next reader nothing. **The listing above is the authority — do not read a file
+it did not show.**
 
 ```bash
 [ -f $ARTIFACTS_DIR/plan-context.md ] && cat $ARTIFACTS_DIR/plan-context.md
@@ -53,7 +59,7 @@ Extract:
 - Validation commands (especially type-check)
 - Patterns to mirror
 
-### 1.2 Load Plan Confirmation (if present)
+### 1.2 Load Plan Confirmation (only if the listing shows it)
 
 ```bash
 [ -f $ARTIFACTS_DIR/plan-confirmation.md ] && cat $ARTIFACTS_DIR/plan-confirmation.md

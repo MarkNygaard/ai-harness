@@ -211,6 +211,136 @@ mod tests {
         );
     }
 
+    /// Scope is computed once, deterministically, and consumed — not re-derived
+    /// per node. Two runs had an agent "simplify" 79 files of a repo the run
+    /// never touched, because a diff against the wrong base (or a `git` call at
+    /// the multi-repo root) answers with something plausible instead of nothing.
+    #[test]
+    fn the_changed_file_set_is_computed_once_and_read_not_rederived() {
+        let yaml = super::WORKFLOWS
+            .iter()
+            .find(|(name, _)| *name == "idea-to-pr")
+            .expect("bundled")
+            .1;
+        let wf = harness_dag::parse_workflow(yaml).expect("parses");
+        let body = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| match &n.kind {
+                    harness_dag::NodeKind::Bash(b) => b.clone(),
+                    harness_dag::NodeKind::Prompt(p) => p.clone(),
+                    harness_dag::NodeKind::Loop(l) => l.prompt.clone(),
+                    _ => String::new(),
+                })
+                .unwrap_or_else(|| panic!("no node `{id}`"))
+        };
+
+        // The producer diffs each repo against *its own* base, not the run's.
+        let scope = body("scope");
+        assert!(
+            scope.contains(".base_branch") && scope.contains(r#"origin/$base...HEAD"#),
+            "scope must diff each repo against its own configured base"
+        );
+        assert!(
+            scope.contains("scope.json") && scope.contains("head:"),
+            "scope must record the file set and each repo's head"
+        );
+
+        // The consumer reads it and is told not to run its own diff.
+        let simplify = body("pi-simplify");
+        assert!(
+            simplify.contains("scope.json"),
+            "pi-simplify must read the computed scope"
+        );
+        assert!(
+            !simplify.contains("git diff --name-only"),
+            "pi-simplify must not compute its own changed-file set any more"
+        );
+
+        // And the guard makes it enforceable rather than merely instructed.
+        let guard = body("guard-scope");
+        assert!(
+            guard.contains("files | length == 0") && guard.contains("reset --hard"),
+            "guard-scope must revert repos that were not in scope"
+        );
+        assert!(
+            guard.contains("clean -fd") && !guard.contains("clean -fdx"),
+            "the guard must not clean ignored files — that is the warm build state"
+        );
+        // Ordering: nothing validates or ships before the guard has run.
+        let after = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .map(|n| n.depends_on.clone())
+                .unwrap_or_default()
+        };
+        assert!(
+            after("guard-scope").contains(&"pi-simplify".to_string()),
+            "the guard runs after the step that wanders"
+        );
+        assert!(
+            after("validate").contains(&"guard-scope".to_string()),
+            "validate must see the reverted tree, not the wandered one"
+        );
+    }
+
+    /// A prose "the title MUST end with the identifier" was applied to the first
+    /// PR of a run and skipped on the second, so Linear never linked it.
+    #[test]
+    fn every_pr_title_is_gated_not_merely_requested() {
+        let yaml = super::WORKFLOWS
+            .iter()
+            .find(|(name, _)| *name == "idea-to-pr")
+            .expect("bundled")
+            .1;
+        let wf = harness_dag::parse_workflow(yaml).expect("parses");
+        let gate = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "gate-pr-titles")
+            .expect("gate exists");
+        let script = match &gate.kind {
+            harness_dag::NodeKind::Bash(b) => b.clone(),
+            _ => panic!("the gate must be bash — an agent cannot gate itself"),
+        };
+        assert!(
+            script.contains(".pr-list"),
+            "the gate must check every PR the run opened, not one"
+        );
+        assert!(
+            script.contains("harness linear issue --issue"),
+            "the identifier must come from Linear, not from matching the task text"
+        );
+        assert!(
+            script.contains("feat|fix|chore|ci|docs|refactor|perf|test"),
+            "the gate must check the conventional-commits format"
+        );
+        assert!(
+            script.contains("gh api -X PATCH"),
+            "appending a missing identifier is mechanical, so the gate fixes it \
+             (and `gh pr edit` needs a token scope this one lacks)"
+        );
+        assert!(
+            script.contains("exit 1"),
+            "a title needing a type/scope judgement must fail the node"
+        );
+        assert!(
+            gate.depends_on.contains(&"verify-pr-title".to_string()),
+            "the gate runs after the step it checks"
+        );
+        assert!(
+            wf.nodes
+                .iter()
+                .find(|n| n.id == "pi-review-fix-loop")
+                .expect("review loop")
+                .depends_on
+                .contains(&"gate-pr-titles".to_string()),
+            "nothing proceeds past a wrong title"
+        );
+    }
+
     /// The BC setup step downloads ~96 MB of symbols; caching them is only safe
     /// if the key covers everything that decides their content, a partial cache
     /// can never be mistaken for a hit, and the entry expires — the endpoint

@@ -62,8 +62,10 @@ checks to the files the change touched — get them with
 compilation elsewhere). **Never reformat unrelated files** to make a repo-wide
 check pass.
 
-Read `$ARTIFACTS_DIR/plan-context.md` if present — the plan may name the exact
-validation commands.
+The plan may name the exact validation commands: read the plan artifact this run
+actually wrote — `plan.md`, or `plan-context.md` when a `plan-setup` step ran.
+List `$ARTIFACTS_DIR` first and read only what it shows; a read of an artifact a
+shorter pipeline never wrote lands in the run's error feed for nothing.
 
 ---
 
