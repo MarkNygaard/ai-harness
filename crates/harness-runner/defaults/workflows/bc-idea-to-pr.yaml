@@ -155,7 +155,42 @@ nodes:
         *) echo "unknown BC_AUTH '${BC_AUTH}' (use basic|ntlm|negotiate|anyauth)" >&2; exit 1 ;;
       esac
 
-      # 3. Download symbols (Microsoft base + each dependency) into .alpackages.
+      # 3. Symbols. 96 MB of packages that are identical from run to run unless
+      #    app.json's dependency set, its pinned platform/application, or the
+      #    endpoint changes — so key a cache on exactly those and pay the
+      #    download once per symbol set instead of once per run. Without
+      #    HARNESS_CACHE_DIR (an older server) every run downloads, as before.
+      #
+      #    Refreshed after BC_SYMBOL_CACHE_TTL_DAYS (7) regardless of the key:
+      #    the endpoint returns the *server's* symbols, and a BC cumulative
+      #    update moves them without app.json changing. A cache that never
+      #    expired would quietly compile against symbols older than the server.
+      mkdir -p .alpackages
+      sym_cache=""; sym_key=""; sym_fresh=0; sym_dirty=0
+      sym_ttl_days="${BC_SYMBOL_CACHE_TTL_DAYS:-7}"
+      if [ -n "${HARNESS_CACHE_DIR:-}" ]; then
+        sym_key=$( { printf '%s\n' "$dev_url"
+                     jq -cS '{d: (.dependencies // []), p: .platform, a: .application}' app.json
+                   } | sha256sum | cut -c1-16 )
+        # The key goes in the top-level name, not a nested path: the harness
+        # sweeps whole immediate subdirectories of HARNESS_CACHE_DIR, so a stale
+        # symbol set can be evicted without taking the current one with it.
+        sym_cache="$HARNESS_CACHE_DIR/alpackages-$sym_key"
+      fi
+      # `.complete` only exists in a cache that was moved into place whole. A
+      # half-copied .alpackages is the worst outcome available here: it surfaces
+      # hundreds of lines later as cryptic AL1022 errors instead of as a failure
+      # to fetch symbols.
+      if [ -n "$sym_cache" ] && [ -f "$sym_cache/.complete" ]; then
+        if [ -n "$(find "$sym_cache/.complete" -mtime "+$sym_ttl_days" 2>/dev/null)" ]; then
+          echo "symbol cache is older than ${sym_ttl_days}d — refreshing from $dev_url"
+        elif cp "$sym_cache"/*.app .alpackages/ 2>/dev/null; then
+          sym_fresh=1
+          echo "symbols restored from cache (key $sym_key, $(ls -1 .alpackages/*.app | wc -l) packages)"
+        fi
+      fi
+
+      #    Download (Microsoft base + each dependency) into .alpackages.
       #    Every package is required to compile, so ANY failed download is fatal:
       #    a partial/empty .alpackages otherwise surfaces hundreds of lines later
       #    as cryptic AL1022 "package not found" compile errors instead of here,
@@ -166,6 +201,9 @@ nodes:
       mkdir -p .alpackages
       failed=0
       dl() { # publisher  appName  appId
+        # Warm cache: nothing to fetch, and `failed` stays 0 so the gate below
+        # passes on the restored set.
+        [ "$sym_fresh" -eq 1 ] && return 0
         if curl -fsS "${auth_opt[@]}" -u "$BC_USER:$BC_PASSWORD" -G "$dev_url/packages" \
              --data-urlencode "publisher=$1" --data-urlencode "appName=$2" \
              --data-urlencode "appId=$3" --data-urlencode "tenant=default" \
@@ -190,10 +228,23 @@ nodes:
       done < <(printf '%s\n' "$deps")
       echo "symbols in .alpackages:"; ls -1 .alpackages
       if [ "$failed" -ne 0 ]; then
-        echo "ERROR: $failed symbol package(s) failed to download from $dev_url —" \
-             "verify the dev endpoint is reachable from the container and that" \
-             "BC_USER/BC_PASSWORD and BC_AUTH (basic|ntlm|negotiate) are correct." >&2
-        exit 1
+        # A complete cached set beats no run at all. It is only offered here
+        # because `.complete` means the set was whole when stored — the
+        # partial-symbols failure mode this gate exists to prevent stays fatal.
+        # It may be older than the server, so say so loudly.
+        if [ -n "$sym_cache" ] && [ -f "$sym_cache/.complete" ]; then
+          echo "WARNING: $failed symbol package(s) failed to download from $dev_url." >&2
+          echo "         Falling back to the cached symbol set for this app.json," >&2
+          echo "         which is complete but may be older than the server." >&2
+          rm -f .alpackages/*.app
+          cp "$sym_cache"/*.app .alpackages/ || exit 1
+          sym_fresh=1
+        else
+          echo "ERROR: $failed symbol package(s) failed to download from $dev_url —" \
+               "verify the dev endpoint is reachable from the container and that" \
+               "BC_USER/BC_PASSWORD and BC_AUTH (basic|ntlm|negotiate) are correct." >&2
+          exit 1
+        fi
       fi
 
       # 4. Resolve any STILL-missing packages the compiler reports — Microsoft
@@ -223,6 +274,7 @@ nodes:
                -o ".alpackages/${name// /_}.app"; then
             echo "  v $name (resolved from AL1022)"
             progressed=1
+            sym_dirty=1
           else
             echo "  x could not download $name (publisher $pub) from $dev_url" >&2
           fi
@@ -236,6 +288,29 @@ nodes:
       done
       rm -f /tmp/_probe.app
       echo "symbols in .alpackages (after resolve):"; ls -1 .alpackages
+
+      #    Store the set for the next run — after the resolve loop, so the cache
+      #    includes the platform packages AL1022 asked for and the next run does
+      #    not re-resolve them. Built in a temp dir and moved into place, so a
+      #    cache directory never exists in a half-written state; `sym_dirty`
+      #    covers a warm cache the loop had to add to.
+      if [ -n "$sym_cache" ] && { [ "$sym_fresh" -ne 1 ] || [ "$sym_dirty" -eq 1 ]; }; then
+        tmp="$sym_cache.tmp-$$"
+        rm -rf "$tmp"
+        if mkdir -p "$tmp" && cp .alpackages/*.app "$tmp"/; then
+          ls -1 "$tmp"/*.app | wc -l > "$tmp/.complete"
+          rm -rf "$sym_cache"
+          if mv "$tmp" "$sym_cache"; then
+            echo "cached $(ls -1 "$sym_cache"/*.app | wc -l) symbol packages (key $sym_key)"
+          else
+            rm -rf "$tmp"
+            echo "could not place the symbol cache — the run continues uncached" >&2
+          fi
+        else
+          rm -rf "$tmp"
+          echo "could not populate the symbol cache — the run continues uncached" >&2
+        fi
+      fi
 
   - id: implement
     category: implementation

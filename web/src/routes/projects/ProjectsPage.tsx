@@ -298,6 +298,16 @@ function ProjectCacheDialog({ project }: { project: Project }) {
                   : `${gb(size.data.git_bytes)} GB`}
               </dd>
             </div>
+            <div className="flex justify-between gap-4">
+              <dt className="text-muted-foreground">
+                Workflow cache (this project)
+              </dt>
+              <dd className="font-medium">
+                {size.isLoading || size.data == null
+                  ? "—"
+                  : `${gb(size.data.workflow_bytes)} GB / ${size.data.workflow_cap_gb} GB`}
+              </dd>
+            </div>
           </dl>
           <div className="flex flex-col gap-1">
             <label

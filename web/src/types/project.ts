@@ -62,4 +62,7 @@ export interface CacheSize {
   deps_cap_gb: number;
   /** Bare git mirrors runs clone from — shared by all projects. */
   git_bytes: number;
+  /** What this project's workflows cached themselves (`$HARNESS_CACHE_DIR`). */
+  workflow_bytes: number;
+  workflow_cap_gb: number;
 }

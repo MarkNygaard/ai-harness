@@ -205,6 +205,35 @@ The previous iteration's output is available as `$LOOP_PREV_OUTPUT`.
 records an approval node as *skipped* with a "not yet supported" note (no input
 channel yet). Don't rely on it to actually pause a run.
 
+
+## Caching inside a workflow
+
+`$HARNESS_CACHE_DIR` is a directory on the server's persistent volume, private to
+the project, that survives the run. Everything else a run touches does not: the
+worktree is thrown away, and `$ARTIFACTS_DIR` with it.
+
+Package-manager downloads are already cached by the harness itself (pnpm store,
+NuGet packages, Go modules, …) — you do not need to do anything for those. Use
+this for what only you know is reusable: BC symbol packages keyed by `app.json`,
+a downloaded SDK, a fixture that costs more to rebuild than to keep.
+
+Three rules, learned from the BC symbol cache (`bc-idea-to-pr`'s `setup-bc`):
+
+1. **Key on the inputs, in the top-level directory name.** The harness bounds
+   this cache by evicting whole immediate subdirectories, so
+   `alpackages-<hash>/` lets one stale entry go without taking the live one;
+   `alpackages/<hash>/` loses every entry at once.
+2. **Build in a temp dir and `mv` it into place, with a marker file written
+   inside before the move.** A half-written cache is worse than none — it looks
+   like a hit and fails much later, somewhere unrelated. Check the marker, not
+   the directory.
+3. **Expire it if the source can change without the key changing.** The BC cache
+   keys on `app.json`, but the endpoint serves whatever the *server* has, so it
+   also refreshes after 7 days. A cache with no expiry and an incomplete key is
+   a wrong answer that never corrects itself.
+
+Absent (an older server), `$HARNESS_CACHE_DIR` is simply unset — write the step
+so it still works, uncached.
 ## trigger_rule
 
 After a node's deps finish, `trigger_rule` decides run vs skip. A dependency

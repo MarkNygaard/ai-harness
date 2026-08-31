@@ -302,15 +302,17 @@ pub async fn get_cache_size(
     // "0 cached" even with a warm pnpm store behind it.
     let deps = super::caches::deps_root(&state.projects_dir);
     let mirrors = super::caches::git_mirror_root(&state.projects_dir);
+    let workflow = super::caches::project_cache(&state.projects_dir, &name);
     let sizes = spawn_blocking(move || {
         (
             cache::dir_size(&dir),
             cache::dir_size(&deps),
             cache::dir_size(&mirrors),
+            cache::dir_size(&workflow),
         )
     })
     .await;
-    let (bytes, deps_bytes, git_bytes) = match sizes {
+    let (bytes, deps_bytes, git_bytes, workflow_bytes) = match sizes {
         Ok(n) => n,
         Err(e) => {
             return err(
@@ -325,6 +327,8 @@ pub async fn get_cache_size(
         "deps_bytes": deps_bytes,
         "deps_cap_gb": super::caches::deps_cap_gb(),
         "git_bytes": git_bytes,
+        "workflow_bytes": workflow_bytes,
+        "workflow_cap_gb": super::caches::project_cap_gb(),
     }))
     .into_response()
 }

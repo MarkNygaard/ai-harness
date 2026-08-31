@@ -39,6 +39,7 @@ PVC. Three caches, all under `<projects_dir>` (`/home/harness/projects`):
 | `.cargo-target/<project>` | Rust build artifacts (`CARGO_TARGET_DIR`), per project | `HARNESS_CARGO_TARGET_CAP_GB` (default 50 GiB **per project**), or a per-project cap in the UI |
 | `.deps-cache` | package-manager downloads — pnpm store, npm/bun/yarn, NuGet packages, Go modules, uv/pip/poetry, Composer — shared by all projects | `HARNESS_DEPS_CACHE_CAP_GB` (default 20 GiB) |
 | `.git-cache` | bare mirrors runs clone from, shared by all projects | `HARNESS_GIT_MIRROR_TTL_DAYS` (default 30; mirrors idle longer are dropped) |
+| `.project-cache/<project>` | whatever a workflow caches itself via `$HARNESS_CACHE_DIR` (BC symbol packages, a downloaded SDK), per project | `HARNESS_PROJECT_CACHE_CAP_GB` (default 5 GiB **per project**) |
 
 `0` disables the corresponding sweep. The defaults total well past the ~5Gi the
 PVC below starts at: size it for the caps you actually set plus the checkouts and

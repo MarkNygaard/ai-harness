@@ -211,6 +211,65 @@ mod tests {
         );
     }
 
+    /// The BC setup step downloads ~96 MB of symbols; caching them is only safe
+    /// if the key covers everything that decides their content, a partial cache
+    /// can never be mistaken for a hit, and the entry expires — the endpoint
+    /// serves the *server's* symbols, which move without `app.json` changing.
+    #[test]
+    fn bc_symbols_are_cached_by_what_decides_them() {
+        let yaml = super::WORKFLOWS
+            .iter()
+            .find(|(name, _)| *name == "bc-idea-to-pr")
+            .expect("bundled")
+            .1;
+        let wf = harness_dag::parse_workflow(yaml).expect("parses");
+        let setup = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "setup-bc")
+            .and_then(|n| match &n.kind {
+                harness_dag::NodeKind::Bash(b) => Some(b.clone()),
+                _ => None,
+            })
+            .expect("setup-bc is a bash node");
+
+        // Every input to the symbol set is in the key.
+        assert!(
+            setup.contains("HARNESS_CACHE_DIR"),
+            "uses the durable cache"
+        );
+        for part in [".dependencies", ".platform", ".application", "$dev_url"] {
+            assert!(
+                setup.contains(part),
+                "the cache key must cover {part}, or a change to it serves stale symbols"
+            );
+        }
+        // Top-level key, so the sweeper can evict one entry (see caches.rs).
+        assert!(
+            setup.contains("$HARNESS_CACHE_DIR/alpackages-$sym_key"),
+            "the key belongs in the top-level name, not a nested path"
+        );
+        // A partial cache is never a hit, and the marker goes in before the move.
+        assert!(
+            setup.contains(r#"[ -f "$sym_cache/.complete" ]"#),
+            "restoring must be gated on the completeness marker"
+        );
+        assert!(
+            setup.contains(r#"mv "$tmp" "$sym_cache""#),
+            "the cache must be moved into place, never written in situ"
+        );
+        // And it expires.
+        assert!(
+            setup.contains("BC_SYMBOL_CACHE_TTL_DAYS:-7") && setup.contains("-mtime"),
+            "a key that cannot see a server upgrade needs a TTL"
+        );
+        // A warm cache skips the downloads rather than the fatal gate.
+        assert!(
+            setup.contains(r#"[ "$sym_fresh" -eq 1 ] && return 0"#),
+            "a warm cache must short-circuit the downloads themselves"
+        );
+    }
+
     #[test]
     fn the_supervisor_derives_the_build_column_in_both_places() {
         let yaml = super::WORKFLOWS
