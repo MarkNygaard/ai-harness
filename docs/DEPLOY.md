@@ -29,6 +29,22 @@ that uses a ghcr image, CloudNativePG, an Envoy route, and a SOPS secret.
 | Persistence | a PVC mounted at **`/home/harness`** — holds run artifacts + (later) UI-entered agent credentials, so they survive restarts |
 | Ingress | an Envoy `HTTPRoute` on `envoy-internal` at `harness.${SECRET_DOMAIN}` |
 
+### Caches — size the volume for them
+
+Runs work in throwaway worktrees, so everything reusable lives beside them on the
+PVC. Three caches, all under `<projects_dir>` (`/home/harness/projects`):
+
+| Dir | Holds | Bounded by |
+|---|---|---|
+| `.cargo-target/<project>` | Rust build artifacts (`CARGO_TARGET_DIR`), per project | `HARNESS_CARGO_TARGET_CAP_GB` (default 50 GiB **per project**), or a per-project cap in the UI |
+| `.deps-cache` | package-manager downloads — pnpm store, npm/bun/yarn, NuGet packages, Go modules, uv/pip/poetry, Composer — shared by all projects | `HARNESS_DEPS_CACHE_CAP_GB` (default 20 GiB) |
+| `.git-cache` | bare mirrors runs clone from, shared by all projects | `HARNESS_GIT_MIRROR_TTL_DAYS` (default 30; mirrors idle longer are dropped) |
+
+`0` disables the corresponding sweep. The defaults total well past the ~5Gi the
+PVC below starts at: size it for the caps you actually set plus the checkouts and
+worktrees, or lower the caps. Everything here is *cache* — deleting the volume's
+cache dirs costs the next run its warm start and nothing else.
+
 ## 3. Files to create — `kubernetes/apps/automation/ai-harness/`
 
 Mirror the closest existing analog app. Adapt these to current conventions/versions.

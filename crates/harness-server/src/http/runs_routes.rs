@@ -846,11 +846,17 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
         .ok()
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(CACHE_CAP_GB_DEFAULT);
-    if env_cap_gb == 0 {
-        tracing::info!("cache sweeper: disabled (HARNESS_CARGO_TARGET_CAP_GB=0)");
+    // Each cache has its own switch; only all three off means nothing to do.
+    // A project with an explicit cap is still swept when the env default is 0.
+    if env_cap_gb == 0
+        && super::caches::deps_cap_gb() == 0
+        && super::caches::git_mirror_ttl_days() == 0
+    {
+        tracing::info!("cache sweeper: disabled (all caps 0)");
         return;
     }
     let root = state.projects_dir.join(".cargo-target");
+    let projects_dir = state.projects_dir.clone();
     tokio::spawn(async move {
         let mut tick =
             tokio::time::interval(std::time::Duration::from_secs(CACHE_SWEEP_EVERY_SECS));
@@ -876,8 +882,32 @@ pub(crate) fn spawn_cache_sweeper(state: Arc<RunsState>) {
             };
             let root = root.clone();
             let caps = caps.clone();
+            let deps = super::caches::deps_root(&projects_dir);
+            let mirrors = super::caches::git_mirror_root(&projects_dir);
             if let Err(e) = tokio::task::spawn_blocking(move || {
-                sweep_project_caches(&root, CACHE_SWEEP_SAFETY_FLOOR_SECS, &caps)
+                sweep_project_caches(&root, CACHE_SWEEP_SAFETY_FLOOR_SECS, &caps);
+                // The shared caches are bounded as a whole, not per project:
+                // pnpm's store and NuGet's packages folder are content-addressed,
+                // so no project owns an entry in them.
+                let cap_gb = super::caches::deps_cap_gb();
+                let cap = cap_gb.saturating_mul(1024 * 1024 * 1024);
+                if let Some((before, after)) = super::caches::sweep_deps_cache(
+                    &deps,
+                    cap,
+                    cap / 5 * 4,
+                    CACHE_SWEEP_SAFETY_FLOOR_SECS,
+                ) {
+                    tracing::info!(
+                        "cache sweeper: deps {:.1} GB -> {:.1} GB (cap {cap_gb} GB)",
+                        before as f64 / 1.073_741_824e9,
+                        after as f64 / 1.073_741_824e9,
+                    );
+                }
+                let ttl = super::caches::git_mirror_ttl_days();
+                let dropped = super::caches::sweep_git_mirrors(&mirrors, ttl);
+                if dropped > 0 {
+                    tracing::info!("cache sweeper: dropped {dropped} git mirror(s) idle >{ttl}d");
+                }
             })
             .await
             {
@@ -1740,6 +1770,16 @@ async fn execute_run_task(
         ("CARGO_PROFILE_TEST_DEBUG".to_string(), "1".to_string()),
     ]);
 
+    // Warm the other ecosystems the same way: point pnpm/npm/bun/NuGet/Go/pip at
+    // a shared cache on the persistent volume, so a fresh worktree's
+    // `pnpm install` hardlinks from a warm store and `dotnet restore` reads
+    // packages it already has instead of re-downloading both every run. See
+    // `caches` for what is deliberately left uncached (task caches — they would
+    // let a run skip codegen whose remote input changed).
+    run_env.extend(super::caches::deps_env(&super::caches::deps_root(
+        &state.projects_dir,
+    )));
+
     // What this run may ask the server to do on its behalf — a capability
     // scoped to this run and this project, never a credential.
     //
@@ -2181,17 +2221,23 @@ async fn resolve_workspace(
     let container = state.projects_dir.join(".worktrees").join(run_id);
     let clones = layout.clone();
     let container_for_task = container.clone();
+    // Unlike the single-repo path (which worktrees a checkout that already
+    // exists), every repo here would otherwise be cloned from scratch on every
+    // run. Source them from persistent bare mirrors instead: the mirror fetches
+    // only what is new, and the run's clone hardlinks its objects.
+    let mirror_root = super::caches::git_mirror_root(&state.projects_dir);
     let made = tokio::task::spawn_blocking(move || {
         std::fs::create_dir_all(&container_for_task)
             .map_err(|e| format!("create workspace dir: {e}"))?;
         for repo in &clones {
             let dest = container_for_task.join(&repo.folder);
-            harness_runner::clone_run_branch(
+            harness_runner::clone_run_branch_cached(
                 &repo.url,
                 &dest,
                 &repo.base_branch,
                 &run_branch,
                 token.as_deref(),
+                Some(&mirror_root),
             )
             .map_err(|e| format!("clone `{}` into `{}` failed: {e}", repo.url, repo.folder))?;
         }

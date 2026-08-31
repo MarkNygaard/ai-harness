@@ -7,6 +7,7 @@ pub mod accounts;
 pub(crate) mod auth;
 pub(crate) mod auth_routes;
 pub(crate) mod billing_routes;
+pub(crate) mod caches;
 pub(crate) mod categories_routes;
 pub(crate) mod codex_routes;
 pub(crate) mod credentials_routes;

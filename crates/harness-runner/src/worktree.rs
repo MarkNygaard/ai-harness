@@ -255,6 +255,138 @@ pub fn sanitize_branch_component(s: &str) -> String {
         .collect()
 }
 
+/// Directory name for `git_url`'s mirror: host + path flattened into one safe
+/// segment (`github.com-me-app.git`), so two repos that share a basename — or
+/// the same repo written as `https://` and `git@` — can't collide or fork into
+/// two mirrors. Scheme and userinfo are dropped for that reason.
+fn mirror_name(git_url: &str) -> String {
+    let s = git_url.trim().trim_end_matches('/');
+    let s = s.strip_suffix(".git").unwrap_or(s);
+    let s = s.rsplit("://").next().unwrap_or(s);
+    let s = s.rsplit('@').next().unwrap_or(s);
+    let mut out = String::with_capacity(s.len() + 4);
+    for ch in s.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' {
+            out.push(ch);
+        } else {
+            out.push('-');
+        }
+    }
+    // Never let the name start with a dot (hidden, and `.`/`..` are reserved),
+    // and keep it inside the 255-byte filename limit with room for `.git`.
+    let trimmed: String = out.trim_start_matches('.').chars().take(200).collect();
+    if trimmed.is_empty() {
+        return "repo.git".to_string();
+    }
+    format!("{trimmed}.git")
+}
+
+/// A persistent bare mirror of `git_url` under `mirror_root` — created on first
+/// use, incrementally updated (`remote update --prune`) after. Returns the
+/// mirror path.
+///
+/// The mirror is what makes a run's clone cheap: without it every run of a
+/// multi-repo project transfers each repo's whole history again. Auth as in
+/// [`clone_repo`].
+pub fn ensure_mirror(
+    git_url: &str,
+    mirror_root: &Path,
+    token: Option<&str>,
+) -> Result<PathBuf, WorktreeError> {
+    std::fs::create_dir_all(mirror_root)
+        .map_err(|e| WorktreeError(format!("create mirror root: {e}")))?;
+    let dir = mirror_root.join(mirror_name(git_url));
+    if dir.join("HEAD").is_file() {
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(&dir);
+        auth_args(&mut cmd, token);
+        cmd.args(["remote", "update", "--prune"]);
+        finish(cmd, "git remote update")?;
+        return Ok(dir);
+    }
+    // Build into a private temp dir and rename into place, so the mirror path
+    // only ever holds a finished mirror. Two runs of the same project starting
+    // together is normal here (A/B pairs, an epic's children), and without this
+    // they would clone over each other — or one would delete the other's
+    // half-written mirror mid-transfer.
+    let tmp = mirror_root.join(format!(
+        "{}.tmp-{}-{}",
+        dir.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default(),
+    ));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let mut cmd = Command::new("git");
+    auth_args(&mut cmd, token);
+    cmd.arg("clone").arg("--mirror").arg(git_url).arg(&tmp);
+    let cloned = finish(cmd, "git clone --mirror");
+    if cloned.is_err() {
+        let _ = std::fs::remove_dir_all(&tmp);
+        cloned?;
+    }
+    if std::fs::rename(&tmp, &dir).is_err() {
+        // Lost the race (or a stale directory is in the way). A mirror another
+        // run just finished is as good as ours; otherwise clear the leftover and
+        // let this run fall back to cloning from origin.
+        let _ = std::fs::remove_dir_all(&tmp);
+        if !dir.join("HEAD").is_file() {
+            let _ = std::fs::remove_dir_all(&dir);
+            return Err(WorktreeError(format!(
+                "could not place mirror at {}",
+                dir.display()
+            )));
+        }
+    }
+    Ok(dir)
+}
+
+/// [`clone_run_branch`], but sourcing objects from the persistent mirror under
+/// `mirror_root` instead of the network. Falls back to a plain remote clone when
+/// `mirror_root` is `None` or the mirror can't be brought up to date — a stale
+/// mirror must never decide what a run builds, so the fallback is a fresh clone,
+/// not the mirror we have.
+pub fn clone_run_branch_cached(
+    git_url: &str,
+    dest: &Path,
+    base_branch: &str,
+    new_branch: &str,
+    token: Option<&str>,
+    mirror_root: Option<&Path>,
+) -> Result<(), WorktreeError> {
+    let Some(root) = mirror_root else {
+        return clone_run_branch(git_url, dest, base_branch, new_branch, token);
+    };
+    let mirror = match ensure_mirror(git_url, root, token) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("git mirror unusable for {git_url} ({e}); cloning from origin");
+            return clone_run_branch(git_url, dest, base_branch, new_branch, token);
+        }
+    };
+    // A local clone hardlinks the object store rather than refetching it: no
+    // network, and near-zero extra disk. Hardlinks (not alternates) mean the
+    // clone still stands if the mirror is pruned mid-run.
+    let mut cmd = Command::new("git");
+    cmd.arg("clone").arg(&mirror).arg(dest);
+    finish(cmd, "git clone (from mirror)")?;
+    // Point `origin` back at the real remote: the mirror is an implementation
+    // detail, and the agent's push/PR must reach GitHub, not a local path.
+    run_git(dest, &["remote", "set-url", "origin", git_url])?;
+    run_git(
+        dest,
+        &[
+            "checkout",
+            "-b",
+            new_branch,
+            &format!("origin/{base_branch}"),
+        ],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,5 +461,84 @@ mod tests {
     #[test]
     fn sanitizes_branch_components() {
         assert_eq!(sanitize_branch_component("idea-to/pr v2"), "idea-to-pr-v2");
+    }
+
+    #[test]
+    fn mirror_name_is_stable_across_url_forms() {
+        // https and ssh forms of the same repo share one mirror.
+        assert_eq!(
+            mirror_name("https://github.com/me/app.git"),
+            "github.com-me-app.git"
+        );
+        assert_eq!(
+            mirror_name("git@github.com:me/app.git"),
+            "github.com-me-app.git"
+        );
+        assert_eq!(
+            mirror_name("https://x-access-token@github.com/me/app/"),
+            "github.com-me-app.git"
+        );
+        // Same basename, different owner — distinct mirrors.
+        assert_ne!(
+            mirror_name("https://github.com/me/app"),
+            mirror_name("https://github.com/you/app")
+        );
+    }
+
+    #[test]
+    fn mirror_clone_reuses_objects_and_repoints_origin() {
+        let origin = TempDir::new().unwrap();
+        init_repo(origin.path());
+        let mirrors = TempDir::new().unwrap();
+        let dest = TempDir::new().unwrap();
+        let dest = dest.path().join("checkout");
+        let url = origin.path().to_string_lossy().to_string();
+
+        // `git init` defaults to `master` or `main` depending on the install.
+        let base = run_git(origin.path(), &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
+        clone_run_branch_cached(
+            &url,
+            &dest,
+            base.trim(),
+            "run/1",
+            None,
+            Some(mirrors.path()),
+        )
+        .unwrap();
+
+        // The mirror is on disk, ready to serve the next run incrementally.
+        assert!(mirrors
+            .path()
+            .join(mirror_name(&url))
+            .join("HEAD")
+            .is_file());
+        // `origin` points at the real remote, not the mirror.
+        let remote = run_git(&dest, &["remote", "get-url", "origin"]).unwrap();
+        assert_eq!(remote.trim(), url.trim());
+        // The run branch is checked out.
+        let branch = run_git(&dest, &["rev-parse", "--abbrev-ref", "HEAD"]).unwrap();
+        assert_eq!(branch.trim(), "run/1");
+    }
+
+    #[test]
+    fn ensure_mirror_creates_then_updates_in_place() {
+        let origin = TempDir::new().unwrap();
+        init_repo(origin.path());
+        let mirrors = TempDir::new().unwrap();
+        let url = origin.path().to_string_lossy().to_string();
+
+        let first = ensure_mirror(&url, mirrors.path(), None).unwrap();
+        assert!(first.join("HEAD").is_file());
+        // A second call fetches into the same mirror instead of rebuilding it,
+        // and leaves no temp directory behind.
+        let second = ensure_mirror(&url, mirrors.path(), None).unwrap();
+        assert_eq!(first, second);
+        let leftovers: Vec<_> = std::fs::read_dir(mirrors.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".tmp-"))
+            .collect();
+        assert!(leftovers.is_empty(), "temp dirs left: {leftovers:?}");
     }
 }

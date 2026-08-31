@@ -28,6 +28,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Runs reuse dependency downloads and git objects, not just Rust build artifacts.**
+  Only `CARGO_TARGET_DIR` was pointed at the persistent volume, so a project with no
+  Rust in it had literally nothing cached — the cache dialog read `0` for a
+  JS/.NET project because there was nothing to read. Every run now inherits a shared
+  download cache at `<projects_dir>/.deps-cache`: pnpm's store (both the pnpm ≤10
+  `npm_config_*` and pnpm 11 `pnpm_config_*` spellings), npm/bun/yarn caches, NuGet's
+  global packages folder and HTTP cache, `GOMODCACHE`/`GOCACHE`, uv/pip/poetry, and
+  Composer. It sits on the same filesystem as the worktrees, which is what lets
+  `pnpm install` hardlink `node_modules` into a fresh tree instead of downloading it.
+  Multi-repo runs additionally clone from persistent bare mirrors under
+  `.git-cache` — previously the only path that reused a checkout was the single-repo
+  worktree, so each repo of a multi-repo project transferred its whole history every
+  run; the mirror fetches only what is new and the run's clone hardlinks its objects.
+  A mirror that can't be brought up to date is bypassed rather than trusted, so a
+  stale mirror can never decide what a run builds. Both caches are swept: the
+  dependency cache by whole ecosystem subdirectory when it passes
+  `HARNESS_DEPS_CACHE_CAP_GB` (default 20), git mirrors when idle longer than
+  `HARNESS_GIT_MIRROR_TTL_DAYS` (default 30). Whole subdirectories rather than
+  individual files, because these caches are indexed — evicting one file out of a
+  content-addressed store leaves an index entry pointing at nothing. Build *task*
+  caches (turbo/nx, `.next/cache`) are deliberately still cold: they decide whether
+  to re-run a step, and codegen driven by a remote schema (Sanity types) has inputs
+  no hash of the tree can see, so replaying a cached `typecheck` would check the
+  wrong types. The cache dialog now reports all three sizes, marking the shared ones
+  as shared.
 - **`run_activity_errors` (MCP)** — what the agents keep tripping over, across runs
   rather than one at a time. The activity table already recorded every tool result,
   but the only reader was a per-run tail feeding the live UI, so a repeated obstacle
