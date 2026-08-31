@@ -92,6 +92,25 @@ pub struct RegisterProjectRequest {
     pub cargo_target_cap_gb: Option<i32>,
 }
 
+/// The first remote listed twice in `repos`, if any.
+///
+/// A row naming the project's own `git_url` is legitimate — that row chooses the
+/// primary repo's folder. Naming the *same* remote twice is not: it would put one
+/// repo in two folders on the same `run/<id>` branch, where the second push
+/// either rejects as non-fast-forward or clobbers the first.
+fn duplicate_remote(repos: &[ProjectRepo]) -> Option<String> {
+    let mut seen = std::collections::HashSet::new();
+    for r in repos {
+        let url = r.url.trim();
+        if url.is_empty() {
+            continue;
+        }
+        if !seen.insert(harness_runner::remote_identity(url)) {
+            return Some(url.to_string());
+        }
+    }
+    None
+}
 /// `POST /api/projects` — register/update a project and ensure its repo is
 /// cloned into `projects_dir/<name>`. Idempotent: re-registering an existing
 /// project updates the row and `git fetch`es the existing checkout.
@@ -125,6 +144,16 @@ pub async fn register_project(
     let detect = want_branch.is_none();
     let dest: PathBuf = state.projects_dir.join(&req.name);
     let token = state.github_token().await;
+    // One remote, one checkout: see `duplicate_remote`.
+    if let Some(dupe) = duplicate_remote(&req.repos) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "`{dupe}` is listed more than once — a repo gets one folder. To \
+                 name the primary repo's folder, list its URL exactly once."
+            ),
+        );
+    }
     let git_url = req.git_url.trim().to_string();
     let clone_url = git_url.clone();
     let exists = dest.exists();
@@ -452,5 +481,43 @@ pub async fn sweep_cache(
             StatusCode::INTERNAL_SERVER_ERROR,
             format!("task failed: {e}"),
         ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(folder: &str, url: &str) -> ProjectRepo {
+        ProjectRepo {
+            folder: folder.to_string(),
+            url: url.to_string(),
+            base_branch: "main".to_string(),
+            role: None,
+        }
+    }
+
+    #[test]
+    fn one_row_per_remote_and_url_form_does_not_hide_a_duplicate() {
+        // The primary's URL listed once is the rename case, not a duplicate —
+        // `plan_layout` folds it into the primary checkout.
+        assert_eq!(
+            duplicate_remote(&[
+                row("frontend", "https://github.com/me/front.git"),
+                row("backend", "https://github.com/me/api.git"),
+            ]),
+            None
+        );
+        // Two folders for one repo would race to push the same run branch, and
+        // a different URL spelling must not get past the check.
+        assert_eq!(
+            duplicate_remote(&[
+                row("frontend", "https://github.com/me/front.git"),
+                row("also-frontend", "git@github.com:me/front"),
+            ]),
+            Some("git@github.com:me/front".to_string())
+        );
+        // A blank trailing row from the form is not a duplicate of anything.
+        assert_eq!(duplicate_remote(&[row("a", ""), row("b", "")]), None);
     }
 }

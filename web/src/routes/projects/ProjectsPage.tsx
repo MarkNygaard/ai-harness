@@ -648,10 +648,12 @@ function ProjectForm({
           </Button>
         </div>
         <span className="text-[10px] text-muted-foreground">
-          Leave empty for a single-repo project. Add repos to span e.g. a
-          frontend + backend — each is checked out into its folder, and a run
-          works and opens a PR across whichever repos it changes. The Git URL
-          above is the primary repo.
+          Leave empty for a single-repo project. The Git URL above is already
+          the first repo — it is checked out into a folder named after it. Add a
+          row for each <em>other</em> repo the work spans; each gets its own
+          folder, and a run opens a PR in whichever repos it changed. To choose
+          the primary repo&rsquo;s folder name, add a row with that same Git URL
+          — it renames the folder rather than checking the repo out twice.
         </span>
         {repos.map((repo, i) => (
           <div

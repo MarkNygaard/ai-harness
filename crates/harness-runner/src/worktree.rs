@@ -255,15 +255,31 @@ pub fn sanitize_branch_component(s: &str) -> String {
         .collect()
 }
 
+/// The repo a URL points at, normalised: host + path, lower-cased, without
+/// scheme, userinfo, a `.git` suffix or a trailing slash. Two URLs with the same
+/// identity are the same repo — `https://github.com/me/App.git`,
+/// `git@github.com:me/app`, and `https://x-access-token@github.com/me/app/` all
+/// answer `github.com/me/app`.
+pub fn remote_identity(git_url: &str) -> String {
+    let s = git_url.trim().trim_end_matches('/');
+    let s = s.strip_suffix(".git").unwrap_or(s);
+    let s = s.rsplit("://").next().unwrap_or(s);
+    let s = s.rsplit('@').next().unwrap_or(s);
+    // `git@host:owner/repo` and `https://host/owner/repo` name one repo.
+    s.replacen(':', "/", 1).to_ascii_lowercase()
+}
+
+/// Whether two URLs name the same repo. See [`remote_identity`].
+pub fn same_remote(a: &str, b: &str) -> bool {
+    remote_identity(a) == remote_identity(b)
+}
+
 /// Directory name for `git_url`'s mirror: host + path flattened into one safe
 /// segment (`github.com-me-app.git`), so two repos that share a basename — or
 /// the same repo written as `https://` and `git@` — can't collide or fork into
 /// two mirrors. Scheme and userinfo are dropped for that reason.
 fn mirror_name(git_url: &str) -> String {
-    let s = git_url.trim().trim_end_matches('/');
-    let s = s.strip_suffix(".git").unwrap_or(s);
-    let s = s.rsplit("://").next().unwrap_or(s);
-    let s = s.rsplit('@').next().unwrap_or(s);
+    let s = remote_identity(git_url);
     let mut out = String::with_capacity(s.len() + 4);
     for ch in s.chars() {
         if ch.is_ascii_alphanumeric() || ch == '.' || ch == '-' {

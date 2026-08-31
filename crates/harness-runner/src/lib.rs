@@ -39,7 +39,7 @@ pub use run::{execute_run, parse_sandbox, print_report, RunOptions};
 pub use worktree::{
     clone_repo, clone_run_branch, clone_run_branch_cached, default_branch, ensure_mirror,
     fetch_repo, mise_shims_dir, mise_tool_path, provision_toolchains, prune_worktrees,
-    sanitize_branch_component, Worktree, WorktreeError,
+    remote_identity, same_remote, sanitize_branch_component, Worktree, WorktreeError,
 };
 
 /// A request to run an AI prompt against a working directory.
