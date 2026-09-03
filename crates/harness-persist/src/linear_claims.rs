@@ -49,6 +49,42 @@ const ADD_REPORTED_NODES: &str =
 const ADD_LAST_ACTIVITY_AT: &str = "ALTER TABLE harness_linear_claims \
      ADD COLUMN IF NOT EXISTS last_activity_at timestamptz NOT NULL DEFAULT now()";
 
+/// Retire every active claim but the first for each `(issue, workflow)`.
+///
+/// Runs once, immediately before the unique index below, because a database that
+/// pre-dates it can already hold the state that index forbids — the duplicate
+/// claims are what this whole guard exists to stop, and the index cannot be
+/// built over them. The earliest `(created_at, run_id)` wins: it is the claim
+/// that really did take the issue, and the tuple keeps the choice deterministic
+/// when two claims land in the same millisecond (which is exactly how they land).
+const RETIRE_DUPLICATE_ACTIVE_CLAIMS: &str = "
+UPDATE harness_linear_claims AS c SET phase = 'done'
+ WHERE c.phase <> 'done'
+   AND EXISTS (
+        SELECT 1 FROM harness_linear_claims AS winner
+         WHERE winner.phase <> 'done'
+           AND winner.issue_id = c.issue_id
+           AND winner.workflow = c.workflow
+           AND (winner.created_at, winner.run_id) < (c.created_at, c.run_id)
+   )";
+
+/// At most one **active** claim per `(issue, workflow)`.
+///
+/// Both entry points — the column poller and the delegation webhook — used to
+/// treat "the issue left its source column" as the claim signal, read from
+/// Linear and acted on independently. That is a check-then-act with nothing
+/// holding the gap, and the only backstop was the binding's concurrency cap,
+/// which stops nothing while a slot is free. ECOM-44 arrived through both paths
+/// 90ms apart and got two runs, two branches and two pull requests.
+///
+/// Partial, on `phase <> 'done'`: a claim retires to `done` on every exit —
+/// completed, rolled back after failure, or dropped when its run row never
+/// appeared — so an issue can still be claimed again later, by this workflow or
+/// another. This forbids only two at once.
+const ADD_ONE_ACTIVE_CLAIM_PER_ISSUE: &str = "
+CREATE UNIQUE INDEX IF NOT EXISTS harness_linear_claims_one_active_per_issue
+    ON harness_linear_claims (issue_id, workflow) WHERE phase <> 'done'";
+
 /// A claim row (matches `harness_linear_claims`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LinearClaim {
@@ -115,6 +151,13 @@ impl LinearClaimStore {
         sqlx::query(ADD_AGENT_SESSION_ID).execute(&pool).await?;
         sqlx::query(ADD_REPORTED_NODES).execute(&pool).await?;
         sqlx::query(ADD_LAST_ACTIVITY_AT).execute(&pool).await?;
+        // Order matters: the index cannot be built over the duplicates.
+        sqlx::query(RETIRE_DUPLICATE_ACTIVE_CLAIMS)
+            .execute(&pool)
+            .await?;
+        sqlx::query(ADD_ONE_ACTIVE_CLAIM_PER_ISSUE)
+            .execute(&pool)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -122,6 +165,12 @@ impl LinearClaimStore {
     ///
     /// `agent_session_id` links the claim to the Linear agent session that
     /// delegated the work; `None` for a run the column poller claimed itself.
+    ///
+    /// Returns whether the row was written. `false` means the claim was refused:
+    /// either this run already had one, or — the case worth reacting to — the
+    /// issue already has an active claim for this workflow and something raced
+    /// past the checks upstream. A caller that gets `false` has a run it should
+    /// not have started.
     #[allow(clippy::too_many_arguments)]
     pub async fn record(
         &self,
@@ -132,13 +181,17 @@ impl LinearClaimStore {
         identifier: &str,
         original_state_id: &str,
         agent_session_id: Option<&str>,
-    ) -> Result<(), PersistError> {
-        sqlx::query(
+    ) -> Result<bool, PersistError> {
+        // Untargeted `DO NOTHING`: the run_id primary key and the one-active-
+        // claim-per-issue index both have to fall through to "not written"
+        // rather than an error, and they mean different things to the caller
+        // only in the log line it writes.
+        let done = sqlx::query(
             "INSERT INTO harness_linear_claims
                 (run_id, project, workflow, issue_id, identifier, original_state_id,
                  phase, agent_session_id, created_at)
              VALUES ($1, $2, $3, $4, $5, $6, 'claimed', $7, now())
-             ON CONFLICT (run_id) DO NOTHING",
+             ON CONFLICT DO NOTHING",
         )
         .bind(run_id)
         .bind(project)
@@ -149,7 +202,32 @@ impl LinearClaimStore {
         .bind(agent_session_id)
         .execute(&self.pool)
         .await?;
-        Ok(())
+        Ok(done.rows_affected() > 0)
+    }
+
+    /// Whether `(issue, workflow)` already has an active claim — i.e. a run is
+    /// in flight for this issue and there must not be a second.
+    ///
+    /// The durable half of the duplicate-claim guard, and the half that survives
+    /// a restart: the in-process guard in `linear_agent` closes the concurrent
+    /// window inside one container, and this catches a claim recorded by the
+    /// process that was running before this one.
+    pub async fn claim_exists_for_issue(
+        &self,
+        issue_id: &str,
+        workflow: &str,
+    ) -> Result<bool, PersistError> {
+        let row: (bool,) = sqlx::query_as(
+            "SELECT EXISTS (
+                 SELECT 1 FROM harness_linear_claims
+                  WHERE issue_id = $1 AND workflow = $2 AND phase <> 'done'
+             )",
+        )
+        .bind(issue_id)
+        .bind(workflow)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.0)
     }
 
     /// How many active (non-`done`) claims `(project, workflow)` currently has —
@@ -461,11 +539,18 @@ mod tests {
         put_run(&pool, &rid("f1"), "failed").await;
         put_run(&pool, &rid("f2"), "cancelled").await;
         put_run(&pool, &rid("ok"), "completed").await;
+        // Retired between attempts, as the poller does: only one claim on an
+        // issue may be active at a time, so attempt two exists precisely because
+        // attempt one finished.
         for run in [rid("f1"), rid("f2"), rid("ok")] {
-            store
-                .record(&run, "proj", "idea-to-pr", &issue, "PROJ-1", "todo", None)
-                .await
-                .unwrap();
+            assert!(
+                store
+                    .record(&run, "proj", "idea-to-pr", &issue, "PROJ-1", "todo", None)
+                    .await
+                    .unwrap(),
+                "a retired claim must not block the next attempt"
+            );
+            store.set_phase(&run, "done").await.unwrap();
         }
 
         // Only the failed/cancelled runs count; the success does NOT consume the
@@ -520,6 +605,84 @@ mod tests {
         assert_eq!(store.count_active(&project, "merge-pr").await.unwrap(), 0);
     }
 
+    /// One active claim per `(issue, workflow)` — the guarantee that stops one
+    /// Linear issue producing two runs and two pull requests.
+    ///
+    /// This is the backstop, not the mechanism: the poller and the delegation
+    /// webhook both check `claim_exists_for_issue` under an in-process guard
+    /// first. It exists because those two entry points read their claim signal
+    /// from Linear independently, and ECOM-44 slipped between them.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn one_issue_cannot_hold_two_active_claims() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = LinearClaimStore::connect(&url).await.expect("connect");
+        let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let issue = format!("dup-issue-{ts}");
+        let (first, second) = (format!("dup-a-{ts}"), format!("dup-b-{ts}"));
+
+        assert!(!store
+            .claim_exists_for_issue(&issue, "idea-to-pr")
+            .await
+            .unwrap());
+        assert!(store
+            .record(&first, "proj", "idea-to-pr", &issue, "P-1", "todo", None)
+            .await
+            .unwrap());
+        assert!(store
+            .claim_exists_for_issue(&issue, "idea-to-pr")
+            .await
+            .unwrap());
+
+        // The second entry point, having raced past every check upstream: it
+        // gets `false` rather than a second claim.
+        assert!(
+            !store
+                .record(&second, "proj", "idea-to-pr", &issue, "P-1", "todo", None)
+                .await
+                .unwrap(),
+            "a second active claim on one issue must be refused"
+        );
+        assert!(store.claim_for_run(&second).await.unwrap().is_none());
+
+        // Another workflow is a different stage of the same issue's life, not a
+        // duplicate: `merge-pr` claims it after `idea-to-pr` is done with it.
+        assert!(store
+            .record(
+                &format!("dup-merge-{ts}"),
+                "proj",
+                "merge-pr",
+                &issue,
+                "P-1",
+                "ready",
+                None
+            )
+            .await
+            .unwrap());
+
+        // And once the first claim retires, the issue can be claimed again.
+        store.set_phase(&first, "done").await.unwrap();
+        assert!(!store
+            .claim_exists_for_issue(&issue, "idea-to-pr")
+            .await
+            .unwrap());
+        assert!(store
+            .record(
+                &format!("dup-c-{ts}"),
+                "proj",
+                "idea-to-pr",
+                &issue,
+                "P-1",
+                "todo",
+                None
+            )
+            .await
+            .unwrap());
+    }
+
     /// `claim_for_run` resolves a run's claim; `clear_claims` removes every claim
     /// for `(issue, workflow)`, resetting the attempt counter — the Rerun reset.
     #[tokio::test]
@@ -546,6 +709,9 @@ mod tests {
             .record(&rr1, "proj", "wf", &issue, "P-1", "todo", None)
             .await
             .unwrap();
+        // The first attempt is over before the second is claimed — two *active*
+        // claims on one issue are what the unique index forbids.
+        store.set_phase(&rr1, "done").await.unwrap();
         store
             .record(&rr2, "proj", "wf", &issue, "P-1", "todo", None)
             .await
