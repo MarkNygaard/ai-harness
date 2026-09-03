@@ -14,7 +14,7 @@ import {
   IconUsers,
   IconWorld,
 } from "@tabler/icons-react";
-import { useAuthStatus } from "@/lib/auth";
+import { isAdminOf, useAuthStatus } from "@/lib/auth";
 import {
   Sidebar,
   SidebarContent,
@@ -169,10 +169,7 @@ export function SettingsSidebar({
   const status = useAuthStatus();
   const [query, setQuery] = useState("");
 
-  // Before an install has accounts there are no roles, so nothing is hidden —
-  // whoever got in is the operator by definition.
-  const isAdmin =
-    status.data?.mode !== "accounts" || status.data?.user?.role === "admin";
+  const isAdmin = isAdminOf(status.data);
 
   const groups = GROUPS.map((g) => ({
     ...g,

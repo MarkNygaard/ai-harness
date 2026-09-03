@@ -89,3 +89,17 @@ export function useLogout() {
     onSuccess: () => invalidateEverything(qc),
   });
 }
+
+/**
+ * Whether this session may see and change installation-wide settings.
+ *
+ * Before an install has accounts there are no roles, so whoever got in is the
+ * operator by definition. A status that has not arrived yet reads as admin,
+ * which is what keeps the settings nav from flashing items away on every page
+ * load; anything that *acts* on the answer rather than laying out a page should
+ * wait for the query to settle first, because a guess in that direction is
+ * wrong for a member.
+ */
+export function isAdminOf(status: AuthStatus | undefined): boolean {
+  return status?.mode !== "accounts" || status.user?.role === "admin";
+}

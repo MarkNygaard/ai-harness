@@ -1,37 +1,11 @@
 import { Bot } from "lucide-react";
 import { SettingsShell } from "@/components/SettingsShell";
 import { ProviderMark } from "@/components/providers/ProviderMark";
+import { AGENTS } from "@/lib/agents";
 import { describeProvider } from "@/lib/provider-status";
 import { useProviderHealth } from "@/lib/system";
 import { useCredentials } from "@/lib/credentials";
 import { CliUpdateButton, Section } from "./parts";
-
-/**
- * What a workflow node can pick, and what backs it.
- *
- * `provider` is the value a workflow author types in `provider:`, which is why
- * this page is keyed on it: the question it answers is "can `provider: pi`
- * run", and that needs the CLI *and* a credential.
- *
- * `subscriptions` is a list because the two dimensions cross. Pi runs
- * `kimi-code/*` on a Kimi plan and `openai-codex/*` on a ChatGPT one, so one
- * agent is backed by two accounts, and either alone is enough to run it.
- *
- * No descriptions. What an agent is *used for* is a property of the workflows,
- * which change; a sentence here would be a claim nothing keeps true, and was
- * already drifting — Claude was described as the planning-and-review agent
- * while Kimi did the implementing.
- */
-export const AGENTS: {
-  provider: string;
-  label: string;
-  subscriptions: string[];
-}[] = [
-  { provider: "claude", label: "Claude Code", subscriptions: ["claude"] },
-  { provider: "codex", label: "Codex", subscriptions: ["codex"] },
-  { provider: "pi", label: "Pi", subscriptions: ["pi", "codex"] },
-  { provider: "cursor", label: "Cursor", subscriptions: ["cursor"] },
-];
 
 /**
  * The agents that execute workflow nodes: what is installed, at what version,
