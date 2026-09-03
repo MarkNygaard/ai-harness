@@ -22,6 +22,8 @@ import { SsoSettingsPage } from "./routes/settings/SignInPage";
 import { AcceptInvitePage } from "./routes/auth/AcceptInvitePage";
 import { ForgotPasswordPage } from "./routes/auth/ForgotPasswordPage";
 import { TooltipProvider } from "./components/ui/tooltip";
+import { Toaster } from "./components/ui/sonner";
+import { AgentUpdateToast } from "./components/AgentUpdateToast";
 import { TokenPrompt } from "./components/TokenPrompt";
 import { LoginPage, SetupPage } from "./routes/auth/SignInPage";
 import { RequireSignIn } from "./components/RequireSignIn";
@@ -111,6 +113,11 @@ export function App() {
         </Routes>
         <RequireSignIn />
         <TokenPrompt />
+        {/* Outside the routes on purpose: both are about the installation
+            rather than the page, and the notice fires once per load however you
+            arrived. */}
+        <AgentUpdateToast />
+        <Toaster />
       </TooltipProvider>
     </QueryClientProvider>
   );

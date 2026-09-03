@@ -37,14 +37,19 @@ export interface ClaudeUpdateResult {
  * Each entry costs a process spawn on the server, and the npm lookup hits the
  * network, so this opts out of the app-wide 5s refetch: checked on mount, kept
  * fresh for 30 minutes. Nothing here changes without a deploy or an update.
+ *
+ * `enabled` exists because the route is admin-only: the app-wide update notice
+ * mounts on every page, and asking as a member would spend a rejected request
+ * per page load to learn nothing.
  */
-export function useProviderHealth() {
+export function useProviderHealth(enabled = true) {
   return useQuery<ProviderHealth[], Error>({
     queryKey: ["provider-health"],
     queryFn: ({ signal }) =>
       apiJson<ProviderHealth[]>("/api/system/providers", { signal }),
     refetchInterval: false,
     staleTime: 1000 * 60 * 30,
+    enabled,
   });
 }
 
