@@ -302,6 +302,74 @@ impl Drop for SessionGuard {
     }
 }
 
+// ── Duplicate-claim guard (across entry points) ──────────────────────────────
+//
+// The guard above is keyed on the *session*, which is what a webhook redelivery
+// shares. It says nothing about the **poller**, which has no session at all: two
+// different entry points, both deciding from "the issue is still delegated and
+// still in its source column", both acting on that read a moment later. ECOM-44
+// came through delegation and a poller tick 90ms apart and got two runs, two
+// branches and two pull requests.
+//
+// Same two layers as the session guard, for the same reason — in-process for the
+// concurrent case, the database for anything that outlives this process — plus a
+// partial unique index in `harness_linear_claims` as the backstop that makes a
+// second active claim impossible rather than unlikely.
+
+static ISSUES_IN_FLIGHT: LazyLock<std::sync::Mutex<HashSet<String>>> =
+    LazyLock::new(|| std::sync::Mutex::new(HashSet::new()));
+
+/// Claims exclusive handling of one `(workflow, issue)` while a run is being
+/// started for it, releasing it on drop.
+///
+/// Held from *before* the eligibility decision until the claim row exists —
+/// which is the whole race, since the claim row is what every later check reads.
+/// Per workflow, not per issue: an issue legitimately flows through several
+/// bindings (`idea-to-pr` claims it in Todo, `merge-pr` in Ready for merge), and
+/// an epic is supervised by one workflow while its pieces are built by another.
+pub(crate) struct IssueGuard(String);
+
+impl IssueGuard {
+    /// `None` when another entry point is already starting a run for this issue.
+    pub(crate) fn acquire(workflow: &str, issue_id: &str) -> Option<Self> {
+        let key = format!("{workflow}\u{0}{issue_id}");
+        let mut set = ISSUES_IN_FLIGHT.lock().ok()?;
+        // `then`, not `then_some`: the latter builds the guard before testing
+        // the bool, so a refused acquire drops a guard — and `Drop` takes this
+        // same lock, which is still held here. That self-deadlocks the caller,
+        // on exactly the concurrent path this type exists to handle.
+        set.insert(key.clone()).then(|| IssueGuard(key))
+    }
+}
+
+impl Drop for IssueGuard {
+    fn drop(&mut self) {
+        if let Ok(mut set) = ISSUES_IN_FLIGHT.lock() {
+            set.remove(&self.0);
+        }
+    }
+}
+
+/// Whether some other entry point already has a run in flight for this issue.
+///
+/// Checked while holding an [`IssueGuard`], so a `false` here stays false until
+/// the claim row is written.
+pub(crate) async fn issue_already_claimed(
+    state: &Arc<RunsState>,
+    workflow: &str,
+    issue_id: &str,
+) -> bool {
+    match state.linear_claim_store().await {
+        Ok(store) => store
+            .claim_exists_for_issue(issue_id, workflow)
+            .await
+            .unwrap_or(false),
+        // No database to check against — the in-process guard is still holding,
+        // and refusing work over a hiccup is worse than the risk it covers.
+        Err(_) => false,
+    }
+}
+
 /// Whether this `created` event is a redelivery of one already handled.
 async fn already_handled(state: &Arc<RunsState>, session_id: &str) -> bool {
     match state.linear_claim_store().await {
@@ -419,6 +487,55 @@ async fn start_delegated_run(
             return;
         }
     };
+
+    // Nothing below may run twice for one issue: the poller reads the same
+    // "delegated, still in the source column" signal this handler does, and the
+    // status move that clears that signal is several awaits away. Held until the
+    // claim row exists, which is when every later check can see it.
+    let _issue_guard = match event.issue_id.as_deref() {
+        Some(issue_id) => match IssueGuard::acquire(&binding.workflow, issue_id) {
+            Some(guard) => Some(guard),
+            None => {
+                tracing::info!(
+                    "linear webhook: {}/{} — a run is already being started for {}; \
+                     leaving this delegation to it",
+                    binding.project,
+                    binding.workflow,
+                    event.issue_identifier.as_deref().unwrap_or(issue_id)
+                );
+                return;
+            }
+        },
+        // No issue to guard: a session opened against nothing has no claim to
+        // duplicate.
+        None => None,
+    };
+    if let Some(issue_id) = event.issue_id.as_deref() {
+        if issue_already_claimed(state, &binding.workflow, issue_id).await {
+            tracing::info!(
+                "linear webhook: {}/{} — {} already has a run in flight; not starting a second",
+                binding.project,
+                binding.workflow,
+                event.issue_identifier.as_deref().unwrap_or(issue_id)
+            );
+            // A response rather than an error: the work is happening, just not
+            // in this session. Closes the thread instead of leaving it to go
+            // stale waiting for a run that already has a home.
+            let _ = client
+                .create_agent_activity(
+                    &session,
+                    &AgentActivity::Response {
+                        body: format!(
+                            "A run for this issue is already in flight for `{}`. \
+                             I've left it to that run rather than starting a second one.",
+                            binding.workflow
+                        ),
+                    },
+                )
+                .await;
+            return;
+        }
+    }
 
     // Honour **Max simultaneous tasks** before touching anything. Checked here,
     // ahead of the status move and the run start, so a refused delegation leaves the
@@ -538,7 +655,7 @@ async fn start_delegated_run(
             // Link the run to the session so status-sync reports progress back
             // into this thread (see `linear_poller::sync_active_claims`).
             if let Ok(claims) = state.linear_claim_store().await {
-                if let Err(e) = claims
+                match claims
                     .record(
                         &run_id,
                         &binding.project,
@@ -550,7 +667,20 @@ async fn start_delegated_run(
                     )
                     .await
                 {
-                    tracing::warn!("linear webhook: failed to record claim for {run_id}: {e}");
+                    // Refused by the one-active-claim index, having passed both
+                    // guards above — so the duplicate came from outside this
+                    // process. `error!`, with both ids: the run is live and
+                    // someone has to decide which of the two PRs to keep.
+                    Ok(false) => tracing::error!(
+                        "linear webhook: claim for {run_id} refused — {} already has an \
+                         active claim for {}. Two runs are now in flight for one issue.",
+                        event.issue_identifier.as_deref().unwrap_or("(delegated)"),
+                        binding.workflow
+                    ),
+                    Ok(true) => {}
+                    Err(e) => {
+                        tracing::warn!("linear webhook: failed to record claim for {run_id}: {e}")
+                    }
                 }
             }
             let run_link = state.public_url().map(|b| format!("{b}/runs/{run_id}"));
@@ -1248,6 +1378,38 @@ async fn issue_context(
 mod tests {
     use super::*;
     use harness_sources::linear::parse_agent_session_event;
+
+    // ── Not starting two runs for one issue ──────────────────────────────────
+
+    /// The guard is what the poller and the webhook hold across their own
+    /// check-then-act, so the second one to arrive has to be turned away while
+    /// the first is still deciding — and has to get its turn once that is over.
+    #[test]
+    fn issue_guard_admits_one_holder_at_a_time() {
+        let held = IssueGuard::acquire("idea-to-pr", "iss-1").expect("first holder");
+        assert!(
+            IssueGuard::acquire("idea-to-pr", "iss-1").is_none(),
+            "a second entry point must not start a run for an issue already being claimed"
+        );
+        // A different issue, and the same issue under a different workflow, are
+        // both unrelated work: an issue flows through several bindings.
+        assert!(IssueGuard::acquire("idea-to-pr", "iss-2").is_some());
+        assert!(IssueGuard::acquire("merge-pr", "iss-1").is_some());
+
+        drop(held);
+        assert!(
+            IssueGuard::acquire("idea-to-pr", "iss-1").is_some(),
+            "the issue must be claimable again once the first claim is recorded"
+        );
+    }
+
+    /// The key is built, not concatenated loosely: `("a", "b-c")` and
+    /// `("a-b", "c")` are different work and must not collide.
+    #[test]
+    fn issue_guard_keys_cannot_collide_across_the_separator() {
+        let _held = IssueGuard::acquire("wf", "a-b").expect("first holder");
+        assert!(IssueGuard::acquire("wf-a", "b").is_some());
+    }
 
     // ── Attributing a delivery to a connection ───────────────────────────────
 

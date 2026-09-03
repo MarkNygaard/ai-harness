@@ -415,14 +415,39 @@ async fn claim_and_fire(
                 );
             }
             Ok(_) => {
-                chosen = Some(issue);
+                // Delegation reads the same column this tick did, so an issue
+                // sitting here may already be on its way to a run. Take the
+                // guard as part of choosing: held for the rest of this claim, it
+                // is what makes the active-claim check below stay true.
+                let Some(guard) = super::linear_agent::IssueGuard::acquire(&b.workflow, &issue.id)
+                else {
+                    tracing::info!(
+                        "linear poller: {}/{} — {} is already being started elsewhere; skipping",
+                        b.project,
+                        b.workflow,
+                        issue.identifier
+                    );
+                    continue;
+                };
+                if super::linear_agent::issue_already_claimed(state, &b.workflow, &issue.id).await {
+                    tracing::info!(
+                        "linear poller: {}/{} — {} already has a run in flight; skipping",
+                        b.project,
+                        b.workflow,
+                        issue.identifier
+                    );
+                    continue;
+                }
+                chosen = Some((issue, guard));
                 break;
             }
             Err(e) => tracing::warn!("linear poller: attempts lookup failed: {e}"),
         }
     }
-    let Some(issue) = chosen else {
-        return; // nothing eligible (or all eligible issues exhausted retries)
+    // `_issue_guard` lives as long as this claim: dropping it at the end of the
+    // function is the point, so delegation cannot slip in behind us.
+    let Some((issue, _issue_guard)) = chosen else {
+        return; // nothing eligible (retries exhausted, or already being claimed)
     };
 
     let route = super::linear_agent::route_issue(state, client, b, &issue.id).await;
@@ -521,7 +546,7 @@ async fn claim_and_fire(
 
     match start_run(state, req).await {
         Ok(run_id) => {
-            if let Err(e) = claim_store
+            match claim_store
                 .record(
                     &run_id,
                     &b.project,
@@ -533,7 +558,19 @@ async fn claim_and_fire(
                 )
                 .await
             {
-                tracing::warn!("linear poller: failed to record claim for {}: {e}", run_id);
+                // Refused by the one-active-claim index despite the guard and
+                // the check above, so the duplicate came from another process.
+                // Loud: the run is live, and a person has to pick a PR.
+                Ok(false) => tracing::error!(
+                    "linear poller: claim for {run_id} refused — {} already has an active \
+                     claim for {}. Two runs are now in flight for one issue.",
+                    issue.identifier,
+                    b.workflow
+                ),
+                Ok(true) => {}
+                Err(e) => {
+                    tracing::warn!("linear poller: failed to record claim for {}: {e}", run_id)
+                }
             }
             let run_url = state
                 .public_url()
