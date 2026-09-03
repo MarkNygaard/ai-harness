@@ -1,4 +1,7 @@
-# Connecting Linear
+---
+title: "Connecting Linear"
+description: "Connect a Linear workspace as an OAuth app, so status moves, comments and run links are authored by the application rather than by a personal API key."
+---
 
 The harness writes to Linear on its own: it moves claimed issues through the
 status map, comments when a run starts/finishes, attaches the run link, and
@@ -148,7 +151,7 @@ Worth knowing:
 - **At most 5 images per task**, and any single file over 25MB is skipped.
 - **Failure is never fatal.** If a download fails the original URL stays in the text
   and the run proceeds — an image is a bonus, not a prerequisite.
-- On a **text-only** model the agent simply won't see the image; omp substitutes
+- On a **text-only** model the agent simply won't see the image; Pi substitutes
   `[image omitted: model does not support vision]` rather than erroring.
 
 Files live under `<projects-dir>/../attachments/<issue>/`, overridable with

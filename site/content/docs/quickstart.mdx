@@ -1,0 +1,138 @@
+---
+title: "Quickstart"
+description: "Run the container, open the dashboard, and take one task through a workflow."
+---
+
+The harness is one container plus a Postgres database. You run it somewhere it
+can reach your git remotes, put it behind a URL, and do the rest in the dashboard it serves. Projects,
+credentials, workflows, runs, all of it.
+
+There is nothing to install locally. The CLI, the config file and the build from
+source all exist, but none of them is how you use a running harness.
+
+## 1. Run the container
+
+The image is `ghcr.io/marknygaard/ai-harness`, published per release (`1.2.3`)
+and per merge to `main` (`main-<sha>`). It bundles the agent CLIs, `git` and `mise`, listens on **8080**, and
+answers health checks on **`GET /health`**.
+
+<Tabs items={["Docker", "Kubernetes"]}>
+<Tab value="Docker">
+
+```bash
+docker run -d --name harness -p 8080:8080 \
+  -e HARNESS_DATABASE_URL=postgres://harness:harness@postgres:5432/harness \
+  -e HARNESS_SECRET_KEY=$(openssl rand -hex 32) \
+  -e HARNESS_PUBLIC_URL=https://harness.example.com \
+  -v harness-data:/home/harness \
+  ghcr.io/marknygaard/ai-harness:main-<sha>
+```
+
+You supply the Postgres. Put a reverse proxy in front for TLS and point your
+domain at it.
+
+</Tab>
+<Tab value="Kubernetes">
+
+**No Helm chart or manifests ship with the project.** It is an ordinary
+stateless-ish container, so a Deployment, a Service, an Ingress and a
+PersistentVolumeClaim is the whole shape:
+
+- **Image** `ghcr.io/marknygaard/ai-harness`, `linux/amd64`, pinned to a
+  version or a `main-<sha>` rather than `latest`. The
+  entrypoint is `harness serve` and the image already sets
+  `HARNESS_HTTP_ADDR=0.0.0.0:8080`.
+- **Probes** for liveness, readiness and startup, all on `GET /health` at port
+  8080. Give startup a generous `failureThreshold`, because the first boot runs
+  migrations.
+- **PVC mounted at `/home/harness`**, with `HARNESS_PROJECT_ROOT` pointing
+  inside it. It holds checkouts and caches. See
+  [sizing the volume](/docs/operating/deploy#sizing-the-volume).
+- **Secret** carrying `HARNESS_DATABASE_URL` and `HARNESS_SECRET_KEY`.
+- **Postgres.** An operator-managed cluster such as CloudNativePG is the usual
+  choice.
+- **Replicas: 1.** Runs execute as child processes *inside the pod*, so the pod
+  needs room for the agents and their builds. Start at a 4Gi memory limit, and
+  go higher if your projects compile Rust.
+
+<Callout>
+Provider credentials do **not** belong in the cluster secret. They are entered
+in the dashboard and stored encrypted in Postgres, so the infrastructure secret
+stays infrastructure-only.
+</Callout>
+
+</Tab>
+</Tabs>
+
+<Callout type="warn">
+`HARNESS_SECRET_KEY` encrypts every stored credential. **Keep it stable** across
+restarts and redeploys. Change it and every credential becomes undecryptable
+and has to be typed in again by hand. Treat it like a database password.
+</Callout>
+
+## 2. Open the dashboard
+
+Go to the URL you gave it. Everything from here is in the UI.
+
+**Add a project** on the Projects page: a name, a git remote, a base branch.
+Runs check out an isolated worktree from that branch.
+
+**Add credentials** on the Credentials page. GitHub for pushing and opening
+PRs, plus whichever agent providers your workflow uses. They are encrypted at
+rest and can be set per project with a global fallback. See
+[Agents and models](/docs/operating/agents).
+
+## 3. Trigger a run
+
+Pick a workflow, describe the task, and start it.
+[`idea-to-pr`](/docs/workflows/bundled#idea-to-pr) is the default pipeline. The
+run page shows the DAG executing node by node, with each node's output,
+duration and cost, and the artifacts it produced.
+
+That is the whole loop. A finished run leaves a pull request.
+
+## 4. Optional: connect your editor
+
+**Settings → Editor connection** builds the MCP configuration for you, so an
+assistant you are already talking to can trigger runs without you opening the
+dashboard at all:
+
+```bash
+claude mcp add --transport http harness https://harness.example.com/mcp \
+  --header "Authorization: Bearer <your MCP key>"
+```
+
+See [MCP endpoint](/docs/triggers/mcp).
+
+## Running it from source
+
+Only relevant if you are **working on the harness itself**, or iterating on
+workflow YAML before deploying it.
+
+```bash
+cargo build --release
+./start-server.sh          # brings up Postgres via docker-compose, then serves on :9800
+```
+
+`start-server.sh` expects `./target/release/harness` to exist and is a
+contributor convenience, not a deployment method.
+
+To run a workflow with no server at all, use `harness run`. It is the fastest
+way to iterate on a DAG. Without `--real` it uses a built-in echo agent, so
+shape, gating and `$node.output` wiring all execute for free:
+
+```bash
+harness run idea-to-pr --workspace . --args "add a health endpoint"
+```
+
+<Callout type="warn">
+Do not start the server from inside a Claude Code or agent session. The
+`CLAUDECODE` and `CLAUDE_CODE_ENTRYPOINT` environment variables propagate into
+spawned subprocesses and cause a SIGTRAP. Use a standalone terminal.
+</Callout>
+
+## Next
+
+- [Concepts](/docs/concepts), the words the rest of the docs assumes you know.
+- [Deploying](/docs/operating/deploy), for volume sizing, caches and sign-in.
+- [Bundled workflows](/docs/workflows/bundled), the nine that ship with it.

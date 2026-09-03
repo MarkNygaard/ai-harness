@@ -13,8 +13,10 @@ that uses a ghcr image, CloudNativePG, an Envoy route, and a SOPS secret.
 
 ## 1. The image
 
-- **`ghcr.io/marknygaard/ai-harness:latest`** (also `:main-<sha>`), built and
-  pushed by the ai-harness repo's `Image` GitHub Action on every merge to `main`.
+- **`ghcr.io/marknygaard/ai-harness`**, built and pushed by the ai-harness
+  repo's `Image` GitHub Action: `latest` + `main-<sha>` on every merge to
+  `main`, and `1.2.3` / `1.2` / `1` on a `v*` release tag. Pin an immutable
+  one (`1.2.3` or `main-<sha>`), not `latest`.
   `linux/amd64`. It bundles the web UI (embedded in the binary) plus the agent
   CLIs (`claude`, `codex`, `omp`), `git`, and `mise`.
 - Entrypoint runs `harness serve`. It already sets `HARNESS_HTTP_ADDR=0.0.0.0:8080`
@@ -100,7 +102,10 @@ spec:
           app:
             image:
               repository: ghcr.io/marknygaard/ai-harness
-              tag: latest
+              # Pin an immutable tag: a release (`1.2.3`) or a merge (`main-<sha>`).
+              # `latest` moves, so restarts can land on different code and there is
+              # nothing to roll back to. Let image automation move the pin.
+              tag: main-<sha>
             env:
               TZ: Europe/Copenhagen
               HARNESS_HTTP_ADDR: 0.0.0.0:8080

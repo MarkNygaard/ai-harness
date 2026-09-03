@@ -36,7 +36,7 @@ runs anywhere a container does (Kubernetes or plain Docker).
   Credentials page through an OAuth install with `actor=app`, so the comments,
   status moves and run links the harness writes are authored by the application
   instead of by whoever's personal API key was pasted. See
-  [Connecting Linear](docs/linear-connect.md).
+  [Connecting Linear](site/content/docs/triggers/linear-connect.mdx).
 - **Projects.** Register a git repo; runs operate on an isolated worktree off
   its base branch. Per-project **GitHub credentials** (with global fallback) and
   Linear trigger bindings are managed from the Projects page.
@@ -141,12 +141,25 @@ token instead; all three are accepted.
 - **[CLAUDE.md](CLAUDE.md)** — the canonical guide for humans and agents:
   build/verify commands, architecture glossary, server-operation & worktree
   rules, and the PR workflow. **Start here.** (`AGENTS.md` just points here.)
-- [docs/authoring-workflows.md](docs/authoring-workflows.md) — authoring
-  workflow DAGs (node types, `when:` / `$node.output` / `output_format`,
-  `trigger_rule`, and good practices).
-- [docs/linear-epics.md](docs/linear-epics.md) — building an issue with
-  sub-issues one piece at a time on a shared branch: the relay of columns, the
-  bindings it needs, and what stalls it.
+- **User documentation** lives in [`site/content/docs/`](site/content/docs/) and
+  is published by the site in [`site/`](site/), in four sections:
+  - **Getting started** — [introduction](site/content/docs/index.mdx),
+    [quickstart](site/content/docs/quickstart.mdx),
+    [concepts](site/content/docs/concepts.mdx).
+  - **[Workflows](site/content/docs/workflows/)** —
+    [authoring](site/content/docs/workflows/authoring.mdx) (the canonical YAML
+    reference) and [the bundled ones](site/content/docs/workflows/bundled.mdx).
+  - **[Triggering runs](site/content/docs/triggers/)** — the three routes in,
+    the [MCP tool reference](site/content/docs/triggers/mcp.mdx), and Linear
+    [connection](site/content/docs/triggers/linear-connect.mdx) and
+    [epics](site/content/docs/triggers/linear-epics.mdx).
+  - **[Operating](site/content/docs/operating/)** —
+    [deploying](site/content/docs/operating/deploy.mdx),
+    [configuration](site/content/docs/operating/configuration.mdx),
+    [CLI](site/content/docs/operating/cli.mdx) and
+    [agents/models](site/content/docs/operating/agents.mdx).
+- [docs/reference/](docs/reference/) and [docs/design/](docs/design/) stay
+  internal: inherited specs and in-flight design notes, not published.
 
 ## Acknowledgements
 

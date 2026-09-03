@@ -1,0 +1,145 @@
+---
+title: "Deploying"
+description: "Running the control plane as a container: the image, the environment it needs, what has to persist, and the operational traps."
+---
+
+The control plane is one `harness` binary, the HTTP API with the dashboard
+inside it, backed by Postgres. A run is a set of **local child processes**
+inside the server's container; there is no per-run Kubernetes Job, so the same
+image runs under Kubernetes *or* plain Docker.
+
+## The image
+
+`ghcr.io/marknygaard/ai-harness`
+
+It carries the agent runtimes, `bun`, `mise`, and Pi with its `pi-web-access`
+plugin, and listens on `:8080`.
+
+| Tag | Points at | Immutable |
+| --- | --- | --- |
+| `1.2.3` | That release | Yes |
+| `1.2` | Latest patch of that minor | No |
+| `1` | Latest minor of that major (from `1.0.0` on) | No |
+| `main-<sha>` | One merge to `main` | Yes |
+| `latest` | The tip of `main` | No |
+
+**Pin an immutable tag.** `latest` moves under you, so a pod that restarts can
+come back on different code than its neighbour, and there is nothing to roll
+back *to*. Deploy `1.2.3` if you track releases, or `main-<sha>` if you track
+`main`, and let your image automation move the pin.
+
+<Callout type="warn">
+The `cursor-agent` binary is **not** in the image. Workflows with `cursor` nodes
+need it added to `PATH`, or those nodes fail to spawn.
+</Callout>
+
+```bash
+docker run -p 8080:8080 \
+  -e HARNESS_DATABASE_URL=postgres://... \
+  -e HARNESS_SECRET_KEY=... \
+  -e HARNESS_PUBLIC_URL=https://harness.example.com \
+  -v harness-data:/var/lib/harness \
+  ghcr.io/marknygaard/ai-harness
+```
+
+## Required environment
+
+| Variable | Purpose |
+| --- | --- |
+| `HARNESS_DATABASE_URL` | Postgres connection string. |
+| `HARNESS_SECRET_KEY` | AES-256-GCM key for credentials stored at rest. |
+| `HARNESS_DATA_DIR` | Data volume. Caches, toolchains, artifacts. |
+| `HARNESS_PROJECT_ROOT` | Project checkouts. |
+| `HARNESS_PUBLIC_URL` | Public origin, used to build the run links that appear in Linear and PR comments. |
+
+The full list, including cache ceilings and the variables a run injects into
+your workflow steps, is in [Configuration](/docs/operating/configuration).
+
+## Kubernetes
+
+**No Helm chart or manifests ship with the project.** It is an ordinary
+container, and the shape is a Deployment, a Service, an Ingress and a PVC.
+
+| Piece | What it needs |
+| --- | --- |
+| Image | `ghcr.io/marknygaard/ai-harness`, `linux/amd64`, pinned to a version or `main-<sha>` rather than `latest`. Entrypoint is `harness serve`. |
+| Port | 8080. The image sets `HARNESS_HTTP_ADDR=0.0.0.0:8080` itself. |
+| Probes | Liveness, readiness and startup on `GET /health`. Give startup a generous `failureThreshold`, because the first boot runs migrations. |
+| Volume | A PVC mounted at `/home/harness`, with `HARNESS_PROJECT_ROOT` pointing inside it. |
+| Secret | `HARNESS_DATABASE_URL` and `HARNESS_SECRET_KEY`. Infrastructure only. |
+| Postgres | An operator-managed cluster (CloudNativePG or equivalent). |
+| Replicas | **1.** |
+
+<Callout>
+Provider credentials do **not** go in the cluster secret. They are entered in
+the dashboard and stored encrypted in Postgres, which is why the infrastructure
+secret stays infrastructure-only and why the volume has to survive restarts.
+</Callout>
+
+Runs are child processes **inside the pod**, and there is no per-run Job, so
+size it for the agents and whatever their builds need. Requests of `100m` CPU and
+`512Mi` memory with a `4Gi` memory limit is a workable starting point; a project
+that compiles Rust will want more. Concurrency is bounded by the pod, not by the
+harness.
+
+## What has to persist
+
+Give the volume to `HARNESS_DATA_DIR` and `HARNESS_PROJECT_ROOT`. Both hold
+caches rather than the source of truth, so nothing is *lost* if they go. But every
+run then re-provisions its toolchains and re-clones its checkouts from scratch,
+which is slow and expensive rather than merely inconvenient.
+
+Postgres holds the actual state: projects, credentials, runs, workflows.
+
+### Sizing the volume
+
+Runs work in throwaway worktrees, so everything reusable lives beside them under
+the projects directory. Four caches, each separately bounded:
+
+| Directory | Holds | Cap | Default |
+| --- | --- | --- | --- |
+| `.cargo-target/<project>` | Rust build artifacts (`CARGO_TARGET_DIR`), per project | `HARNESS_CARGO_TARGET_CAP_GB` | 50 GiB **per project** |
+| `.deps-cache` | Package-manager downloads, shared by all projects. pnpm, npm/bun/yarn, NuGet, Go modules, uv/pip/poetry, Composer | `HARNESS_DEPS_CACHE_CAP_GB` | 20 GiB |
+| `.git-cache` | Bare mirrors that runs clone from, shared | `HARNESS_GIT_MIRROR_TTL_DAYS` | 30 days idle |
+| `.project-cache/<project>` | Whatever a workflow caches itself via `$HARNESS_CACHE_DIR` | `HARNESS_PROJECT_CACHE_CAP_GB` | 5 GiB **per project** |
+
+`0` disables the corresponding sweep. **The defaults add up to far more than a
+small volume**. Size it for the caps you actually set, plus checkouts and
+worktrees, or lower the caps. It is all cache: deleting these directories costs
+the next run its warm start and nothing else.
+
+<Callout type="warn">
+**`HARNESS_SECRET_KEY` must stay stable across restarts and redeploys.** It
+encrypts every stored credential; change it and all of them become
+undecryptable, and each has to be re-entered by hand. Treat it like a database
+password, not like a config value.
+</Callout>
+
+## Running from source
+
+Only relevant when working on the harness itself. `./start-server.sh` brings up
+Postgres through the development `docker-compose.yml` and serves on
+`127.0.0.1:9800`; it expects `./target/release/harness` to exist. It is a
+contributor convenience, not a deployment method.
+
+<Callout type="warn">
+Do not start the server from inside a Claude Code or agent session. The
+`CLAUDECODE` and `CLAUDE_CODE_ENTRYPOINT` environment variables propagate into
+spawned subprocesses and cause a SIGTRAP. Use a standalone terminal.
+</Callout>
+
+## Sign-in and tokens
+
+Authentication can be turned on but **never off**. Once accounts exist, recovery
+is `harness admin create`, which needs a shell on the server. See the
+[CLI reference](/docs/operating/cli#harness-admin).
+
+With sign-in enabled, people mint **personal access tokens** rather than sharing
+`HARNESS_API_TOKEN`, so a run is attributed to whoever triggered it and revoking
+one person's access does not disturb anybody else.
+
+## Next
+
+- [Configuration](/docs/operating/configuration), every setting and where it comes from.
+- [MCP endpoint](/docs/triggers/mcp), for connecting editors.
+- [Connecting Linear](/docs/triggers/linear-connect), installing the workspace app.

@@ -1,0 +1,82 @@
+---
+title: "Introduction"
+description: "What ai-harness is, what it deliberately does not do, and how a run gets from a written issue to a pull request."
+---
+
+ai-harness turns a written issue into a reviewed pull request. You describe what
+should be true when the work is done, and it plans, writes the code, reviews
+that code with a model that did not write it, and opens a pull request against
+your base branch.
+
+It runs on your own hardware. One binary, one Postgres database.
+
+## The one design decision worth knowing
+
+The harness writes prompts and runs the pipeline. The agents decide how to do
+the work.
+
+There is no diff-application engine here, no tool-call interpreter, no attempt
+to script the edit. A node hands an agent a prompt and a working directory, and
+what the agent does with them is the agent's business. That is why one pipeline
+can put Claude Code, Codex, Kimi and Cursor nodes side by side without an
+adapter for each, and why a new version of an agent CLI is not a change to the
+harness.
+
+The cost of that decision is worth stating plainly. **A bad agent stays bad.**
+What you get is everything around it: isolation, ordering, gates, retries, a
+review pass by a different model, and a record of what happened at each step.
+
+## How a run works
+
+1. A trigger arrives, from the dashboard, the [MCP endpoint](/docs/triggers/mcp),
+   or a [Linear issue](/docs/triggers/linear-connect) delegated to the harness.
+2. The run checks out a git worktree off the project's base branch. Your working
+   copy is never touched.
+3. `mise` installs whatever toolchains the project declared, then caches them.
+4. The pipeline runs node by node. Each node picks its own agent and model.
+   `when:` decides what runs, `$node.output` passes results forward, and
+   `trigger_rule` decides what a node does when something it depends on fails.
+5. A node opens the pull request. Review loops can send the work back around
+   first, usually with a different model reviewing than wrote the code.
+
+Every node's output, timing and cost is recorded, so you can go back and see
+what a run actually did.
+
+## Who does what
+
+Two people, checking different things.
+
+Whoever wants the change writes the issue and tests the result against their own
+acceptance criteria. A developer reviews the code and keeps the project's rules
+current. Neither has to do the other's job, which is what makes it workable for
+someone who cannot read a diff. See
+[shipping without writing code](/docs/shipping-without-code) and
+[project rules](/docs/project-rules).
+
+## What you have to supply
+
+The harness coordinates. It brings no intelligence of its own.
+
+- **Agent CLIs and their credentials.** Claude Code, Codex, Pi and Cursor run as
+  subprocesses, and each needs its own account. See
+  [agents and models](/docs/operating/agents).
+- **A workflow**, or one of the [nine that ship with it](/docs/workflows/bundled).
+- **Postgres and a volume that survives restarts.** See
+  [deploying](/docs/operating/deploy).
+
+## Where to go next
+
+<Cards>
+  <Card title="Quickstart" href="/docs/quickstart">
+    Run the container, open the dashboard, take one task through a workflow.
+  </Card>
+  <Card title="Shipping without writing code" href="/docs/shipping-without-code">
+    The loop from the requesting side, for people who do not write code.
+  </Card>
+  <Card title="Project rules" href="/docs/project-rules">
+    The file every run reads, and why review gets lighter over time.
+  </Card>
+  <Card title="Authoring workflows" href="/docs/workflows/authoring">
+    The YAML reference. Node bodies, gating, variables, hooks.
+  </Card>
+</Cards>

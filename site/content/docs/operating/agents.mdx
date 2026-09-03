@@ -1,0 +1,86 @@
+---
+title: "Agents and models"
+description: "The agent CLIs the harness drives, how a node picks one, what each needs to be authenticated, and why model diversity is worth paying for."
+---
+
+The harness does not talk to model APIs directly. It drives **agent CLIs** as
+subprocesses: it builds the prompt and manages the lifecycle, and the agent
+decides how to execute. Each one needs its own binary on `PATH` and its own
+credentials.
+
+## Providers
+
+A node's `provider` selects the agent. Several names route to the same one:
+
+| `provider` | Agent | Notes |
+| --- | --- | --- |
+| `claude` | Claude Code CLI | Run headless. The default for planning and review steps in the bundled workflows. |
+| `openai-codex` | Codex | Also reachable through Pi on a ChatGPT subscription. |
+| `pi`, `kimi`, `omp` | Pi | Three aliases for one agent. Pi's CLI binary is named `omp`, which is why that spelling is accepted. |
+| `cursor` | `cursor-agent` | Needs the binary on `PATH`. Without it, `cursor` nodes fail to spawn. |
+
+Anything the dispatcher does not recognise falls through to the default agent,
+so an unknown provider name falls back instead of failing. Worth knowing when a
+node behaves as though its `provider:` were ignored, because it was.
+
+## Credentials
+
+Credentials are managed on the dashboard's **Credentials** page, encrypted at
+rest with `HARNESS_SECRET_KEY`, and can be set per project with a global
+fallback.
+
+- **Claude.** OAuth, or an API key.
+- **Cursor.** An API key, which becomes `CURSOR_API_KEY` in the subprocess.
+- **OpenAI and Codex.** An API key, or a ChatGPT Plus or Pro subscription
+  through Pi. See
+  [ChatGPT subscription](/docs/operating/chatgpt-subscription).
+- **Kimi.** The Kimi-for-Coding subscription, through Pi.
+
+Control-plane secrets are scrubbed from the processes a run spawns, so an agent
+cannot read the database URL or the encryption key out of its own environment.
+
+## Choosing a model per node
+
+`provider`, `model` and `effort` are all per-node. That is the whole point of
+the DAG: a workflow can plan with an expensive model at high effort and
+implement with a cheap one.
+
+```yaml
+- id: create-plan
+  provider: claude
+  model: opus
+  effort: max
+  prompt: |
+    ...
+
+- id: implement
+  provider: kimi
+  command: implement-tasks
+```
+
+`effort` takes `low` | `medium` | `high` | `xhigh` | `max` and is passed to the
+agent CLI. Spend it where judgement matters, on planning and architecture, and
+not on mechanical steps.
+
+## Why the bundled workflows mix models
+
+In [`idea-to-pr`](/docs/workflows/bundled#idea-to-pr), Claude plans, Kimi
+implements, and then **gpt-5.x and Claude Sonnet each review and fix in turn**.
+That is deliberate: a model reviewing its own output tends to agree with it. A
+reviewer that did not write the code catches a different class of mistake, which
+is why the bundled pipelines pay for a second and third pass rather than looping
+the author again.
+
+[`architect`](/docs/workflows/bundled#architect) goes further. Its
+behaviour-preservation review will **revert** a change that drifted semantics,
+rather than reporting it.
+
+## Comparing models
+
+To find out whether a model change is actually an improvement, run the same task
+twice and have a third model judge the diffs:
+
+- `run_trigger_pair` over [MCP](/docs/triggers/mcp) starts both arms with
+  everything but the model held constant,
+- [`judge-ab`](/docs/workflows/bundled#judge-ab) scores them from the actual
+  code change rather than from either model's account of its own work.

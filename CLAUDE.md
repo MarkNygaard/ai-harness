@@ -17,7 +17,9 @@ portions of its runtime are still used.
 - The current code is authoritative for design; the architecture/glossary below
   is the in-repo overview.
 - Authoring workflow DAGs (node types, `when:`/`$node.output`/`output_format`,
-  `trigger_rule`, good-practices): [docs/authoring-workflows.md](docs/authoring-workflows.md).
+  `trigger_rule`, good-practices): [site/content/docs/workflows/authoring.mdx](site/content/docs/workflows/authoring.mdx).
+- User-facing documentation lives in [site/content/docs/](site/content/docs/)
+  and is published by the site; `docs/` now holds internal material only.
 - Inherited design specs in [docs/reference/](docs/reference/) are **background
   only** — they describe majiayu's design at seed time and may have drifted.
   Verify against the current code before relying on them.
@@ -38,6 +40,10 @@ is minutes. Match the verify to the change:
   && bunx vitest run && bunx vite build`**. Do **NOT** run any `cargo` command —
   no Rust was touched, and compiling the workspace just to check a `.tsx` edit is
   pure waste.
+- **Site-only change** (only `site/**` touched — landing page or user docs): run
+  **`cd site && bunx tsc --noEmit && bunx next build`**. No `cargo`, and no `web`
+  build either. If you edited `web/src/styles/theme.css`, verify **both** `web`
+  and `site` — they share it.
 - **Single-crate Rust change**: `cargo test -p <crate>` and `cargo clippy -p <crate>`
   for the crate(s) you edited (plus direct dependents if you changed a public API).
 - **Cross-cutting Rust change** (enum variant, shared trait, workspace dep): the
@@ -69,6 +75,10 @@ Always: `cargo fmt --all` (or `cd web && bunx prettier`) before committing.
 - Pre-commit hook (`.githooks/pre-commit`) runs fmt + clippy + test. After
   cloning, activate with: `git config core.hooksPath .githooks` (the workspace
   `build.rs` also auto-configures this).
+- The public site (`site/`) is a separate Next.js static export — landing page
+  plus the user docs in `site/content/docs/`. It is **not** embedded in the
+  server binary and is deployed on its own; see [site/README.md](site/README.md).
+  The product name lives in `site/lib/config.ts` and nowhere else in `site/app`.
 - The web dashboard is bundled into `harness-server` at build time via `bun`
   (see `crates/harness-server/build.rs`). For Rust-only iteration, set
   `HARNESS_SKIP_WEB_BUILD=1` (a stub UI is embedded). Release builds require
@@ -179,5 +189,10 @@ tests are the source of truth.*
 - Keep PRs focused; squash-merge.
 - Do NOT modify the `Cargo.toml` version in feature/fix PRs — version bumps
   happen at release time (prevents conflicts across parallel PRs).
+- **Cutting a release:** bump the workspace version, then push a `v<version>`
+  tag. `.github/workflows/image.yaml` publishes `1.2.3` / `1.2` / `1` from that
+  tag (the bare major only from `1.0.0` on). Every merge to `main` still
+  publishes `latest` + `main-<sha>`; `main-<sha>` is the immutable handle
+  deployments should pin.
 - The `CI Result` status check (see `.github/workflows/ci.yml`) must pass.
 - CI uses path-based change detection — only affected crate tests run on PRs.

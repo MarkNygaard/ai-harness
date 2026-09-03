@@ -1,6 +1,11 @@
-# ChatGPT Plus/Pro (Codex) via omp
+---
+title: "ChatGPT subscription"
+description: "Run OpenAI models on a ChatGPT Plus or Pro subscription through Pi, without per-token API-key billing."
+---
 
-This runbook covers connecting the harness to a **ChatGPT Plus or Pro subscription** so that workflow nodes can run OpenAI models (e.g. `openai-codex/gpt-5.5`) through `omp` without per-token API-key billing.
+This runbook covers connecting the harness to a **ChatGPT Plus or Pro subscription** so that workflow nodes can run OpenAI models (e.g. `openai-codex/gpt-5.5`) through Pi without per-token API-key billing.
+
+Pi's CLI binary is named `omp`, so that is the command you type below.
 
 ## One-time setup
 
@@ -10,7 +15,7 @@ This runbook covers connecting the harness to a **ChatGPT Plus or Pro subscripti
 4. Approve the login in your browser.
 5. Verify the models available to your account: run `omp`, then `/model`.
 
-The credential is stored in omp's `~/.omp/agent/agent.db` SQLite store and auto-refreshes. It persists on the cluster PV, so the one-time login survives restarts.
+The credential is stored in Pi's `~/.omp/agent/agent.db` SQLite store and auto-refreshes. It persists on the cluster PV, so the one-time login survives restarts.
 
 ## Model addressing
 
@@ -28,5 +33,5 @@ The model id **must** be namespace-qualified (`openai-codex/...`). A bare name l
 ## How it works
 
 - No `OPENAI_API_KEY` is set; billing rides the subscription.
-- `omp` reads the OAuth row from `~/.omp/agent/agent.db` and self-refreshes.
-- Token usage (including `cacheRead`) is reported through `omp`'s native JSON event stream, so the run overview shows realistic input/output/cache splits.
+- Pi reads the OAuth row from `~/.omp/agent/agent.db` and self-refreshes.
+- Token usage (including `cacheRead`) is reported through Pi's native JSON event stream, so the run overview shows realistic input/output/cache splits.

@@ -1,0 +1,137 @@
+---
+title: "Shipping without writing code"
+description: "How someone who does not write code takes a Linear issue through to a reviewed pull request. What you do, what the harness does, and where a developer comes in."
+---
+
+You do not have to read a diff to use this. The loop below is how the people
+who test a product end up shipping to it, with a developer reviewing the code at
+the end instead of writing it.
+
+<Callout>
+A developer sets this up once. Connecting Linear, registering the project,
+adding credentials. After that the loop is yours, and nothing on this page needs
+a terminal.
+</Callout>
+
+## The loop
+
+1. **Write the issue.** Describe what should be true when it is done.
+2. **Hand it over.** Assign the issue to the harness, or @-mention it.
+3. **Watch, or don't.** It posts progress in the issue thread and opens a pull
+   request when it is finished.
+4. **Test it.** Against what you asked for. You wrote the criteria, so you are
+   the one who can tell.
+5. **Request a code review** from a developer.
+
+You check that it does the right thing. The developer checks that it does it
+the right way. Those are different questions and you should not have to answer
+both.
+
+## Writing an issue it can build
+
+This is the only real skill involved, and it is the one you already have: you
+write acceptance criteria for a living.
+
+**Say what should be true afterwards, not how to do it.** Nobody has to tell it
+which file to edit, because it reads the codebase first. It does need to know
+what "done" looks like.
+
+A good issue has:
+
+- **The behaviour you want**, in the language of the product rather than the
+  code. "The export button should be disabled while an export is already
+  running."
+- **How you will test it.** Write the steps you are going to take. Those are
+  the acceptance criteria and the instructions at once, and the run reads
+  them.
+- **Where you noticed it**, if it is a fix. A URL, a page name, a screenshot.
+  Paste images straight into the issue.
+- **Anything that must not change.** If a behaviour is load-bearing and easy to
+  break in passing, say so.
+
+What it cannot do is make a decision you have not made. Leave a question in the
+issue, like whether something should be a modal or a page, and the run will
+answer it for you. You may not like the answer. Decide first.
+
+## Handing it over
+
+Two things have to be true before a run starts, and they are deliberately
+separate:
+
+- **The issue is delegated to the harness.** Assign it to the app, or @-mention
+  it. You stay the assignee. Delegating says *who should do the work*, not who
+  owns it.
+- **The issue is in the right column.** Your team's board has a column bound to
+  a workflow. Delegating an issue sitting in Backlog will not start anything.
+
+Delegation says *who*, the column says *when*. Ask whoever set this up which
+column starts a build. If that person is you, see
+[connecting Linear](/docs/triggers/linear-connect).
+
+## While it works
+
+The harness replies in the issue's own thread: what it is doing, which step it
+is on, and a link to the run. You can **ask it a question mid-run** and it will
+answer in the thread.
+
+If you want to see more than the summary, the run page shows every step, what it
+produced, and how long it took. You do not need to understand the code to see
+that a step failed.
+
+## Testing it
+
+When the run finishes there is a pull request, and usually a preview of some
+kind depending on how your project deploys.
+
+Test it the way you would test a developer's work, because that is what it is.
+Go through the steps you wrote in the issue.
+
+**Trust your test over its summary.** The run tells you what it believes it
+did, and it is usually right. Usually is the dangerous part. The summary is a
+claim. Your test is the evidence.
+
+If it does not do what you asked:
+
+- **Say so in the issue thread.** Be specific about what you saw and what you
+  expected, the same way you would with a person.
+- **Move it back to the trigger column** to have another go, if your board is
+  set up with a revision column. That runs
+  [`revise-pr`](/docs/workflows/bundled#revise-pr), which updates the existing
+  pull request rather than opening a second one.
+
+## Requesting review
+
+Once it passes your test, ask a developer to review the pull request.
+
+They are reviewing whether it fits the codebase, whether it will cause trouble
+later, and whether the approach is right. That is a different question from
+"does it work", which is why this step is not optional.
+
+If they ask what has already happened to it: two or three other models reviewed
+the code before they saw it, none of them the model that wrote it, and a build
+had to pass before the pull request opened. None of that replaces a human
+reading it. It does mean the obvious problems are usually gone by then.
+
+## When it goes wrong
+
+**It opened nothing.** Almost always the two conditions: not delegated, or not
+in the bound column. Check both before assuming it is broken.
+
+**It did the wrong thing.** Re-read the issue as though you had never seen it
+before. Most of the time the instruction was ambiguous and it picked the reading
+you did not mean. Rewrite the criteria and run it again. That is cheaper than
+arguing with it.
+
+**It failed partway.** The thread says which step failed and why. A failed
+build or test is a normal outcome, not a crash. Hand the reason to a developer
+if it is not obvious.
+
+**It keeps failing the same way.** Stop and get a developer. Something about the
+task needs a decision the run cannot make, and running it a fourth time will not
+produce it.
+
+## What this does not change
+
+You are still shipping to a real codebase. The pull request needs a human
+approval before it merges, the same as anyone else's. That approval is the
+point, not a formality on the way to it.
