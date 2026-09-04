@@ -3,7 +3,12 @@ import { SettingsShell } from "@/components/SettingsShell";
 import { ProviderMark } from "@/components/providers/ProviderMark";
 import { AGENTS } from "@/lib/agents";
 import { describeProvider } from "@/lib/provider-status";
-import { useProviderHealth } from "@/lib/system";
+import {
+  useCliUpdateStatus,
+  useProviderHealth,
+  type CliUpdateStatus,
+  type CompletedCliUpdate,
+} from "@/lib/system";
 import { useCredentials } from "@/lib/credentials";
 import { CliUpdateButton, Section } from "./parts";
 
@@ -18,6 +23,9 @@ import { CliUpdateButton, Section } from "./parts";
  */
 export function AgentsPage() {
   const creds = useCredentials();
+  // One query for the whole table: the queue is instance-wide, and asking per
+  // row would poll it four times over.
+  const status = useCliUpdateStatus().data;
   const configured = new Map(
     (creds.data ?? []).map((c) => [c.provider, c.configured]),
   );
@@ -45,6 +53,7 @@ export function AgentsPage() {
               key={agent.provider}
               agent={agent}
               configured={configured}
+              queue={status}
             />
           ))}
         </Section>
@@ -64,9 +73,11 @@ export function AgentsPage() {
 function AgentRow({
   agent,
   configured,
+  queue,
 }: {
   agent: (typeof AGENTS)[number];
   configured: Map<string, boolean>;
+  queue: CliUpdateStatus | undefined;
 }) {
   const health = useProviderHealth().data?.find(
     (h) => h.provider === agent.provider,
@@ -100,16 +111,61 @@ function AgentRow({
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
-          {health?.update_available && (
+          {(health?.update_available ||
+            queue?.pending.includes(agent.provider)) && (
             <CliUpdateButton
               provider={agent.provider}
               label={agent.label}
-              to={health.latest}
+              to={health?.latest ?? null}
+              queue={queue}
             />
           )}
         </div>
       </div>
       {detail && <p className="text-xs text-muted-foreground">{detail}</p>}
+      <QueueOutcome
+        outcome={queue?.completed.find((c) => c.provider === agent.provider)}
+      />
     </div>
   );
+}
+
+/**
+ * What the queue did while nobody was watching.
+ *
+ * A queued update installs itself minutes or hours later, so without this the
+ * only trace of it having happened is a version number that quietly changed —
+ * and a failure would leave no trace at all. Kept for a day, server-side.
+ */
+function QueueOutcome({
+  outcome,
+}: {
+  outcome: CompletedCliUpdate | undefined;
+}) {
+  if (!outcome) return null;
+  return (
+    <p
+      className={
+        outcome.ok
+          ? "text-xs text-muted-foreground"
+          : "text-xs text-status-failed"
+      }
+      title={outcome.message ?? undefined}
+    >
+      {outcome.ok
+        ? `Updated to v${outcome.version ?? "latest"} ${whenPhrase(outcome.at)}, once runs were idle.`
+        : `The queued update failed ${whenPhrase(outcome.at)} — see server logs.`}
+    </p>
+  );
+}
+
+/** "4 minutes ago" for something that happened within the last day. */
+function whenPhrase(at: string): string {
+  const ms = Date.now() - new Date(at).getTime();
+  if (!Number.isFinite(ms)) return "recently";
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
+  const hours = Math.round(minutes / 60);
+  return `${hours} hour${hours === 1 ? "" : "s"} ago`;
 }

@@ -72,6 +72,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     super::settings_routes::spawn_load_public_url(runs_state.clone());
     // Announce a one-time setup token while nobody has claimed this install.
     super::accounts::spawn_setup_token(runs_state.clone());
+    // Apply agent-CLI updates that were asked for while runs were in flight,
+    // as soon as the cluster goes idle — an `npm install` under a live agent
+    // can fail the run.
+    super::system_routes::spawn_cli_update_watcher(runs_state.clone(), state.core.home_dir.clone());
     Router::new()
         .route("/", get(crate::dashboard::index))
         .route("/overview", get(crate::overview::index))
@@ -151,9 +155,15 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         // ── System: agent-CLI version + in-app update ───────────────────────
         .route("/api/system/providers", get(system_routes::providers))
+        // What the update queue is doing: runs in flight, an install underway,
+        // what is waiting for the cluster to go idle, and what it last did.
+        .route(
+            "/api/system/cli-update",
+            get(system_routes::cli_update_status),
+        )
         .route(
             "/api/system/cli-update/{provider}",
-            post(system_routes::cli_update),
+            post(system_routes::cli_update).delete(system_routes::cli_update_cancel),
         )
         // Kept so a browser still holding the previous bundle keeps working
         // through the window where the server has deployed and the UI has not.
