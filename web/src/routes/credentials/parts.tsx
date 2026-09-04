@@ -10,6 +10,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   ArrowUpCircle,
   Check,
+  Clock,
   ExternalLink,
   Loader2,
   Trash2,
@@ -19,7 +20,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ProviderMark } from "@/components/providers/ProviderMark";
 import { describeProvider } from "@/lib/provider-status";
-import { useProviderHealth, useUpdateAgentCli } from "@/lib/system";
+import {
+  useCancelAgentCliUpdate,
+  useProviderHealth,
+  useUpdateAgentCli,
+  type CliUpdateStatus,
+} from "@/lib/system";
 import {
   startKimiConnect,
   pollKimiConnect,
@@ -376,12 +382,21 @@ export function ProviderSummary({
 }
 
 /**
- * Install the newer CLI the row just reported.
+ * Install the newer CLI the row just reported — or queue it, when runs are in
+ * flight.
  *
  * This used to live in the sidebar footer, where it was permanently visible to
  * everyone and actionable by nobody but an admin. It belongs beside the version
  * it is updating. The install goes into the container's persistent
  * `$HOME/.local` (see `system_routes.rs`), so it survives restarts.
+ *
+ * The button never refuses to be pressed while the cluster is busy: an
+ * `npm install` replaces the package tree under whatever is running, so the
+ * server will not do it under a live agent, and says so on the button rather
+ * than making someone come back and guess when it is safe. `queue` is what the
+ * server says about that, so the label is the truth and not a hope — and the
+ * server checks again on arrival, so a run starting between render and click
+ * queues rather than breaks.
  *
  * Shown for any provider the server says has an update, which is any CLI it can
  * actually install -- Claude Code and Codex today.
@@ -390,12 +405,15 @@ export function CliUpdateButton({
   provider,
   label,
   to,
+  queue,
 }: {
   provider: string;
   label: string;
   to: string | null;
+  queue: CliUpdateStatus | undefined;
 }) {
   const update = useUpdateAgentCli();
+  const cancel = useCancelAgentCliUpdate();
   const failed = update.isError
     ? update.error.message
     : update.data && !update.data.ok
@@ -410,6 +428,43 @@ export function CliUpdateButton({
     );
   }
 
+  // Queued: nothing more to press, so offer the way out instead. Read from the
+  // server rather than from this mutation's result, so it survives a reload and
+  // shows an update queued from another browser.
+  if (queue?.pending.includes(provider)) {
+    const busy = queue.installing
+      ? "installing now"
+      : `waiting for ${runsPhrase(queue.active_runs)} to finish`;
+    return (
+      <span className="flex items-center gap-1.5">
+        <span
+          className="text-[11px] text-muted-foreground"
+          title={`${label} will be updated to ${to} once no run is in flight — ${busy}.`}
+        >
+          <Clock className="mr-1 inline size-3 align-[-2px]" />
+          Queued — {busy}
+        </span>
+        {!queue.installing && (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={cancel.isPending}
+            onClick={() => cancel.mutate(provider)}
+            title={`Do not update ${label} after all`}
+          >
+            Cancel
+          </Button>
+        )}
+      </span>
+    );
+  }
+
+  // Busy, so pressing this queues rather than installs. Say that on the button:
+  // an admin who expects an immediate install and gets a wait should have been
+  // told before clicking, not after.
+  const willQueue = (queue?.active_runs ?? 0) > 0 || queue?.installing;
+
   return (
     <Button
       type="button"
@@ -418,11 +473,19 @@ export function CliUpdateButton({
       className="gap-1"
       disabled={update.isPending}
       onClick={() => update.mutate(provider)}
-      title={`Update ${label} to ${to}`}
+      title={
+        willQueue
+          ? `${runsPhrase(queue?.active_runs ?? 0)} in flight — ${label} will be updated to ${to} as soon as the last one finishes`
+          : `Update ${label} to ${to}`
+      }
     >
       {update.isPending ? (
         <>
           <Loader2 className="size-3 animate-spin" /> Updating…
+        </>
+      ) : willQueue ? (
+        <>
+          <Clock className="size-3" /> Update when idle
         </>
       ) : (
         <>
@@ -431,6 +494,11 @@ export function CliUpdateButton({
       )}
     </Button>
   );
+}
+
+/** `"1 run"` / `"3 runs"` — the count is the reason, so it is worth showing. */
+function runsPhrase(count: number): string {
+  return count === 1 ? "1 run" : `${count} runs`;
 }
 
 /** Kimi-for-Coding device login: Connect → approve in browser → poll until done. */

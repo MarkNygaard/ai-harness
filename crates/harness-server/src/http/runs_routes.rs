@@ -482,6 +482,21 @@ impl RunsState {
             .values()
             .any(|r| r.project == project)
     }
+
+    /// The runs this instance is executing right now.
+    ///
+    /// Registered synchronously by [`start_run`], so unlike the `running` rows
+    /// in the database this sees a run that started a moment ago. The agent-CLI
+    /// update interlock needs both views to be sure nothing is in flight.
+    pub(crate) async fn live_run_ids(&self) -> Vec<String> {
+        self.live.lock().await.keys().cloned().collect()
+    }
+
+    /// This process's identity, as stamped on run leases. Also identifies the
+    /// replica holding a cluster-wide lease.
+    pub(crate) fn instance_id(&self) -> &str {
+        &self.instance_id
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1573,10 +1588,53 @@ pub(crate) fn resolve_workflow_models(
 /// Validate, resolve, and spawn a run in the background — the shared core behind
 /// both `POST /api/runs` and the MCP `run_trigger` tool. Returns the `run_id` or
 /// a `(status, message)` pair the caller renders however it likes.
+/// Block while an agent CLI is being reinstalled, and fail the start if it is
+/// still going after [`CLI_UPDATE_WAIT`].
+///
+/// A missing settings store means no interlock is possible; that is the
+/// pre-existing behaviour and starting the run is the right call — the update
+/// route refuses to install without one, so there is nothing to collide with.
+async fn wait_out_cli_update(state: &Arc<RunsState>) -> Result<(), (StatusCode, String)> {
+    let deadline = tokio::time::Instant::now() + CLI_UPDATE_WAIT;
+    let mut announced = false;
+    loop {
+        let Some(holder) = super::system_routes::update_install_lease_holder(state).await else {
+            return Ok(());
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                format!(
+                    "an agent CLI is being updated on {holder}; runs are paused until it \
+                     finishes — retry shortly"
+                ),
+            ));
+        }
+        if !announced {
+            tracing::info!("run start: waiting for the agent CLI update on {holder} to finish");
+            announced = true;
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+}
+
+/// How long a run start will wait out an agent-CLI install before giving up.
+///
+/// An install is seconds, so waiting is nearly always invisible and strictly
+/// better than an error — but it happens inside an HTTP request, so it cannot
+/// wait indefinitely for one that has hung.
+const CLI_UPDATE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+
 pub(crate) async fn start_run(
     state: &Arc<RunsState>,
     req: CreateRunRequest,
 ) -> Result<String, (StatusCode, String)> {
+    // The other half of the agent-CLI update interlock (see
+    // `system_routes::cli_update`): an install deletes and re-extracts the
+    // package tree, so a CLI spawned into the middle of one can fail to exec at
+    // all. Runs only ever wait here for the length of an install, and only when
+    // an administrator asked for one.
+    wait_out_cli_update(state).await?;
     // A run must live in a project — the project's checkout is the workspace
     // (there is no global project root). Reject a missing/unknown project.
     let triggered_by = req.triggered_by.clone();

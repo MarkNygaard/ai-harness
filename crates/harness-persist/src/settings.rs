@@ -80,6 +80,54 @@ impl SettingsStore {
         Ok(result.rows_affected() > 0)
     }
 
+    /// Claim a time-limited lease on `key`, taking it over from a holder whose
+    /// lease has expired.
+    ///
+    /// Postgres decides the winner in one statement, so two replicas racing for
+    /// the same lease cannot both believe they hold it. The expiry is what makes
+    /// it safe against a hard kill: a holder that dies without releasing blocks
+    /// everyone for `ttl_secs` and no longer. `updated_at` is the clock, so the
+    /// value carries no deadline that could drift from it.
+    ///
+    /// Returns `true` when this call is the holder. Release with [`Self::delete`].
+    pub async fn acquire_lease(
+        &self,
+        key: &str,
+        value: &str,
+        ttl_secs: f64,
+    ) -> Result<bool, PersistError> {
+        let result = sqlx::query(
+            "INSERT INTO harness_settings (key, value, updated_at)
+             VALUES ($1, $2, now())
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at = now()
+             WHERE harness_settings.updated_at < now() - make_interval(secs => $3)",
+        )
+        .bind(key)
+        .bind(value)
+        .bind(ttl_secs)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// The value of an unexpired lease on `key`, or `None` when nobody holds
+    /// one. An expired row reads as free without having to be deleted first.
+    pub async fn lease_holder(
+        &self,
+        key: &str,
+        ttl_secs: f64,
+    ) -> Result<Option<String>, PersistError> {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT value FROM harness_settings
+             WHERE key = $1 AND updated_at > now() - make_interval(secs => $2)",
+        )
+        .bind(key)
+        .bind(ttl_secs)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
     /// Remove a setting. Returns `true` if one was there.
     pub async fn delete(&self, key: &str) -> Result<bool, PersistError> {
         let result = sqlx::query("DELETE FROM harness_settings WHERE key = $1")
@@ -126,6 +174,52 @@ mod tests {
         assert!(store.set_if_absent(&key, "fresh").await.unwrap());
         assert_eq!(store.get(&key).await.unwrap().as_deref(), Some("fresh"));
 
+        store.delete(&key).await.unwrap();
+    }
+
+    /// The lease's whole job is to be exclusive while it is alive and to free
+    /// itself when its holder dies without releasing it, so both halves are
+    /// worth pinning: a second claimant is refused, and a claim against a
+    /// zero-length TTL (an already-expired lease) succeeds.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_lease_is_exclusive_until_it_expires() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = SettingsStore::connect(&url).await.expect("connect");
+        let key = format!(
+            "test-lease-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+
+        assert_eq!(store.lease_holder(&key, 300.0).await.unwrap(), None);
+        assert!(store.acquire_lease(&key, "pod-a", 300.0).await.unwrap());
+        assert_eq!(
+            store.lease_holder(&key, 300.0).await.unwrap().as_deref(),
+            Some("pod-a")
+        );
+
+        // Held: a second pod is refused and does not become the holder.
+        assert!(!store.acquire_lease(&key, "pod-b", 300.0).await.unwrap());
+        assert_eq!(
+            store.lease_holder(&key, 300.0).await.unwrap().as_deref(),
+            Some("pod-a")
+        );
+
+        // Expired (nothing is newer than `now()`): free to read and to take
+        // over, without anyone having deleted the row.
+        assert_eq!(store.lease_holder(&key, 0.0).await.unwrap(), None);
+        assert!(store.acquire_lease(&key, "pod-b", 0.0).await.unwrap());
+        assert_eq!(
+            store.lease_holder(&key, 300.0).await.unwrap().as_deref(),
+            Some("pod-b")
+        );
+
+        // Released, so the next claimant gets it.
+        assert!(store.delete(&key).await.unwrap());
+        assert!(store.acquire_lease(&key, "pod-c", 300.0).await.unwrap());
         store.delete(&key).await.unwrap();
     }
 }
