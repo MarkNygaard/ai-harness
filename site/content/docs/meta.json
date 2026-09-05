@@ -7,8 +7,9 @@
     "project-rules",
     "concepts",
     "workflows",
-    "mcp",
     "triggers",
+    "mcp",
+    "integrations",
     "operating"
   ]
 }

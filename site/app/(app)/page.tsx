@@ -26,7 +26,7 @@ const features = [
   {
     title: "Three ways to trigger",
     body: "The dashboard, an MCP endpoint so an assistant you are already talking to can start a run, or Linear. Delegate an issue and it moves through your columns on its own.",
-    href: "/docs/triggers/linear-connect",
+    href: "/docs/integrations/linear",
   },
   {
     title: "Isolated by default",

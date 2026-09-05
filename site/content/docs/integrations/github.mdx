@@ -1,0 +1,71 @@
+---
+title: "GitHub"
+description: "The token every run needs to clone, push and open pull requests, the commit-author setting that stops platforms rejecting the result, and why GitHub is the one credential you can set per project."
+---
+
+Every run clones a repository, pushes a branch and opens a pull request, so
+GitHub is the one integration nothing works without.
+
+Connect it on **Settings → Integrations**.
+
+## The token
+
+A **fine-grained or classic personal access token** with **repo** and
+**pull-request** access to the repositories you register as projects.
+
+It does three jobs. The harness sets it as both `GH_TOKEN` and `GITHUB_TOKEN`,
+which authenticates `git` clone and fetch over HTTPS, and lets the `gh` CLI open
+the pull request at the end of a run.
+
+Scope it to the repositories you actually register. A token that can reach every
+repository in the organisation is a token an agent can reach every repository
+with.
+
+<Callout>
+The server also reads `GITHUB_TOKEN` or `GH_TOKEN` from its own environment as a
+fallback. A credential connected in the dashboard takes precedence, and is the
+better place for it: environment variables end up in deployment manifests, and
+this one does not need to.
+</Callout>
+
+## Commit author email
+
+Optional, and worth setting.
+
+Runs author their commits with a synthetic address unless you give them one.
+That is fine for GitHub itself, but some platforms validate the commit author
+against a real GitHub account and reject anything they cannot match. Vercel is
+the one people hit first: the pull request opens, the preview deployment does
+not.
+
+Set it to a GitHub-verified address, or to your `@users.noreply.github.com` one
+if you would rather not publish a real address in the commit history.
+
+A per-project value wins over the global one.
+
+## Per project, with a global fallback
+
+**GitHub is the only credential configurable per project.** Everything else is
+global, because everything else is an account you have one of.
+
+Repositories are different. They live in different organisations, need different
+scopes, and the identity that opens a pull request is visible to everyone
+reviewing it. So a project can carry its own token and its own author email, and
+falls back to the global pair when it does not.
+
+The usual arrangement is a global token for the repositories you own and a
+per-project one wherever a run should push as somebody else.
+
+## What it does not cover
+
+**Triggering.** GitHub connects the repository, not the work. Runs start from
+[Linear](/docs/integrations/linear), the dashboard, or
+[MCP](/docs/mcp). See [triggering runs](/docs/triggers).
+
+**Merging.** The bundled workflows stop at a pull request.
+[`merge-pr`](/docs/workflows/bundled#merge-pr) merges one when you ask it to,
+and gates on CI passing rather than on a review.
+
+**Branch protection.** If you want a human approval enforced before anything
+merges, that is a repository setting rather than a harness one, and the harness
+will not work around it.
