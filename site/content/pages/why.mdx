@@ -1,148 +1,137 @@
 ---
-title: "Why a pipeline, not a loop"
-description: "Where this sits next to CI/CD, an honest answer to why you should not just run a coding agent in a loop, and when a loop is genuinely the better tool."
+title: "The pipeline before the commit"
+description: "Where agentic SDLC sits next to CI/CD, why the code stage was the last one left manual, and what changes when a pipeline runs on a ticket instead of a commit."
 ---
-
-The most reasonable objection to all of this is short: **I can already run a
-coding agent in a loop. Why do I need a pipeline?**
-
-Often you don't. This page is the honest version of the answer, including the
-cases where you should close this tab and go write a shell script.
-
-## Where this sits
 
 Software delivery has been automated from the outside in.
 
-The usual stages run **Plan, Code, Build, Test, Release, Deploy, Operate.**
-Continuous integration automated Build and Test. Continuous delivery automated
-Release and Deploy. Over about fifteen years, everything to the right of the
-commit got a pipeline: defined as code, triggered by an event, run in an
-isolated environment, gated on checks that can fail it.
+Continuous integration took Build and Test. Continuous delivery took Release and
+Deploy. Over roughly fifteen years, everything to the right of the commit became
+a pipeline: defined as code, triggered by an event, run in an isolated
+environment, gated on checks that can fail it.
 
-**Code is the stage nobody automated.** It stayed manual because it was the part
-that needed a person.
+**Code was the stage nobody automated.** It stayed manual because it was the
+part that needed a person to understand the problem. That is the part that
+changed, and it is where this sits.
 
-That is the part that changed. So:
+## Where automation has reached
 
-> CI/CD starts at the commit. This starts at the ticket.
+| Plan | Code | Build | Test | Release | Deploy | Operate |
+| --- | --- | --- | --- | --- | --- | --- |
+| partly | **here** | CI | CI | CD | CD | monitoring |
 
-Same shape, one stage to the left. Triggered by an event, defined as code in the
-repository, run in an isolated environment, gated on checks that can fail it.
-The artifact at the end is a pull request rather than a build.
+The tail of Plan is included because exploration and planning are pipeline steps
+too: a read-only pass over the codebase produces a plan, and the plan is what
+the implementation step works from.
 
-## When a loop is enough
+## The same shape as CI/CD
 
-A loop is the right tool more often than vendors admit. Use one when:
+This is not an analogy. The properties that make CI a pipeline rather than a
+script are all present here, one stage to the left.
 
-- **You are the only person who will run it.** A loop lives in your terminal.
-- **The task is small enough to hold in one head.** A rename, a missing null
-  check, a test you already know how to write.
-- **You will read every line of the diff anyway.** Then most of what a pipeline
-  adds is redundant, because you are the gate.
-- **You are exploring.** When you do not yet know what you want, a conversation
-  beats a specification, and a pipeline needs a specification to start.
+| | CI | CD | Agentic SDLC |
+| --- | --- | --- | --- |
+| **Triggered by** | a commit | a green build | a ticket |
+| **Defined in** | `.github/workflows/` | same | `.harness/workflows/` |
+| **Runs in** | an ephemeral runner | a deploy target | an ephemeral git worktree |
+| **Gated on** | tests and lint | smoke checks | a build gate and review passes |
+| **Produces** | a build artifact | a running release | a pull request |
+| **On failure** | a red build | a rollback | a failed run and no PR |
+| **Reviewed by** | nobody, it is deterministic | nobody | a different model, then a person |
 
-If all four are true, a pipeline is overhead. Run the loop.
+The last row is the one that has no equivalent on the left. A build either
+compiles or it does not. A generated change can be plausible and wrong, so the
+pipeline has to carry judgement as well as checks, and that judgement cannot
+come from the model that produced the work.
 
-## What breaks when you scale a loop
+## What "agentic SDLC" means
 
-The four conditions above stop holding in a specific order, and each failure has
-a mechanism behind it rather than a missing feature.
+**SDLC** is Software Development Life Cycle, the pre-DevOps term for the whole
+arc of building software: requirements, design, implementation, testing,
+deployment, maintenance. **Agentic** is the current adjective for systems where
+a model plans and acts across several steps rather than answering one prompt.
 
-### A model grades its own work generously
+Put together, agentic SDLC describes a life cycle where agents carry out stages
+end to end instead of assisting a human through them. This covers requirements
+through testing and stops at the pull request.
 
-Ask an agent to review what it just wrote and it will usually approve it. This
-is structural, not a prompting problem: the reasoning that produced the code is
-the reasoning being asked to judge it, and it has no reason to disagree with
-itself.
+The term is useful with an executive and useless with a developer, who will read
+it as procurement language. The developer-facing version is the shorter one:
+**CI/CD starts at the commit, this starts at the ticket.**
 
-The fix is not a better review prompt. It is **a different model doing the
-review**. In `idea-to-pr`, Claude plans, Kimi writes the code, then gpt-5.x and
-Claude Sonnet each review and fix in turn. None of the reviewers wrote the code.
-That is why the pipeline pays for three passes instead of looping the author.
+## Pipelines and loops
 
-### A loop runs in your working copy
+The other way to run a coding agent is in a loop: prompt, inspect, prompt again,
+until it is right. That works well, and for a large class of tasks it is the
+better tool. A loop wins when one person runs it, the task is small enough to
+hold in your head, you will read the whole diff anyway, and you are still
+working out what you want. A pipeline needs a specification before it can start.
+A conversation does not.
 
-Two tasks cannot run at once. A half-finished edit sits in your tree while you
-try to do something else. A bad run leaves you cleaning up.
+The two diverge on four properties, and each has a mechanism behind it rather
+than a missing feature.
 
-Every run here gets its own git worktree off the base branch, and throws it away
-afterwards. Runs cannot see each other and cannot touch anyone's checkout.
+**Who can start one.** A loop needs a terminal, an API key and someone who can
+read a diff. A pipeline that triggers from a ticket can be handed to the person
+who knows exactly what the checkout page should do and would test it properly.
+That is the difference that changes who is allowed to build software, rather
+than how fast one person builds it. See
+[shipping without writing code](/docs/shipping-without-code).
 
-### A loop stops when the model says it is done
+**Who reviews.** Ask an agent to review what it just wrote and it will generally
+approve it. The reasoning that produced the code is the reasoning being asked to
+judge it. The fix is not a better prompt, it is a different model:
+[`idea-to-pr`](/docs/workflows/bundled#idea-to-pr) has Claude plan, Kimi
+implement, then gpt-5.x and Claude Sonnet each review and fix. None of the
+reviewers wrote the code.
 
-There is no build that must pass. The agent decides it has finished, and it is
-the same agent whose work you are trying to check.
+**What is enforced.** A loop stops when the model decides it is finished. A
+build gate written as a node cannot be skipped by an agent that believes it is
+done, because the pipeline decides what runs next, not the model.
 
-A build gate written as a node in the DAG cannot be skipped by an agent that
-believes it is finished. Neither can a review pass. The pipeline decides what
-runs next, not the model.
+**What is left behind.** A loop leaves a scrollback buffer. A run records every
+node's output, duration and cost, in a form you can inspect afterwards and
+improve. Standards work the same way: the
+[`AGENTS.md` and `CLAUDE.md` cascade](/docs/project-rules) loads into every run,
+so a rule written once stops being re-explained.
 
-### Nothing is written down
+## What a pipeline costs
 
-When a loop produces something wrong, you get the final state and a scrollback
-buffer. You cannot see which step went wrong, what it cost, or why it chose that
-approach.
+**Setup.** A loop starts now. A pipeline needs a project registered,
+credentials, and a workflow that fits your repository. That is an afternoon
+before the first useful run.
 
-Every node's output, duration and cost is recorded. A run you can inspect is a
-run you can improve.
+**Tokens.** Three review passes cost roughly three review passes. For a one-line
+change that trade is bad, and you should run the loop.
 
-### A loop cannot be handed to anyone else
+**A specification.** The system resolves ambiguity on your behalf and does not
+announce that it did. Vague ticket, confident wrong answer. Specifying the work
+is still the hard part and it is still yours.
 
-This is the one that matters most, and it is not a technical limitation.
+**No opinion about your code.** The harness writes prompts and runs the
+pipeline. Isolation and review passes catch more mistakes; nothing here makes a
+weak model write good software.
 
-A loop needs a terminal, an API key and someone who can read a diff. The person
-in your company who knows exactly what the checkout page should do, and who
-would test it properly, cannot run one.
+## On human review
 
-A pipeline that triggers from a ticket can be handed to that person. See
-[shipping without writing code](/docs/shipping-without-code). That is not a
-convenience feature. It changes who is allowed to build software, which is a
-different claim from "the agent writes code faster".
+The bundled workflows stop at a pull request. That is a default, not a
+constraint. Bind [`merge-pr`](/docs/workflows/bundled#merge-pr) to a column,
+have `idea-to-pr` move the issue there when it finishes, and the chain runs from
+ticket to merged with nobody in it. What `merge-pr` waits on is CI passing, not
+an approval.
 
-### Standards have to be repeated
-
-In a loop, every conversation starts from nothing. You re-explain the merge
-policy, the verify commands, the module that owns the thing you are touching.
-
-The [`AGENTS.md` and `CLAUDE.md` cascade](/docs/project-rules) is loaded into
-every run automatically. Write the rule once and every future run has it. Review
-effort falls over time instead of staying flat.
-
-## What this does not fix
-
-Worth being explicit, because the limits are real.
-
-**A bad agent stays bad.** The harness writes prompts and runs the pipeline. It
-has no opinion about the code. Better isolation and more review passes catch
-more mistakes, but nothing here makes a weak model write good software.
-
-**A vague ticket produces a confident wrong answer.** The system will resolve
-your ambiguity for you and will not tell you it did. Specification is still the
-hard part, and it is still yours.
-
-**Nothing here forces a human to review.** The bundled workflows stop at a pull
-request, but that is a default, not a constraint. Bind
-[`merge-pr`](/docs/workflows/bundled#merge-pr) to a column, have `idea-to-pr`
-move the issue there when it finishes, and the chain runs from ticket to merged
-with nobody in it. What `merge-pr` waits for is CI passing, not an approval.
-
-If you want review enforced, that is branch protection on the repository, and it
-is worth turning on. The harness gives you a good place to put a human. It does
-not check that you did.
-
-**More passes cost more.** Three review passes cost roughly three review passes.
-The trade is money against defects reaching a human, and for a small change that
-trade is often bad.
+Whether to close that last gap is a decision about your codebase rather than
+about the tool. If you want review enforced, that is branch protection on the
+repository. The harness gives you a good place to put a human and does not check
+that you used it.
 
 ## Why this rhymes with CI
 
-Continuous integration was not adopted because pipelines were clever. Teams
-adopted it because integrating in big manual batches stopped working once there
-was more than one developer, and the failure was expensive and late.
+Continuous integration was not adopted because pipelines were clever. It was
+adopted because integrating in large manual batches stopped working once there
+was more than one developer, and the failures arrived late and expensive.
 
-Running an agent in a loop works the same way. It is fine until there is more
-than one task, more than one person, or someone involved who cannot read the
-diff. Then the thing that breaks is not the agent. It is everything around it.
-
-That is the part this builds.
+The same pressure applies here. Running an agent in a loop works until there is
+more than one task in flight, more than one person involved, or somebody in the
+loop who cannot read a diff. What fails at that point is not the agent. It is
+everything around it, and that is the part this builds.

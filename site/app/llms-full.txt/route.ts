@@ -56,7 +56,7 @@ export async function GET() {
     .readFile(path.join(PAGES_DIR, "why.mdx"), "utf8")
     .catch(() => null)
   const why = whyRaw
-    ? `# Why a pipeline, not a loop\nSource: ${new URL("/why", siteConfig.url).toString()}\n\n${stripFrontmatter(whyRaw)}`
+    ? `# The pipeline before the commit\nSource: ${new URL("/why", siteConfig.url).toString()}\n\n${stripFrontmatter(whyRaw)}`
     : null
 
   const text = `# ${siteConfig.name} — full documentation

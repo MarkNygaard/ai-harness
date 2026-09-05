@@ -38,7 +38,7 @@ The full documentation as a single file is at ${new URL("/llms-full.txt", siteCo
 
 ## Start here
 
-- [Why a pipeline, not a loop](${why}): where this sits next to CI/CD, and an honest answer to why you should not just run a coding agent in a loop.
+- [The pipeline before the commit](${why}): where agentic SDLC sits next to CI/CD, why the code stage was the last one left manual, and how pipelines and loops differ.
 
 ${body}
 

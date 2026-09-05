@@ -188,14 +188,15 @@ export default function HomePage() {
         </ol>
 
         <p className="mt-6 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-          Already running an agent in a loop?{" "}
           <Link
             href="/why"
             className="underline underline-offset-4 hover:text-foreground"
           >
-            Why a pipeline, not a loop
+            The pipeline before the commit
           </Link>{" "}
-          is the honest comparison, including when a loop is the better tool.
+          places this next to CI/CD: the code stage was the last one left
+          manual, and this is what a pipeline looks like when it runs on a
+          ticket.
         </p>
 
         <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
