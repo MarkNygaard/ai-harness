@@ -288,70 +288,36 @@ overrides are unaffected.)
 Resolution, in full: the global `linear` credential's `access_token` if present,
 else its `api_key`, else Linear is reported as not connected.
 
-## Deploying behind Cloudflare Zero Trust (or any SSO proxy)
+## The webhook has to be reachable
 
-If the harness sits behind Cloudflare Access — or any proxy that demands an SSO
-session — **the webhook will not work until you exempt its path.** Linear is a
-server, not a browser: it has no Entra/Okta session and cannot get one, so Access
-answers it with a login page instead of letting it reach the harness. Linear then
-retries at 1 minute, 1 hour and 6 hours, and may disable the webhook.
+`POST /api/linear/webhook` must be reachable **without a browser session**.
+Linear is a server: it has no SSO session, cannot obtain one, and anything in
+front of the harness that answers with a login page will stop delegation
+working. Linear then retries at one minute, one hour and six hours, and
+eventually disables the webhook.
 
-Nothing in the harness can influence this: Access runs *in front of* the
-application. The fix is one Cloudflare-side change.
+The harness has its own [sign-in](/docs/setup/deploy#sign-in-and-tokens), so it
+does not need a proxy in front of it for authentication. If you have one anyway,
+exempt this path. What authenticates the endpoint is its HMAC signature, which
+is why exempting it is safe. See below.
 
-**Add a second Access application scoped to the webhook path.** Access matches the
-most specific application first, so a path-scoped app overrides the one covering
-the hostname, and inherits nothing from it.
-
-1. Zero Trust → **Access** → **Applications** → **Add an application** →
-   **Self-hosted**. (Recent UI: *Access controls → Applications → Create new
-   application → Self-hosted and private → Add public hostname*.)
-2. Set the public hostname to your harness host **with the path**
-   `api/linear/webhook`. It must match exactly — a wildcard does not cover its
-   parent path, and this app must be *more* specific than your existing one.
-3. Add one policy with **Action: Bypass** and **Include: Everyone**. That makes
-   this path — and only this path — publicly reachable.
-4. Leave your existing hostname-wide application untouched. The UI keeps
-   requiring Entra.
-
-What authenticates the endpoint after that is its **HMAC signature**, which is why
-it is safe to expose: nothing is parsed before the signature is verified in
-constant time, stale timestamps are rejected, and with no signing secret stored it
-refuses everything. See below.
-
-### Verify it before pointing Linear at it
-
-From outside your network:
+### Check it from outside your network
 
 ```sh
-curl -i -X POST https://harness.example.com/api/linear/webhook \
-  -H 'Content-Type: application/json' -d '{}'
+curl -i -X POST https://harness.example.com/api/linear/webhook   -H 'Content-Type: application/json' -d '{}'
 ```
 
-Read the response to see **which gate answered**:
+Read which gate answered:
 
 | Response | Meaning |
-|---|---|
-| HTML, or a 302 to your IdP | Cloudflare is still blocking — the bypass isn't matching. Check the path. |
-| `412 {"error":"no Linear webhook signing secret configured"}` | ✅ Reached the harness. Save the signing secret on the Integrations page. |
-| `401 {"error":"missing Linear-Signature header"}` | ✅ Reached the harness, secret stored, rejecting unsigned input correctly. |
+| --- | --- |
+| HTML, or a redirect to an identity provider | Something in front of the harness is still blocking it |
+| `412 {"error":"no Linear webhook signing secret configured"}` | Reached the harness. Save the signing secret on the Integrations page |
+| `401 {"error":"missing Linear-Signature header"}` | Reached the harness, secret stored, correctly rejecting unsigned input |
 
-A JSON error from the harness is success here — it means the request got through
-and our own verification turned it away.
+A JSON error from the harness is the success case here. It means the request got
+through and the harness's own verification turned it away.
 
-### If it still fails after the bypass
-
-Access is not the only Cloudflare feature that can block a server-to-server POST:
-
-- **Bot Fight Mode / Bot Management** — flags non-browser traffic. A common cause
-  of webhooks failing behind Cloudflare. Check Security → Bots.
-- **WAF custom or managed rules** issuing a Managed Challenge on that path. Add a
-  skip rule for it if so.
-- **"Require Access protection"** or an origin rule that rejects traffic without an
-  Access JWT — that would undo the bypass.
-
-A Cloudflare **Tunnel** is not a problem in itself: it routes the request, Access
-is what blocks it.
 
 ## Security of the webhook endpoint
 
