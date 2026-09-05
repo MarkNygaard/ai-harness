@@ -121,9 +121,15 @@ more mistakes, but nothing here makes a weak model write good software.
 your ambiguity for you and will not tell you it did. Specification is still the
 hard part, and it is still yours.
 
-**Review is still required.** Nothing merges without a human approving it. If
-you were hoping to remove that step, this is the wrong tool, and the whole
-design is arranged to make sure you cannot.
+**Nothing here forces a human to review.** The bundled workflows stop at a pull
+request, but that is a default, not a constraint. Bind
+[`merge-pr`](/docs/workflows/bundled#merge-pr) to a column, have `idea-to-pr`
+move the issue there when it finishes, and the chain runs from ticket to merged
+with nobody in it. What `merge-pr` waits for is CI passing, not an approval.
+
+If you want review enforced, that is branch protection on the repository, and it
+is worth turning on. The harness gives you a good place to put a human. It does
+not check that you did.
 
 **More passes cost more.** Three review passes cost roughly three review passes.
 The trade is money against defects reaching a human, and for a small change that

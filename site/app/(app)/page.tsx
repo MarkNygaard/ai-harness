@@ -63,7 +63,7 @@ const loop = [
   },
   {
     title: "Review the code",
-    body: "Nothing merges without a human approving it. By now the obvious problems are gone, which is not the same as the code being right.",
+    body: "By now the obvious problems are gone, which is not the same as the code being right. You can automate this step away. We think you should not.",
     who: "A developer",
   },
   {
