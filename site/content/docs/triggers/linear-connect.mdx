@@ -17,7 +17,7 @@ applies the failed label when it gives up.
 Connect the workspace once and the attribution problem goes away.
 
 **One workspace, one install.** The Linear credential is global — it lives on the
-**Credentials page** under *Integrations*, not per project. The identity being
+**Subscriptions page** under *Integrations*, not per project. The identity being
 connected is the *app*, which is the same for every project; only the trigger
 *bindings* (team, status map, eligibility label) are per project, and those stay
 on the Projects page.
@@ -80,7 +80,7 @@ Copy the **client ID**, **client secret** and **webhook signing secret**.
    other credential.
 3. Click **Connect as app**. Linear asks a workspace admin to authorize —
    `actor=app` installs require admin permission — and redirects back to the
-   Credentials page with the result.
+   Subscriptions page with the result.
 4. The panel then reads **app install**, names the workspace, and shows two
    readiness lines: whether the token carries the agent scopes, and whether the
    webhook secret is stored. Both must be satisfied for delegation to work.
@@ -282,7 +282,7 @@ you've confirmed a run comments as the app.
 A **per-project** Linear credential from an earlier version is **inert**: Linear
 is now resolved from the global credential only, so a leftover project-scoped
 `api_key` is neither read nor editable. If Linear was configured per project
-before, connect the workspace once on the Credentials page. (Per-project *GitHub*
+before, connect the workspace once on the Subscriptions page. (Per-project *GitHub*
 overrides are unaffected.)
 
 Resolution, in full: the global `linear` credential's `access_token` if present,
@@ -333,7 +333,7 @@ Read the response to see **which gate answered**:
 | Response | Meaning |
 |---|---|
 | HTML, or a 302 to your IdP | Cloudflare is still blocking — the bypass isn't matching. Check the path. |
-| `412 {"error":"no Linear webhook signing secret configured"}` | ✅ Reached the harness. Save the signing secret on the Credentials page. |
+| `412 {"error":"no Linear webhook signing secret configured"}` | ✅ Reached the harness. Save the signing secret on the Subscriptions page. |
 | `401 {"error":"missing Linear-Signature header"}` | ✅ Reached the harness, secret stored, rejecting unsigned input correctly. |
 
 A JSON error from the harness is success here — it means the request got through
@@ -393,10 +393,10 @@ in one step is possible if that ever becomes the preference.)
 | `redirect_uri` mismatch error from Linear | The app's registered callback differs from the URL shown in the panel — they must match character for character. |
 | "authorization expired or was already used" | The one-time `state` nonce was replayed or is older than 10 minutes (it is also lost if the server restarted mid-flow). Start again. |
 | Comments still show a person's name | The panel reads **personal key** — a global `api_key` is still the credential in use. Connect as app, then clear the key. |
-| The project's Linear trigger button disappeared | The bindings dialog only appears once Linear is connected. Connect on the Credentials page. |
+| The project's Linear trigger button disappeared | The bindings dialog only appears once Linear is connected. Connect on the Subscriptions page. |
 | Delegating does nothing | Check the panel's two Delegation lines. Then check the OAuth app's webhook is enabled, subscribed to *Agent session events*, and pointed at the webhook URL shown. Server logs record every rejected delivery with the reason. |
 | Session shows "unresponsive" in Linear | The acknowledging `thought` didn't land within 10s — usually the webhook never arrived, or the Linear credential can't write. The log line is `failed to acknowledge session`. |
-| A poller-claimed run posts plain comments instead of a session thread | Session creation failed and the run fell back. The reason is logged as `could not open an agent session, falling back to comments: <reason>` — `Access denied` means the workspace is not connected as an app (reconnect on the Credentials page); the run itself is unaffected either way. |
+| A poller-claimed run posts plain comments instead of a session thread | Session creation failed and the run fell back. The reason is logged as `could not open an agent session, falling back to comments: <reason>` — `Access denied` means the workspace is not connected as an app (reconnect on the Subscriptions page); the run itself is unaffected either way. |
 | Session shows "stopped responding" mid-run | Linear marks a session stale after **30 minutes** without an activity. Progress activities and a ~10-minute heartbeat now keep it alive; if it still goes stale, check the poller is running (it is what posts them) and the logs for `failed to report into session`. Sending any later activity recovers the session. |
 | "No enabled Linear trigger covers this issue’s team" | No **enabled** binding matches the issue’s team. Add one on the Projects page, or enable the existing one — a disabled binding is inert for delegation too. |
 | "This issue is in X, and `wf` only starts from…" | Working as intended: the binding's source status is the gate. Move the issue there. |
