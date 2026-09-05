@@ -188,6 +188,17 @@ export default function HomePage() {
         </ol>
 
         <p className="mt-6 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          Already running an agent in a loop?{" "}
+          <Link
+            href="/docs/pipeline-not-loop"
+            className="underline underline-offset-4 hover:text-foreground"
+          >
+            Why a pipeline, not a loop
+          </Link>{" "}
+          is the honest comparison, including when a loop is the better tool.
+        </p>
+
+        <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           <Link
             href="/docs/shipping-without-code"
             className="underline underline-offset-4 hover:text-foreground"
