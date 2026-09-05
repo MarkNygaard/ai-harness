@@ -1,0 +1,137 @@
+---
+title: "The pipeline before the commit"
+description: "Where agentic SDLC sits next to CI/CD, why the code stage was the last one left manual, and what changes when a pipeline runs on a ticket instead of a commit."
+---
+
+Software delivery has been automated from the outside in.
+
+Continuous integration took Build and Test. Continuous delivery took Release and
+Deploy. Over roughly fifteen years, everything to the right of the commit became
+a pipeline: defined as code, triggered by an event, run in an isolated
+environment, gated on checks that can fail it.
+
+**Code was the stage nobody automated.** It stayed manual because it was the
+part that needed a person to understand the problem. That is the part that
+changed, and it is where this sits.
+
+## Where automation has reached
+
+| Plan | Code | Build | Test | Release | Deploy | Operate |
+| --- | --- | --- | --- | --- | --- | --- |
+| partly | **here** | CI | CI | CD | CD | monitoring |
+
+The tail of Plan is included because exploration and planning are pipeline steps
+too: a read-only pass over the codebase produces a plan, and the plan is what
+the implementation step works from.
+
+## The same shape as CI/CD
+
+This is not an analogy. The properties that make CI a pipeline rather than a
+script are all present here, one stage to the left.
+
+| | CI | CD | Agentic SDLC |
+| --- | --- | --- | --- |
+| **Triggered by** | a commit | a green build | a ticket |
+| **Defined in** | `.github/workflows/` | same | `.harness/workflows/` |
+| **Runs in** | an ephemeral runner | a deploy target | an ephemeral git worktree |
+| **Gated on** | tests and lint | smoke checks | a build gate and review passes |
+| **Produces** | a build artifact | a running release | a pull request |
+| **On failure** | a red build | a rollback | a failed run and no PR |
+| **Reviewed by** | nobody, it is deterministic | nobody | a different model, then a person |
+
+The last row is the one that has no equivalent on the left. A build either
+compiles or it does not. A generated change can be plausible and wrong, so the
+pipeline has to carry judgement as well as checks, and that judgement cannot
+come from the model that produced the work.
+
+## What "agentic SDLC" means
+
+**SDLC** is Software Development Life Cycle, the pre-DevOps term for the whole
+arc of building software: requirements, design, implementation, testing,
+deployment, maintenance. **Agentic** is the current adjective for systems where
+a model plans and acts across several steps rather than answering one prompt.
+
+Put together, agentic SDLC describes a life cycle where agents carry out stages
+end to end instead of assisting a human through them. This covers requirements
+through testing and stops at the pull request.
+
+The term is useful with an executive and useless with a developer, who will read
+it as procurement language. The developer-facing version is the shorter one:
+**CI/CD starts at the commit, this starts at the ticket.**
+
+## Pipelines and loops
+
+The other way to run a coding agent is in a loop: prompt, inspect, prompt again,
+until it is right. That works well, and for a large class of tasks it is the
+better tool. A loop wins when one person runs it, the task is small enough to
+hold in your head, you will read the whole diff anyway, and you are still
+working out what you want. A pipeline needs a specification before it can start.
+A conversation does not.
+
+The two diverge on four properties, and each has a mechanism behind it rather
+than a missing feature.
+
+**Who can start one.** A loop needs a terminal, an API key and someone who can
+read a diff. A pipeline that triggers from a ticket can be handed to the person
+who knows exactly what the checkout page should do and would test it properly.
+That is the difference that changes who is allowed to build software, rather
+than how fast one person builds it. See
+[shipping without writing code](/docs/shipping-without-code).
+
+**Who reviews.** Ask an agent to review what it just wrote and it will generally
+approve it. The reasoning that produced the code is the reasoning being asked to
+judge it. The fix is not a better prompt, it is a different model:
+[`idea-to-pr`](/docs/workflows/bundled#idea-to-pr) has Claude plan, Kimi
+implement, then an OpenAI model and a Claude model each review and fix. None of
+the reviewers wrote the code.
+
+**What is enforced.** A loop stops when the model decides it is finished. A
+build gate written as a node cannot be skipped by an agent that believes it is
+done, because the pipeline decides what runs next, not the model.
+
+**What is left behind.** A loop leaves a scrollback buffer. A run records every
+node's output, duration and cost, in a form you can inspect afterwards and
+improve. Standards work the same way: the
+[`AGENTS.md` and `CLAUDE.md` cascade](/docs/project-rules) loads into every run,
+so a rule written once stops being re-explained.
+
+## What a pipeline costs
+
+**Setup.** A loop starts now. A pipeline needs a project registered,
+credentials, and a workflow that fits your repository. That is an afternoon
+before the first useful run.
+
+**Tokens.** Three review passes cost roughly three review passes. For a one-line
+change that trade is bad, and you should run the loop.
+
+**A specification.** The system resolves ambiguity on your behalf and does not
+announce that it did. Vague ticket, confident wrong answer. Specifying the work
+is still the hard part and it is still yours.
+
+**No opinion about your code.** The harness writes prompts and runs the
+pipeline. Isolation and review passes catch more mistakes; nothing here makes a
+weak model write good software.
+
+## On human review
+
+The bundled workflows stop at a pull request. That is a default, not a
+constraint. Bind [`merge-pr`](/docs/workflows/bundled#merge-pr) to a column,
+have `idea-to-pr` move the issue there when it finishes, and the chain runs from
+ticket to merged with nobody in it. What `merge-pr` waits on is CI passing, not
+an approval.
+
+Whether to close that last gap is a decision about your codebase rather than
+about the tool. If you want review enforced, that is branch protection on the
+repository. The harness gives you a good place to put a human and does not check
+that you used it.
+
+## Why this rhymes with CI
+
+Continuous integration was not adopted because pipelines were clever. It was
+adopted because integrating in large manual batches stopped working once there
+was more than one developer, and the failures arrived late and expensive.
+
+The same pressure applies here. Running an agent in a loop works until there is
+more than one task in flight, more than one person involved, or somebody in the
+loop who cannot read a diff. What fails at that point is not the agent. It is
+everything around it, and that is the part this builds.

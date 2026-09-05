@@ -1,4 +1,9 @@
 {
-  "title": "Operating",
-  "pages": ["index", "deploy", "configuration", "cli", "agents", "chatgpt-subscription"]
+  "title": "Reference",
+  "pages": [
+    "index",
+    "configuration",
+    "cli",
+    "agents"
+  ]
 }

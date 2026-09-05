@@ -1,0 +1,97 @@
+---
+title: "Projects"
+description: "Registering a repository: the git remote, the base branch, toolchains, multi-repo layouts, and the per-project settings that override the global ones."
+---
+
+A **project** is a registered repository, plus the settings runs need to work on
+it. Everything else in the harness points at one: bindings name a project,
+credentials can be overridden per project, and a run always belongs to one.
+
+Add one on the **Projects** page.
+
+## The required parts
+
+**Name.** How the project is referred to everywhere else, including in the MCP
+tools and in bindings.
+
+**Git URL.** The remote runs clone from. Cloning happens over HTTPS using the
+[GitHub token](/docs/setup/github), so the remote should be one that token can
+reach.
+
+**Base branch.** Runs check out a worktree from this branch and target pull
+requests at it. It is also exposed to workflows as `$BASE_BRANCH`.
+
+<Callout type="warn">
+A worktree comes from the **remote**. It has none of your unpushed local
+commits, and there is no local branch of this name inside one, only the
+remote-tracking `origin/<branch>`. A workflow step that diffs against a bare
+`$BASE_BRANCH` quietly falls back to scanning the whole repository. Diff against
+`origin/$BASE_BRANCH`.
+</Callout>
+
+## Optional settings
+
+**Default workflow.** Which workflow a run uses when the trigger does not name
+one.
+
+**Toolchains.** What the project needs installed, provisioned by `mise` on the
+first run and then cached on the data volume. Declaring them here is why adding
+a language does not mean rebuilding the image.
+
+**External URL.** A live site associated with the project, exposed to runs as
+`$EXTERNAL_URL`. This is what [`geo-audit`](/docs/workflows/bundled#geo-audit)
+audits, and it is a project setting rather than a run argument because it does
+not change between runs.
+
+**Cargo target cap.** A per-project override of the Rust build cache ceiling.
+Useful when one project's `target` directory is much larger than the rest and
+you would rather it did not evict everything else. See
+[configuration](/docs/operating/configuration#cache-and-storage-limits).
+
+## Multi-repo projects
+
+A project can span more than one repository. Each extra repo carries its own
+URL, base branch, a **folder** it is checked out into, and an optional **role**
+describing what it is for.
+
+The run gets all of them in one workspace, each in its own folder, and
+`HARNESS_REPOS` describes the layout to the agents. That is how a review can
+reason about a frontend and the backend where half of its logic actually lives.
+[`review-area`](/docs/workflows/bundled#review-area) is built for this, and
+works single-repo too.
+
+Use it when a change genuinely spans repositories. A project per repository is
+simpler when they are independent.
+
+## What can be overridden per project
+
+Two things, and only two.
+
+**GitHub credentials.** A project can carry its own token and commit author
+email, falling back to the global pair. This is how a run pushes as a different
+identity for a repository in another organisation. See
+[GitHub](/docs/setup/github#per-project-with-a-global-fallback).
+
+**Build environment variables.** Values a project's build or test steps need,
+stored with the project rather than baked into the workflow.
+
+Everything else, meaning the model accounts and the Linear connection, is
+global. There is one of each and they are shared.
+
+## Linear bindings
+
+A project's Linear triggers live behind the ⚡ icon on its row. They connect a
+team and a column to a workflow, and they are per project because that is where
+the workflow and the base branch come from. See
+[trigger bindings](/docs/setup/bindings).
+
+## What lives in the repository instead
+
+Not everything about a project is configured in the dashboard. Two things belong
+in the repository itself, and are better there because they are versioned and
+reviewed with the code:
+
+- `.harness/workflows/` and `.harness/commands/`, which shadow the bundled ones
+  by name. See [workflows](/docs/workflows).
+- `AGENTS.md` and `CLAUDE.md`, the rules every run reads. See
+  [project rules](/docs/project-rules).

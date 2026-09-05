@@ -1,0 +1,131 @@
+---
+title: "Trigger bindings"
+description: "How a Linear column starts a run: the status map, the two gates, concurrency and attempts, and how to chain bindings so work moves through your board on its own."
+---
+
+A **binding** connects a Linear team to a project and a workflow, and describes
+which columns mean what. It is the thing the poller reads, and it is where most
+of the setup lives.
+
+Bindings are per project: **Projects → your project → the ⚡ icon**.
+
+## Start with it not firing
+
+A binding has two switches and they do different jobs.
+
+**`enabled`** gates work arriving by *either* route. Uncheck it and delegation
+stops too, not just the poller.
+
+**`live`** is poller-only. When it is off, which is the default, the poller
+**dry-runs** the binding: it works out what it would have claimed and logs it,
+without touching anything.
+
+Leave `live` off for the first day. Move a card into the column, read the log,
+confirm it would have picked the issue you expected and run the workflow you
+expected. Then turn it on. A binding that fires on the wrong column is much
+easier to find before it has opened nine pull requests.
+
+## The status map
+
+The binding names the columns a run moves an issue through. Only the first is
+required.
+
+| Field | When the issue moves there |
+| --- | --- |
+| **Source status** | Required. The column the poller watches. An issue here, delegated, is eligible |
+| **In progress** | The run started |
+| **Review** | The pull request opened |
+| **Ready** | The run finished successfully |
+| **Failed label** | Applied when the harness gives up. While present, the issue is skipped |
+
+Two more exist for [epics](/docs/setup/linear-epics): **piece ready**,
+where a sub-issue goes instead of the normal ready column, and **epic review**,
+where the epic itself goes once its pull request is open.
+
+Leaving a status unset means the issue does not move at that point. That is
+occasionally what you want, and usually not: the board is how everyone else sees
+what the harness is doing.
+
+<Callout>
+Clearing the failed label turns off the give-up lifecycle for that binding
+entirely. The issue then stays eligible and the poller will offer it again,
+which is a loop if the run keeps failing the same way.
+</Callout>
+
+## Base branch
+
+The branch runs check out from, and the one pull requests target. Unset falls
+back to the project's default.
+
+## Concurrency and attempts
+
+**Max simultaneous tasks** caps how many of this binding's issues run at once.
+Default 1. It applies to delegation as well as the poller: delegate three issues
+to a binding set to 1 and one starts, while the others get a reply saying what
+is running and stay where they are.
+
+Staying put is the point. A refused issue is still in the source column and
+still delegated, so a `live` binding starts it by itself once a slot frees. With
+`live` off, nothing comes back for it, and the reply says so.
+
+**Max attempts** is how many times the poller re-fires an issue before giving
+up. Default 1, meaning one shot and no whole-workflow retry. Raise it only for
+workflows whose failures are genuinely transient, because the alternative to
+giving up is doing the same wrong thing again at full cost.
+
+## Timing
+
+The poller ticks every **30 seconds**. On each tick it syncs statuses, and it
+evaluates a binding for new work when that binding's own **poll interval** has
+elapsed, so a slow binding does not stop a fast one from being checked.
+
+One tick has a hard ceiling of 20 minutes, after which it stops and picks up
+where it left off.
+
+## Chaining bindings into a pipeline
+
+This is the part worth understanding, because it is what makes the board move on
+its own.
+
+A workflow's **ready** column can be another binding's **source** column. Set
+them up that way and finishing one stage starts the next.
+
+A common arrangement:
+
+| Column | Binding | Fires |
+| --- | --- | --- |
+| Ready to build | `idea-to-pr` | builds the feature, opens a PR |
+| In review | none | a human looks at it |
+| Changes requested | `revise-pr` | updates the existing PR |
+| Ready for merge | `merge-pr` | merges once CI passes |
+
+Cards move right as work completes, and a card dropped into *Changes requested*
+by a reviewer starts a revision without anyone re-delegating.
+
+<Callout type="warn">
+On the `revise-pr` binding, set **ready** to the *review* column, not to Done.
+The workflow updates an existing pull request rather than finishing the work, so
+a card that lands in Done has skipped the review it was just revised for.
+</Callout>
+
+Note what the last row means. With `merge-pr` bound, the chain runs from ticket
+to merged with no human in it, gated only on CI. That is a decision about your
+codebase rather than a default. See
+[on human review](/why#on-human-review).
+
+## When nothing happens
+
+Almost always one of the two conditions, and `linear_check` over
+[MCP](/docs/mcp) will tell you which:
+
+- The issue is not **delegated**, or
+- it is not in the binding's **source status**.
+
+Delegation says *who*, the column says *when*, and both have to be true.
+
+After that, the usual causes are `enabled` off, `live` off on a poller-only
+setup, a concurrency cap already full, or a failed label still on the issue from
+an earlier attempt. Two bindings sharing a source status is the other one:
+disabling the binding you do not want is how you choose between them.
+
+The full troubleshooting table is on [connecting Linear](/docs/setup/linear#troubleshooting).

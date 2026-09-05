@@ -1,0 +1,44 @@
+---
+title: "Setup"
+description: "The order to do things in, once, to get from an empty deployment to a run that opens a pull request."
+---
+
+Setting a harness up is a handful of steps that only happen once. They have a
+natural order, and doing them out of order mostly produces confusing errors
+rather than broken state.
+
+## The order
+
+1. **[Deploy it](/docs/setup/deploy).** One container, a Postgres database, and
+   a volume that survives restarts. Get the dashboard loading before anything
+   else.
+2. **[Register a project](/docs/setup/projects).** A git remote and a base
+   branch. Nothing else can be configured until something exists to point it at.
+3. **[Connect the model accounts](/docs/setup/subscriptions).** Claude, ChatGPT,
+   Kimi or Cursor, whichever the workflow you plan to run actually uses.
+4. **[Connect GitHub](/docs/setup/github).** Required. Every run clones, pushes
+   and opens a pull request.
+5. **Run something.** Trigger [`idea-to-pr`](/docs/workflows/bundled#idea-to-pr)
+   from the dashboard and watch it. Fix what breaks here, while there is only
+   one moving part.
+6. **[Connect Linear](/docs/setup/linear).** Optional, and the point at which
+   the rest of your team can use this rather than just you.
+7. **[Add a trigger binding](/docs/setup/bindings).** Which column starts which
+   workflow. Leave it in dry-run at first.
+
+Steps 1 to 5 give you a working harness for one person. Steps 6 and 7 are what
+make it a team's.
+
+## After setup
+
+Two things are ongoing rather than once-only, and both belong in the repository
+rather than the dashboard:
+
+- **[Project rules](/docs/project-rules).** The `AGENTS.md` and `CLAUDE.md`
+  every run reads. This is the file you keep editing, and the reason review gets
+  lighter over time.
+- **[Workflows](/docs/workflows).** Start with a bundled one. Fork it into
+  `.harness/workflows/` when it no longer fits.
+
+And connect your editor to the [MCP endpoint](/docs/mcp), which is how you read
+what runs actually did and turn that into the rules above.

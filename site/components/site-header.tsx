@@ -44,12 +44,21 @@ export function SiteHeader() {
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className={
+                  // Grid so both copies share one cell. The hidden bold copy
+                  // sets the width, which stops the row shuffling sideways
+                  // when the active item turns semibold on navigation.
                   active
-                    ? "text-foreground"
-                    : "text-muted-foreground transition-colors hover:text-foreground"
+                    ? "grid font-semibold text-foreground"
+                    : "grid text-muted-foreground transition-colors hover:text-foreground"
                 }
               >
-                {item.label}
+                <span
+                  aria-hidden
+                  className="invisible col-start-1 row-start-1 font-semibold"
+                >
+                  {item.label}
+                </span>
+                <span className="col-start-1 row-start-1">{item.label}</span>
               </Link>
             )
           })}

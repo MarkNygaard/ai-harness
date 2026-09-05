@@ -3,11 +3,15 @@
   "pages": [
     "index",
     "quickstart",
-    "shipping-without-code",
-    "project-rules",
     "concepts",
-    "workflows",
+    "setup",
+    "---Using it---",
+    "shipping-without-code",
     "triggers",
+    "---Tuning it---",
+    "project-rules",
+    "workflows",
+    "mcp",
     "operating"
   ]
 }

@@ -10,6 +10,9 @@ your base branch.
 
 It runs on your own hardware. One binary, one Postgres database.
 
+If you want the one-sentence placement: CI/CD starts at the commit, this starts
+at the ticket. [The pipeline before the commit](/why) makes that case properly.
+
 ## The one design decision worth knowing
 
 The harness writes prompts and runs the pipeline. The agents decide how to do
@@ -28,8 +31,10 @@ review pass by a different model, and a record of what happened at each step.
 
 ## How a run works
 
-1. A trigger arrives, from the dashboard, the [MCP endpoint](/docs/triggers/mcp),
-   or a [Linear issue](/docs/triggers/linear-connect) delegated to the harness.
+1. A trigger arrives. Usually a
+   [Linear issue](/docs/setup/linear) delegated to the harness, since
+   that is the route anyone on the team can use. The dashboard and the
+   [MCP endpoint](/docs/mcp) also start runs.
 2. The run checks out a git worktree off the project's base branch. Your working
    copy is never touched.
 3. `mise` installs whatever toolchains the project declared, then caches them.
@@ -57,16 +62,20 @@ someone who cannot read a diff. See
 
 The harness coordinates. It brings no intelligence of its own.
 
-- **Agent CLIs and their credentials.** Claude Code, Codex, Pi and Cursor run as
-  subprocesses, and each needs its own account. See
-  [agents and models](/docs/operating/agents).
+- **Accounts for the agents.** Claude Code, Codex, Pi and Cursor run as
+  subprocesses, and each needs one. See
+  [subscriptions](/docs/setup/subscriptions).
 - **A workflow**, or one of the [nine that ship with it](/docs/workflows/bundled).
 - **Postgres and a volume that survives restarts.** See
-  [deploying](/docs/operating/deploy).
+  [deploying](/docs/setup/deploy).
 
 ## Where to go next
 
 <Cards>
+  <Card title="The pipeline before the commit" href="/why">
+    Where agentic SDLC sits next to CI/CD, and what changes when a pipeline runs
+    on a ticket.
+  </Card>
   <Card title="Quickstart" href="/docs/quickstart">
     Run the container, open the dashboard, take one task through a workflow.
   </Card>

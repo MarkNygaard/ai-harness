@@ -1,0 +1,92 @@
+---
+title: "Subscriptions"
+description: "Connecting the accounts your agents run on. Claude, ChatGPT, Kimi-for-Coding and Cursor, what each one backs, and why one connect can cover two providers."
+---
+
+**Settings → Subscriptions** holds the accounts your agents run on. Values are
+entered there, encrypted at rest in Postgres, and injected into the agent
+environment at run time. They never go into cluster secrets, and they are
+write-only: nothing is shown back to you after saving.
+
+Which agent uses which account is set separately, on **Settings → Agents**.
+GitHub and Linear are not here either; they live under
+**Settings → Integrations**.
+
+## What each account backs
+
+| Account | Connected by | Backs |
+| --- | --- | --- |
+| **Claude** | Pasting an OAuth token, or the full `~/.claude/.credentials.json` | Claude Code nodes |
+| **ChatGPT** | **Connect ChatGPT**, an OAuth flow | The `codex` CLI **and** `openai-codex/*` models on Pi |
+| **Kimi-for-Coding** | **Connect Kimi**, a device login | `kimi-code/*` models on Pi |
+| **Cursor** | Pasting an API key | `cursor-agent` nodes |
+
+Moonshot's per-token API is separate from the Kimi subscription. It is an API
+key rather than a login, and covers `moonshotai/*` models.
+
+## Connect ChatGPT covers two providers
+
+Worth knowing, because it saves a step people often go looking for.
+
+One **Connect ChatGPT** provisions both places the tokens are needed: it writes
+`~/.codex/auth.json` for the `codex` provider, and hands the same tokens to Pi
+so `pi` nodes can run `openai-codex/*` models. The server does the second half
+through `omp auth-broker import` during the same connect, and the request fails
+loudly if it does not take. A successful connect means both are set.
+
+<Callout>
+There is no separate login for Pi. If you find a runbook telling you to open a
+terminal on the container and run `omp /login`, it predates this and is no
+longer needed.
+</Callout>
+
+### Addressing OpenAI models on Pi
+
+On the `pi` provider the model id **must** be namespace-qualified:
+
+```yaml
+provider: pi
+model: openai-codex/gpt-5.6-sol
+```
+
+A bare name gets mis-prefixed to `kimi-code/...` and fails. To see which models
+your account actually exposes, run `omp` on the container and then `/model`.
+
+<Callout type="warn">
+A ChatGPT subscription exposes the general models, not the `-codex` variants.
+Those need API-key authentication on the dedicated `codex` provider.
+</Callout>
+
+## Subscriptions and API keys behave differently
+
+A subscription login is an OAuth token pair that refreshes itself. An API key is
+a static string. That difference produces two behaviours worth knowing about
+before you debug something.
+
+**Stored credentials are seeded, not overwritten.** Claude Code and the Codex
+CLI both rotate their refresh token in place on disk. If the harness wrote its
+stored copy back on every run, it would re-present a token that has already been
+spent, and authentication would start failing within a day. So those files are
+written only when missing. Pasting a fresh credential still takes effect
+immediately.
+
+**The Claude subscription token is refreshed per run.** Its access token lives
+about eight hours and the CLI does not reliably refresh it in headless
+subscription runs, so an idle gap would otherwise fail a run partway through.
+The harness refreshes it at the start of each real run instead.
+
+## Per project, with a global fallback
+
+Credentials can be set per project as well as globally. A project without its
+own falls back to the global one, which is usually what you want: one set of
+model accounts, and a per-project GitHub credential so pull requests are opened
+by the right identity.
+
+## When a run fails to authenticate
+
+Reconnect from **Settings → Subscriptions** first. It re-runs every half of the
+flow, which is cheaper than working out which one went stale.
+
+The usual cause is a replaced data volume. Subscription credentials are seeded
+onto it, so a fresh volume starts empty even though the credential is still in
+Postgres. A reconnect repairs it.
