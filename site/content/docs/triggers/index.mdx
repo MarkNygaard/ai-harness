@@ -1,48 +1,48 @@
 ---
 title: "Triggering runs"
-description: "The three ways a run starts. The dashboard, the MCP endpoint, and Linear delegation, and when each one fits."
+description: "How work reaches the harness. Linear delegation is the full experience; the dashboard and the MCP endpoint cover the cases it does not."
 ---
 
-A run can start three ways. What separates them is not what they can do, it is
-who is driving.
+Work can reach the harness three ways, but they are not equivalent, and it is
+worth saying which one to reach for.
+
+## Linear, if you can
+
+**Delegate the issue.** The harness registers as a Linear agent: assign an issue
+to it or @-mention it, and it picks the work up, walks the issue through a
+status map you configure, and reports progress inside the issue's own thread.
+
+This is the full experience, and not because of the integration. It is because
+of who it lets drive. An issue is something anyone on the team can write,
+including the people closest to the problem and furthest from the codebase. A
+board is a queue, a status map is a pipeline, and the thread is where the run
+explains itself. Nothing else here gives you that.
+
+A **column poller** also runs for stage-to-stage pipelines, gated per binding by
+`live`. Move a card into a bound column and its workflow starts, which is how
+review and merge stages chain together without anyone re-delegating.
+
+See [connecting Linear](/docs/triggers/linear-connect), and
+[Linear epics](/docs/triggers/linear-epics) for issues with sub-issues.
 
 ## The dashboard
 
 Pick a project, pick a workflow, describe the task, start it. The run page then
-shows the DAG executing node by node, with each node's output, duration and
-cost, and the artifacts it produced.
+shows the DAG executing node by node with each node output, duration and cost.
 
-This is the right choice when a human is choosing the work.
+Right for a one-off, and for watching a run closely while you are still working
+out whether a workflow behaves.
 
-## MCP over HTTP
+## MCP, if you are not using Linear
 
-The harness serves an **MCP-over-HTTP** endpoint, so an assistant you are
-already talking to can start a run without you leaving your editor. It can write
-workflows too, not only run them.
+An assistant connected to the [MCP endpoint](/docs/mcp) can start a run with
+`run_trigger`. Reach for it when your work does not live in Linear, or when you
+are running an A/B comparison rather than shipping something.
 
-```
-run_trigger → a run starts on the cluster
-run_status  → how it is going
-run_findings → what the review passes found
-```
-
-Reach for this when the task comes up mid-conversation. You are already
-describing the problem to an assistant, and the harness takes it from there. See
-[MCP endpoint](/docs/triggers/mcp) for the tool list and how to connect.
-
-## Linear delegation
-
-The harness registers as a Linear **agent**. Delegate an issue to it, or
-@-mention it, and it picks the work up, walks the issue through a configurable
-status map, and reports progress inside the issue's agent-session thread.
-
-A **column poller** also remains for stage-to-stage pipelines, gated per binding
-by `live`. Move a card into a bound column and its workflow starts.
-
-Reach for this when the work is already tracked. The issue is the trigger and
-the board is the progress view. See
-[connecting Linear](/docs/triggers/linear-connect), and
-[Linear epics](/docs/triggers/linear-epics) for issues with sub-issues.
+Worth being clear about the emphasis: **triggering is the smallest part of what
+the MCP endpoint is for.** Its real use is authoring workflows and reading what
+runs actually did, which is a developer's job rather than a requester's. See
+[the MCP endpoint](/docs/mcp).
 
 ## What a trigger supplies
 
@@ -50,6 +50,6 @@ Whichever route it takes, a trigger names the same things:
 
 - the **project** to run against,
 - the **workflow** to run,
-- free-form text exposed to the workflow as `$ARGUMENTS` / `$USER_MESSAGE`,
+- free-form text exposed to the workflow as `$ARGUMENTS` and `$USER_MESSAGE`,
 - optionally a **model override**, which is how an A/B comparison holds
   everything else still.

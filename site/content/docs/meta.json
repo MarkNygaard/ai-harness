@@ -3,11 +3,11 @@
   "pages": [
     "index",
     "quickstart",
-    "pipeline-not-loop",
     "shipping-without-code",
     "project-rules",
     "concepts",
     "workflows",
+    "mcp",
     "triggers",
     "operating"
   ]
