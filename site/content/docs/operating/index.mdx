@@ -1,35 +1,28 @@
 ---
-title: "Operating"
-description: "Running a harness: deploying it, configuring it, driving it from the CLI, and giving it agents to work with."
+title: "Reference"
+description: "Every setting the server reads, the CLI surface, and the agent CLIs the harness drives."
 ---
 
-Everything about running the harness itself, as opposed to authoring what it
-executes.
+The parts you come back to rather than read once. Getting a harness running for
+the first time is [setup](/docs/setup).
 
 <Cards>
-  <Card title="Deploying" href="/docs/operating/deploy">
-    The image, the environment it needs, what has to persist, and the
-    operational traps, starting with the one about `HARNESS_SECRET_KEY`.
-  </Card>
   <Card title="Configuration" href="/docs/operating/configuration">
     Where settings come from and in what order, every environment variable the
     server reads, and the ones a run injects into your workflow steps.
   </Card>
   <Card title="CLI reference" href="/docs/operating/cli">
-    `serve`, `run`, `status`, `exec`, `linear` and `admin`, with flags and defaults.
+    `serve`, `run`, `status`, `exec`, `linear` and `admin`, with flags and
+    defaults.
   </Card>
   <Card title="Agents and models" href="/docs/operating/agents">
-    The agent CLIs the harness drives, what each needs to authenticate, and why
-    the bundled workflows deliberately mix models.
-  </Card>
-  <Card title="Subscriptions" href="/docs/operating/subscriptions">
-    Connecting the accounts your agents run on, and why one connect can cover
-    two providers.
+    The agent CLIs the harness drives, how a node picks one, and why the bundled
+    workflows deliberately mix models.
   </Card>
 </Cards>
 
 ## The short version
 
 The control plane is one binary plus Postgres. Give it a persistent volume, a
-stable `HARNESS_SECRET_KEY`, and credentials for whichever agents your workflows
+stable `HARNESS_SECRET_KEY`, and accounts for whichever agents your workflows
 name. Everything else has a working default.

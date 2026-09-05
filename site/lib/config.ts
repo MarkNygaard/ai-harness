@@ -48,7 +48,7 @@ export const siteConfig = {
     { href: "/why", label: "Why" },
     { href: "/docs", label: "Docs" },
     { href: "/docs/workflows/authoring", label: "Workflows" },
-    { href: "/docs/operating/deploy", label: "Deploy" },
+    { href: "/docs/setup/deploy", label: "Deploy" },
   ],
 } as const
 

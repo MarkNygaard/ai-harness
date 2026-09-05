@@ -47,7 +47,7 @@ PersistentVolumeClaim is the whole shape:
   migrations.
 - **PVC mounted at `/home/harness`**, with `HARNESS_PROJECT_ROOT` pointing
   inside it. It holds checkouts and caches. See
-  [sizing the volume](/docs/operating/deploy#sizing-the-volume).
+  [sizing the volume](/docs/setup/deploy#sizing-the-volume).
 - **Secret** carrying `HARNESS_DATABASE_URL` and `HARNESS_SECRET_KEY`.
 - **Postgres.** An operator-managed cluster such as CloudNativePG is the usual
   choice.
@@ -79,12 +79,12 @@ Runs check out an isolated worktree from that branch.
 
 **Connect the accounts** your agents run on, under
 **Settings → Subscriptions**: Claude, ChatGPT, Kimi or Cursor, whichever your
-workflow uses. See [subscriptions](/docs/operating/subscriptions).
+workflow uses. See [subscriptions](/docs/setup/subscriptions).
 
 **Connect GitHub** under **Settings → Integrations**, so runs can push and open
 pull requests. Connect Linear there too if you want issues to trigger runs,
 which is the path most teams should take. See
-[connecting Linear](/docs/integrations/linear).
+[connecting Linear](/docs/setup/linear).
 
 Everything is encrypted at rest and can be set per project with a global
 fallback.
@@ -143,5 +143,5 @@ spawned subprocesses and cause a SIGTRAP. Use a standalone terminal.
 ## Next
 
 - [Concepts](/docs/concepts), the words the rest of the docs assumes you know.
-- [Deploying](/docs/operating/deploy), for volume sizing, caches and sign-in.
+- [Deploying](/docs/setup/deploy), for volume sizing, caches and sign-in.
 - [Bundled workflows](/docs/workflows/bundled), the nine that ship with it.

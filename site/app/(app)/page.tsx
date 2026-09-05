@@ -26,22 +26,22 @@ const features = [
   {
     title: "Three ways to trigger",
     body: "The dashboard, an MCP endpoint so an assistant you are already talking to can start a run, or Linear. Delegate an issue and it moves through your columns on its own.",
-    href: "/docs/integrations/linear",
+    href: "/docs/setup/linear",
   },
   {
     title: "Isolated by default",
     body: "Every run works in its own git worktree off the base branch, thrown away afterwards. Credentials are encrypted at rest, and a run cannot read the database URL out of its own environment.",
-    href: "/docs/operating/deploy",
+    href: "/docs/setup/deploy",
   },
   {
     title: "Toolchains on demand",
     body: "Declare what a project needs and mise installs it on the first run, then caches it. Adding a language does not mean rebuilding the image.",
-    href: "/docs/operating/deploy",
+    href: "/docs/setup/deploy",
   },
   {
     title: "One binary, one Postgres",
     body: `One ${siteConfig.binary} binary with the dashboard inside it, and a Postgres database. Runs are child processes of that binary, so the same image works under Kubernetes or plain Docker.`,
-    href: "/docs/operating/deploy",
+    href: "/docs/setup/deploy",
   },
 ]
 
@@ -235,7 +235,7 @@ export default function HomePage() {
         </pre>
         <p className="mt-4 text-sm text-muted-foreground">
           <Link
-            href="/docs/operating/deploy"
+            href="/docs/setup/deploy"
             className="underline underline-offset-4 hover:text-foreground"
           >
             Deploying

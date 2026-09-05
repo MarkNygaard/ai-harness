@@ -1,11 +1,9 @@
 {
-  "title": "Operating",
+  "title": "Reference",
   "pages": [
     "index",
-    "deploy",
     "configuration",
     "cli",
-    "agents",
-    "subscriptions"
+    "agents"
   ]
 }

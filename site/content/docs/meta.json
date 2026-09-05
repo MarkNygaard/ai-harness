@@ -3,13 +3,14 @@
   "pages": [
     "index",
     "quickstart",
-    "shipping-without-code",
-    "project-rules",
     "concepts",
-    "workflows",
+    "setup",
+    "shipping-without-code",
     "triggers",
+    "linear-epics",
+    "project-rules",
+    "workflows",
     "mcp",
-    "integrations",
     "operating"
   ]
 }
