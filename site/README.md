@@ -36,6 +36,18 @@ bun install
 bun run dev      # http://localhost:4000
 ```
 
+## Deploying
+
+**Set the project's Root Directory to `site`.** Without it the platform builds
+from the repository root, finds no `package.json`, falls back to a generic
+static preset and fails looking for a `public/` directory. With it, Next.js is
+detected and `output: "export"` is handled automatically: the output is `out/`
+and nothing else needs configuring.
+
+`vercel.json` here carries only an ignore command, so a commit that touches
+neither `site/` nor the shared theme does not trigger a rebuild. It mirrors the
+path filter on the `site` CI job.
+
 ## Before it goes live
 
 Set **`NEXT_PUBLIC_SITE_URL`** to the real origin. It is the base for canonical
