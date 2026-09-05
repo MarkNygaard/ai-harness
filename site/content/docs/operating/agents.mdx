@@ -25,16 +25,37 @@ node behaves as though its `provider:` were ignored, because it was.
 
 ## Credentials
 
-Credentials are managed on the dashboard's **Credentials** page, encrypted at
-rest with `HARNESS_SECRET_KEY`, and can be set per project with a global
-fallback.
+Credentials live on the dashboard's **Credentials** page, encrypted at rest with
+`HARNESS_SECRET_KEY`, and can be set per project with a global fallback.
 
-- **Claude.** OAuth, or an API key.
-- **Cursor.** An API key, which becomes `CURSOR_API_KEY` in the subprocess.
-- **OpenAI and Codex.** An API key, or a ChatGPT Plus or Pro subscription
-  through Pi. See
-  [ChatGPT subscription](/docs/operating/chatgpt-subscription).
-- **Kimi.** The Kimi-for-Coding subscription, through Pi.
+They are not all connected the same way, and the difference matters when you are
+setting a harness up:
+
+| Provider | How you connect it | Where it lands |
+| --- | --- | --- |
+| **Codex** | **Connect Codex** in the dashboard | `~/.codex/auth.json` |
+| **Kimi** | **Connect Kimi** in the dashboard, a device login | Pi's `~/.omp/agent/agent.db` |
+| **Claude** | Paste an OAuth token or a credentials JSON | `CLAUDE_CODE_OAUTH_TOKEN`, or `~/.claude/.credentials.json` |
+| **Moonshot** | Paste an API key | `MOONSHOT_API_KEY` |
+| **Cursor** | Paste an API key, or run `cursor-agent login` on the container | `CURSOR_API_KEY`, or `~/.cursor/cli-config.json` |
+| **GitHub** | Paste a token | `GH_TOKEN` and `GITHUB_TOKEN` |
+
+All of it is done from the dashboard. Nothing here needs a terminal on the
+container.
+
+**Connect Codex** is worth understanding, because one connect covers two
+providers. It writes `~/.codex/auth.json` for the `codex` provider *and*
+provisions the same ChatGPT tokens into Pi, so `pi` nodes can run
+`openai-codex/*` models without a second login. See
+[ChatGPT subscription](/docs/operating/chatgpt-subscription).
+
+<Callout>
+Two of these seed a file only when it is missing rather than overwriting it each
+run. Claude Code and the Codex CLI both rotate their refresh token in place, so
+writing the stored copy back on every run re-presents a token that has already
+been used, and authentication fails within a day. Pasting a fresh credential
+still takes effect immediately.
+</Callout>
 
 Control-plane secrets are scrubbed from the processes a run spawns, so an agent
 cannot read the database URL or the encryption key out of its own environment.

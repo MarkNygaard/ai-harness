@@ -1,37 +1,65 @@
 ---
 title: "ChatGPT subscription"
-description: "Run OpenAI models on a ChatGPT Plus or Pro subscription through Pi, without per-token API-key billing."
+description: "Run OpenAI models on a ChatGPT Plus or Pro subscription instead of per-token API billing. One connect in the dashboard covers both the Codex CLI and Pi."
 ---
 
-This runbook covers connecting the harness to a **ChatGPT Plus or Pro subscription** so that workflow nodes can run OpenAI models (e.g. `openai-codex/gpt-5.5`) through Pi without per-token API-key billing.
+Workflow nodes can run OpenAI models on a **ChatGPT Plus or Pro subscription**
+rather than an API key billed per token.
 
-Pi's CLI binary is named `omp`, so that is the command you type below.
+## Connect it
 
-## One-time setup
+**Credentials → Connect Codex** in the dashboard. That is the whole setup.
 
-1. Open a **standalone terminal** on the cluster container (not inside an agent session — `CLAUDECODE` env vars propagate and can cause `SIGTRAP`).
-2. Run `omp /login`.
-3. Select **"ChatGPT Plus/Pro (Codex)"**.
-4. Approve the login in your browser.
-5. Verify the models available to your account: run `omp`, then `/model`.
+One connect provisions both places the tokens are needed:
 
-The credential is stored in Pi's `~/.omp/agent/agent.db` SQLite store and auto-refreshes. It persists on the cluster PV, so the one-time login survives restarts.
+- `~/.codex/auth.json`, which the **`codex` provider** uses.
+- Pi's own credential store, which the **`pi` provider** uses to run
+  `openai-codex/*` models.
+
+The second one is easy to miss and is the reason there is nothing else to do.
+The server hands the ChatGPT tokens to Pi through `omp auth-broker import`
+during the same connect, and the request fails loudly if that half does not
+take, so a successful connect means both are set.
+
+<Callout>
+There is no separate login for Pi. If you find a runbook telling you to open a
+terminal on the container and run `omp /login`, it predates this and is no
+longer needed.
+</Callout>
 
 ## Model addressing
 
-When authoring a workflow node that uses this credential, set:
+On the `pi` provider, the model id **must** be namespace-qualified:
 
 ```yaml
 provider: pi
-model: openai-codex/gpt-5.5
+model: openai-codex/gpt-5.6-sol
 ```
 
-The model id **must** be namespace-qualified (`openai-codex/...`). A bare name like `gpt-5.5` would be mis-prefixed to `kimi-code/gpt-5.5` by the `pi` provider.
+A bare name would be mis-prefixed to `kimi-code/...` by the `pi` provider and
+fail. On the `codex` provider, address the model the way the Codex CLI expects.
 
-**ChatGPT-account scope**: the subscription exposes the general `gpt-5.x` models (`gpt-5.5`, `gpt-5.4`) but **not** the `-codex` variants. Those require API-key / non-ChatGPT auth and should still use the dedicated `codex` provider.
+To see exactly which models your account exposes, run `omp` on the container and
+then `/model`.
+
+<Callout type="warn">
+A ChatGPT subscription exposes the general models, not the `-codex` variants.
+Those need API-key authentication and the dedicated `codex` provider.
+</Callout>
 
 ## How it works
 
-- No `OPENAI_API_KEY` is set; billing rides the subscription.
-- Pi reads the OAuth row from `~/.omp/agent/agent.db` and self-refreshes.
-- Token usage (including `cacheRead`) is reported through Pi's native JSON event stream, so the run overview shows realistic input/output/cache splits.
+The credential is an OAuth token pair, not an API key. Both stores refresh
+themselves, and both live on the data volume, so the connect survives restarts.
+
+Token usage, including cache reads, comes back through Pi's own JSON event
+stream, so the run overview shows real input, output and cache splits rather
+than estimates.
+
+## If a run fails to authenticate
+
+Reconnect from the Credentials page first. That re-runs both halves.
+
+The two stores can drift apart if the data volume was replaced, since the
+credential is seeded onto it. A reconnect fixes that, and is cheaper than
+working out which half is stale.
