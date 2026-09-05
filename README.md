@@ -13,14 +13,16 @@ runs anywhere a container does (Kubernetes or plain Docker).
   implement → validate → PR → review loops) in YAML or the visual editor. Nodes
   run different agents/models, with `when:` gating, `$node.output` wiring, and
   loop/until constructs.
-- **Bundled workflows.** Several ship in the box, ready to run or fork into a
+- **Bundled workflows.** Nine ship in the box, ready to run or fork into a
   project's `.harness/workflows/`: `idea-to-pr` (a task → a reviewed PR),
   `revise-pr` (address review feedback on an open PR), `merge-pr` (resolve
   conflicts + merge a ready PR), `architect` (behavior-preserving codebase
-  health sweep), `geo-audit` (audit a site for AI-search readiness),
-  `judge-ab` (score an A/B model comparison), and `bc-idea-to-pr` (the
-  idea-to-pr flow for Business Central / AL repos — `al compile` build gate).
-- **Multiple agents in one pipeline.** Claude Code, Codex, Pi/Kimi (`omp`), and
+  health sweep), `review-area` (read-only cross-repo review of one area),
+  `geo-audit` (audit a site for AI-search readiness), `judge-ab` (score an A/B
+  model comparison), `linear-epic-supervise` (grade a merged epic piece and
+  advance the next), and `bc-idea-to-pr` (the idea-to-pr flow for Business
+  Central / AL repos — `al compile` build gate).
+- **Multiple agents in one pipeline.** Claude Code, Codex, Pi, and
   Cursor (`cursor-agent`) nodes, each picking its own model.
 - **Three ways to trigger a run:**
   - the **web UI**;
@@ -33,10 +35,10 @@ runs anywhere a container does (Kubernetes or plain Docker).
     and reports progress inside the issue's agent-session thread. A **column
     poller** remains for stage-to-stage pipelines, gated per binding by `live`.
 - **Linear as an app, not as a person.** The workspace is connected once from the
-  Credentials page through an OAuth install with `actor=app`, so the comments,
+  Integrations page through an OAuth install with `actor=app`, so the comments,
   status moves and run links the harness writes are authored by the application
   instead of by whoever's personal API key was pasted. See
-  [Connecting Linear](site/content/docs/triggers/linear-connect.mdx).
+  [Connecting Linear](site/content/docs/setup/linear.mdx).
 - **Projects.** Register a git repo; runs operate on an isolated worktree off
   its base branch. Per-project **GitHub credentials** (with global fallback) and
   Linear trigger bindings are managed from the Projects page.
@@ -56,7 +58,8 @@ under Kubernetes *or* plain Docker.
   `docker-compose.yml`) and runs the server. See [CLAUDE.md](CLAUDE.md) for the
   build/verify commands.
 - **Container:** run the published image
-  (`ghcr.io/marknygaard/ai-harness`) with `HARNESS_DATABASE_URL`,
+  (`ghcr.io/marknygaard/ai-harness`, pinned to a release such as `1.2.3` or a
+  `main-<sha>` rather than `latest`) with `HARNESS_DATABASE_URL`,
   `HARNESS_SECRET_KEY` (the AES key for stored credentials — keep it stable), an
   optional `HARNESS_API_TOKEN`, and a persistent volume for `HARNESS_DATA_DIR` /
   `HARNESS_PROJECT_ROOT` (project checkouts). Deploy via Kubernetes or
@@ -142,22 +145,23 @@ token instead; all three are accepted.
   build/verify commands, architecture glossary, server-operation & worktree
   rules, and the PR workflow. **Start here.** (`AGENTS.md` just points here.)
 - **User documentation** lives in [`site/content/docs/`](site/content/docs/) and
-  is published by the site in [`site/`](site/), in four sections:
+  is published by the site in [`site/`](site/):
   - **Getting started** — [introduction](site/content/docs/index.mdx),
     [quickstart](site/content/docs/quickstart.mdx),
     [concepts](site/content/docs/concepts.mdx).
-  - **[Workflows](site/content/docs/workflows/)** —
-    [authoring](site/content/docs/workflows/authoring.mdx) (the canonical YAML
-    reference) and [the bundled ones](site/content/docs/workflows/bundled.mdx).
-  - **[Triggering runs](site/content/docs/triggers/)** — the three routes in,
-    the [MCP tool reference](site/content/docs/triggers/mcp.mdx), and Linear
-    [connection](site/content/docs/triggers/linear-connect.mdx) and
-    [epics](site/content/docs/triggers/linear-epics.mdx).
-  - **[Operating](site/content/docs/operating/)** —
-    [deploying](site/content/docs/operating/deploy.mdx),
-    [configuration](site/content/docs/operating/configuration.mdx),
-    [CLI](site/content/docs/operating/cli.mdx) and
-    [agents/models](site/content/docs/operating/agents.mdx).
+  - **[Setup](site/content/docs/setup/)** — the once-only path, in order:
+    deploying, projects, subscriptions, GitHub, Linear, trigger bindings and
+    epics.
+  - **Using it** — [shipping without writing code](site/content/docs/shipping-without-code.mdx)
+    (the loop for people who do not write code) and
+    [triggering runs](site/content/docs/triggers.mdx).
+  - **Tuning it** — [project rules](site/content/docs/project-rules.mdx),
+    [workflows](site/content/docs/workflows/) and the
+    [MCP endpoint](site/content/docs/mcp.mdx).
+  - **[Reference](site/content/docs/operating/)** — configuration, CLI, agents
+    and models.
+  - [The pipeline before the commit](site/content/pages/why.mdx) is the
+    standalone page at `/why`: where this sits next to CI/CD.
 - [docs/reference/](docs/reference/) and [docs/design/](docs/design/) stay
   internal: inherited specs and in-flight design notes, not published.
 

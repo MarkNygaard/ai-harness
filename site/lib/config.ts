@@ -43,11 +43,16 @@ export const siteConfig = {
     github: "https://github.com/MarkNygaard/ai-harness",
   },
 
+  /**
+   * Three items, each going somewhere genuinely different: the pitch, the
+   * orientation, the manual. Individual doc pages do not belong here. The
+   * sidebar covers 22 of them across five groups, and promoting two of those
+   * to the header claims they matter more than the rest.
+   */
   navItems: [
     { href: "/", label: "Home" },
+    { href: "/why", label: "Where it fits" },
     { href: "/docs", label: "Docs" },
-    { href: "/docs/workflows/authoring", label: "Workflows" },
-    { href: "/docs/operating/deploy", label: "Deploy" },
   ],
 } as const
 

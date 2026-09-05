@@ -26,22 +26,22 @@ const features = [
   {
     title: "Three ways to trigger",
     body: "The dashboard, an MCP endpoint so an assistant you are already talking to can start a run, or Linear. Delegate an issue and it moves through your columns on its own.",
-    href: "/docs/triggers/linear-connect",
+    href: "/docs/setup/linear",
   },
   {
     title: "Isolated by default",
     body: "Every run works in its own git worktree off the base branch, thrown away afterwards. Credentials are encrypted at rest, and a run cannot read the database URL out of its own environment.",
-    href: "/docs/operating/deploy",
+    href: "/docs/setup/deploy",
   },
   {
     title: "Toolchains on demand",
     body: "Declare what a project needs and mise installs it on the first run, then caches it. Adding a language does not mean rebuilding the image.",
-    href: "/docs/operating/deploy",
+    href: "/docs/setup/deploy",
   },
   {
     title: "One binary, one Postgres",
     body: `One ${siteConfig.binary} binary with the dashboard inside it, and a Postgres database. Runs are child processes of that binary, so the same image works under Kubernetes or plain Docker.`,
-    href: "/docs/operating/deploy",
+    href: "/docs/setup/deploy",
   },
 ]
 
@@ -63,7 +63,7 @@ const loop = [
   },
   {
     title: "Review the code",
-    body: "Nothing merges without a human approving it. By now the obvious problems are gone, which is not the same as the code being right.",
+    body: "By now the obvious problems are gone, which is not the same as the code being right. You can automate this step away. We think you should not.",
     who: "A developer",
   },
   {
@@ -189,6 +189,18 @@ export default function HomePage() {
 
         <p className="mt-6 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           <Link
+            href="/why"
+            className="underline underline-offset-4 hover:text-foreground"
+          >
+            The pipeline before the commit
+          </Link>{" "}
+          places this next to CI/CD: the code stage was the last one left
+          manual, and this is what a pipeline looks like when it runs on a
+          ticket.
+        </p>
+
+        <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+          <Link
             href="/docs/shipping-without-code"
             className="underline underline-offset-4 hover:text-foreground"
           >
@@ -223,7 +235,7 @@ export default function HomePage() {
         </pre>
         <p className="mt-4 text-sm text-muted-foreground">
           <Link
-            href="/docs/operating/deploy"
+            href="/docs/setup/deploy"
             className="underline underline-offset-4 hover:text-foreground"
           >
             Deploying

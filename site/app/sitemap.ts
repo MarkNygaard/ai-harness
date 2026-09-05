@@ -19,6 +19,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "weekly",
       priority: 1,
     },
+    {
+      // Standalone, so it is not in the docs tree the loop above walks.
+      url: new URL("/why", siteConfig.url).toString(),
+      changeFrequency: "monthly",
+      priority: 0.9,
+    },
     ...docs,
   ]
 }

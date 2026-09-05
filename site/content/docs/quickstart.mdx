@@ -47,7 +47,7 @@ PersistentVolumeClaim is the whole shape:
   migrations.
 - **PVC mounted at `/home/harness`**, with `HARNESS_PROJECT_ROOT` pointing
   inside it. It holds checkouts and caches. See
-  [sizing the volume](/docs/operating/deploy#sizing-the-volume).
+  [sizing the volume](/docs/setup/deploy#sizing-the-volume).
 - **Secret** carrying `HARNESS_DATABASE_URL` and `HARNESS_SECRET_KEY`.
 - **Postgres.** An operator-managed cluster such as CloudNativePG is the usual
   choice.
@@ -77,10 +77,17 @@ Go to the URL you gave it. Everything from here is in the UI.
 **Add a project** on the Projects page: a name, a git remote, a base branch.
 Runs check out an isolated worktree from that branch.
 
-**Add credentials** on the Credentials page. GitHub for pushing and opening
-PRs, plus whichever agent providers your workflow uses. They are encrypted at
-rest and can be set per project with a global fallback. See
-[Agents and models](/docs/operating/agents).
+**Connect the accounts** your agents run on, under
+**Settings → Subscriptions**: Claude, ChatGPT, Kimi or Cursor, whichever your
+workflow uses. See [subscriptions](/docs/setup/subscriptions).
+
+**Connect GitHub** under **Settings → Integrations**, so runs can push and open
+pull requests. Connect Linear there too if you want issues to trigger runs,
+which is the path most teams should take. See
+[connecting Linear](/docs/setup/linear).
+
+Everything is encrypted at rest and can be set per project with a global
+fallback.
 
 ## 3. Trigger a run
 
@@ -91,18 +98,20 @@ duration and cost, and the artifacts it produced.
 
 That is the whole loop. A finished run leaves a pull request.
 
-## 4. Optional: connect your editor
+## 4. Connect your editor
 
-**Settings → Editor connection** builds the MCP configuration for you, so an
-assistant you are already talking to can trigger runs without you opening the
-dashboard at all:
+**Settings → Editor connection** builds the MCP configuration for you.
+
+Worth doing early, and not for triggering. It is how you read what a run
+actually did and turn that into project rules, which is what makes later runs
+better rather than merely faster:
 
 ```bash
 claude mcp add --transport http harness https://harness.example.com/mcp \
   --header "Authorization: Bearer <your MCP key>"
 ```
 
-See [MCP endpoint](/docs/triggers/mcp).
+See [MCP endpoint](/docs/mcp).
 
 ## Running it from source
 
@@ -134,5 +143,5 @@ spawned subprocesses and cause a SIGTRAP. Use a standalone terminal.
 ## Next
 
 - [Concepts](/docs/concepts), the words the rest of the docs assumes you know.
-- [Deploying](/docs/operating/deploy), for volume sizing, caches and sign-in.
+- [Deploying](/docs/setup/deploy), for volume sizing, caches and sign-in.
 - [Bundled workflows](/docs/workflows/bundled), the nine that ship with it.

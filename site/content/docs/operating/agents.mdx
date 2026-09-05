@@ -23,21 +23,21 @@ Anything the dispatcher does not recognise falls through to the default agent,
 so an unknown provider name falls back instead of failing. Worth knowing when a
 node behaves as though its `provider:` were ignored, because it was.
 
-## Credentials
+## Accounts
 
-Credentials are managed on the dashboard's **Credentials** page, encrypted at
-rest with `HARNESS_SECRET_KEY`, and can be set per project with a global
-fallback.
+Agents run on accounts you connect in the dashboard, not on keys in your
+deployment manifest.
 
-- **Claude.** OAuth, or an API key.
-- **Cursor.** An API key, which becomes `CURSOR_API_KEY` in the subprocess.
-- **OpenAI and Codex.** An API key, or a ChatGPT Plus or Pro subscription
-  through Pi. See
-  [ChatGPT subscription](/docs/operating/chatgpt-subscription).
-- **Kimi.** The Kimi-for-Coding subscription, through Pi.
+- **Settings → Subscriptions** holds the model accounts: Claude, ChatGPT,
+  Kimi-for-Coding and Cursor. See [subscriptions](/docs/setup/subscriptions).
+- **Settings → Integrations** holds GitHub and Linear.
+- **Settings → Agents** decides which agent uses which account, and tracks the
+  installed CLI versions.
 
-Control-plane secrets are scrubbed from the processes a run spawns, so an agent
-cannot read the database URL or the encryption key out of its own environment.
+Everything is encrypted at rest with `HARNESS_SECRET_KEY` and can be set per
+project with a global fallback. Control-plane secrets are scrubbed from the
+processes a run spawns, so an agent cannot read the database URL or the
+encryption key out of its own environment.
 
 ## Choosing a model per node
 
@@ -62,10 +62,18 @@ implement with a cheap one.
 agent CLI. Spend it where judgement matters, on planning and architecture, and
 not on mechanical steps.
 
+**Prefer a family alias over a dated model id.** `model: opus` keeps working
+when the vendor ships a new version. A pinned id like `claude-opus-4-1-20250805`
+freezes the workflow to a model that will eventually be retired, and you will
+find out when a run fails rather than when you read the release notes. Pin an
+exact version only when you are comparing two of them and need the comparison
+held still.
+
 ## Why the bundled workflows mix models
 
 In [`idea-to-pr`](/docs/workflows/bundled#idea-to-pr), Claude plans, Kimi
-implements, and then **gpt-5.x and Claude Sonnet each review and fix in turn**.
+implements, and then **an OpenAI model and a Claude model each review and fix in
+turn**.
 That is deliberate: a model reviewing its own output tends to agree with it. A
 reviewer that did not write the code catches a different class of mistake, which
 is why the bundled pipelines pay for a second and third pass rather than looping
@@ -80,7 +88,7 @@ rather than reporting it.
 To find out whether a model change is actually an improvement, run the same task
 twice and have a third model judge the diffs:
 
-- `run_trigger_pair` over [MCP](/docs/triggers/mcp) starts both arms with
+- `run_trigger_pair` over [MCP](/docs/mcp) starts both arms with
   everything but the model held constant,
 - [`judge-ab`](/docs/workflows/bundled#judge-ab) scores them from the actual
   code change rather than from either model's account of its own work.
