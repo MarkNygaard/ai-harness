@@ -7,6 +7,7 @@ import { docsInOrder } from "@/lib/docs-order"
 export const dynamic = "force-static"
 
 const CONTENT_DIR = path.join(process.cwd(), "content/docs")
+const PAGES_DIR = path.join(process.cwd(), "content/pages")
 
 /** Strip YAML frontmatter — the title and description are re-emitted as prose. */
 function stripFrontmatter(raw: string): string {
@@ -48,13 +49,23 @@ export async function GET() {
     })
   )
 
+  // The standalone /why page sits outside the docs tree, so it is read
+  // directly and placed first. It is the page a model should see before any
+  // of the reference material.
+  const whyRaw = await fs
+    .readFile(path.join(PAGES_DIR, "why.mdx"), "utf8")
+    .catch(() => null)
+  const why = whyRaw
+    ? `# Why a pipeline, not a loop\nSource: ${new URL("/why", siteConfig.url).toString()}\n\n${stripFrontmatter(whyRaw)}`
+    : null
+
   const text = `# ${siteConfig.name} — full documentation
 
 > ${siteConfig.description}
 
 Generated from ${siteConfig.url}. Index: ${new URL("/llms.txt", siteConfig.url).toString()}
 
-${sections.filter(Boolean).join("\n\n---\n\n")}
+${[why, ...sections].filter(Boolean).join("\n\n---\n\n")}
 `
 
   return new Response(text, {

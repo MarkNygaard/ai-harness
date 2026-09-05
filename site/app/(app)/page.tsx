@@ -190,7 +190,7 @@ export default function HomePage() {
         <p className="mt-6 max-w-2xl text-sm leading-relaxed text-muted-foreground">
           Already running an agent in a loop?{" "}
           <Link
-            href="/docs/pipeline-not-loop"
+            href="/why"
             className="underline underline-offset-4 hover:text-foreground"
           >
             Why a pipeline, not a loop

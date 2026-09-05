@@ -24,6 +24,8 @@ export function GET() {
     })
     .join("\n\n")
 
+  const why = new URL("/why", siteConfig.url).toString()
+
   const text = `# ${siteConfig.name}
 
 > ${siteConfig.description}
@@ -33,6 +35,10 @@ drives decide how to execute. A task becomes a run of a user-authored workflow
 DAG, executed in an isolated git worktree, and ends in a pull request.
 
 The full documentation as a single file is at ${new URL("/llms-full.txt", siteConfig.url).toString()}.
+
+## Start here
+
+- [Why a pipeline, not a loop](${why}): where this sits next to CI/CD, and an honest answer to why you should not just run a coding agent in a loop.
 
 ${body}
 
