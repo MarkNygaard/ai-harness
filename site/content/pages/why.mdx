@@ -82,8 +82,8 @@ than how fast one person builds it. See
 approve it. The reasoning that produced the code is the reasoning being asked to
 judge it. The fix is not a better prompt, it is a different model:
 [`idea-to-pr`](/docs/workflows/bundled#idea-to-pr) has Claude plan, Kimi
-implement, then gpt-5.x and Claude Sonnet each review and fix. None of the
-reviewers wrote the code.
+implement, then an OpenAI model and a Claude model each review and fix. None of
+the reviewers wrote the code.
 
 **What is enforced.** A loop stops when the model decides it is finished. A
 build gate written as a node cannot be skipped by an agent that believes it is

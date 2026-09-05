@@ -8,6 +8,12 @@ the project's `.harness/workflows/` under the same name. Project workflows
 resolve before the bundled defaults, so the fork wins without any registration
 step.
 
+<Callout>
+This page names vendors rather than model versions, because versions move and
+documentation does not. Each workflow pins its actual models in its YAML, which
+is the answer if you need to know exactly what runs.
+</Callout>
+
 ## Task to pull request
 
 ### `idea-to-pr`
@@ -15,10 +21,10 @@ step.
 The default pipeline: a task (title and description, or a path to a PRD) becomes
 a reviewed pull request.
 
-Claude plans, with a read-only Sonnet `explore` feeding a lean Opus `create-plan`.
-Kimi (via Pi) implements and self-reviews up to five times. Then two more review
-passes by *different* models: gpt-5.x via Pi, then Claude Sonnet, each fixing
-what it finds. A final build gate, and a workflow-summary comment carrying the
+Claude plans, with a cheap read-only `explore` pass feeding a leaner
+`create-plan` pass on a stronger model. Kimi implements and self-reviews up to
+five times. Then two more review passes by *different* models: an OpenAI model
+via Pi, then Claude, each fixing what it finds. A final build gate, and a workflow-summary comment carrying the
 diff and a commit breakdown across the three review-fix passes.
 
 19 nodes. Mixing the models is the point. The reviewer never wrote the code.
