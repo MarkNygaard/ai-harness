@@ -1,4 +1,13 @@
 {
   "title": "Setup",
-  "pages": ["index", "deploy", "projects", "subscriptions", "github", "linear", "bindings"]
+  "pages": [
+    "index",
+    "deploy",
+    "projects",
+    "subscriptions",
+    "github",
+    "linear",
+    "bindings",
+    "linear-epics"
+  ]
 }
