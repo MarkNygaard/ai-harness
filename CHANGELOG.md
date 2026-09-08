@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **GPT-6 Astra and the GPT-5.6 tiers are selectable on `codex` and `pi`.**
+  `gpt-6-astra` plus `gpt-5.6-sol`/`-terra`/`-luna` (and their
+  `openai-codex/`-qualified forms for Pi, which rejects a bare OpenAI id). Sol
+  was already the Codex default and pinned on every bundled workflow's gpt
+  review node, but no 5.6 id was actually offerable in the editor. Astra needs
+  Codex CLI >= 0.153.1 and omp >= 18.1.12 on the container; both are installed
+  unpinned, so a rebuild or an agent-CLI update picks them up. The bundled
+  workflows still pin Sol — nothing changes model unless you change it.
+- **Per-tier pricing for those models** in the notional cost table. Astra is
+  $10/$50 per MTok, Terra $2/$12, Luna $0.20/$1.20, against the gpt-5.x line's
+  $5/$30. The tiers are 25x apart end to end, so a single family rate would
+  have made an A/B run between them meaningless. Astra also joins the `gpt`
+  billing lane, which its id previously missed.
+
 ### Changed
 
 - **Default Claude models moved to the 5 series.** `claude-sonnet-4-6` → `claude-sonnet-5`

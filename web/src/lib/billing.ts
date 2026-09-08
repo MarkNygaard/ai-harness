@@ -91,7 +91,7 @@ export const KNOWN_LANES: LaneMeta[] = [
   {
     lane: "gpt",
     label: "ChatGPT / Codex",
-    hint: "gpt-5.5 via Codex. Estimated value is auto-measured from the weekly usage gauge.",
+    hint: "OpenAI models via Codex or Pi. Estimated value is auto-measured from the weekly usage gauge.",
     defaultMode: "subscription",
     calibrated: true,
   },
