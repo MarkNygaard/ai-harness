@@ -7,7 +7,7 @@ description: |
   implements + simplifies, the cross-platform AL compiler is the build gate
   (`al compile` — symbols downloaded read-only from the BC dev endpoint), then
   a Kimi self-review loop, a GPT-6 Astra model-diverse review, and a Claude
-  Sonnet review — each fixing issues — and a final compile-until-clean gate.
+  Opus review — each fixing issues — and a final compile-until-clean gate.
 
   It NEVER publishes to a server: only read-only symbol download + local
   compilation, so no database is touched and it can't conflict with developers'
@@ -540,6 +540,7 @@ nodes:
     # namespace-qualified. Astra needs omp >= 18.1.12 and is still rolling out
     # per plan — without it on this account, use `openai-codex/gpt-5.6-sol`.
     model: openai-codex/gpt-6-astra
+    effort: high
     context: fresh
     prompt: |
       Model-diverse review of an AL PR already implemented + self-reviewed. Find
@@ -564,11 +565,14 @@ nodes:
       comments, use `gh pr review`, `--no-verify`, or publish. If you find nothing,
       push nothing. When done: <promise>GPT-REVIEW-DONE</promise>
 
-  - id: sonnet-review-fix
+  - id: anthropic-review-fix
     category: validation
     depends_on: [gpt-review-fix]
     provider: claude
-    model: sonnet
+    # The model-diverse counterweight to the OpenAI pass above — a frontier
+    # reader, not a cheap one, or the step stops earning its place.
+    model: opus
+    effort: high
     context: fresh
     prompt: |
       Third, model-diverse review-and-fix pass on the AL PR (planned,
@@ -592,11 +596,11 @@ nodes:
       Commit a conventional-commit and push. If a fix is a judgment call or you're
       unsure it's correct, FLAG it for the human instead of editing. Do NOT post
       PR comments, use `gh pr review`, `--no-verify`, or publish. If you find
-      nothing, push nothing. When done: <promise>SONNET-REVIEW-DONE</promise>
+      nothing, push nothing. When done: <promise>ANTHROPIC-REVIEW-DONE</promise>
 
   - id: final-verify-loop
     category: validation
-    depends_on: [sonnet-review-fix]
+    depends_on: [anthropic-review-fix]
     loop:
       provider: pi
       model: kimi-code/kimi-for-coding
@@ -626,7 +630,7 @@ nodes:
     context: fresh
     prompt: |
       Post one short "workflow complete" PR comment reflecting what actually
-      happened — three review-and-fix passes (kimi self-review loop, gpt, sonnet)
+      happened — three review-and-fix passes (kimi self-review loop, gpt, anthropic)
       already ran and pushed fixes; this is the single human-facing overview, not
       another review.
 
@@ -643,7 +647,7 @@ nodes:
       **Commit breakdown**:
       - Implementation + kimi self-review: <N> commits
       - gpt-review-fix: <N> commits (or "none")
-      - sonnet-review-fix: <N> commits (or "none")
+      - anthropic-review-fix: <N> commits (or "none")
       ```
 
       One short comment, no next-steps blocks. Output: <promise>WORKFLOW-SUMMARY-DONE</promise>

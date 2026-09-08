@@ -28,8 +28,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   $5/$30. The tiers are 25x apart end to end, so a single family rate would
   have made an A/B run between them meaningless. Astra also joins the `gpt`
   billing lane, which its id previously missed.
+- **A `review-pr` workflow.** Reviews an existing pull request and fixes what is
+  concretely wrong with it: a Kimi simplify pass over the changed files, then
+  two review-and-fix passes on different vendors' frontier models, then one
+  summary comment. `revise-pr` needed human feedback to act on and cancels
+  without it; this produces the review instead. It has **no planning node** —
+  the PR was not planned here, so scope comes from git (the `scope.json` /
+  `guard-scope` machinery lifted from `idea-to-pr`) and intent from the PR's own
+  body, issue and commits, recorded as claims to verify rather than a contract.
+  Both passes fix only inside the diff and flag everything else for a human,
+  because without a plan there is no record of what the author deliberately left
+  out. It pushes to the PR branch, so a fork the harness cannot push to will
+  fail once a reviewer finds something.
 
 ### Changed
+
+- **`sonnet-review-fix` is now `anthropic-review-fix`, and runs Opus.** The node
+  id named a model while the pass beside it named a vendor (`gpt-review-fix`),
+  and the model has now changed, so the id named the wrong thing. Renamed with
+  it: the `SONNET-REVIEW-DONE` promise token and the judge-ab attribution
+  example. Runs from before this keep the old id in their history, which
+  judge-ab reads for per-step commit attribution.
+  The pass exists to catch what earlier reviewers rationalized, and it sat on
+  Sonnet while its OpenAI counterpart moved to a frontier model. It is now Opus
+  at `effort: high` ($5/$25 against Sonnet's $3/$15). Both review nodes pin
+  effort explicitly now; neither did, so both ran at the default.
 
 - **Default Claude models moved to the 5 series.** `claude-sonnet-4-6` → `claude-sonnet-5`
   and `claude-opus-4-6` → `claude-opus-5`, across the Claude Code CLI default, the

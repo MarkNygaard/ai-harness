@@ -47,6 +47,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
         include_str!("../defaults/workflows/review-area.yaml"),
     ),
     (
+        "review-pr",
+        include_str!("../defaults/workflows/review-pr.yaml"),
+    ),
+    (
         "linear-epic-supervise",
         include_str!("../defaults/workflows/linear-epic-supervise.yaml"),
     ),
@@ -592,6 +596,73 @@ mod tests {
         assert_eq!(node.model.as_deref(), Some("openai-codex/gpt-6-astra"));
     }
 
+    /// `review-pr` reviews code that was never planned here, so it must judge
+    /// the diff against git-computed scope and the PR's own stated intent — not
+    /// against a plan. A future edit that "helpfully" adds a planning node
+    /// would hand two reviewers a guess at the author's intent and let them
+    /// enforce it as a contract, which is the one failure mode this workflow is
+    /// shaped to avoid.
+    #[test]
+    fn review_pr_reviews_against_the_diff_not_a_plan() {
+        let yaml = default_workflow("review-pr").expect("review-pr bundled");
+        assert!(
+            !yaml.contains("plan.md"),
+            "review-pr must not review against a plan — the PR was not planned here"
+        );
+        let wf = harness_dag::parse_workflow(yaml).expect("review-pr must parse");
+        let node = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("review-pr has a `{id}` node"))
+        };
+        let body = |id: &str| match &node(id).kind {
+            harness_dag::NodeKind::Prompt(p) => p.clone(),
+            harness_dag::NodeKind::Bash(b) => b.clone(),
+            other => panic!("`{id}` has an unexpected body: {other:?}"),
+        };
+
+        // What replaces the plan: the git-computed file set and the recorded
+        // intent. Both review passes must actually read both.
+        for review in ["gpt-review-fix", "anthropic-review-fix"] {
+            let prompt = body(review);
+            assert!(
+                prompt.contains("scope.json"),
+                "`{review}` must take its scope from scope.json, not its own git diff"
+            );
+            assert!(
+                prompt.contains("pr-intent.md"),
+                "`{review}` must read the recorded PR intent"
+            );
+        }
+
+        // Model diversity is the point of running two passes.
+        assert_eq!(node("gpt-review-fix").provider.as_deref(), Some("pi"));
+        assert_eq!(
+            node("gpt-review-fix").model.as_deref(),
+            Some("openai-codex/gpt-6-astra")
+        );
+        assert_eq!(
+            node("anthropic-review-fix").provider.as_deref(),
+            Some("claude")
+        );
+        assert_eq!(node("anthropic-review-fix").model.as_deref(), Some("opus"));
+
+        // The checkout must be deterministic: every node downstream reads the
+        // working tree, so an agent that forgets `gh pr checkout` would have
+        // them review the base branch and report it clean.
+        assert!(
+            matches!(node("checkout-pr").kind, harness_dag::NodeKind::Bash(_)),
+            "checkout-pr must be a bash node, not an agent asked to remember"
+        );
+
+        // Review fixes land after the baseline, so the final gate re-verifies.
+        assert_eq!(
+            node("final-validate").depends_on,
+            vec!["anthropic-review-fix"]
+        );
+    }
+
     #[test]
     fn revise_pr_revalidates_after_review_fixes() {
         let yaml = default_workflow("revise-pr").expect("revise-pr bundled");
@@ -617,7 +688,7 @@ mod tests {
                  $gather-feedback.output.has_linear_feedback == 'true'"
             )
         );
-        assert_eq!(deps("final-validate"), vec!["sonnet-review-fix"]);
+        assert_eq!(deps("final-validate"), vec!["anthropic-review-fix"]);
         assert!(
             matches!(&node("final-validate").kind, harness_dag::NodeKind::Command(name) if name == "validate")
         );

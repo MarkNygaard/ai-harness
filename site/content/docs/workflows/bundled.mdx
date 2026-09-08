@@ -1,6 +1,6 @@
 ---
 title: "Bundled workflows"
-description: "The nine workflows that ship in the box, what each is for, and how to fork one into your own project."
+description: "The ten workflows that ship in the box, what each is for, and how to fork one into your own project."
 ---
 
 These ship with the harness and are ready to run. To change one, copy it into
@@ -50,6 +50,34 @@ is opened.
 Binding configuration matters here. `ready_state_id` must be the **review
 column**, so a successful run loops the card back to review rather than to
 Done. The trigger state is typically "Changes requested".
+</Callout>
+
+### `review-pr`
+
+Review an existing pull request and fix what is concretely wrong with it: a
+simplify pass over the changed files, then two review-and-fix passes on
+different vendors' frontier models. Commits go to the PR's own branch, and one
+summary comment collects what was fixed and what was flagged. `$ARGUMENTS`
+names the PR as a number, a URL, or a Linear issue whose linked PR to review.
+
+Unlike `revise-pr`, it needs no human feedback to act on — it produces the
+review rather than addressing one.
+
+**It has no planning step, deliberately.** The PR was not planned here, so
+there is nothing to review it against but the code and the author's stated
+intent. Scope comes from git: the changed-file set is computed once per repo
+against that repo's base branch, and any repo the run had no business touching
+is reverted. Intent is recorded from the PR body, its linked issue and its
+commits — as claims to verify, not as a contract. Where the diff and the
+description disagree, that is reported rather than quietly fixed.
+
+<Callout type="warn">
+It pushes to the PR's branch, so a pull request from a fork the harness cannot
+push to will fail once a reviewer finds something. Both passes are told to fix
+only defects *inside* the diff and to flag anything else for a human — with no
+plan there is no record of what the author deliberately left out, so an
+"omission" may be their decision. For an assessment that changes nothing, use
+[`review-area`](#review-area).
 </Callout>
 
 ### `merge-pr`
