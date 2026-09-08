@@ -457,19 +457,21 @@ nodes:
         the gpt-review-fix and Sonnet phases that follow. Emitting it on a clean
         PR is the goal.
 
-  # 11. Second-pass review via gpt-5.x — catch what Kimi rationalized.
+  # 11. Second-pass review via an OpenAI model — catch what Kimi rationalized.
   - id: gpt-review-fix
     category: validation
     depends_on: [pi-review-fix-loop]
     provider: pi
-    # Runs gpt-5.x via omp on the ChatGPT Plus/Pro subscription (OAuth — no
-    # per-token API-key billing; "Codex for OSS"). The ChatGPT account exposes
-    # the general gpt-5.x models but NOT the `-codex` variants, so use the
-    # general model. The model id MUST be namespace-qualified (`openai-codex/...`):
+    # Runs an OpenAI model via omp on the ChatGPT Plus/Pro subscription (OAuth
+    # — no per-token API-key billing; "Codex for OSS"). The ChatGPT account
+    # exposes the general models but NOT the `-codex` variants, so use a
+    # general one. The model id MUST be namespace-qualified (`openai-codex/...`):
     # a bare name would be mis-prefixed to `kimi-code/...` by the pi provider.
+    # Astra needs omp >= 18.1.12 and is still rolling out per plan — if this
+    # account does not have it yet, drop to `openai-codex/gpt-5.6-sol`.
     # Connect once on the cluster image: `omp /login` -> "ChatGPT Plus/Pro
     # (Codex)". To see an account's exact list run `omp` -> `/model`.
-    model: openai-codex/gpt-5.6-sol
+    model: openai-codex/gpt-6-astra
     context: fresh
     prompt: |
       You are reviewing a PR that an upstream agent already authored
