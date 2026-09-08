@@ -1,0 +1,636 @@
+name: review-pr
+description: |
+  Review an existing pull request and fix what is concretely wrong — a Kimi
+  simplify pass, then two model-diverse review-and-fix passes (GPT-6 Astra,
+  then Claude Opus). No new PR is opened; commits are pushed to the PR's own
+  branch.
+
+  Flow: resolve the PR -> check its branch out -> record what the author says
+  the change is for -> compute the changed-file set from git -> Kimi simplifies
+  only those files -> Astra reviews and fixes -> Opus reviews and fixes -> final
+  verify gate -> one summary comment on the PR.
+
+  **There is no plan node, deliberately.** The PR was not planned here, so
+  there is nothing to review it against except the code itself and the author's
+  stated intent. Scope comes from git — `scope.json`, diffed per repo against
+  that repo's own base branch, with `guard-scope` reverting any repo the run
+  had no business touching. Intent comes from `pr-intent.md`: the PR body, its
+  linked issue and its commits, recorded as claims rather than as a contract.
+  Where the diff and the description disagree, that is a finding to report, not
+  something to quietly fix.
+
+  What this catches: bugs, security and performance defects, sloppiness,
+  dishonest tests, guardrail violations. What it cannot catch: "this was the
+  wrong thing to build" — without a plan there is no authority on what the
+  change was supposed to be, and the reviewers are told to flag scope doubts
+  for the human instead of acting on them.
+
+  Input (`$ARGUMENTS`): a PR number, a PR URL, or a Linear issue identifier
+  whose linked PR should be reviewed.
+
+  Notes:
+  - It PUSHES to the PR's branch. A PR from a fork the harness cannot push to
+    will fail at the first review that finds something; use `review-area` for a
+    read-only assessment instead.
+  - Reviewing a PR this same harness just produced is redundant — `idea-to-pr`
+    already ran these two passes on it.
+
+  NOT for: opening a PR, addressing human review feedback (that is `revise-pr`,
+  which reads the reviews and cancels when there are none), or a read-only
+  assessment (`review-area`).
+
+provider: pi
+model: kimi-code/kimi-for-coding
+
+nodes:
+  # 1. Resolve exactly which PR is under review, and where it lives.
+  - id: resolve-pr
+    category: planning
+    provider: claude
+    model: sonnet
+    context: fresh
+    # A miss here cancels the whole run at `abort-no-pr`. Retry once so a
+    # transient `gh` lookup failure self-heals instead of failing the run.
+    retries: 1
+    prompt: |
+      Identify the GitHub pull request to review from this input:
+
+      $ARGUMENTS
+
+      The input may be a PR number, a PR URL, or a Linear issue identifier
+      whose linked PR should be reviewed. Use `gh` to resolve it to a single PR.
+
+      **Where to run `gh`.** If `$HARNESS_REPOS` is set this project spans
+      several repos, each checked out in its own folder at the workspace root
+      (the JSON lists `folder`, `url`, `role`) and the root itself is NOT a git
+      repo — `cd` into a repo folder before any `gh`/`git` call, and try each
+      folder until the PR resolves. When `$HARNESS_REPOS` is unset there is a
+      single repo at the root and the folder is `.`.
+
+      Resolve it (from inside the right folder):
+        gh pr list --search "<issue-id>"      # if the input is a Linear issue
+        gh pr view <pr> --json number,state,mergeable,mergeStateStatus,baseRefName,headRefName,title
+
+      Then emit ONLY this JSON verdict (no prose). If you cannot find a PR in
+      any folder, set `pr` to "" and `state` to "CLOSED".
+    output_format:
+      type: object
+      properties:
+        pr: { type: string, description: "PR number, or \"\" if none found" }
+        folder:
+          {
+            type: string,
+            description: "repo folder holding the PR (\".\" when single-repo)",
+          }
+        base: { type: string, description: "base branch (e.g. main)" }
+        head: { type: string, description: "head branch" }
+        title: { type: string }
+        state: { type: string, enum: ["OPEN", "MERGED", "CLOSED"] }
+        mergeable: { type: string, enum: ["MERGEABLE", "CONFLICTING", "UNKNOWN"] }
+      required: [pr, folder, state, mergeable]
+
+  # 2. Nothing to review if there's no open PR.
+  - id: abort-no-pr
+    category: planning
+    depends_on: [resolve-pr]
+    when: "$resolve-pr.output.state != 'OPEN'"
+    cancel: "No open PR to review for this input (not found, or already merged/closed)."
+
+  # 3. Get the PR branch into the worktree — deterministically, not by asking
+  #    an agent to remember. Every node after this reads the working tree, so a
+  #    forgotten checkout would have them review the base branch and report it
+  #    clean: the most expensive possible way to learn nothing.
+  - id: checkout-pr
+    category: setup
+    depends_on: [resolve-pr]
+    when: "$resolve-pr.output.state == 'OPEN'"
+    timeout: 300000
+    bash: |
+      set -uo pipefail
+      folder="$resolve-pr.output.folder"
+      pr="$resolve-pr.output.pr"
+      base="$resolve-pr.output.base"
+      [ -d "$folder/.git" ] || { echo "ERROR: '$folder' is not a git checkout" >&2; exit 1; }
+      cd "$folder" || exit 1
+      gh pr checkout "$pr" || { echo "ERROR: could not check out PR #$pr in $folder" >&2; exit 1; }
+      # The scope diff is taken against origin/<base>. Against a stale remote
+      # ref it reports work that merged upstream long ago as this PR's, so
+      # refresh the ref before anything measures anything.
+      git fetch --quiet origin "$base" 2>/dev/null || true
+      git rev-parse --verify --quiet "origin/$base" >/dev/null || {
+        echo "ERROR: no origin/$base — every scope decision would be wrong" >&2; exit 1; }
+      echo "$folder: PR #$pr checked out at $(git rev-parse --short HEAD) (base $base)"
+      git log --oneline "origin/$base..HEAD" | head -20
+
+  # 4. What the author says this change is for. NOT a plan, and not treated as
+  #    one: it is the PR's own claims, written down so two reviewers read the
+  #    same thing instead of each inferring their own version of the intent.
+  - id: pr-intent
+    category: planning
+    artifact: pr-intent.md
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [checkout-pr]
+    prompt: |
+      Record what PR #$resolve-pr.output.pr ("$resolve-pr.output.title") claims
+      to do, for two reviewers who will read the diff after you. Work from
+      inside `$resolve-pr.output.folder` (`.` when single-repo).
+
+      Gather, and nothing more:
+      - The PR body: `gh pr view $resolve-pr.output.pr --json title,body,url`
+      - Any issue it references — a GitHub issue (`gh issue view <n>`) or a
+        Linear identifier in the title/body/branch name. Record the identifier
+        and, if you can read it, what it asked for.
+      - The commit subjects: `git log --oneline origin/$resolve-pr.output.base..HEAD`
+      - The changed files with line counts:
+        `git diff --stat origin/$resolve-pr.output.base...HEAD`
+
+      Write `$ARTIFACTS_DIR/pr-intent.md` with these sections:
+      - **Stated purpose**: what the author says the change does, quoted or
+        closely paraphrased from the body/issue. If the body is empty or says
+        nothing substantive, write exactly that — an empty PR description is
+        itself worth knowing.
+      - **Referenced issue**: identifier + what it asked for, or "none".
+      - **Shape of the change**: the files and rough size, one or two lines.
+      - **Claims a reviewer can check**: the specific, checkable assertions the
+        description makes (e.g. "keeps the old endpoint working", "adds a
+        migration"). One line each. These are what the reviewers verify the
+        diff against.
+      - **Gaps between description and diff**: anything the diff clearly does
+        that the description never mentions, or vice versa. Do NOT speculate
+        about why — just name the mismatch.
+
+      **Do not invent acceptance criteria.** You are recording the author's
+      claims, not deciding what the change should have been. If the PR does not
+      say something, the honest entry is that it does not say it — a plausible
+      guess written here becomes a contract two reviewers then enforce against
+      code nobody promised. Target 150–400 words.
+
+      Output a one-line confirmation and: <promise>INTENT-DONE</promise>
+
+  # 5. What this PR changed, per repo, computed once and written down.
+  #
+  #    Lifted from idea-to-pr, where agents computing their own changed-file set
+  #    went wrong the same way every time: a diff against the wrong base, or a
+  #    `git` call at the multi-repo root (which is not a repo), returns
+  #    something plausible instead of nothing, and a repo the run never opened
+  #    gets "simplified". The PR's own repo is diffed against the PR's base;
+  #    every other repo against its own.
+  - id: scope
+    category: setup
+    depends_on: [checkout-pr]
+    timeout: 120000
+    bash: |
+      set -uo pipefail
+      out="$ARTIFACTS_DIR/scope.json"
+      rows="$ARTIFACTS_DIR/.scope-rows"
+      pr_folder="$resolve-pr.output.folder"
+      pr_base="$resolve-pr.output.base"
+      : > "$rows"
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        echo "$HARNESS_REPOS" | jq -c '.[] | {folder: .folder, base: .base_branch}' > "$rows"
+      else
+        jq -n -c --arg base "$pr_base" '{folder: ".", base: $base}' > "$rows"
+      fi
+      : > "$out.tmp"
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        folder=$(printf '%s' "$row" | jq -r .folder)
+        base=$(printf '%s' "$row" | jq -r .base)
+        # The PR's repo is measured against the PR's base branch, whatever the
+        # workspace config says its default is — a PR onto a release branch is
+        # not a diff against main.
+        [ "$folder" = "$pr_folder" ] && base="$pr_base"
+        if [ ! -d "$folder/.git" ]; then
+          echo "[$folder] not a git checkout — skipping" >&2
+          continue
+        fi
+        git -C "$folder" fetch --quiet origin "$base" 2>/dev/null || true
+        # An unresolvable base makes the diff empty, which reads as "this repo
+        # is out of scope" — and the guard reverts out-of-scope repos. A missing
+        # base is a broken run, not an empty one, so say so and stop.
+        if ! git -C "$folder" rev-parse --verify --quiet "origin/$base" >/dev/null; then
+          echo "ERROR: [$folder] has no origin/$base — every scope decision for" \
+               "this repo would be wrong, and out-of-scope work gets reverted." >&2
+          exit 1
+        fi
+        # Three sources, because "what this PR changed" is not one query: the
+        # PR's own commits, plus anything a later node leaves uncommitted or
+        # untracked in the tree.
+        committed=$(git -C "$folder" diff --name-only "origin/$base...HEAD" 2>/dev/null || true)
+        tracked=$(git -C "$folder" diff --name-only HEAD 2>/dev/null || true)
+        untracked=$(git -C "$folder" ls-files --others --exclude-standard 2>/dev/null || true)
+        files=$(printf '%s\n%s\n%s\n' "$committed" "$tracked" "$untracked")
+        head=$(git -C "$folder" rev-parse HEAD 2>/dev/null || true)
+        printf '%s\n' "$files" | jq -R -s -c \
+          --arg folder "$folder" --arg base "$base" --arg head "$head" \
+          '{folder: $folder, base: $base, head: $head,
+            files: (split("\n") | map(select(length > 0)) | unique)}' >> "$out.tmp"
+      done < "$rows"
+      jq -s '.' "$out.tmp" > "$out" || { echo "could not write $out" >&2; exit 1; }
+      rm -f "$out.tmp" "$rows"
+      jq -r '.[] | "\(.folder): \(.files | length) changed file(s) vs origin/\(.base)"' "$out"
+
+  # 6. Baseline verify — was this PR green when it arrived? Recorded, NOT
+  #    gated: a PR that is already red is a finding for the reviewers to work
+  #    on, not a reason to refuse to review it. The final gate compares against
+  #    this so "we broke it" and "it arrived broken" stay distinguishable.
+  - id: baseline-validate
+    category: validation
+    command: validate
+    depends_on: [scope]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        summary: { type: string }
+      required: [passed]
+
+  - id: pi-simplify
+    category: implementation
+    depends_on: [baseline-validate]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    prompt: |
+      Simplify ONLY the code this PR changed — clarity, redundancy, naming,
+      dead code — while preserving behaviour exactly.
+
+      ## Scope (critical — do not exceed it)
+
+      **The in-scope file list is already computed. Read it; do not derive
+      it.** `$ARTIFACTS_DIR/scope.json` is an array, one entry per repo folder
+      of this project:
+
+          jq -r '.[] | "\(.folder): \(.files | length)"' $ARTIFACTS_DIR/scope.json
+          jq -r '.[] | select(.files | length > 0) | .folder' $ARTIFACTS_DIR/scope.json
+          jq -r '.[] | select(.folder == "<folder>") | .files[]' $ARTIFACTS_DIR/scope.json
+
+      Those files — and ONLY those files — are in scope. Do NOT open,
+      read-for-simplification, or edit any file outside that list.
+
+      **Do not run `git diff` to second-guess it.** The artifact was diffed per
+      repo against that repo's own base branch, and the PR's repo against the
+      PR's base. It is the answer. An agent that recomputes this gets it wrong
+      plausibly rather than obviously, and a later step reverts any repo you
+      change that was not in scope — so work outside the list is thrown away.
+
+      **A repo with `files: []` is done — not an invitation to go looking.**
+      This PR lives in one repo; an empty list is the expected answer for every
+      other folder. If every folder is empty, take the no-op path and stop.
+
+      ## This is someone else's PR
+
+      Simplify what the diff already does. Do NOT restructure the author's
+      approach, rename their public API, or "tidy" code the PR merely touched
+      in passing. If the change looks wrong in design rather than in detail,
+      leave it alone — the two review passes after you will judge it, and they
+      can flag it for the human. Preserving behaviour exactly is not negotiable
+      here: there is no plan to tell you which behaviour changes were intended.
+
+      ## Process
+
+      Go file by file through the in-scope list. For each, look only for:
+      - Unnecessary complexity / deep nesting that can flatten.
+      - Redundant or duplicated logic, unused variables/imports.
+      - Unclear names; dense one-liners that hurt readability.
+      - Obvious comments that just restate the code.
+      Match the surrounding module's conventions. Clarity over brevity — never
+      introduce clever-but-obscure code, and never drop a feature or behaviour.
+
+      ## Verify BEFORE you commit (non-negotiable)
+
+      After making edits, run the verify chain of the repo you edited, scoped to
+      the packages you touched — the commands live in that repo's own
+      `CLAUDE.md` / `AGENTS.md`. If verification fails, FIX or REVERT your
+      simplification until it passes. A simplification that breaks the build is
+      worse than no simplification.
+
+      Note the baseline: this PR's verify was
+      `passed=$baseline-validate.output.passed` before you started. If it was
+      already failing, do NOT try to fix the failure here — that is the
+      reviewers' job. Just make sure you did not make it worse.
+
+      ## Commit and push
+
+      - From inside the PR's repo folder, if `git status --porcelain` shows
+        modified files after a green verify, stage them and commit ONE
+        conventional-commit: `chore: simplify implementation`, then push to the
+        PR's branch.
+      - Do NOT use `--no-verify` or skip commit hooks. Do NOT run DB migrations.
+        Never stage a file outside the in-scope list.
+      - If you made no changes (or reverted them all), do nothing — a no-op is
+        a perfectly good outcome.
+
+      Output one line per repo folder you considered — `<folder>: N files in
+      scope, <what you simplified + that verify passed>` or `<folder>: no
+      changes`. Then: <promise>SIMPLIFY-DONE</promise>
+
+  # 8. A repo this run did not change must still be unchanged. Instructions
+  #    alone did not hold this in idea-to-pr — the simplify step twice committed
+  #    in a repo whose diff was empty — and reverting is safe by construction:
+  #    `files: []` counts committed, staged, unstaged and untracked changes, so
+  #    an empty set means the repo carries nothing of this run at all.
+  - id: guard-scope
+    category: validation
+    depends_on: [pi-simplify]
+    timeout: 120000
+    bash: |
+      set -uo pipefail
+      scope="$ARTIFACTS_DIR/scope.json"
+      [ -f "$scope" ] || { echo "no scope.json — nothing to guard"; exit 0; }
+      # The PR under review always changed something. If the scope says no repo
+      # did, the scope is wrong — and reverting on a wrong scope destroys work
+      # rather than protecting it. Refuse, loudly.
+      total=$(jq 'length' "$scope")
+      empty=$(jq '[.[] | select(.files | length == 0)] | length' "$scope")
+      if [ "$total" -gt 0 ] && [ "$empty" -eq "$total" ]; then
+        echo "ERROR: scope.json says this PR changed nothing in any of its" \
+             "$total repo(s), which cannot be right — refusing to revert" \
+             "anything. Something is wrong with the scope step." >&2
+        exit 1
+      fi
+      reverted=0
+      while IFS= read -r row; do
+        [ -n "$row" ] || continue
+        folder=$(printf '%s' "$row" | jq -r .folder)
+        head=$(printf '%s' "$row" | jq -r .head)
+        n=$(printf '%s' "$row" | jq -r '.files | length')
+        [ -d "$folder/.git" ] || continue
+        [ -n "$head" ] || continue
+        # In scope: the simplify step was allowed to commit here.
+        [ "$n" -gt 0 ] && continue
+        now=$(git -C "$folder" rev-parse HEAD 2>/dev/null || true)
+        dirty=$(git -C "$folder" status --porcelain 2>/dev/null)
+        if [ "$now" = "$head" ] && [ -z "$dirty" ]; then
+          continue
+        fi
+        echo "!! $folder was not in this PR's scope but has changes — reverting to $head" >&2
+        git -C "$folder" log --oneline "$head..HEAD" 2>/dev/null | sed 's/^/     dropped: /' >&2
+        git -C "$folder" reset --hard "$head" >/dev/null 2>&1 || true
+        git -C "$folder" clean -fd >/dev/null 2>&1 || true
+        reverted=$((reverted + 1))
+      done < <(jq -c '.[]' "$scope")
+      echo "guard-scope: $reverted out-of-scope repo(s) reverted"
+
+  # 9. First model-diverse review-and-fix pass.
+  - id: gpt-review-fix
+    category: validation
+    depends_on: [guard-scope]
+    provider: pi
+    # Runs an OpenAI model via omp on the ChatGPT Plus/Pro subscription (OAuth
+    # — no per-token API-key billing). The ChatGPT account exposes the general
+    # models but NOT the `-codex` variants, so use a general one. The model id
+    # MUST be namespace-qualified (`openai-codex/...`): a bare name would be
+    # mis-prefixed to `kimi-code/...` by the pi provider. Astra needs
+    # omp >= 18.1.12 and is still rolling out per plan — if this account does
+    # not have it yet, drop to `openai-codex/gpt-5.6-sol`.
+    model: openai-codex/gpt-6-astra
+    effort: high
+    context: fresh
+    prompt: |
+      You are reviewing an existing pull request that you did not write, and
+      fixing what is concretely wrong with it.
+
+      ## What you are reviewing against
+
+      There is no plan — this PR was not planned in this harness, so nothing
+      here defines what it "should" have been. You have two things instead:
+
+      1. `cat $ARTIFACTS_DIR/pr-intent.md` — what the author says the change is
+         for, its referenced issue, and the checkable claims the description
+         makes. Treat these as **claims to verify, not a contract to enforce**.
+      2. `cat $ARTIFACTS_DIR/scope.json` — the changed-file set, diffed per repo
+         against that repo's base branch. The PR's repo is the one with a
+         non-empty `files` list.
+
+      Read the diff itself in the PR's folder (`$resolve-pr.output.folder`, `.`
+      when single-repo):
+        git diff origin/$resolve-pr.output.base...HEAD
+        git log --oneline origin/$resolve-pr.output.base..HEAD
+
+      The verify chain was `passed=$baseline-validate.output.passed` before this
+      run touched anything ($baseline-validate.output.summary). A PR that
+      arrived red is a defect to fix; do not assume you caused it.
+
+      ## What to look for
+
+      - Subtle logic bugs (off-by-one, boundary conditions, null/undefined)
+      - Race conditions, idempotency gaps in async code or DB writes
+      - Performance: N+1 queries, unbounded loops, eager loading, accidental
+        re-renders, large in-memory payloads
+      - Security: injection, XSS, missing auth checks, PII in logs, secrets in
+        code, broken access control
+      - API design: inconsistent error shapes, leaky abstractions, breaking
+        changes that are not called out
+      - Test honesty: tests pin real invariants, not just the happy path
+      - Claims that do not hold: a description promising the old endpoint keeps
+        working, where the diff removes it
+
+      ## Scope — narrower than usual, because this is not your change
+
+      Fix defects **inside the diff**. Anything outside it — pre-existing bugs
+      in files this PR merely touched, refactors you would rather have, design
+      you disagree with — goes in your report as a finding, NOT into a commit.
+      Do not add capabilities the PR chose not to build: with no plan there is
+      no record of what was deliberately cut, so an omission you "fix" may be
+      the author's decision. Flag it and let the human rule on it.
+
+      If a finding is fixable but you are not confident your fix is correct, or
+      it is a judgment call, do NOT touch the code — flag it instead.
+
+      ## Fixing
+
+      For each genuine in-diff defect:
+      1. Edit the file(s), in the PR's repo folder.
+      2. Run the project's scoped verify chain (commands in `CLAUDE.md` /
+         `AGENTS.md`; narrowest scope that covers your edit).
+      3. Commit a conventional-commit (e.g. `fix(auth): handle race in token
+         refresh`) and push to the PR's branch.
+
+      Do NOT skip commit hooks or use `--no-verify`. Do NOT execute database /
+      schema migrations — edit schema + SQL only and flag the migration. Do NOT
+      post PR comments or use `gh pr review`; the summary node comments once at
+      the end. Pushed commits are your only change. If you genuinely find
+      nothing, push nothing.
+
+      ## Report (always, even for a clean review)
+
+      3 to 6 lines, no padding:
+      - **Checked**: how much of the diff you read.
+      - **Found**: each genuine defect, one line each with `file:line` — or
+        "nothing".
+      - **Pushed**: the commit subjects you pushed, or "nothing".
+      - **Flags for the human**: out-of-diff findings, claims that do not hold,
+        judgment calls you did not act on. Omit if there are none.
+
+      A clean review and a review that never happened are indistinguishable
+      without this, so "nothing found" is a real, expected answer — write it
+      plainly rather than inventing a fix to justify the step.
+
+      End with: <promise>GPT-REVIEW-DONE</promise>
+
+  # 10. Second model-diverse pass — a different bias profile than the first.
+  - id: anthropic-review-fix
+    category: validation
+    depends_on: [gpt-review-fix]
+    provider: claude
+    # The counterweight to the OpenAI pass above — a frontier reader, not a
+    # cheap one, or the step stops earning its place.
+    model: opus
+    effort: high
+    context: fresh
+    prompt: |
+      You are the second, model-diverse review-and-fix pass on an existing pull
+      request. A Kimi simplify pass and an OpenAI review pass ran before you and
+      may have pushed their own commits. You bring a different training-data and
+      bias profile: your job is to catch what they rationalized or missed, and
+      fix what is concretely fixable.
+
+      ## What you are reviewing against
+
+      There is no plan — this PR was not planned in this harness. You have:
+
+      1. `cat $ARTIFACTS_DIR/pr-intent.md` — the author's stated purpose and the
+         checkable claims their description makes. **Claims to verify, not a
+         contract to enforce.**
+      2. `cat $ARTIFACTS_DIR/scope.json` — the changed-file set, per repo.
+      3. The prior pass's report, which tells you what is already handled:
+
+      $gpt-review-fix.output
+
+      Read the diff in `$resolve-pr.output.folder` (`.` when single-repo):
+        git diff origin/$resolve-pr.output.base...HEAD
+        git log --oneline origin/$resolve-pr.output.base..HEAD
+
+      The commit trail includes the earlier passes' fixes. Focus on what is
+      still open — and on whether their fixes were actually right, since a
+      confident bad fix from an earlier reviewer is exactly the failure a
+      second model exists to catch. Baseline verify before this run:
+      `passed=$baseline-validate.output.passed`.
+
+      ## What to look for
+
+      Everything the first pass was asked to look for, plus what a second
+      reader is better placed to see:
+      - Fixes from the earlier passes that are wrong, incomplete, or that
+        changed behaviour the PR never intended to change
+      - Test honesty: tests that assert the implementation rather than the
+        requirement, or that would pass with the feature removed
+      - Guardrail compliance: `CLAUDE.md` / `AGENTS.md` is auto-loaded into your
+        context. Verify no `--no-verify`, no executed migrations, no unrelated
+        lockfile churn, no scope-violating commands from the passes above.
+      - Coherence: does the change read as one design, or as three agents
+        patching over each other?
+
+      ## Scope — narrower than usual, because this is not your change
+
+      Fix defects **inside the diff**. Pre-existing problems in touched files,
+      refactors you would prefer, and design you disagree with go in your
+      report, not into a commit. Do not add capabilities the PR chose not to
+      build — with no plan there is no record of what was deliberately cut. If
+      you are not confident a fix is correct, or it is a judgment call, flag it
+      instead of committing it.
+
+      ## Fixing
+
+      Same rules as the pass before you: edit, run the scoped verify chain,
+      conventional-commit, push to the PR's branch. Do NOT skip hooks or use
+      `--no-verify`. Do NOT execute migrations — edit schema + SQL and flag it.
+      Do NOT post PR comments or use `gh pr review`. If you genuinely find
+      nothing, push nothing.
+
+      ## Report (always, even for a clean review)
+
+      3 to 6 lines: **Checked**, **Found** (with `file:line`, or "nothing"),
+      **Pushed** (commit subjects, or "nothing"), **Flags for the human**
+      (including anything you think the earlier passes got wrong).
+
+      End with: <promise>ANTHROPIC-REVIEW-DONE</promise>
+
+  # 11. Final verify gate — the passes above may have pushed commits since the
+  #     baseline, so verify the branch as it now stands.
+  - id: final-validate
+    category: validation
+    command: validate
+    depends_on: [anthropic-review-fix]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        summary: { type: string }
+      required: [passed]
+
+  # 12. Red at the end. Two very different situations, so the message says
+  #     which: a PR that arrived red and is still red is the author's problem
+  #     to hear about; one this run broke is ours.
+  - id: abort-final-invalid
+    category: validation
+    depends_on: [final-validate]
+    when: "$final-validate.output.passed != 'true'"
+    cancel: "PR #$resolve-pr.output.pr does not verify clean after review (it arrived with passed=$baseline-validate.output.passed). $final-validate.output.summary"
+
+  # 13. One comment on the PR, carrying both reviewers' findings — including
+  #     the ones nobody fixed, which are the whole reason a human reads this.
+  - id: summary
+    category: delivery
+    provider: claude
+    model: sonnet
+    retries: 1
+    depends_on: [final-validate]
+    when: "$final-validate.output.passed == 'true'"
+    prompt: |
+      Post one review summary on PR #$resolve-pr.output.pr. Work from inside
+      `$resolve-pr.output.folder` (`.` when single-repo).
+
+      The two review passes reported:
+
+      ## Simplify
+      $pi-simplify.output
+
+      ## OpenAI pass
+      $gpt-review-fix.output
+
+      ## Claude pass
+      $anthropic-review-fix.output
+
+      Ground the summary in what actually landed:
+        git log --oneline origin/$resolve-pr.output.base..HEAD
+
+      Post it with `gh pr comment $resolve-pr.output.pr --body "..."`. The body
+      MUST start with these two lines:
+
+          <!-- harness:review-pr:complete -->
+          🔍 Automated review complete
+
+      The first line is a hidden marker (invisible in rendered GitHub) that
+      identifies this as a harness review pass. Then, briefly:
+
+      - **Fixed and pushed**: the commits this run added, by pass. If none, say
+        "nothing — the PR reviewed clean" and mean it.
+      - **Flagged for you**: every item either reviewer flagged rather than
+        fixed — out-of-diff findings, claims in the description that the diff
+        does not support, judgment calls, migrations to run by hand. This
+        section is the point of the comment. Do NOT drop an item because it
+        sounds minor, and do NOT soften a disagreement between the two passes:
+        if they contradict each other, say so and let the human decide.
+      - **Not covered**: one line, always — this review judged the code and its
+        stated intent, not whether the change was the right thing to build.
+        There was no plan to check that against.
+
+      Report what the passes reported. Do NOT re-review the code yourself, do
+      NOT invent findings, and do NOT claim a pass found something it did not.
+      If both passes came back clean, a short comment saying exactly that is the
+      correct output.
+
+      Do NOT approve the PR, do NOT use `gh pr review`, do NOT change labels,
+      title or milestone, and do NOT merge.
+
+      When done, output a one-line confirmation and: <promise>SUMMARY-DONE</promise>
