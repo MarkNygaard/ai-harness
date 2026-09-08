@@ -28,6 +28,17 @@ function ratesFor(model: string): Rates {
     return { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
   if (m.includes("sonnet"))
     return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+  // GPT-6 Astra standard tier, short context. Must precede the gpt-5 check —
+  // `openai-codex/gpt-6-astra` matches that one too. (mirrors token_usage.rs)
+  if (m.includes("gpt-6"))
+    return { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
+  // The 5.6 tiers are 25x apart end to end, so Terra and Luna get their own
+  // arms ahead of the generic gpt-5 one. (mirrors token_usage.rs)
+  if (m.includes("5.6-terra"))
+    return { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 };
+  if (m.includes("5.6-luna"))
+    return { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 };
+  // The rest of the gpt-5.x line, at GPT-5.6 Sol's rate.
   if (m.includes("gpt-5") || m.includes("codex") || m.includes("openai"))
     return { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 5 };
   if (m.includes("kimi") || m.includes("moonshot"))

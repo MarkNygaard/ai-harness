@@ -34,7 +34,11 @@ pub(crate) fn lane_for_model(model: &str) -> &'static str {
     let m = model.to_ascii_lowercase();
     if m.contains("opus") || m.contains("haiku") || m.contains("fable") || m.contains("sonnet") {
         "claude"
-    } else if m.contains("gpt-5") || m.contains("codex") || m.contains("openai") {
+    } else if m.contains("gpt-5")
+        || m.contains("gpt-6")
+        || m.contains("codex")
+        || m.contains("openai")
+    {
         "gpt"
     } else if m.contains("kimi") || m.contains("moonshot") {
         "kimi"
@@ -79,7 +83,38 @@ pub(crate) fn rates_for_model(model: &str) -> ModelRates {
             cache_read: 0.3,
             cache_write: 3.75,
         }
+    } else if m.contains("gpt-6") {
+        // GPT-6 Astra, standard tier at short context (<= 272K input): $10 in /
+        // $50 out / $1 cache-read / $12.50 cache-write. A request above that
+        // threshold prices at long-context rates; not modelled — this is a
+        // notional basis, and the id carries no context tier. Must precede the
+        // gpt-5/codex/openai arm, which `openai-codex/gpt-6-astra` also matches.
+        ModelRates {
+            input: 10.0,
+            output: 50.0,
+            cache_read: 1.0,
+            cache_write: 12.5,
+        }
+    } else if m.contains("5.6-terra") {
+        // GPT-5.6 Terra, the everyday tier. Its own arm because the 5.6 tiers
+        // are 25x apart end to end — pricing Luna at the generic gpt-5 rate
+        // would make an A/B against Sol meaningless.
+        ModelRates {
+            input: 2.0,
+            output: 12.0,
+            cache_read: 0.20,
+            cache_write: 2.50,
+        }
+    } else if m.contains("5.6-luna") {
+        // GPT-5.6 Luna, the fast/cheap tier.
+        ModelRates {
+            input: 0.20,
+            output: 1.20,
+            cache_read: 0.02,
+            cache_write: 0.25,
+        }
     } else if m.contains("gpt-5") || m.contains("codex") || m.contains("openai") {
+        // The rest of the gpt-5.x line, at GPT-5.6 Sol's rate.
         ModelRates {
             input: 5.0,
             output: 30.0,

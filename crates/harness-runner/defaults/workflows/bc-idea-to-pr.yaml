@@ -6,8 +6,8 @@ description: |
   Flow: Claude plans (read-only Sonnet explore -> Opus create-plan), Kimi
   implements + simplifies, the cross-platform AL compiler is the build gate
   (`al compile` — symbols downloaded read-only from the BC dev endpoint), then
-  a Kimi self-review loop, a gpt-5.x model-diverse review, and a Claude Sonnet
-  review — each fixing issues — and a final compile-until-clean gate.
+  a Kimi self-review loop, a GPT-6 Astra model-diverse review, and a Claude
+  Sonnet review — each fixing issues — and a final compile-until-clean gate.
 
   It NEVER publishes to a server: only read-only symbol download + local
   compilation, so no database is touched and it can't conflict with developers'
@@ -536,8 +536,10 @@ nodes:
     category: validation
     depends_on: [pi-review-fix-loop]
     provider: pi
-    # gpt-5.x via omp on the ChatGPT subscription; id MUST be namespace-qualified.
-    model: openai-codex/gpt-5.6-sol
+    # An OpenAI model via omp on the ChatGPT subscription; id MUST be
+    # namespace-qualified. Astra needs omp >= 18.1.12 and is still rolling out
+    # per plan — without it on this account, use `openai-codex/gpt-5.6-sol`.
+    model: openai-codex/gpt-6-astra
     context: fresh
     prompt: |
       Model-diverse review of an AL PR already implemented + self-reviewed. Find
