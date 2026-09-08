@@ -454,7 +454,7 @@ nodes:
           <promise>PI_REVIEW_CLEAN</promise>
 
         Be honest: emitting PI_REVIEW_CLEAN prematurely shifts cost onto
-        the gpt-review-fix and Sonnet phases that follow. Emitting it on a clean
+        the gpt-review-fix and Claude phases that follow. Emitting it on a clean
         PR is the goal.
 
   # 11. Second-pass review via an OpenAI model — catch what Kimi rationalized.
@@ -472,6 +472,7 @@ nodes:
     # Connect once on the cluster image: `omp /login` -> "ChatGPT Plus/Pro
     # (Codex)". To see an account's exact list run `omp` -> `/model`.
     model: openai-codex/gpt-6-astra
+    effort: high
     context: fresh
     prompt: |
       You are reviewing a PR that an upstream agent already authored
@@ -512,11 +513,14 @@ nodes:
 
   # 12. Third model-diverse review-and-fix pass — like gpt-review-fix, on a
   #     different model. Reviews and fixes; posts no comment and sets no label.
-  - id: sonnet-review-fix
+  - id: anthropic-review-fix
     category: validation
     depends_on: [gpt-review-fix]
     provider: claude
-    model: sonnet
+    # The model-diverse counterweight to the OpenAI pass above — a frontier
+    # reader, not a cheap one, or the step stops earning its place.
+    model: opus
+    effort: high
     context: fresh
     prompt: |
       You are the third, model-diverse review-and-fix pass on a PR revision
@@ -569,14 +573,14 @@ nodes:
       Push commits — that is the entire output. If you genuinely find nothing,
       push nothing.
 
-      When done, output: <promise>SONNET-REVIEW-DONE</promise>
+      When done, output: <promise>ANTHROPIC-REVIEW-DONE</promise>
 
   # 13. Final scoped verify gate — review/fix nodes above may push commits
   #     after the earlier validate node, so verify the branch HEAD again.
   - id: final-validate
     category: validation
     command: validate
-    depends_on: [sonnet-review-fix]
+    depends_on: [anthropic-review-fix]
     provider: pi
     model: kimi-code/kimi-for-coding
     context: fresh
@@ -687,7 +691,7 @@ nodes:
       `git log --oneline origin/$resolve-pr.output.base..HEAD`
 
       The three-review chain (kimi self-review loop, gpt-review-fix,
-      sonnet-review-fix) already ran in this same workflow, so do NOT suggest
+      anthropic-review-fix) already ran in this same workflow, so do NOT suggest
       running additional
       review agents.
 

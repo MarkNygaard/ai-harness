@@ -617,7 +617,7 @@ mod tests {
                  $gather-feedback.output.has_linear_feedback == 'true'"
             )
         );
-        assert_eq!(deps("final-validate"), vec!["sonnet-review-fix"]);
+        assert_eq!(deps("final-validate"), vec!["anthropic-review-fix"]);
         assert!(
             matches!(&node("final-validate").kind, harness_dag::NodeKind::Command(name) if name == "validate")
         );

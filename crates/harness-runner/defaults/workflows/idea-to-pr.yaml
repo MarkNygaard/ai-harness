@@ -6,7 +6,7 @@ description: |
   Flow: Claude plans (a read-only Sonnet `explore` feeding a lean Opus
   `create-plan`), Kimi (via Pi, on the Kimi-for-Coding subscription)
   implements and self-reviews up to 5x, GPT-6 Astra via omp does a second-pass
-  review-with-fixes, and Claude Sonnet does a third model-diverse
+  review-with-fixes, and Claude Opus does a third model-diverse
   review-with-fixes — then a final build gate and a workflow-summary comment.
 
   Output: a PR against the project's base branch (auto-detected from
@@ -800,7 +800,7 @@ nodes:
           <promise>PI_REVIEW_CLEAN</promise>
 
         Be honest: emitting PI_REVIEW_CLEAN prematurely shifts cost onto
-        the gpt-review-fix and Sonnet phases that follow. Emitting it on a clean
+        the gpt-review-fix and Claude phases that follow. Emitting it on a clean
         PR is the goal.
 
   - id: gpt-review-fix
@@ -817,6 +817,7 @@ nodes:
     # Connect once on the cluster image: `omp /login` → "ChatGPT Plus/Pro
     # (Codex)". To see an account's exact list run `omp` → `/model`.
     model: openai-codex/gpt-6-astra
+    effort: high
     context: fresh
     prompt: |
       You are reviewing a PR that an upstream agent already authored
@@ -880,11 +881,14 @@ nodes:
       End with: <promise>GPT-REVIEW-DONE</promise>
 
 
-  - id: sonnet-review-fix
+  - id: anthropic-review-fix
     category: validation
     depends_on: [gpt-review-fix]
     provider: claude
-    model: sonnet
+    # The model-diverse counterweight to the OpenAI pass above — a frontier
+    # reader, not a cheap one, or the step stops earning its place.
+    model: opus
+    effort: high
     context: fresh
     prompt: |
       You are the third, model-diverse review-and-fix pass on a PR that has
@@ -945,11 +949,11 @@ nodes:
       Push commits — that is the entire output. If you genuinely find nothing,
       push nothing.
 
-      When done, output: <promise>SONNET-REVIEW-DONE</promise>
+      When done, output: <promise>ANTHROPIC-REVIEW-DONE</promise>
 
   - id: final-verify-loop
     category: validation
-    depends_on: [sonnet-review-fix]
+    depends_on: [anthropic-review-fix]
     loop:
       provider: pi
       model: kimi-code/kimi-for-coding
@@ -958,7 +962,7 @@ nodes:
       prompt: |
         Final gate — the last node that can touch code before the run
         completes. Every fix-capable node upstream (implement, the kimi
-        self-review loop, gpt-review-fix, sonnet) may have pushed changes since
+        self-review loop, gpt-review-fix, anthropic-review-fix) may have pushed changes since
         `validate` ran, so verify the FINAL state of the branch.
 
         Know what `validate` did and did not do: it ran the project's **quick
@@ -1059,7 +1063,7 @@ nodes:
       Post a short "workflow complete" PR comment that reflects what
       ACTUALLY happened in this run. Don't suggest running review
       agents — three review-and-fix passes (kimi self-review loop, gpt-review-fix,
-      sonnet-review-fix) already ran in this same workflow and pushed their fixes
+      anthropic-review-fix) already ran in this same workflow and pushed their fixes
       as commits. This comment is the run's single human-facing overview: a thin
       status line with the commit breakdown, not a second review.
 
@@ -1071,7 +1075,7 @@ nodes:
 
       1. `gh pr view --json number,title,headRefName,additions,deletions`.
       2. `git log --oneline origin/<base>..HEAD` (that entry's `base`) — every
-         commit that landed, including the gpt-review-fix and sonnet-review-fix passes.
+         commit that landed, including the gpt-review-fix and anthropic-review-fix passes.
       3. Count commits by phase using the conventional-commit prefixes
          (feat / fix / chore / etc.) and any phase markers in the bodies.
 
@@ -1090,7 +1094,7 @@ nodes:
       **Commit breakdown**:
       - Implementation + kimi self-review: <N> commits
       - gpt-review-fix pass: <N> commits (or "none — nothing to fix")
-      - sonnet-review-fix pass: <N> commits (or "none — nothing to fix")
+      - anthropic-review-fix pass: <N> commits (or "none — nothing to fix")
       ```
 
       Rules:
