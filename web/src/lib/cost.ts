@@ -28,6 +28,10 @@ function ratesFor(model: string): Rates {
     return { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
   if (m.includes("sonnet"))
     return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+  // GPT-6 Astra standard tier, short context. Must precede the gpt-5 check —
+  // `openai-codex/gpt-6-astra` matches that one too. (mirrors token_usage.rs)
+  if (m.includes("gpt-6"))
+    return { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
   if (m.includes("gpt-5") || m.includes("codex") || m.includes("openai"))
     return { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 5 };
   if (m.includes("kimi") || m.includes("moonshot"))

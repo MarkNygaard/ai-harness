@@ -18,6 +18,8 @@ describe("usageCost", () => {
     expect(out("claude-haiku-4-5")).toBeCloseTo(5, 9);
     expect(out("claude-fable-5")).toBeCloseTo(50, 9);
     expect(out("openai-codex/gpt-5.5")).toBeCloseTo(30, 9);
+    expect(out("gpt-6-astra")).toBeCloseTo(50, 9);
+    expect(out("openai-codex/gpt-6-astra")).toBeCloseTo(50, 9);
     expect(out("kimi-code/kimi-for-coding")).toBeCloseTo(4, 9);
     expect(out("composer-2.5")).toBeCloseTo(2.5, 9);
     // Unknown → Sonnet-tier fallback (matches the server).

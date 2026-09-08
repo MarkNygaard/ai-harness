@@ -135,12 +135,21 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
         });
     }
     if creds.codex {
-        // Codex CLI on a ChatGPT account: general gpt-5.x models (not the
-        // `-codex` variants, which need API-key auth).
+        // Codex CLI on a ChatGPT account: the general models (not the `-codex`
+        // variants, which need API-key auth). `gpt-6-astra` needs Codex CLI
+        // >= 0.153.1 and is still rolling out per plan, so the older ids stay
+        // listed for an account that doesn't have it yet.
         providers.push(ProviderInfo {
             id: "codex",
             label: "Codex",
-            models: vec!["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+            models: vec![
+                "gpt-6-astra",
+                // The Codex CLI's own default (see `harness_agents::codex`).
+                "gpt-5.6-sol",
+                "gpt-5.5",
+                "gpt-5.4",
+                "gpt-5.4-mini",
+            ],
         });
     }
     // omp (`pi`) is shown when at least one omp backend is authenticated; its
@@ -149,6 +158,10 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
         let mut pi_models: Vec<&'static str> = Vec::new();
         if creds.codex {
             pi_models.extend([
+                // Astra entered omp's openai-codex catalog in omp v18.1.12.
+                "openai-codex/gpt-6-astra",
+                // What every bundled workflow's gpt review node pins.
+                "openai-codex/gpt-5.6-sol",
                 "openai-codex/gpt-5.5",
                 "openai-codex/gpt-5.4-nano",
                 "openai-codex/gpt-5.2-codex",
@@ -935,7 +948,7 @@ nodes:
         assert!(!has(&none, "pi"));
         assert!(has(&none, "anthropic-api"));
 
-        // Codex only: Codex-CLI gpt-5.x + omp's openai-codex/* models; no kimi.
+        // Codex only: Codex-CLI models + omp's openai-codex/* ones; no kimi.
         let codex = catalog(
             tmp.path(),
             ConnectedCreds {
@@ -944,7 +957,13 @@ nodes:
             },
         );
         assert!(models(&codex, "codex").contains(&"gpt-5.5"));
+        assert!(models(&codex, "codex").contains(&"gpt-6-astra"));
+        // The CLI default and the id the bundled workflows pin are both offerable.
+        assert!(models(&codex, "codex").contains(&"gpt-5.6-sol"));
+        assert!(models(&codex, "pi").contains(&"openai-codex/gpt-5.6-sol"));
         assert!(models(&codex, "pi").contains(&"openai-codex/gpt-5.1-codex"));
+        // On `pi` an OpenAI id must be namespace-qualified — Astra included.
+        assert!(models(&codex, "pi").contains(&"openai-codex/gpt-6-astra"));
         assert!(!models(&codex, "pi")
             .iter()
             .any(|m| m.starts_with("kimi-code/")));

@@ -34,7 +34,11 @@ pub(crate) fn lane_for_model(model: &str) -> &'static str {
     let m = model.to_ascii_lowercase();
     if m.contains("opus") || m.contains("haiku") || m.contains("fable") || m.contains("sonnet") {
         "claude"
-    } else if m.contains("gpt-5") || m.contains("codex") || m.contains("openai") {
+    } else if m.contains("gpt-5")
+        || m.contains("gpt-6")
+        || m.contains("codex")
+        || m.contains("openai")
+    {
         "gpt"
     } else if m.contains("kimi") || m.contains("moonshot") {
         "kimi"
@@ -78,6 +82,18 @@ pub(crate) fn rates_for_model(model: &str) -> ModelRates {
             output: 15.0,
             cache_read: 0.3,
             cache_write: 3.75,
+        }
+    } else if m.contains("gpt-6") {
+        // GPT-6 Astra, standard tier at short context (<= 272K input): $10 in /
+        // $50 out / $1 cache-read / $12.50 cache-write. A request above that
+        // threshold prices at long-context rates; not modelled — this is a
+        // notional basis, and the id carries no context tier. Must precede the
+        // gpt-5/codex/openai arm, which `openai-codex/gpt-6-astra` also matches.
+        ModelRates {
+            input: 10.0,
+            output: 50.0,
+            cache_read: 1.0,
+            cache_write: 12.5,
         }
     } else if m.contains("gpt-5") || m.contains("codex") || m.contains("openai") {
         ModelRates {
