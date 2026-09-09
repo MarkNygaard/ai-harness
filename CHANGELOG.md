@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `openai-codex/`-qualified forms for Pi, which rejects a bare OpenAI id). Sol
   was already the Codex default and pinned on every bundled workflow's gpt
   review node, but no 5.6 id was actually offerable in the editor. Astra needs
-  Codex CLI >= 0.153.1 and omp >= 18.1.12 on the container; both are installed
-  unpinned, so a rebuild or an agent-CLI update picks them up.
+  Codex CLI >= 0.153.1 and omp >= 18.1.12 on the container — see the omp pin
+  below, which is what actually gets a new enough omp into the image.
 - **The `gpt-review-fix` step now runs GPT-6 Astra** in `idea-to-pr`,
   `bc-idea-to-pr` and `revise-pr`, up from `gpt-5.6-sol`. That is the
   model-diverse second-pass review, so the strongest available reviewer is the
@@ -73,6 +73,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **omp is pinned, in its own image layer — an unpinned install shipped a
+  years-stale CLI.** `bun install -g @oh-my-pi/pi-coding-agent` carried no
+  version and shared a `RUN` layer with the bun installer. Docker keys a layer
+  on its text, so once that text settled every rebuild reused the cached layer
+  and shipped whatever omp had been current the first time it was built:
+  "unpinned" means "latest" only on a cache miss. The result was a cluster
+  running workflows pinned to `openai-codex/gpt-6-astra` on an omp that had
+  never heard of the model — all six `pi` review nodes of a real PR review died
+  in three seconds with `Model "openai-codex/gpt-6-astra" not found`, before
+  any request was made, and everything downstream skipped. omp is now
+  `ARG OMP_VERSION=18.1.15` in a layer of its own, so bumping the version
+  changes the layer's text and the new version is actually installed. This is
+  the only place omp's version can be decided: unlike Claude Code and Codex it
+  has no in-app update path, because it lives in `/opt/bun` where the system
+  routes' `npm install --prefix` cannot reach it.
 - **The scope guard deleted the work it was meant to protect.** #371 computed each
   repo's changed-file set as `git diff origin/<base>...HEAD` — committed work
   only. But `implement-tasks` leaves its work **uncommitted**; `finalize-pr` is

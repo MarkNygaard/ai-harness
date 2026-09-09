@@ -71,6 +71,14 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
     && rm -rf /var/lib/apt/lists/*
 
 # Node (Claude Code + Codex CLIs are npm packages).
+#
+# This layer is cached on its text like any other, so the versions baked in
+# here age the same way omp's did below. It is left unpinned because these two
+# are the CLIs the system routes CAN update in place at runtime
+# (`npm install --prefix`, see `system_routes.rs`), so a stale image is
+# recoverable from the UI rather than only by a rebuild. Note `gpt-6-astra` on
+# the `codex` provider needs Codex CLI >= 0.153.1 — if a node fails on that,
+# updating the CLI from Settings is the fix.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install -g @anthropic-ai/claude-code @openai/codex \
@@ -85,9 +93,30 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # BUN_INSTALL (so its global packages, incl. omp, land there too) and move the
 # mise binary into /usr/local/bin.
 RUN curl -fsSL https://bun.sh/install | BUN_INSTALL=/opt/bun bash \
-    && BUN_INSTALL=/opt/bun /opt/bun/bin/bun install -g @oh-my-pi/pi-coding-agent \
     && chmod -R a+rX /opt/bun \
-    && ln -sf /opt/bun/bin/bun /usr/local/bin/bun \
+    && ln -sf /opt/bun/bin/bun /usr/local/bin/bun
+
+# omp, in its own layer and at a pinned version.
+#
+# This used to be an unpinned `bun install -g` sharing the layer above. Docker
+# keys a layer on its text, so once that text stopped changing every rebuild
+# reused the cached layer and shipped whatever omp had been current the first
+# time it was built — "unpinned" means "latest" only on a cache miss. That is
+# how a cluster running workflows pinned to `openai-codex/gpt-6-astra` ended up
+# with an omp that had never heard of the model: every `pi` review node failed
+# with `Model "openai-codex/gpt-6-astra" not found` before making a request.
+#
+# The version therefore has to be stated, not inferred. Bumping this ARG
+# changes the layer's text, which is what makes the new version actually get
+# installed. Unlike the npm CLIs above, omp has NO in-app update path — it
+# lives in /opt/bun, out of reach of the `npm install --prefix` the
+# system routes use — so this line is the only place its version is decided.
+#
+# 18.1.12 added gpt-6-astra to omp's openai-codex catalog; keep this at or
+# above that for as long as any workflow pins an Astra model.
+ARG OMP_VERSION=18.1.15
+RUN BUN_INSTALL=/opt/bun /opt/bun/bin/bun install -g "@oh-my-pi/pi-coding-agent@${OMP_VERSION}" \
+    && chmod -R a+rX /opt/bun \
     && ln -sf /opt/bun/bin/omp /usr/local/bin/omp
 
 # pi-web-access: adds web SEARCH + rich fetch (Exa MCP) to the omp agent on top
