@@ -133,6 +133,18 @@ pub struct PersistedNode {
     pub started_at: Option<DateTime<Utc>>,
     pub ended_at: Option<DateTime<Utc>>,
     pub artifact_content: Option<String>,
+    /// Failing tool calls recorded inside this node.
+    ///
+    /// A node's `status` is the verdict on its *output*, so a node that fought a
+    /// broken command a dozen times and still produced the artifact reports
+    /// plain `success` — the struggle is only in the activity feed, which nobody
+    /// reads for a run that worked. That is how a project ends up repeatedly
+    /// paying for the same obstacle without anyone noticing: the signal exists,
+    /// but not where a run is actually reviewed. A non-zero count here is not a
+    /// failure and must not be read as one; it says the node had to work around
+    /// something, and names a run worth opening the feed for.
+    #[sqlx(default)]
+    pub error_count: i64,
 }
 
 /// One raw error line joined to its run — the input to the grouping below.
@@ -168,6 +180,11 @@ pub struct ActivityErrorGroup {
     /// How many distinct runs hit it — a high count over one run is one agent
     /// looping; over many runs it is a property of the project.
     pub runs: i64,
+    /// The most recent run ids that hit it (capped). Without these a group can
+    /// be counted but not traced: "14 times over 10 runs" leaves the reader
+    /// unable to answer whether the run in front of them was one of them, which
+    /// is the first thing anyone asks of this list.
+    pub run_ids: Vec<String>,
     pub project: Option<String>,
     pub workflow: String,
     /// Node ids where it appeared (capped, most frequent first).
@@ -177,6 +194,11 @@ pub struct ActivityErrorGroup {
     pub first_seen: DateTime<Utc>,
     pub last_seen: DateTime<Utc>,
 }
+
+/// How many run ids an [`ActivityErrorGroup`] carries. Enough to recognise a
+/// run you are holding and to open a couple of examples; not so many that a
+/// group repeated across a hundred runs prints a wall of ids.
+const RECENT_RUN_IDS: usize = 5;
 
 /// Collapse a failure message to a coarse fingerprint so near-identical ones group.
 ///
@@ -775,6 +797,9 @@ impl RunStore {
         struct Acc {
             count: i64,
             runs: std::collections::HashSet<String>,
+            /// Distinct run ids in first-seen order. Rows arrive newest-first,
+            /// so this is newest-first too and the head is the useful end.
+            recent_runs: Vec<String>,
             nodes: HashMap<String, i64>,
             sample: String,
             first_seen: DateTime<Utc>,
@@ -798,13 +823,16 @@ impl RunStore {
             let e = acc.entry(key).or_insert_with(|| Acc {
                 count: 0,
                 runs: std::collections::HashSet::new(),
+                recent_runs: Vec::new(),
                 nodes: HashMap::new(),
                 sample: message.clone(),
                 first_seen: at,
                 last_seen: at,
             });
             e.count += 1;
-            e.runs.insert(run_id);
+            if e.runs.insert(run_id.clone()) && e.recent_runs.len() < RECENT_RUN_IDS {
+                e.recent_runs.push(run_id);
+            }
             *e.nodes.entry(node_id).or_insert(0) += 1;
             if at < e.first_seen {
                 e.first_seen = at;
@@ -822,6 +850,7 @@ impl RunStore {
                 ActivityErrorGroup {
                     count: a.count,
                     runs: a.runs.len() as i64,
+                    run_ids: a.recent_runs,
                     project,
                     workflow,
                     nodes: nodes.into_iter().take(6).map(|(n, _)| n).collect(),
@@ -1164,11 +1193,24 @@ impl RunStore {
                 .bind(run_id)
                 .fetch_one(&self.pool)
                 .await?;
+        // The error count is joined in rather than stored on the node row: it is
+        // derived from the activity feed, which keeps arriving after a node's
+        // own row is written, so a stored copy would be a snapshot taken too
+        // early. Aggregating in the subquery (not a `GROUP BY` over the join)
+        // keeps one row per node whatever the feed holds.
         let nodes = sqlx::query_as::<_, PersistedNode>(
-            "SELECT node_id, ordinal, status, provider, model, output, iterations, converged,
-                    note, input_tokens, output_tokens, cache_read, cache_write, started_at, ended_at,
-                    artifact_content
-             FROM harness_run_nodes WHERE run_id = $1 ORDER BY ordinal",
+            "SELECT n.node_id, n.ordinal, n.status, n.provider, n.model, n.output, n.iterations,
+                    n.converged, n.note, n.input_tokens, n.output_tokens, n.cache_read,
+                    n.cache_write, n.started_at, n.ended_at, n.artifact_content,
+                    COALESCE(e.errors, 0) AS error_count
+             FROM harness_run_nodes n
+             LEFT JOIN (
+                 SELECT node_id, COUNT(*) AS errors
+                 FROM harness_run_activity
+                 WHERE run_id = $1 AND is_error
+                 GROUP BY node_id
+             ) e ON e.node_id = n.node_id
+             WHERE n.run_id = $1 ORDER BY n.ordinal",
         )
         .bind(run_id)
         .fetch_all(&self.pool)
@@ -1783,12 +1825,37 @@ mod tests {
             );
             assert_eq!(g.runs, 1);
             assert_eq!(g.nodes, vec!["build".to_string()]);
+            // A count nobody can trace back to a run is a dead end: the group
+            // has to name the run it came from, once, not once per occurrence.
+            assert_eq!(g.run_ids, vec![run_id.clone()], "{g:?}");
         }
         // Most-repeated first, and the repeat is collapsed rather than listed twice.
         assert_eq!(groups[0].count, 2);
         assert!(groups[0].sample.contains("@/i18n/stores"), "{groups:?}");
         assert_eq!(groups[1].count, 1);
         assert!(groups[1].sample.contains("permission denied"), "{groups:?}");
+
+        // The same failures must also be visible on the run itself — the whole
+        // point is that a node reporting `success` still declares what it fought.
+        store
+            .record_node(&run_id, 0, &report.nodes[0])
+            .await
+            .unwrap();
+        let detail = store.get_run(&run_id).await.unwrap().expect("run");
+        let build = detail
+            .nodes
+            .iter()
+            .find(|n| n.node_id == "build")
+            .expect("build node");
+        assert_eq!(build.status, "success");
+        // Four of the five activities failed. The blank one counts here even
+        // though the grouping above drops it: there it would be a fingerprint
+        // collapsing unrelated failures into one meaningless group, whereas a
+        // count loses nothing to a failure that had nothing to say.
+        assert_eq!(
+            build.error_count, 4,
+            "every failing tool result, and only those: {build:?}"
+        );
 
         store.delete_run(&run_id).await.unwrap();
     }

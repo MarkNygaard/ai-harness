@@ -570,7 +570,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "run_status",
-            "description": "Get one run's status and per-node detail by run_id.",
+            "description": "Get one run's status and per-node detail by run_id. Each node also carries `error_count`: failing tool calls recorded inside it. That is independent of the node's `status` — a node can finish `success` having fought a broken command a dozen times — so a non-zero count is not a failure, it means the node worked around something and the run is worth reading the activity feed for.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -590,7 +590,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "run_activity_errors",
-            "description": "Recurring agent-side failures across runs — what the agents keep tripping over, rather than one run's feed. Each group is identical failures collapsed together: `count` occurrences over `runs` distinct runs, the `workflow`, the `nodes` they happened in, a verbatim `sample`, and first/last seen. Most-repeated first. Use it to decide what belongs in a project's CLAUDE.md: a failure with a high `runs` count is a property of the project (a missing generated file, an absent credential, a command that isn't where the agent looked), not one agent's bad luck. Optional `project` narrows to one project, `days` sets the window (default 14), `limit` caps the groups returned (default 25). Note that a search matching nothing is not counted as a failure.",
+            "description": "Recurring agent-side failures across runs — what the agents keep tripping over, rather than one run's feed. Each group is identical failures collapsed together: `count` occurrences over `runs` distinct runs, the most recent of those in `run_ids` (capped, newest first — use them to tell whether a run you are looking at is one of them), the `workflow`, the `nodes` they happened in, a verbatim `sample`, and first/last seen. Most-repeated first. Use it to decide what belongs in a project's CLAUDE.md: a failure with a high `runs` count is a property of the project (a missing generated file, an absent credential, a command that isn't where the agent looked), not one agent's bad luck. Optional `project` narrows to one project, `days` sets the window (default 14), `limit` caps the groups returned (default 25). Note that a search matching nothing is not counted as a failure.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,

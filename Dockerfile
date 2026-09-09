@@ -7,7 +7,8 @@
 # so the builder needs both cargo AND bun, and the runtime is a single static-ish
 # binary that already serves the UI.
 #
-# The runtime also carries the agent CLIs (claude / codex / cursor / omp) + git + mise,
+# The runtime also carries the agent CLIs (claude / codex / cursor / omp) + git + mise
+# + a headless Chromium for the agents' browser tool,
 # so `provider: claude|codex|cursor|pi` nodes and toolchain bootstrap work in-pod.
 # Provider credentials are NOT baked in — they're entered in the UI, stored encrypted
 # in Postgres, and materialized into $HOME (~/.claude, ~/.codex) or env (CURSOR_API_KEY)
@@ -143,6 +144,38 @@ RUN curl https://cursor.com/install -fsS | bash \
     && rm -rf /root/.local /root/.cursor \
     && cursor-agent --version
 
+# Chromium, for the agents' browser tool.
+#
+# omp ships a browser tool and the agents reach for it unprompted on frontend
+# work; with no browser in the image it fails with "Shared browser daemon
+# unavailable (broker start or Chromium launch failed)" — 6 occurrences across
+# 4 runs in a week, in `implement-tasks` and `gpt-review-fix`. Unlike the
+# missing-`file` case this is not only lost convenience: on a storefront project
+# the deliverable IS the rendered page, and every review pass so far has had to
+# sign off with "live rendering not verified" because nothing in the image could
+# open it.
+#
+# This is by far the largest thing here — roughly 400 MB with its dependencies,
+# against ~1 MB for `file`. It is worth it only because the projects this
+# harness runs are mostly web front ends; an install that is all backend should
+# consider dropping this layer.
+#
+# `fonts-liberation` is not optional cosmetics: without a font package Chromium
+# renders every glyph as a box, so screenshots are worthless for the visual
+# check that justifies having it at all.
+#
+# The two env vars below are the discovery paths browser tooling actually reads
+# (chrome-launcher/lighthouse honor CHROME_PATH; puppeteer honors
+# PUPPETEER_EXECUTABLE_PATH), set so a library that would otherwise try to
+# download its own copy at run time finds this one instead. CHROMIUM_FLAGS is
+# read by Debian's /usr/bin/chromium wrapper: containers get a 64 MB /dev/shm
+# and no CAP_SYS_ADMIN, which are the two things that make an otherwise healthy
+# Chromium fail to start.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends chromium fonts-liberation \
+    && rm -rf /var/lib/apt/lists/* \
+    && /usr/bin/chromium --version
+
 RUN curl -fsSL https://mise.run | sh \
     && mv /root/.local/bin/mise /usr/local/bin/mise \
     && chmod a+rx /usr/local/bin/mise \
@@ -163,7 +196,10 @@ USER harness
 ENV HOME=/home/harness \
     PATH="/home/harness/.local/bin:/usr/local/bin:/usr/bin:/bin" \
     HARNESS_HTTP_ADDR=0.0.0.0:8080 \
-    OMP_PLUGIN_DIRS=/opt/omp-plugins/node_modules/pi-web-access
+    OMP_PLUGIN_DIRS=/opt/omp-plugins/node_modules/pi-web-access \
+    CHROME_PATH=/usr/bin/chromium \
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    CHROMIUM_FLAGS="--no-sandbox --disable-dev-shm-usage"
 WORKDIR /home/harness
 EXPOSE 8080
 

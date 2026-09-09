@@ -234,6 +234,17 @@ impl LocalRunner {
         prompt: String,
         req: &NodeRequest<'_>,
     ) -> Result<NodeOutput, RunnerError> {
+        // The layout goes before the task: it describes the ground the agent is
+        // standing on, and an agent that reads it after the instructions has
+        // already decided where to run `git`.
+        let layout = workspace_layout_preamble(&self.env_vars);
+        let prompt = if layout.is_empty() {
+            prompt
+        } else {
+            format!("{layout}\n\n{prompt}")
+        };
+        // Stays last: a schema directive the agent reads before the task it
+        // applies to is one it can forget by the time it answers.
         let prompt = match req.output_format {
             Some(schema) => format!("{prompt}{}", output_format_directive(schema)),
             None => prompt,
@@ -338,6 +349,73 @@ fn apply_commit_identity(
         provider.unwrap_or("").to_string(),
     );
     env.insert("HARNESS_MODEL".into(), model.unwrap_or("").to_string());
+}
+
+/// Describe a multi-repo workspace's layout for the agent, or return an empty
+/// string for a single-repo run.
+///
+/// In a multi-repo run the workspace root holds one checkout per repo and is
+/// itself **not** a git repository, so a bare `git` or `gh` at the root dies
+/// with `fatal: not a git repository (or any parent up to mount point /home)` —
+/// a message that names no cause the agent can act on, and one it typically
+/// answers by retrying the same command somewhere else.
+///
+/// It was the most repeated agent-side failure on multi-repo projects, and it
+/// kept recurring because the remedy lived only in prose scattered through the
+/// bundled workflows: a node whose prompt happened not to repeat it — and every
+/// user-authored workflow, which repeats none of it — had nothing to go on.
+/// Stating the layout here covers each `prompt`, `command` and loop node of
+/// every workflow, bundled or not, since they all funnel through
+/// [`LocalRunner::run_prompt`].
+///
+/// Deliberately silent for single-repo runs, where the root *is* the repository
+/// and the whole block would be a warning about a hazard that does not exist.
+fn workspace_layout_preamble(env: &HashMap<String, String>) -> String {
+    let Some(raw) = env.get("HARNESS_REPOS").filter(|v| !v.trim().is_empty()) else {
+        return String::new();
+    };
+    let Ok(repos) = serde_json::from_str::<Vec<serde_json::Value>>(raw) else {
+        // Malformed JSON is the server's bug, not the agent's: saying nothing
+        // leaves the run exactly as it was before this block existed, whereas a
+        // half-rendered layout would send it to a folder that may not be there.
+        return String::new();
+    };
+    let mut rows = Vec::with_capacity(repos.len());
+    for repo in &repos {
+        let Some(folder) = repo.get("folder").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let base = repo
+            .get("base_branch")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let role = repo.get("role").and_then(|v| v.as_str()).unwrap_or("");
+        let mut row = format!("- `{folder}/`");
+        if !base.is_empty() {
+            row.push_str(&format!(" — base branch `{base}`"));
+        }
+        if !role.is_empty() {
+            row.push_str(&format!(" ({role})"));
+        }
+        rows.push(row);
+    }
+    if rows.is_empty() {
+        return String::new();
+    }
+    let list = rows.join("\n");
+    format!(
+        "## Workspace layout (read before running any command)\n\n\
+         This run's working directory is a **multi-repo container**: it holds one \
+         checkout per repository and is **not** itself a git repository. `git` and \
+         `gh` fail there with \"fatal: not a git repository\" — that error means you \
+         are at the root, not that the checkout is broken.\n\n\
+         Repositories, relative to the working directory:\n\
+         {list}\n\n\
+         Run every `git` and `gh` command from inside one of those folders \
+         (`cd <folder>` first), and use that repository's own base branch. \
+         Build and test commands likewise belong inside the repo that owns them. \
+         The full layout, including each remote URL, is the JSON in `$HARNESS_REPOS`."
+    )
 }
 
 /// Build the instruction appended to a prompt when a node declares an
@@ -585,6 +663,109 @@ mod tests {
             agent.last_prompt.lock().unwrap().as_deref(),
             Some("do the thing")
         );
+    }
+
+    /// The layout block exists to stop `fatal: not a git repository` at the
+    /// workspace root, so the test pins what an agent has to be told to avoid
+    /// it: which folders exist, and that git belongs inside one.
+    #[tokio::test]
+    async fn multi_repo_prompt_is_prefixed_with_the_workspace_layout() {
+        let dir = TempDir::new().unwrap();
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        let repos = serde_json::json!([
+            { "folder": "frontend", "url": "https://x/f.git", "base_branch": "main", "role": "primary" },
+            { "folder": "backend", "url": "https://x/b.git", "base_branch": "develop" },
+        ]);
+        let runner = runner.with_env_vars(HashMap::from([(
+            "HARNESS_REPOS".to_string(),
+            repos.to_string(),
+        )]));
+        let vars = VarContext::new();
+
+        runner
+            .execute(request(NodeBody::Prompt("do the thing".into()), &vars))
+            .await
+            .unwrap();
+
+        let sent = agent.last_prompt.lock().unwrap().clone().unwrap();
+        assert!(
+            sent.starts_with("## Workspace layout"),
+            "layout must precede the task: {sent:?}"
+        );
+        assert!(sent.contains("`frontend/`"), "got: {sent:?}");
+        assert!(sent.contains("`backend/`"), "got: {sent:?}");
+        assert!(sent.contains("base branch `develop`"), "got: {sent:?}");
+        assert!(sent.contains("(primary)"), "got: {sent:?}");
+        assert!(sent.contains("itself a git repository"), "got: {sent:?}");
+        assert!(
+            sent.contains("fatal: not a git repository"),
+            "got: {sent:?}"
+        );
+        // The task itself still arrives intact, after the block.
+        assert!(sent.ends_with("do the thing"), "got: {sent:?}");
+    }
+
+    /// A single-repo run's root *is* the repository, so the warning would be
+    /// false. Absent `HARNESS_REPOS` must leave the prompt byte-identical.
+    #[tokio::test]
+    async fn single_repo_prompt_is_left_alone() {
+        let dir = TempDir::new().unwrap();
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        let vars = VarContext::new();
+        runner
+            .execute(request(NodeBody::Prompt("do the thing".into()), &vars))
+            .await
+            .unwrap();
+        assert_eq!(
+            agent.last_prompt.lock().unwrap().as_deref(),
+            Some("do the thing")
+        );
+    }
+
+    /// Malformed or empty layout JSON is a server-side bug; the run should
+    /// proceed exactly as it did before the block existed rather than be sent
+    /// to a folder that might not be there.
+    #[test]
+    fn unusable_repo_layouts_produce_no_block() {
+        for raw in [
+            "",
+            "   ",
+            "not json",
+            "[]",
+            r#"[{"url":"https://x/f.git"}]"#,
+        ] {
+            let env = HashMap::from([("HARNESS_REPOS".to_string(), raw.to_string())]);
+            assert_eq!(
+                super::workspace_layout_preamble(&env),
+                "",
+                "expected no block for {raw:?}"
+            );
+        }
+    }
+
+    /// The layout is context, the schema directive is an instruction about the
+    /// reply — the reply rule has to stay last, with the task between them.
+    #[tokio::test]
+    async fn layout_leads_and_output_format_directive_still_trails() {
+        let dir = TempDir::new().unwrap();
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        let repos = serde_json::json!([{ "folder": "frontend", "base_branch": "main" }]);
+        let runner = runner.with_env_vars(HashMap::from([(
+            "HARNESS_REPOS".to_string(),
+            repos.to_string(),
+        )]));
+        let schema = serde_json::json!({ "type": "object" });
+        let vars = VarContext::new();
+        let mut req = request(NodeBody::Prompt("classify this".into()), &vars);
+        req.output_format = Some(&schema);
+
+        runner.execute(req).await.unwrap();
+
+        let sent = agent.last_prompt.lock().unwrap().clone().unwrap();
+        let layout = sent.find("## Workspace layout").unwrap();
+        let task = sent.find("classify this").unwrap();
+        let schema_at = sent.find("JSON schema").unwrap();
+        assert!(layout < task && task < schema_at, "got: {sent:?}");
     }
 
     #[tokio::test]

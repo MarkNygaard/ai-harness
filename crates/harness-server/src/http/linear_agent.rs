@@ -2135,6 +2135,7 @@ mod tests {
                 started_at: None,
                 ended_at: None,
                 artifact_content: artifact.map(str::to_string),
+                error_count: 0,
             };
         let meta = |id: &str| harness_dag::NodeMeta {
             id: id.into(),
