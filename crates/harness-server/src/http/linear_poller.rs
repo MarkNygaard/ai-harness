@@ -1459,6 +1459,7 @@ mod tests {
             started_at: None,
             ended_at: None,
             artifact_content: None,
+            error_count: 0,
         }
     }
 

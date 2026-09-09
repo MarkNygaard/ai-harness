@@ -160,6 +160,19 @@ tests are the source of truth.*
   `cursor-agent` binary must be on `PATH` in the container image — without it,
   `cursor` nodes fail to spawn. Verify with `cargo test -p harness-runner`.
   Routing for all three lives in `dispatch.rs` (`DispatchAgent`).
+- **Agent browser tool** — omp's browser tool needs a Chromium on `PATH`; the
+  image installs one plus `fonts-liberation` (without a font package every glyph
+  renders as a box, so screenshots are useless). `CHROME_PATH` /
+  `PUPPETEER_EXECUTABLE_PATH` point at it and `CHROMIUM_FLAGS` carries
+  `--no-sandbox --disable-dev-shm-usage`, which is what a container needs. It is
+  ~400 MB of the image — an all-backend install can drop that layer.
+- **Multi-repo prompts** — in a multi-repo run the workspace root is not a git
+  repo, so `LocalRunner::run_prompt` prepends a workspace-layout block to every
+  `prompt`/`command`/loop node (`workspace_layout_preamble`, keyed on
+  `HARNESS_REPOS`). Do NOT re-add "cd into the folder before git" prose to
+  individual workflow prompts — that scattering is what let the rule go missing
+  in the first place. Single-repo runs get no block. Verify with
+  `cargo test -p harness-runner`.
 
 ## Server operation
 

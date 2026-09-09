@@ -60,6 +60,11 @@ reason about a frontend and the backend where half of its logic actually lives.
 [`review-area`](/docs/workflows/bundled#review-area) is built for this, and
 works single-repo too.
 
+The workspace root in a multi-repo run holds the checkouts but is not itself a
+git repository, so `git` and `gh` only work inside one of the folders. Every
+agent node is told this automatically — your own workflows do not need to repeat
+it — but a `bash:` node you write does have to `cd` into the right folder first.
+
 Use it when a change genuinely spans repositories. A project per repository is
 simpler when they are independent.
 
