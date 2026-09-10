@@ -494,8 +494,25 @@ async fn claim_and_fire(
         }
         super::linear_agent::Route::Build => (b.workflow.clone(), b.base_branch.clone()),
     };
+    // Who put this issue in the column being watched — not who it is assigned
+    // to. An issue delegated by one person and later dragged into a re-run
+    // column by another is a second run, asked for by the second person, and
+    // the assignee would credit the first. `delegate_id` is the harness's own
+    // Linear identity, excluded so its pickup and completion moves never read
+    // as a request.
+    let trigger = super::linear_agent::linear_trigger(
+        state,
+        client,
+        Some(issue.id.as_str()),
+        Some(b.source_state_id.as_str()),
+        Some(delegate_id),
+        super::runs_routes::SOURCE_LINEAR_POLLER,
+    )
+    .await;
     let req = CreateRunRequest {
-        triggered_by: Some("linear".to_string()),
+        triggered_by: trigger.user_id.clone(),
+        trigger_source: trigger.source.clone(),
+        trigger_actor: trigger.actor.clone(),
         workflow,
         title: Some(format!("{} {}", issue.identifier, issue.title)),
         issue_id: Some(issue.id.clone()),
@@ -1476,6 +1493,8 @@ mod tests {
         harness_persist::RunDetail {
             run: harness_persist::RunSummary {
                 triggered_by: None,
+                trigger_source: None,
+                trigger_actor: None,
                 id: "r1".into(),
                 workflow_name: "idea-to-pr".into(),
                 title: None,

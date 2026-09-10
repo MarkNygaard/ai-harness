@@ -76,10 +76,29 @@ pub struct RunSummary {
     /// Display label for the arm's substituted model (e.g. `"cursor/composer-2.5"`),
     /// so the comparison view can name each arm without re-reading node rows.
     pub ab_label: Option<String>,
-    /// Who asked for this run — a user id, or a label like `linear` for a run
-    /// nothing signed-in started. `None` on runs from before accounts existed.
+    /// Who asked for this run, as a harness user id — `None` when the person
+    /// has no account here, or when nothing identified them.
     pub triggered_by: Option<String>,
+    /// Where the run came in from: `ui`, `mcp`, `linear-webhook`,
+    /// `linear-poller`, or the coarse `linear` on rows predating the split.
+    pub trigger_source: Option<String>,
+    /// The initiator as a human reads them, when one is known.
+    pub trigger_actor: Option<String>,
 }
+
+/// Who set a run in motion, stamped at start time (borrowed for binding).
+///
+/// The three travel together because they are one answer: `source` is the door
+/// the run came in through, `user_id` the account behind it when there is one,
+/// and `actor` what to show a reader. Grouping them keeps `start_run` from
+/// growing three more positional arguments that would be trivial to swap.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Trigger<'a> {
+    pub source: Option<&'a str>,
+    pub user_id: Option<&'a str>,
+    pub actor: Option<&'a str>,
+}
+
 /// A/B pairing metadata stamped on a run at start time (borrowed for binding).
 #[derive(Debug, Clone, Copy)]
 pub struct AbPairing<'a> {
@@ -304,9 +323,19 @@ CREATE TABLE IF NOT EXISTS harness_workflow_runs (
     node_count    int  NOT NULL DEFAULT 0,
     graph         jsonb NOT NULL DEFAULT '[]'::jsonb,
     owner         text,
-    -- Who asked for this run: a user id, or a label like `linear` for a run
-    -- nothing signed-in started. NULL on every run from before accounts.
+    -- Who asked for this run, as a harness user id. NULL when the person has no
+    -- account here (someone working only in Linear) or when nothing identified
+    -- them — never a source label; that is `trigger_source`'s job.
     triggered_by  text,
+    -- Where the run came in from: ui | mcp | linear-webhook | linear-poller.
+    -- NULL on rows written before this column existed.
+    trigger_source text,
+    -- The initiator as a human reads them (name, then email), filled
+    -- whenever a person is known. Kept beside `triggered_by` rather than joined
+    -- from it because the two answer different questions: a Linear-only
+    -- colleague has a name to show and no account to join to, and a run should
+    -- still say who asked for it after that account is deleted.
+    trigger_actor text,
     heartbeat_at  timestamptz,
     recorded_at   timestamptz NOT NULL DEFAULT now()
 )";
@@ -317,6 +346,28 @@ const ALTER_RUNS_GRAPH: &str =
 /// Who asked for a run. Idempotent.
 const ALTER_RUNS_TRIGGERED_BY: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS triggered_by text";
+/// Where a run came in from, split out from `triggered_by`. Idempotent.
+const ALTER_RUNS_TRIGGER_SOURCE: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS trigger_source text";
+/// The initiator's display label. Idempotent.
+const ALTER_RUNS_TRIGGER_ACTOR: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS trigger_actor text";
+/// Move the one source label `triggered_by` ever held into its own column.
+///
+/// That column used to mean "a user id, or the string `linear`", which made it
+/// unreadable without knowing which kind of value you had — and left the two
+/// Linear paths indistinguishable from each other and UI runs indistinguishable
+/// from MCP ones. New rows record the specific source; these historical ones can
+/// only say `linear`, because nothing was written down that could tell the
+/// webhook from the poller after the fact.
+///
+/// Idempotent by construction: after it runs there is no `triggered_by =
+/// 'linear'` left to match. Historical UI and MCP rows keep their user id and
+/// are left with a NULL source for the same reason — the distinction was never
+/// recorded, and guessing one would be worse than admitting it is unknown.
+const MIGRATE_RUNS_LINEAR_TRIGGER: &str = "UPDATE harness_workflow_runs
+        SET trigger_source = 'linear', triggered_by = NULL
+      WHERE triggered_by = 'linear'";
 const ALTER_RUNS_TITLE: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS title text";
 const ALTER_RUNS_DESCRIPTION: &str =
@@ -433,6 +484,16 @@ impl RunStore {
         sqlx::query(CREATE_RUNS).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_GRAPH).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_TRIGGERED_BY)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(ALTER_RUNS_TRIGGER_SOURCE)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(ALTER_RUNS_TRIGGER_ACTOR)
+            .execute(&self.pool)
+            .await?;
+        // After the columns exist, never before.
+        sqlx::query(MIGRATE_RUNS_LINEAR_TRIGGER)
             .execute(&self.pool)
             .await?;
         sqlx::query(ALTER_RUNS_TITLE).execute(&self.pool).await?;
@@ -572,15 +633,15 @@ impl RunStore {
         graph: &[NodeMeta],
         owner: Option<&str>,
         ab: Option<&AbPairing<'_>>,
-        triggered_by: Option<&str>,
+        trigger: Option<&Trigger<'_>>,
     ) -> Result<(), PersistError> {
         // Stamp the lease (`owner` + fresh `heartbeat_at`) so this run is
         // claimed by the current instance and protected from reconcile until its
         // heartbeat goes stale. A/B fields are stamped once at start and preserved
         // on conflict (COALESCE) so a re-`start_run` never drops the pairing.
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, owner, ab_pair_id, ab_arm, ab_label, triggered_by, heartbeat_at, recorded_at)
-             VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9, $10, $11, $12, now(), now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, owner, ab_pair_id, ab_arm, ab_label, triggered_by, trigger_source, trigger_actor, heartbeat_at, recorded_at)
+             VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now(), now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 title         = COALESCE(excluded.title, harness_workflow_runs.title),
@@ -593,7 +654,9 @@ impl RunStore {
                 ab_label      = COALESCE(harness_workflow_runs.ab_label, excluded.ab_label),
                 -- Preserve-first, like the A/B fields: a re-`start_run` must not
                 -- reattribute a run to whoever restarted it.
-                triggered_by  = COALESCE(harness_workflow_runs.triggered_by, excluded.triggered_by),
+                triggered_by   = COALESCE(harness_workflow_runs.triggered_by, excluded.triggered_by),
+                trigger_source = COALESCE(harness_workflow_runs.trigger_source, excluded.trigger_source),
+                trigger_actor  = COALESCE(harness_workflow_runs.trigger_actor, excluded.trigger_actor),
                 heartbeat_at  = now()",
         )
         .bind(run_id)
@@ -607,7 +670,9 @@ impl RunStore {
         .bind(ab.map(|a| a.pair_id))
         .bind(ab.map(|a| a.arm))
         .bind(ab.and_then(|a| a.label))
-        .bind(triggered_by)
+        .bind(trigger.and_then(|t| t.user_id))
+        .bind(trigger.and_then(|t| t.source))
+        .bind(trigger.and_then(|t| t.actor))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -1016,7 +1081,8 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by,
+                    r.trigger_source, r.trigger_actor
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              GROUP BY r.id
@@ -1039,7 +1105,8 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by,
+                    r.trigger_source, r.trigger_actor
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              WHERE r.project = $1
@@ -1060,7 +1127,8 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, r.description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by,
+                    r.trigger_source, r.trigger_actor
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              WHERE r.ab_pair_id = $1
@@ -1109,7 +1177,8 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by,
+                    r.trigger_source, r.trigger_actor
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              WHERE r.project IS NULL OR btrim(r.project) = ''
@@ -1176,7 +1245,8 @@ impl RunStore {
             "SELECT r.id, r.workflow_name, r.title, r.description, r.status, r.project,
                     r.node_count, r.recorded_at,
                     MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
-                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by,
+                    r.trigger_source, r.trigger_actor
              FROM harness_workflow_runs r
              LEFT JOIN harness_run_nodes n ON n.run_id = r.id
              WHERE r.id = $1

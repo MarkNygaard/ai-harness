@@ -514,6 +514,52 @@ impl ModelRef {
     }
 }
 
+/// The doors a run can arrive through.
+///
+/// Named rather than free text because these are compared, and a run recorded
+/// as `linear_poller` in one place and `linear-poller` in another is a bug
+/// nobody sees until a filter silently returns nothing.
+pub(crate) const SOURCE_UI: &str = "ui";
+pub(crate) const SOURCE_MCP: &str = "mcp";
+pub(crate) const SOURCE_LINEAR_WEBHOOK: &str = "linear-webhook";
+pub(crate) const SOURCE_LINEAR_POLLER: &str = "linear-poller";
+
+/// Who set a run in motion, owned.
+///
+/// [`harness_persist::Trigger`] borrows, which suits a call that writes a row
+/// and returns; this one is carried into a spawned task that outlives the
+/// request, so it has to own its strings.
+#[derive(Debug, Clone, Default)]
+pub struct TriggerInfo {
+    pub source: Option<String>,
+    pub user_id: Option<String>,
+    pub actor: Option<String>,
+}
+
+impl TriggerInfo {
+    /// The signed-in caller of an HTTP request, arriving through `source`.
+    pub(crate) async fn from_caller(
+        state: &Arc<RunsState>,
+        headers: &axum::http::HeaderMap,
+        source: &str,
+    ) -> Self {
+        let (user_id, actor) = super::accounts::caller_trigger(state, headers).await;
+        Self {
+            source: Some(source.to_string()),
+            user_id,
+            actor,
+        }
+    }
+
+    fn as_trigger(&self) -> harness_persist::Trigger<'_> {
+        harness_persist::Trigger {
+            source: self.source.as_deref(),
+            user_id: self.user_id.as_deref(),
+            actor: self.actor.as_deref(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateRunRequest {
     /// Who asked for this run, stamped on the row so it can later be said.
@@ -523,6 +569,14 @@ pub struct CreateRunRequest {
     /// attribute their run to somebody else.
     #[serde(skip_deserializing)]
     pub triggered_by: Option<String>,
+    /// Which door the run came in through: `ui`, `mcp`, `linear-webhook`,
+    /// `linear-poller`. Server-set for the same reason as `triggered_by`.
+    #[serde(skip_deserializing)]
+    pub trigger_source: Option<String>,
+    /// The initiator as a human reads them. Server-set; may be present when
+    /// `triggered_by` is not, for a person with no account here.
+    #[serde(skip_deserializing)]
+    pub trigger_actor: Option<String>,
     /// Workflow path or bundled/project name.
     pub workflow: String,
     /// Human task title — names the run; exposed to nodes as `$TASK_TITLE`.
@@ -1317,7 +1371,7 @@ pub async fn judge_run_pair(
     AxumPath(pair_id): AxumPath<String>,
     Json(req): Json<JudgePairRequest>,
 ) -> Response {
-    let triggered_by = super::accounts::caller_id(&state, &headers).await;
+    let trigger = TriggerInfo::from_caller(&state, &headers, SOURCE_UI).await;
     let store = match state.store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -1351,7 +1405,9 @@ pub async fn judge_run_pair(
         summaries[0].title.as_deref().unwrap_or(pair_id.as_str())
     );
     let run_req = CreateRunRequest {
-        triggered_by: triggered_by.clone(),
+        triggered_by: trigger.user_id.clone(),
+        trigger_source: trigger.source.clone(),
+        trigger_actor: trigger.actor.clone(),
         workflow: "judge-ab".to_string(),
         // The judge grades two runs; it is not itself about an issue.
         issue_id: None,
@@ -1388,7 +1444,10 @@ pub async fn create_run(
     headers: axum::http::HeaderMap,
     Json(mut req): Json<CreateRunRequest>,
 ) -> Response {
-    req.triggered_by = super::accounts::caller_id(&state, &headers).await;
+    let trigger = TriggerInfo::from_caller(&state, &headers, SOURCE_UI).await;
+    req.triggered_by = trigger.user_id;
+    req.trigger_source = trigger.source;
+    req.trigger_actor = trigger.actor;
     match start_run(&state, req).await {
         Ok(run_id) => (StatusCode::ACCEPTED, Json(CreateRunResponse { run_id })).into_response(),
         Err((status, msg)) => err(status, msg),
@@ -1408,7 +1467,7 @@ pub async fn rerun_run(
 ) -> Response {
     // A rerun belongs to whoever asked for it, not to whoever started the
     // original — they are different decisions, often by different people.
-    let triggered_by = super::accounts::caller_id(&state, &headers).await;
+    let trigger = TriggerInfo::from_caller(&state, &headers, SOURCE_UI).await;
     let store = match state.store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -1432,7 +1491,9 @@ pub async fn rerun_run(
         );
     };
     let req = CreateRunRequest {
-        triggered_by: triggered_by.clone(),
+        triggered_by: trigger.user_id.clone(),
+        trigger_source: trigger.source.clone(),
+        trigger_actor: trigger.actor.clone(),
         workflow: detail.run.workflow_name.clone(),
         title: detail.run.title.clone(),
         // A rerun does not inherit one: the issue a run came from is not kept
@@ -1471,6 +1532,12 @@ pub struct CreateRunPairRequest {
     /// Who asked. Server-set; see [`CreateRunRequest::triggered_by`].
     #[serde(skip_deserializing)]
     pub triggered_by: Option<String>,
+    /// Server-set; see [`CreateRunRequest::trigger_source`].
+    #[serde(skip_deserializing)]
+    pub trigger_source: Option<String>,
+    /// Server-set; see [`CreateRunRequest::trigger_actor`].
+    #[serde(skip_deserializing)]
+    pub trigger_actor: Option<String>,
     pub workflow: String,
     #[serde(default)]
     pub title: Option<String>,
@@ -1505,7 +1572,10 @@ pub async fn create_run_pair(
     headers: axum::http::HeaderMap,
     Json(mut req): Json<CreateRunPairRequest>,
 ) -> Response {
-    req.triggered_by = super::accounts::caller_id(&state, &headers).await;
+    let trigger = TriggerInfo::from_caller(&state, &headers, SOURCE_UI).await;
+    req.triggered_by = trigger.user_id;
+    req.trigger_source = trigger.source;
+    req.trigger_actor = trigger.actor;
     match start_run_pair(&state, req).await {
         Ok(resp) => (StatusCode::ACCEPTED, Json(resp)).into_response(),
         Err((status, msg)) => err(status, msg),
@@ -1522,6 +1592,8 @@ pub(crate) async fn start_run_pair(
     // One arm = the base request with the swap and pairing stamp filled in.
     let arm = |arm: &str, variant: &ModelRef| CreateRunRequest {
         triggered_by: req.triggered_by.clone(),
+        trigger_source: req.trigger_source.clone(),
+        trigger_actor: req.trigger_actor.clone(),
         workflow: req.workflow.clone(),
         title: req.title.clone(),
         // An A/B pair compares models on a task; neither arm should write to an
@@ -1637,7 +1709,11 @@ pub(crate) async fn start_run(
     wait_out_cli_update(state).await?;
     // A run must live in a project — the project's checkout is the workspace
     // (there is no global project root). Reject a missing/unknown project.
-    let triggered_by = req.triggered_by.clone();
+    let trigger = TriggerInfo {
+        source: req.trigger_source.clone(),
+        user_id: req.triggered_by.clone(),
+        actor: req.trigger_actor.clone(),
+    };
     let project = match req
         .project
         .as_deref()
@@ -1748,7 +1824,7 @@ pub(crate) async fn start_run(
             repos,
             toolchains,
             ab,
-            triggered_by,
+            trigger,
             btx,
         )
         .await;
@@ -1782,7 +1858,7 @@ async fn execute_run_task(
     repos: Vec<harness_persist::ProjectRepo>,
     toolchains: Vec<String>,
     ab: Option<AbInfo>,
-    triggered_by: Option<String>,
+    trigger: TriggerInfo,
     btx: broadcast::Sender<RunEvent>,
 ) {
     // The workspace is an isolated per-run worktree off the project checkout's
@@ -1821,7 +1897,7 @@ async fn execute_run_task(
                         &[],
                         Some(&state.instance_id),
                         ab_ref.as_ref(),
-                        triggered_by.as_deref(),
+                        Some(&trigger.as_trigger()),
                     )
                     .await;
                 let _ = store
@@ -2022,7 +2098,7 @@ async fn execute_run_task(
     let persist_description = description.clone();
     let persist_project = Some(project.clone());
     let persist_owner = state.instance_id.clone();
-    let persist_triggered_by = triggered_by.clone();
+    let persist_trigger = trigger.clone();
     let persist_ab = ab;
     // Map node id → declared artifact path so the forwarder can read each
     // artifact the moment its node finishes (the worktree still exists) and
@@ -2074,7 +2150,7 @@ async fn execute_run_task(
                                 nodes,
                                 Some(&persist_owner),
                                 ab_ref.as_ref(),
-                                persist_triggered_by.as_deref(),
+                                Some(&persist_trigger.as_trigger()),
                             )
                             .await;
                     }

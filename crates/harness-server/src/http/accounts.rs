@@ -417,6 +417,38 @@ pub(crate) async fn caller_id(state: &Arc<RunsState>, headers: &HeaderMap) -> Op
     authenticated_user(state, headers).await.map(|u| u.id)
 }
 
+/// How to write a person on a run, for a reader rather than for a join.
+///
+/// Name and address together because either alone loses something: two
+/// colleagues can share a first name, and an address alone makes a run list
+/// read like a mail log.
+pub(crate) fn actor_label(name: Option<&str>, email: Option<&str>) -> Option<String> {
+    let name = name.map(str::trim).filter(|s| !s.is_empty());
+    let email = email.map(str::trim).filter(|s| !s.is_empty());
+    match (name, email) {
+        (Some(n), Some(e)) => Some(format!("{n} <{e}>")),
+        (Some(n), None) => Some(n.to_string()),
+        (None, Some(e)) => Some(e.to_string()),
+        (None, None) => None,
+    }
+}
+
+/// The signed-in caller as a run's trigger: their account id and a label.
+///
+/// Returns `(user_id, actor_label)`, both `None` when nobody is signed in.
+pub(crate) async fn caller_trigger(
+    state: &Arc<RunsState>,
+    headers: &HeaderMap,
+) -> (Option<String>, Option<String>) {
+    match authenticated_user(state, headers).await {
+        Some(u) => {
+            let label = actor_label(Some(&u.name), Some(&u.email));
+            (Some(u.id), label)
+        }
+        None => (None, None),
+    }
+}
+
 /// An extractor that refuses the request unless the caller may administer this
 /// harness.
 ///
@@ -480,6 +512,32 @@ pub(crate) fn valid_role(role: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A run list has to read like people, not like a mail log — and a person
+    /// Linear named with no address is still worth showing.
+    #[test]
+    fn an_actor_label_uses_whichever_halves_exist() {
+        assert_eq!(
+            actor_label(Some("Andrius Mickus"), Some("a@x.com")).as_deref(),
+            Some("Andrius Mickus <a@x.com>")
+        );
+        assert_eq!(
+            actor_label(Some("Andrius Mickus"), None).as_deref(),
+            Some("Andrius Mickus")
+        );
+        assert_eq!(
+            actor_label(None, Some("a@x.com")).as_deref(),
+            Some("a@x.com")
+        );
+        assert_eq!(actor_label(None, None), None);
+        // Blank is not a name. Linear returns empty strings for fields a
+        // workspace does not disclose, and " <>" is worse than nothing.
+        assert_eq!(actor_label(Some("  "), Some("  ")), None);
+        assert_eq!(
+            actor_label(Some(" "), Some("a@x.com")).as_deref(),
+            Some("a@x.com")
+        );
+    }
 
     #[test]
     fn a_password_round_trips_and_a_wrong_one_does_not() {
