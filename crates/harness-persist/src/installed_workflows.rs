@@ -38,6 +38,18 @@ CREATE TABLE IF NOT EXISTS harness_installed_workflows (
     updated_at   timestamptz NOT NULL DEFAULT now()
 )";
 
+/// Added after the table shipped, so it is an ALTER rather than a column above.
+///
+/// Set when this harness *published* the workflow rather than installing
+/// somebody else's. Both directions produce a row here — the row is the link
+/// between a local file and a registry slug, and publishing creates exactly
+/// that link — but the two must not be confused. An installed workflow offers
+/// **Update**, meaning take the publisher's newer version; a published one
+/// offers **Publish update**, meaning send yours. Reversing them would either
+/// overwrite an author's own work with an older copy of it, or offer to
+/// publish under somebody else's slug.
+const ADD_PUBLISHED: &str = "ALTER TABLE harness_installed_workflows ADD COLUMN IF NOT EXISTS published boolean NOT NULL DEFAULT false";
+
 /// A library workflow this harness has installed.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct InstalledWorkflow {
@@ -50,6 +62,9 @@ pub struct InstalledWorkflow {
     pub version: i32,
     pub publisher: Option<String>,
     pub title: Option<String>,
+    /// This harness published it, rather than installing somebody else's.
+    #[serde(default)]
+    pub published: bool,
     pub installed_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -62,6 +77,8 @@ pub struct InstallRecord<'a> {
     pub version: i32,
     pub publisher: Option<&'a str>,
     pub title: Option<&'a str>,
+    /// True when this harness published it rather than installed it.
+    pub published: bool,
 }
 
 /// Reads and writes [`InstalledWorkflow`].
@@ -82,6 +99,7 @@ impl InstalledWorkflowStore {
     pub async fn from_pool(pool: PgPool) -> Result<Self, PersistError> {
         let store = Self { pool };
         sqlx::query(CREATE_INSTALLED).execute(&store.pool).await?;
+        sqlx::query(ADD_PUBLISHED).execute(&store.pool).await?;
         Ok(store)
     }
 
@@ -92,13 +110,14 @@ impl InstalledWorkflowStore {
     pub async fn record(&self, install: &InstallRecord<'_>) -> Result<(), PersistError> {
         sqlx::query(
             "INSERT INTO harness_installed_workflows
-                 (name, slug, version, publisher, title)
-             VALUES ($1, $2, $3, $4, $5)
+                 (name, slug, version, publisher, title, published)
+             VALUES ($1, $2, $3, $4, $5, $6)
              ON CONFLICT (name) DO UPDATE SET
                 slug       = excluded.slug,
                 version    = excluded.version,
                 publisher  = excluded.publisher,
                 title      = excluded.title,
+                published  = excluded.published,
                 updated_at = now()",
         )
         .bind(install.name)
@@ -106,6 +125,7 @@ impl InstalledWorkflowStore {
         .bind(install.version)
         .bind(install.publisher)
         .bind(install.title)
+        .bind(install.published)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -129,7 +149,7 @@ impl InstalledWorkflowStore {
     /// the editor's workflow list.
     pub async fn all(&self) -> Result<Vec<InstalledWorkflow>, PersistError> {
         Ok(sqlx::query_as::<_, InstalledWorkflow>(
-            "SELECT name, slug, version, publisher, title, installed_at, updated_at
+            "SELECT name, slug, version, publisher, title, published, installed_at, updated_at
              FROM harness_installed_workflows ORDER BY name",
         )
         .fetch_all(&self.pool)
@@ -140,7 +160,7 @@ impl InstalledWorkflowStore {
     /// the library.
     pub async fn get(&self, name: &str) -> Result<Option<InstalledWorkflow>, PersistError> {
         Ok(sqlx::query_as::<_, InstalledWorkflow>(
-            "SELECT name, slug, version, publisher, title, installed_at, updated_at
+            "SELECT name, slug, version, publisher, title, published, installed_at, updated_at
              FROM harness_installed_workflows WHERE name = $1",
         )
         .bind(name)
@@ -152,7 +172,7 @@ impl InstalledWorkflowStore {
     /// is showing registry entries and needs to know which are already here.
     pub async fn by_slug(&self, slug: &str) -> Result<Option<InstalledWorkflow>, PersistError> {
         Ok(sqlx::query_as::<_, InstalledWorkflow>(
-            "SELECT name, slug, version, publisher, title, installed_at, updated_at
+            "SELECT name, slug, version, publisher, title, published, installed_at, updated_at
              FROM harness_installed_workflows WHERE slug = $1",
         )
         .bind(slug)
@@ -192,6 +212,7 @@ mod tests {
                 version: 1,
                 publisher: Some("marknygaard"),
                 title: Some("GEO Audit — Ecommerce"),
+                published: false,
             })
             .await
             .unwrap();
@@ -205,6 +226,7 @@ mod tests {
                 version: 4,
                 publisher: Some("marknygaard"),
                 title: Some("GEO Audit — Ecommerce"),
+                published: false,
             })
             .await
             .unwrap();

@@ -8,6 +8,7 @@ import {
 } from "@tabler/icons-react";
 import { LibraryDialog } from "@/components/editor/LibraryDialog";
 import { PersonBadge } from "@/components/PersonBadge";
+import { PublishDialog } from "@/components/editor/PublishDialog";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -54,8 +55,17 @@ export function WorkflowsList() {
   // the whole distinction the library exists to make the moment you close its
   // dialog. `installed` is the local record, so this grouping is right even
   // with the registry unreachable.
-  const installed = all.filter((wf) => wf.source === "project" && wf.installed);
-  const custom = all.filter((wf) => wf.source === "project" && !wf.installed);
+  // Publishing also writes an `installed` row — the row is the link between a
+  // local file and a registry slug, and publishing creates exactly that link.
+  // It still belongs under Custom: you wrote it, you can edit it, and the
+  // update flows the other way. Only the `published` flag separates the two.
+  const mine = (wf: WorkflowSummary) => wf.installed?.published === true;
+  const installed = all.filter(
+    (wf) => wf.source === "project" && wf.installed && !mine(wf),
+  );
+  const custom = all.filter(
+    (wf) => wf.source === "project" && (!wf.installed || mine(wf)),
+  );
   const templates = all.filter((wf) => wf.source === "bundled");
 
   return (
@@ -105,7 +115,7 @@ export function WorkflowsList() {
           view={view}
         >
           {custom.map((wf) => (
-            <WorkflowCard key={wf.name} wf={wf} view={view} />
+            <WorkflowCard key={wf.name} wf={wf} view={view} publishable />
           ))}
         </Section>
         {custom.length === 0 && all.length > 0 && (
@@ -271,7 +281,17 @@ function Authors({ wf }: { wf: WorkflowSummary }) {
   );
 }
 
-function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
+function WorkflowCard({
+  wf,
+  view,
+  publishable = false,
+}: {
+  wf: WorkflowSummary;
+  view: View;
+  /** Offer Publish. Only for workflows written here — a built-in cannot be
+   *  published, and an installed one is somebody else's to update. */
+  publishable?: boolean;
+}) {
   const steps = `${wf.node_count} step${wf.node_count === 1 ? "" : "s"}`;
   // Readable heading, canonical slug kept alongside: the slug is what you type
   // in YAML, pass to MCP and bind Linear triggers to, so hiding it would cost
@@ -288,31 +308,35 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
   const description = wf.description ? reflowParagraphs(wf.description) : "";
 
   return (
-    <Link
-      to={`/editor/${encodeURIComponent(wf.name)}`}
-      className="group block"
-      title={description || title}
-    >
-      <Card className="h-full transition-colors group-hover:border-accent-orange/50">
-        {view === "grid" ? (
-          // A fixed height rather than an aspect ratio: the height is then the
-          // same at every breakpoint, so the description's line clamp below can
-          // be a single value that actually matches the box. (With a ratio, the
-          // card's height changed with the column count and no one clamp could
-          // reach the footer at every width.)
-          // Wide side margins, shallow top and bottom: the generous `px` narrows
-          // the text column so lines are short enough to read comfortably, while
-          // the modest `py` spends the fixed height on content rather than air.
-          <CardContent className="flex h-40 flex-col gap-3 px-7 py-3 sm:h-72">
-            <div className="min-w-0">
-              <span className="line-clamp-2 text-sm font-medium leading-snug">
-                {title}
-              </span>
-              <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
-                {wf.name}
-              </span>
-            </div>
-            {/* Reflowed first (see `reflowParagraphs`) so paragraphs wrap to the
+    // Relative wrapper so Publish can sit over the card without being inside
+    // the Link — a button nested in an anchor opens the dialog *and*
+    // navigates away from it.
+    <div className="group relative">
+      <Link
+        to={`/editor/${encodeURIComponent(wf.name)}`}
+        className="block"
+        title={description || title}
+      >
+        <Card className="h-full transition-colors group-hover:border-accent-orange/50">
+          {view === "grid" ? (
+            // A fixed height rather than an aspect ratio: the height is then the
+            // same at every breakpoint, so the description's line clamp below can
+            // be a single value that actually matches the box. (With a ratio, the
+            // card's height changed with the column count and no one clamp could
+            // reach the footer at every width.)
+            // Wide side margins, shallow top and bottom: the generous `px` narrows
+            // the text column so lines are short enough to read comfortably, while
+            // the modest `py` spends the fixed height on content rather than air.
+            <CardContent className="flex h-40 flex-col gap-3 px-7 py-3 sm:h-72">
+              <div className="min-w-0">
+                <span className="line-clamp-2 text-sm font-medium leading-snug">
+                  {title}
+                </span>
+                <span className="mt-0.5 block truncate font-mono text-[10px] text-muted-foreground">
+                  {wf.name}
+                </span>
+              </div>
+              {/* Reflowed first (see `reflowParagraphs`) so paragraphs wrap to the
                 card's width instead of to the YAML's, then `whitespace-pre-line`
                 keeps the blank lines between them.
                 Deliberately NOT `flex-1`: that sized the box from the flex
@@ -321,41 +345,47 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
                 a clean ellipsis. Letting the clamp own the height means the box is
                 always a whole number of lines; the card's fixed height has room
                 for eight with slack, and `mt-auto` below pins the footer. */}
-            <p className="line-clamp-3 whitespace-pre-line text-xs leading-5 text-muted-foreground sm:line-clamp-8">
-              {description}
-            </p>
-            <div className="mt-auto flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
-              <span>{steps}</span>
+              <p className="line-clamp-3 whitespace-pre-line text-xs leading-5 text-muted-foreground sm:line-clamp-8">
+                {description}
+              </p>
+              <div className="mt-auto flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
+                <span>{steps}</span>
+                {wf.overrides_bundled && <OverrideBadge />}
+                <Authors wf={wf} />
+              </div>
+            </CardContent>
+          ) : (
+            <CardContent className="flex items-center gap-3 py-3">
+              <IconBinaryTree2 className="size-5 shrink-0 text-accent-orange" />
+              <div className="min-w-0 flex-1">
+                <div className="flex min-w-0 items-baseline gap-2">
+                  <span className="truncate text-sm font-medium">{title}</span>
+                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                    {wf.name}
+                  </span>
+                </div>
+                {description && (
+                  // No `whitespace-pre-line` here: at two lines a paragraph break
+                  // would spend one of them, so the reflowed text runs on instead.
+                  <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+                    {description}
+                  </p>
+                )}
+              </div>
               {wf.overrides_bundled && <OverrideBadge />}
               <Authors wf={wf} />
-            </div>
-          </CardContent>
-        ) : (
-          <CardContent className="flex items-center gap-3 py-3">
-            <IconBinaryTree2 className="size-5 shrink-0 text-accent-orange" />
-            <div className="min-w-0 flex-1">
-              <div className="flex min-w-0 items-baseline gap-2">
-                <span className="truncate text-sm font-medium">{title}</span>
-                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                  {wf.name}
-                </span>
+              <div className="shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
+                {steps}
               </div>
-              {description && (
-                // No `whitespace-pre-line` here: at two lines a paragraph break
-                // would spend one of them, so the reflowed text runs on instead.
-                <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
-                  {description}
-                </p>
-              )}
-            </div>
-            {wf.overrides_bundled && <OverrideBadge />}
-            <Authors wf={wf} />
-            <div className="shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
-              {steps}
-            </div>
-          </CardContent>
-        )}
-      </Card>
-    </Link>
+            </CardContent>
+          )}
+        </Card>
+      </Link>
+      {publishable && (
+        <div className="absolute right-2 top-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
+          <PublishDialog wf={wf} />
+        </div>
+      )}
+    </div>
   );
 }

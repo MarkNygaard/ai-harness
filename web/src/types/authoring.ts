@@ -69,6 +69,8 @@ export interface InstalledWorkflow {
   version: number;
   publisher: string | null;
   title: string | null;
+  /** This harness published it, rather than installing someone else's. */
+  published: boolean;
   installed_at: string;
   updated_at: string;
 }
