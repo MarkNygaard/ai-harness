@@ -55,6 +55,25 @@ export function useLibrary(enabled: boolean) {
  * `name` answers a previous conflict. Omitted on the first attempt, so the
  * ordinary case is one request with no body.
  */
+/**
+ * How to ask for an install.
+ *
+ * **A body is sent only when there is something to say.** The route takes an
+ * optional JSON body, so the ordinary install is a bare `POST` — and a body
+ * without `Content-Type: application/json` is refused with a `415`, which is
+ * exactly what an empty `{}` sent without the header earned. Separated from the
+ * hook so the shape is testable: the bug was invisible in review and obvious in
+ * a browser.
+ */
+export function installRequestInit(name?: string): RequestInit {
+  if (!name) return { method: "POST" };
+  return {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  };
+}
+
 export function useInstallWorkflow() {
   const qc = useQueryClient();
   return useMutation<
@@ -66,10 +85,7 @@ export function useInstallWorkflow() {
       try {
         return await apiJson(
           `/api/library/${encodeURIComponent(slug)}/install`,
-          {
-            method: "POST",
-            body: JSON.stringify(name ? { name } : {}),
-          },
+          installRequestInit(name),
         );
       } catch (e) {
         throw asConflict(e);

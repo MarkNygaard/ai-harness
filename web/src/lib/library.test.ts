@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "./api";
-import { InstallNameConflict, asConflict } from "./library";
+import { InstallNameConflict, asConflict, installRequestInit } from "./library";
 
 describe("asConflict", () => {
   /**
@@ -67,5 +67,32 @@ describe("asConflict", () => {
     // Not an Error at all — still has to come back as one.
     expect(asConflict("just a string")).toBeInstanceOf(Error);
     expect(asConflict(undefined)).toBeInstanceOf(Error);
+  });
+});
+
+describe("installRequestInit", () => {
+  /**
+   * The ordinary install has nothing to say, and the route's body is optional —
+   * so it sends none. An empty `{}` is not harmless: without a
+   * `Content-Type: application/json` header the server refuses the request with
+   * a `415`, which is how this shipped broken.
+   */
+  it("sends no body when there is nothing to ask for", () => {
+    const init = installRequestInit();
+    expect(init.method).toBe("POST");
+    expect(init.body).toBeUndefined();
+    expect(init.headers).toBeUndefined();
+  });
+
+  /** A chosen name is JSON, and JSON has to say so. */
+  it("declares the content type whenever it sends a body", () => {
+    const init = installRequestInit("geo-audit-ecommerce");
+    expect(init.body).toBe(JSON.stringify({ name: "geo-audit-ecommerce" }));
+    expect(init.headers).toEqual({ "Content-Type": "application/json" });
+  });
+
+  /** An empty name is no name — it must not become a body either. */
+  it("treats an empty name as no name", () => {
+    expect(installRequestInit("").body).toBeUndefined();
   });
 });
