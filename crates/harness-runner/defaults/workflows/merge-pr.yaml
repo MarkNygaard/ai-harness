@@ -1,13 +1,15 @@
 name: merge-pr
 description: |
-  Merge a ready pull request — resolving merge conflicts against its base branch
-  first if needed — then squash-merge it. Input ($ARGUMENTS) names the PR: a PR
-  number, a PR URL, or a Linear issue whose linked PR should be merged.
+  Merge a ready pull request, resolving conflicts against its base branch first if
+  there are any, then squash-merge it. `$ARGUMENTS` names the PR as a number, a
+  URL, or a Linear issue whose linked PR should be merged.
 
-  Linear-agnostic: works from a manual/API trigger or a "Ready for merge" Linear
-  source binding (which feeds one issue at a time). Project rules (merge vs
-  rebase, verify chain, prohibitions) live in the project's CLAUDE.md / AGENTS.md
-  and are auto-loaded into every agent's context.
+  It does not depend on Linear. It works from a manual or API trigger, and from a
+  "Ready for merge" Linear source binding, which feeds one issue at a time.
+
+  Project rules live in the project's `CLAUDE.md` or `AGENTS.md`, and the harness
+  loads them into every agent's context. They cover merge versus rebase, the
+  verify chain, and what agents may not do.
 provider: pi
 model: kimi-code/kimi-for-coding
 

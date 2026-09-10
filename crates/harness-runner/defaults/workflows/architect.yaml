@@ -1,25 +1,23 @@
 name: architect
 description: |
-  A behavior-preserving codebase-health sweep.
+  Simplify a codebase without changing what it does.
 
-  Flow: measure code-health metrics (stack-aware — Rust and/or web),
-  read-only architectural assessment (Claude Sonnet), a tightly-scoped plan
-  (Claude Opus at max effort, ≤5–7 files, KISS/YAGNI/Rule-of-Three),
-  hook-enforced simplification with per-edit verification (Pi/Kimi), full
-  validate + fix loop, a model-diverse behavior-preservation review (GPT) that
-  reverts any change that drifted semantics, then PR — skipped entirely if the
-  sweep found nothing to change.
+  The run measures code-health metrics for whichever stacks it finds, Rust or web
+  or both. Claude Sonnet makes a read-only architectural assessment. Claude Opus
+  at max effort writes a plan covering at most five to seven files, applying KISS,
+  YAGNI and the rule of three. Pi/Kimi carries out the plan with hooks verifying
+  every edit, and a validate and fix loop follows. GPT then reviews for behavior
+  changes and reverts anything that drifted. The run opens a PR last, and opens
+  none at all when the sweep found nothing to change.
 
-  Output: a PR against the project's base branch with independently
-  revertable conventional-commits and a short summary comment (or no PR at all
-  when there's nothing to simplify).
+  The PR targets the project's base branch. Every conventional commit in it can be
+  reverted on its own, and one comment summarizes the run.
 
-  Project-specific rules — verify chain, conventional-commit scope
-  vocabulary, agent prohibitions — live in the project's `CLAUDE.md` /
-  `AGENTS.md` and are auto-loaded into every agent's context.
+  Project rules live in the project's `CLAUDE.md` or `AGENTS.md`, and the harness
+  loads them into every agent's context. They cover the verify chain, the
+  conventional-commit scope vocabulary, and what agents may not do.
 
-  NOT for: feature work, bug fixes, or behavior-changing refactors.
-  Each change must be independently revertable.
+  NOT for feature work, bug fixes, or refactors that change behavior.
 
 provider: pi
 model: kimi-code/kimi-for-coding

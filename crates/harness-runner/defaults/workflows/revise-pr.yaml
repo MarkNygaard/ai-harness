@@ -1,29 +1,26 @@
 name: revise-pr
 description: |
-  Address reviewer feedback on an existing PR branch and push updates — no new
-  PR is opened. Use this when a Linear card has been moved to "Changes
-  requested" (or an equivalent trigger state) and the bound workflow is
-  `revise-pr`.
+  Address reviewer feedback on an existing PR branch and push updates. No new PR
+  is opened. Use this when a Linear card moves to "Changes requested", or an
+  equivalent trigger state, and the bound workflow is `revise-pr`.
 
-  Binding configuration required for correct poller routing:
-  - `ready_state_id` must be the **review column** (e.g. "Functional testing"
-    / "In Review") so that when this workflow completes successfully the card
-    loops back to review, NOT to Done/merge.
-  - The trigger state is typically "Changes requested".
+  The binding needs two things for the poller to route correctly.
+  `ready_state_id` must be the review column, such as "Functional testing" or "In
+  Review", so that a successful run sends the card back to review rather than to
+  Done or merge. The trigger state is normally "Changes requested".
 
-  Feedback sources:
-  - **GitHub PR reviews / inline comments** are read inside the workflow via
-    `gh` (the token is available in the worktree).
-  - **Linear tester comments** are injected by the poller into `$ARGUMENTS`
-    under a "## Reviewer comments (Linear)" section. That section is the *only*
-    Linear feedback: `$ARGUMENTS` always also carries the issue's own
-    description, which is the original report the PR was written to fix, not a
-    reviewer saying it failed. With neither source producing anything the run
-    cancels at `abort-no-feedback` and asks a human to move the card back —
-    moving a card by mistake must not trigger a speculative second fix.
+  Feedback comes from two places. GitHub PR reviews and inline comments are read
+  inside the workflow with `gh`, using the token available in the worktree.
+  Linear tester comments are injected by the poller into `$ARGUMENTS`, under a
+  "## Reviewer comments (Linear)" heading. That heading marks the only Linear
+  feedback the run should act on, because `$ARGUMENTS` always also carries the
+  issue's own description, which is the original report the PR was written to fix
+  rather than a reviewer saying it failed. When neither source produces anything,
+  the run cancels at `abort-no-feedback` and asks a human to move the card back,
+  so that moving a card by mistake does not trigger a speculative second fix.
 
-  On completion the poller returns the Linear card to the review column; on
-  failure it routes back to the source column under the existing retry cap.
+  On completion the poller returns the card to the review column. On failure it
+  routes back to the source column under the existing retry cap.
 provider: pi
 model: kimi-code/kimi-for-coding
 

@@ -1,29 +1,28 @@
 name: judge-ab
 description: |
-  Pairwise A/B quality judge. Given the shared task and the two arms' results,
-  decide which arm did the better job and score each 0–100.
+  Pairwise A/B quality judge. Given the shared task and both arms' results, it
+  decides which arm did better and scores each from 0 to 100.
 
-  When an arm produced a pull request, the judge reads the actual diff
-  (`gh pr diff`) and bases its verdict primarily on the code change — falling
-  back to the textual evidence (status, per-step outcomes, final output) when no
-  PR is available. The judge model is the workflow default (Claude Opus) unless
-  the trigger overrides it, so the judge itself is held constant across a
-  comparison.
+  When an arm produced a pull request, the judge reads the diff with `gh pr diff`
+  and bases its verdict on the code change. It falls back to the textual evidence,
+  meaning the status, the per-step outcomes and the final output, when no PR
+  exists. The judge model is the workflow default, Claude Opus, unless the trigger
+  overrides it, so the judge stays constant across a comparison.
 
-  The judge then does a SECOND analysis: how much did the shared late-stage
-  reviewers (`gpt-review-fix`, `anthropic-review-fix`) shape each arm? Those steps
-  run on the SAME models in both arms, so a heavy review contribution is not the
-  swapped implementer's credit — and it signals the pipeline's premise (a cheap
-  implementer does the bulk; reviewers only polish) is breaking down.
+  The judge then runs a second analysis, measuring how much the shared late-stage
+  reviewers `gpt-review-fix` and `anthropic-review-fix` shaped each arm. Those
+  steps run on the same models in both arms, so a large review contribution is not
+  credit the swapped implementer earned. It also warns that the pipeline's premise
+  is failing, because a cheap implementer is supposed to do the bulk of the work
+  and the reviewers are supposed to polish it.
 
-  It also scores plan-adherence per arm — how completely/correctly each arm
-  fulfilled the plan it was built against. The plan comes from the SAME planner
-  (Opus) in both arms, so this isolates the swapped implementer's execution from
-  the planner's design and from the shared reviewers.
+  It scores plan adherence per arm as well, meaning how completely and correctly
+  each arm carried out the plan it was built against. The same planner, Opus,
+  wrote the plan in both arms, so this separates the swapped implementer's
+  execution from the planner's design and from the shared reviewers.
 
-  Output: `{ winner, score_a, score_b, reasoning, review_share_a,
-  review_share_b, review_assessment, plan_fidelity_a, plan_fidelity_b,
-  plan_assessment }`.
+  Output: `{ winner, score_a, score_b, reasoning, review_share_a, review_share_b,
+  review_assessment, plan_fidelity_a, plan_fidelity_b, plan_assessment }`.
 provider: claude
 model: opus
 nodes:
