@@ -133,3 +133,74 @@ export function asConflict(e: unknown): Error {
   }
   return e instanceof Error ? e : new Error(String(e));
 }
+
+/**
+ * Who this harness publishes as.
+ *
+ * `configured: false` is the normal state of an install that has never
+ * published — not an error, and the UI shows a different thing for it. The name
+ * is resolved by the registry from the token, never claimed by the browser: the
+ * token itself stays server-side, so this is the only way the page can know
+ * whose name an entry would carry.
+ */
+export interface PublisherIdentity {
+  configured: boolean;
+  name: string | null;
+  login: string | null;
+}
+
+export function usePublisher(enabled: boolean) {
+  return useQuery<PublisherIdentity, Error>({
+    queryKey: ["library", "publisher"],
+    enabled,
+    queryFn: ({ signal }) =>
+      apiJson<PublisherIdentity>("/api/library/publisher", { signal }),
+    retry: false,
+    staleTime: 60_000,
+  });
+}
+
+/** What a publish sends. Everything but `name` is optional after the first. */
+export interface PublishRequest {
+  /** The local workflow, by file stem. */
+  name: string;
+  title?: string;
+  description?: string;
+  tags?: string[];
+  changelog?: string;
+  /** Rename the publisher first, so the entry carries the expected name. */
+  publish_as?: string;
+}
+
+export interface PublishResult {
+  slug: string;
+  version: number;
+  publisher: string;
+  /** This was the workflow's first appearance in the library. */
+  created: boolean;
+}
+
+/**
+ * Publish a workflow, or add a version to one this harness already published.
+ *
+ * One call for both, and the server decides which from its own record. Asking
+ * the caller would invite answering wrong, and both wrong answers are bad: a
+ * duplicate entry, or a version aimed at somebody else's workflow.
+ */
+export function usePublishWorkflow() {
+  const qc = useQueryClient();
+  return useMutation<PublishResult, Error, PublishRequest>({
+    mutationFn: (req) =>
+      apiJson("/api/library/publish", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(req),
+      }),
+    onSuccess: () => {
+      // The library gains an entry or a version, the workflow gains its
+      // published marker, and the publisher's display name may have changed.
+      void qc.invalidateQueries({ queryKey: ["library"] });
+      void qc.invalidateQueries({ queryKey: ["authoring", "workflows"] });
+    },
+  });
+}
