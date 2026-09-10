@@ -69,6 +69,17 @@ pub struct User {
 
 const USER_COLUMNS: &str = "id, email, name, role, created_at, last_login_at, disabled_at";
 
+/// An account plus when it was last active — see [`UserStore::list_with_activity`].
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct UserActivity {
+    #[serde(flatten)]
+    #[sqlx(flatten)]
+    pub user: User,
+    /// The most recent of: a session touched, a token used, a run started, or
+    /// a sign-in. `None` for an account that has never done any of them.
+    pub last_active_at: Option<DateTime<Utc>>,
+}
+
 /// What a profile write did: the account as it now stands, and whether its
 /// sessions were ended.
 ///
@@ -159,6 +170,49 @@ impl UserStore {
     pub async fn list(&self) -> Result<Vec<User>, PersistError> {
         let sql = format!("SELECT {USER_COLUMNS} FROM harness_users ORDER BY created_at");
         Ok(sqlx::query_as::<_, User>(&sql)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// Every account, with when each was last actually *doing* something.
+    ///
+    /// `last_login_at` only moves when somebody authenticates, and using the
+    /// harness extends a session rather than reopening one — so a person who
+    /// visits daily can show a sign-in from months ago. That is accurate and
+    /// useless: on a members page the question is "is this person still using
+    /// this?", not "when did they last type a password".
+    ///
+    /// Three sources, because there are three ways to be active and no single
+    /// one covers a real team:
+    ///
+    /// - a **session**, touched on every authenticated request;
+    /// - a **personal access token**, stamped when a program uses it, which is
+    ///   how somebody driving the harness from an editor over MCP looks busy
+    ///   while never opening the dashboard;
+    /// - a **run they set off**, which is the only trace left by someone who
+    ///   works entirely in Linear and lets the poller do the rest.
+    ///
+    /// Expired sessions are swept, so a genuinely idle person eventually has
+    /// none of the first — hence the fall back to `last_login_at`, which at
+    /// least says when they were last here at all.
+    pub async fn list_with_activity(&self) -> Result<Vec<UserActivity>, PersistError> {
+        let sql = format!(
+            "SELECT {},
+                    GREATEST(
+                        u.last_login_at,
+                        (SELECT max(s.last_seen_at) FROM harness_sessions s WHERE s.user_id = u.id),
+                        (SELECT max(t.last_used_at) FROM harness_tokens t WHERE t.user_id = u.id),
+                        (SELECT max(r.recorded_at) FROM harness_workflow_runs r
+                          WHERE r.triggered_by = u.id)
+                    ) AS last_active_at
+             FROM harness_users u ORDER BY u.created_at",
+            USER_COLUMNS
+                .split(", ")
+                .map(|c| format!("u.{c}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        Ok(sqlx::query_as::<_, UserActivity>(&sql)
             .fetch_all(&self.pool)
             .await?)
     }

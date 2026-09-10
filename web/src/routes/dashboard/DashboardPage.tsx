@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { SubscriptionsRow } from "@/components/dashboard/SubscriptionsRow";
-import { RunInitiator } from "@/components/RunInitiator";
+import { PersonBadge } from "@/components/PersonBadge";
 import { Badge } from "@/components/ui/badge";
 import { distinctInitiators } from "@/lib/initiator";
 import { useRuns } from "@/lib/runs";
@@ -223,7 +223,7 @@ function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
       {people.length > 0 && (
         <div className="flex shrink-0 items-center -space-x-1">
           {people.map((p) => (
-            <RunInitiator
+            <PersonBadge
               key={p.actor}
               actor={p.actor}
               source={p.source}

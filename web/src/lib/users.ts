@@ -5,11 +5,23 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "./api";
 import type { AuthUser } from "./auth";
 
+/**
+ * An account plus when its owner was last actually doing something — a request
+ * made, a token used, or a run set off. Distinct from `last_login_at`, which
+ * only moves when somebody signs in, and which a daily user can leave untouched
+ * for months because using the harness extends a session rather than starting
+ * one.
+ */
+export interface UserActivity extends AuthUser {
+  /** Null for an account that has never done any of those things. */
+  last_active_at: string | null;
+}
+
 export function useUsers(enabled: boolean) {
-  return useQuery<AuthUser[], Error>({
+  return useQuery<UserActivity[], Error>({
     queryKey: ["users"],
     enabled,
-    queryFn: ({ signal }) => apiJson<AuthUser[]>("/api/users", { signal }),
+    queryFn: ({ signal }) => apiJson<UserActivity[]>("/api/users", { signal }),
     retry: false,
     refetchInterval: false,
   });

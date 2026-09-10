@@ -132,10 +132,27 @@ async fn handle_one(
     }
 }
 
-/// After a successful authoring mutation, report the resulting DAG's node
-/// summaries (the build→validate→fix loop sees the new state).
-fn state_after(dir: &Path, name: &str, msg: String) -> Value {
-    match authoring::get_workflow(dir, name) {
+/// Echo the workflow's state after a successful authoring change, and note who
+/// made it.
+///
+/// The recording lives here for the same reason it lives in the HTTP layer's
+/// `mutation_result`: every node-level tool ends up here, so a tool added later
+/// cannot quietly forget to say who edited the workflow.
+async fn state_after(
+    state: &Arc<RunsState>,
+    actor: &super::runs_routes::TriggerInfo,
+    name: &str,
+    msg: String,
+) -> Value {
+    super::workflows_routes::record_edit_as(
+        state,
+        name,
+        actor.user_id.as_deref(),
+        actor.actor.as_deref(),
+        super::workflows_routes::EDIT_SOURCE_MCP,
+    )
+    .await;
+    match authoring::get_workflow(&state.project_root, name) {
         Ok(src) => to_result(msg, &authoring::validate_workflow(&src.yaml)),
         Err(e) => tool_error(e),
     }
@@ -438,10 +455,20 @@ async fn call_tool(
         }
         "workflow_save" => {
             match authoring::save_workflow(&state.project_root, &s("name"), &s("yaml")) {
-                Ok(()) => to_result(
-                    format!("saved `{}`", s("name")),
-                    &json!({ "saved": true, "name": s("name") }),
-                ),
+                Ok(()) => {
+                    super::workflows_routes::record_edit_as(
+                        state,
+                        &s("name"),
+                        actor.user_id.as_deref(),
+                        actor.actor.as_deref(),
+                        super::workflows_routes::EDIT_SOURCE_MCP,
+                    )
+                    .await;
+                    to_result(
+                        format!("saved `{}`", s("name")),
+                        &json!({ "saved": true, "name": s("name") }),
+                    )
+                }
                 Err(e) => tool_error(e),
             }
         }
@@ -449,10 +476,20 @@ async fn call_tool(
         // deleted; the call reports that rather than silently no-op'ing).
         "workflow_delete" => {
             match authoring::delete_project_workflow(&state.project_root, &s("name")) {
-                Ok(true) => to_result(
-                    format!("deleted custom workflow `{}`", s("name")),
-                    &json!({ "deleted": true, "name": s("name") }),
-                ),
+                Ok(true) => {
+                    // The workflow is gone, so its provenance should be too —
+                    // otherwise a new workflow reusing the name inherits an
+                    // author who never saw it.
+                    if let Ok(store) = state.workflow_author_store().await {
+                        if let Err(e) = store.forget(&s("name")).await {
+                            tracing::warn!("mcp: could not forget who wrote {}: {e}", s("name"));
+                        }
+                    }
+                    to_result(
+                        format!("deleted custom workflow `{}`", s("name")),
+                        &json!({ "deleted": true, "name": s("name") }),
+                    )
+                }
                 Ok(false) => tool_error(format!(
                     "`{}` is not a custom workflow — bundled defaults can't be deleted",
                     s("name")
@@ -469,53 +506,67 @@ async fn call_tool(
                 args.get("model").and_then(Value::as_str),
             );
             match r {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("created `{}`", s("name")),
-                ),
+                Ok(()) => {
+                    state_after(state, actor, &s("name"), format!("created `{}`", s("name"))).await
+                }
                 Err(e) => tool_error(e),
             }
         }
         "workflow_set_node" => {
             let node = args.get("node").cloned().unwrap_or(Value::Null);
             match authoring::set_node(&state.project_root, &s("name"), node) {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("set node in `{}`", s("name")),
-                ),
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("set node in `{}`", s("name")),
+                    )
+                    .await
+                }
                 Err(e) => tool_error(e),
             }
         }
         "workflow_set_ui" => {
             let ui = args.get("ui").cloned().unwrap_or(Value::Null);
             match authoring::set_ui(&state.project_root, &s("name"), ui) {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("set ui on `{}`", s("name")),
-                ),
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("set ui on `{}`", s("name")),
+                    )
+                    .await
+                }
                 Err(e) => tool_error(e),
             }
         }
         "workflow_remove_node" => {
             match authoring::remove_node(&state.project_root, &s("name"), &s("id")) {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("removed `{}` from `{}`", s("id"), s("name")),
-                ),
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("removed `{}` from `{}`", s("id"), s("name")),
+                    )
+                    .await
+                }
                 Err(e) => tool_error(e),
             }
         }
         "workflow_connect" => {
             match authoring::connect_nodes(&state.project_root, &s("name"), &s("from"), &s("to")) {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("connected `{}` -> `{}`", s("from"), s("to")),
-                ),
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("connected `{}` -> `{}`", s("from"), s("to")),
+                    )
+                    .await
+                }
                 Err(e) => tool_error(e),
             }
         }

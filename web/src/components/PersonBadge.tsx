@@ -7,24 +7,30 @@ import {
 import { parseInitiator, sourceLabel } from "@/lib/initiator";
 
 /**
- * Who asked for a run, as a circle of initials with the full name on hover.
+ * A person, as a circle of initials with their full name on hover.
  *
- * Renders **nothing** when there is nobody to name — runs from before this was
- * recorded, and anything an install with no sign-in started. A row of empty
- * circles would say less than no circle at all, and every overview shows a mix
- * of old and new runs.
+ * Used for whoever started a run and whoever wrote a workflow — the same
+ * question in two places, so the same badge.
  *
- * `size="sm"` is for dense rows (the dashboard's task list); the default suits
- * a run's own header.
+ * Renders **nothing** when there is nobody to name: runs from before
+ * attribution existed, workflows that shipped bundled or were dropped into the
+ * directory by hand, and anything an install with no sign-in did. A row of
+ * empty circles would say less than no circle at all, and every list shows a
+ * mix.
+ *
+ * `size="sm"` is for dense rows; the default suits a header.
  */
-export function RunInitiator({
+export function PersonBadge({
   actor,
   source,
+  action = "Started by",
   size = "default",
   className,
 }: {
   actor: string | null | undefined;
   source: string | null | undefined;
+  /** What this person did, for the tooltip and for screen readers. */
+  action?: string;
   size?: "sm" | "default";
   className?: string;
 }) {
@@ -32,7 +38,7 @@ export function RunInitiator({
   if (!who) return null;
   const how = sourceLabel(source);
   // The tooltip carries what the circle cannot: the whole name, the address
-  // that distinguishes two people sharing one, and how the run was started.
+  // that distinguishes two people sharing one, and how it was done.
   const detail = [who.email !== who.label ? who.email : null, how]
     .filter(Boolean)
     .join(" · ");
@@ -41,7 +47,7 @@ export function RunInitiator({
       <TooltipTrigger
         render={
           <Avatar
-            data-slot="run-initiator"
+            data-slot="person-badge"
             className={[
               size === "sm" ? "size-5" : "size-6",
               "shrink-0",
@@ -49,9 +55,9 @@ export function RunInitiator({
             ]
               .filter(Boolean)
               .join(" ")}
-            // Reachable without a pointer: the initials alone do not identify
-            // anyone, and hover is not available to every reader.
-            aria-label={`Started by ${who.label}`}
+            // Reachable without a pointer: the initials alone identify nobody,
+            // and hover is not available to every reader.
+            aria-label={`${action} ${who.label}`}
           />
         }
       >
@@ -66,7 +72,9 @@ export function RunInitiator({
         </AvatarFallback>
       </TooltipTrigger>
       <TooltipContent>
-        <span className="font-medium">{who.label}</span>
+        <span className="font-medium">
+          {action} {who.label}
+        </span>
         {detail && <span className="text-background/70">{detail}</span>}
       </TooltipContent>
     </Tooltip>

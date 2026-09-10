@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, Play, Trash2 } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
-import { RunInitiator } from "@/components/RunInitiator";
+import { PersonBadge } from "@/components/PersonBadge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -121,7 +121,7 @@ function RunRow({ run }: { run: RunSummary }) {
           <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>
             {run.status}
           </Badge>
-          <RunInitiator actor={run.trigger_actor} source={run.trigger_source} />
+          <PersonBadge actor={run.trigger_actor} source={run.trigger_source} />
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="truncate text-sm font-medium">

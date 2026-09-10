@@ -37,7 +37,10 @@ pub async fn list_users(_: AdminOnly, Extension(state): Extension<Arc<RunsState>
         Ok(u) => u,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    match users.list().await {
+    // With activity, not just the account: `last_login_at` alone says when
+    // somebody last typed a password, which on a members page is the wrong
+    // question. See `list_with_activity`.
+    match users.list_with_activity().await {
         Ok(list) => Json(list).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }

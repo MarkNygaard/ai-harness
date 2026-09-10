@@ -105,6 +105,7 @@ pub struct RunsState {
     linear_source_store: OnceCell<harness_persist::LinearSourceStore>,
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     finding_store: OnceCell<harness_persist::FindingStateStore>,
+    workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     user_store: OnceCell<harness_persist::UserStore>,
     settings_store: OnceCell<harness_persist::SettingsStore>,
     token_store: OnceCell<harness_persist::TokenStore>,
@@ -207,6 +208,7 @@ impl RunsState {
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             finding_store: OnceCell::new(),
+            workflow_author_store: OnceCell::new(),
             user_store: OnceCell::new(),
             settings_store: OnceCell::new(),
             token_store: OnceCell::new(),
@@ -376,6 +378,22 @@ impl RunsState {
     }
 
     /// Lazily connect the unified finding triage-state store (all reports).
+    pub(crate) async fn workflow_author_store(
+        &self,
+    ) -> Result<&harness_persist::WorkflowAuthorStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.workflow_author_store
+            .get_or_try_init(|| async {
+                harness_persist::WorkflowAuthorStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
     pub(crate) async fn finding_store(
         &self,
     ) -> Result<&harness_persist::FindingStateStore, String> {

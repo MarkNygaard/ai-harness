@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ReactFlowProvider } from "@xyflow/react";
 import { Info } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
-import { RunInitiator } from "@/components/RunInitiator";
+import { PersonBadge } from "@/components/PersonBadge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -63,7 +63,7 @@ export function RunDetailPage() {
           <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>
             {run.status}
           </Badge>
-          <RunInitiator actor={run.triggerActor} source={run.triggerSource} />
+          <PersonBadge actor={run.triggerActor} source={run.triggerSource} />
           {run.live && (
             <span className="flex items-center gap-1.5 text-xs text-status-running">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-status-running" />

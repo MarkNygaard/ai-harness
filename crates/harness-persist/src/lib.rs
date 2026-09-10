@@ -37,7 +37,7 @@ mod settings;
 pub use settings::SettingsStore;
 
 mod users;
-pub use users::{NewUser, ProfileUpdate, User, UserStore};
+pub use users::{NewUser, ProfileUpdate, User, UserActivity, UserStore};
 
 mod tokens;
 pub use tokens::{AccessToken, TokenStore};
@@ -47,6 +47,9 @@ pub use invites::{Invite, InviteStore, KIND_INVITE, KIND_RESET};
 
 mod finding_state;
 pub use finding_state::{FindingState, FindingStateInput, FindingStateStore};
+
+mod workflow_authors;
+pub use workflow_authors::{Editor, WorkflowAuthorStore, WorkflowAuthorship};
 
 /// A run row (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]

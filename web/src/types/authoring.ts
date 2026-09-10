@@ -38,6 +38,27 @@ export interface WorkflowUi {
   report: WorkflowReport | null;
 }
 
+/**
+ * Who wrote a custom workflow and who last changed it.
+ *
+ * Absent — not empty — when unknown: a bundled workflow has no author, and one
+ * added to the directory by hand has none anybody recorded.
+ */
+export interface WorkflowAuthorship {
+  name: string;
+  /** Harness account id; null when the person has no account here. */
+  created_by: string | null;
+  /** The creator as a reader sees them (`Name <email>`). */
+  created_actor: string | null;
+  /** Which door it came through: "ui" or "mcp". */
+  created_source: string | null;
+  created_at: string;
+  updated_by: string | null;
+  updated_actor: string | null;
+  updated_source: string | null;
+  updated_at: string;
+}
+
 export interface WorkflowSummary {
   name: string;
   source: AuthoringSource;
@@ -45,6 +66,8 @@ export interface WorkflowSummary {
   node_count: number;
   /** Declarative nav/report surfaces; absent for workflows that opt out. */
   ui?: WorkflowUi | null;
+  /** Absent when nobody recorded who wrote it. */
+  authorship?: WorkflowAuthorship | null;
 }
 
 export interface WorkflowSource {
