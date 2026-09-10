@@ -2,7 +2,9 @@ import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { SubscriptionsRow } from "@/components/dashboard/SubscriptionsRow";
+import { RunInitiator } from "@/components/RunInitiator";
 import { Badge } from "@/components/ui/badge";
+import { distinctInitiators } from "@/lib/initiator";
 import { useRuns } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
 import type { RunStatus, RunSummary } from "@/types/run";
@@ -205,6 +207,9 @@ function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
     hour: "2-digit",
     minute: "2-digit",
   });
+  // Usually one person behind a task's build/review/merge runs; two when
+  // somebody else asked for the changes, which is the case worth seeing.
+  const people = distinctInitiators(task.runs);
   return (
     <div
       className={`flex items-center gap-3 px-1 py-1.5 text-sm hover:bg-muted/30 ${
@@ -215,6 +220,19 @@ function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
         {finishedTime}
       </span>
       <span className="min-w-0 flex-1 truncate">{task.title}</span>
+      {people.length > 0 && (
+        <div className="flex shrink-0 items-center -space-x-1">
+          {people.map((p) => (
+            <RunInitiator
+              key={p.actor}
+              actor={p.actor}
+              source={p.source}
+              size="sm"
+              className="ring-1 ring-background"
+            />
+          ))}
+        </div>
+      )}
       {task.project && (
         <Badge variant="outline" className="shrink-0 text-[10px]">
           {task.project}

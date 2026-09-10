@@ -3,6 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ReactFlowProvider } from "@xyflow/react";
 import { Info } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
+import { RunInitiator } from "@/components/RunInitiator";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
@@ -18,6 +19,7 @@ import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
 import { WorkflowReport } from "@/components/report/WorkflowReport";
 import { useCancelRun, useRerunRun, useRunView } from "@/lib/runs";
+import { parseInitiator, sourceLabel } from "@/lib/initiator";
 import { parseWorkflowVerdict, useWorkflowUi } from "@/lib/report";
 import type { RunStatus } from "@/types/run";
 const STATUS_VARIANT: Record<
@@ -61,6 +63,7 @@ export function RunDetailPage() {
           <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>
             {run.status}
           </Badge>
+          <RunInitiator actor={run.triggerActor} source={run.triggerSource} />
           {run.live && (
             <span className="flex items-center gap-1.5 text-xs text-status-running">
               <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-status-running" />
@@ -130,6 +133,20 @@ export function RunDetailPage() {
                     run.recordedAt
                       ? new Date(run.recordedAt).toLocaleString()
                       : "—"
+                  }
+                />
+                {/* Spelled out here rather than left to the header's circle:
+                    initials identify nobody on their own, and this panel is
+                    where someone comes to find out. */}
+                <Field
+                  label="Started by"
+                  value={
+                    [
+                      parseInitiator(run.triggerActor)?.label,
+                      sourceLabel(run.triggerSource),
+                    ]
+                      .filter(Boolean)
+                      .join(" · ") || "—"
                   }
                 />
               </dl>

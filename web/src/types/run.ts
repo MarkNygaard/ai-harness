@@ -54,6 +54,22 @@ export interface RunSummary {
   ab_arm: string | null;
   /** Display label for the arm's substituted model (e.g. "cursor/composer-2.5"). */
   ab_label: string | null;
+  /**
+   * Which door the run came in through: "ui" | "mcp" | "linear-webhook" |
+   * "linear-poller", or the coarse "linear" on rows written before the split.
+   * Null on runs from before any of this was recorded.
+   */
+  trigger_source: string | null;
+  /**
+   * Who asked for the run, as `Name <email>` — either half may be missing.
+   * Null when nobody was identified.
+   */
+  trigger_actor: string | null;
+  /**
+   * Their harness account id. Null when the person has no account here (a
+   * colleague who works only in Linear); `trigger_actor` still names them.
+   */
+  triggered_by: string | null;
 }
 /** One (project, day, status) tally from the runs summary endpoint. */
 export interface RunDailyCount {

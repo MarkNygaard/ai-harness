@@ -413,6 +413,9 @@ describe("nodesFromDetail", () => {
       ab_pair_id: null,
       ab_arm: null,
       ab_label: null,
+      trigger_source: null,
+      trigger_actor: null,
+      triggered_by: null,
       graph: [
         { id: "build", depends_on: [] },
         { id: "review", depends_on: ["build"] },
@@ -478,6 +481,9 @@ describe("nodesFromDetail", () => {
       ab_pair_id: null,
       ab_arm: null,
       ab_label: null,
+      trigger_source: null,
+      trigger_actor: null,
+      triggered_by: null,
       graph: [
         { id: "explore", depends_on: [] },
         { id: "plan", depends_on: ["explore"] },
@@ -529,6 +535,9 @@ describe("nodesFromDetail", () => {
       ab_pair_id: null,
       ab_arm: null,
       ab_label: null,
+      trigger_source: null,
+      trigger_actor: null,
+      triggered_by: null,
       graph: [{ id: "explore", depends_on: [], artifact: "exploration.md" }],
       nodes: [
         {
@@ -571,6 +580,9 @@ describe("nodesFromDetail", () => {
       ab_pair_id: null,
       ab_arm: null,
       ab_label: null,
+      trigger_source: null,
+      trigger_actor: null,
+      triggered_by: null,
       graph: [{ id: "build", depends_on: [] }],
       nodes: [
         {
