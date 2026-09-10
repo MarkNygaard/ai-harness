@@ -24,6 +24,7 @@ pub mod defaults;
 mod dispatch;
 mod hooks;
 mod local;
+pub mod models;
 mod pi;
 mod registry;
 mod run;
