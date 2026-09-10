@@ -39,7 +39,7 @@ first run and then cached on the data volume. Declaring them here is why adding
 a language does not mean rebuilding the image.
 
 **External URL.** A live site associated with the project, exposed to runs as
-`$EXTERNAL_URL`. This is what [`geo-audit`](/docs/workflows/bundled#geo-audit)
+`$EXTERNAL_URL`. This is what [`geo-audit`](/docs/workflows/library#geo-audit)
 audits, and it is a project setting rather than a run argument because it does
 not change between runs.
 
@@ -57,7 +57,7 @@ describing what it is for.
 The run gets all of them in one workspace, each in its own folder, and
 `HARNESS_REPOS` describes the layout to the agents. That is how a review can
 reason about a frontend and the backend where half of its logic actually lives.
-[`review-area`](/docs/workflows/bundled#review-area) is built for this, and
+[`review-area`](/docs/workflows/library#review-area) is built for this, and
 works single-repo too.
 
 The workspace root in a multi-repo run holds the checkouts but is not itself a

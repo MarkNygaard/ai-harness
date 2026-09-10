@@ -78,7 +78,6 @@ const workflows = [
   ["revise-pr", "address review feedback on an open PR"],
   ["merge-pr", "resolve conflicts and merge a ready PR"],
   ["architect", "behaviour-preserving codebase health sweep"],
-  ["geo-audit", "audit a site for AI-search readiness"],
   ["judge-ab", "score an A/B model comparison"],
 ]
 

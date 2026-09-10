@@ -26,8 +26,9 @@ description: >-
 give it a task (title + description) and a registered **project** (a git repo it
 has cloned); it runs a **workflow** — by default `idea-to-pr`: plan → implement →
 multi-pass review → build gate — in an isolated worktree and opens a **reviewed
-pull request**. Other bundled workflows include `geo-audit` (audit a project's
-live site for AI-search readiness) and `merge-pr` / `revise-pr`. You interact
+pull request**. Other bundled workflows include `merge-pr`, `revise-pr` and `review-pr`; more
+(`geo-audit`, `review-area`, `bc-idea-to-pr`) are installable from the workflow
+library and must be installed on that harness before a run can name them. You interact
 with it purely through its MCP tools: trigger a run, then poll its status.
 
 This skill covers two things: **running** the harness (trigger + monitor, below)
@@ -186,7 +187,9 @@ mcp__harness__run_trigger({
   description: "Add a token-bucket rate limiter (60 req/min/IP) to the public REST API, with tests and a config flag. Return 429 with a Retry-After header."
 })
 
-// Audit a project's live site (workflow reads the project's external URL).
+// Audit a project's live site. `geo-audit` comes from the workflow library, so
+// it has to be installed on that harness first — `library_list` says what is.
+
 mcp__harness__run_trigger({
   project: "ticket0",
   workflow: "geo-audit",

@@ -1,0 +1,95 @@
+---
+title: "The workflow library"
+description: "Browse published workflows from inside the harness, install one with a click, and keep it up to date."
+---
+
+Not every workflow belongs in every install. A Business Central pipeline is
+noise on a harness that has never seen an AL repository, and a GEO audit written
+for ecommerce is the wrong audit for a documentation site. The library is where
+those live: browse it from the editor, install what you need, and leave the rest.
+
+Open **Workflows → Library**.
+
+## Installing
+
+Installing makes a **copy** on your harness. Nothing about it changes on its own
+afterwards — a workflow you installed today runs the same next month, whatever
+its author does in the meantime. When they publish something newer, the entry
+says *update available* and you decide.
+
+Two groups, because the trust in them differs:
+
+- **Official** — published by the project.
+- **Community** — published by anyone, always shown with its author.
+
+An installed workflow lands under **Installed** on the workflows page, so it
+stays distinguishable from one you wrote. It is an ordinary workflow file
+otherwise: editable, runnable, bindable to a Linear trigger.
+
+<Callout>
+A library workflow can never take the name of a built-in one — the registry
+refuses to publish those names at all. If the name collides with something *you*
+wrote, the install asks which name to use rather than choosing for you.
+</Callout>
+
+## Keeping up to date
+
+**Update** fetches the newest version and replaces the local copy. It only
+appears when the library genuinely has a higher version, so a workflow whose
+latest release was withdrawn is never quietly rolled backwards.
+
+**Uninstall** deletes the workflow file and stops your harness being counted as
+an install of it.
+
+## What is published today
+
+### `geo-audit`
+
+Audits a live ecommerce site for Generative Engine Optimization, meaning how
+ready it is to be cited by AI search, with traditional SEO underneath it.
+
+Runs against the project's `external_url`, exposed as `$EXTERNAL_URL`. It audits
+**three pages, not one**: a store's homepage carries no `Product` schema, no
+price and no reviews, so auditing only it reports the same non-findings for
+every shop. It fetches the entry URL plus `robots.txt`, `llms.txt`,
+`llms-full.txt`, `sitemap.xml` and `.well-known/ucp`, then picks real pages to
+examine.
+
+Written for ecommerce. Other kinds of site want a different audit, which is
+exactly the sort of thing the library is for.
+
+### `bc-idea-to-pr`
+
+`idea-to-pr` adapted for Business Central / AL repositories. The cross-platform
+AL compiler is the build gate: `al compile`, with symbols downloaded read-only
+from the BC dev endpoint.
+
+It **never publishes to a server**. Read-only symbol download and local
+compilation only, so no database is touched and it cannot collide with a
+developer's environment. Deploying stays a human step.
+
+### `review-area`
+
+A read-only, cross-repo review of a specific area, in two stages to keep the
+expensive model economical. A cheap scout pass maps the area across every repo
+in the workspace into a curated dossier; a deep review then reasons *from the
+dossier* instead of exploring again, spending the expensive tokens on judgement
+rather than navigation.
+
+Works multi-repo (via `HARNESS_REPOS`) or single-repo.
+
+## Turning it off
+
+The library points at a public registry by default, so a new install has one
+without configuring anything. Two reasons to change that, and both are real:
+
+- **An air-gapped install** should not be reaching for a public service. Set
+  `HARNESS_REGISTRY_URL` to an empty value and the feature disappears.
+- **A private registry** — set `HARNESS_REGISTRY_URL` to its address.
+
+## Over MCP
+
+An editor connected to the [MCP endpoint](/docs/mcp) can browse and install too:
+`library_list`, `library_install` and `library_uninstall`. Worth reaching for
+before authoring something new — an existing workflow that nearly fits is
+usually a better starting point than a blank canvas.
