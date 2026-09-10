@@ -17,7 +17,7 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
+use axum::extract::Path;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -25,7 +25,6 @@ use harness_runner::authoring;
 use serde::Serialize;
 
 use super::runs_routes::RunsState;
-use super::state::AppState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
@@ -45,24 +44,93 @@ pub struct LibraryEntry {
     pub update_available: bool,
 }
 
-/// `GET /api/library`
+/// What went wrong, in terms both front doors can render.
 ///
-/// A registry that cannot be reached is reported as an error rather than an
-/// empty library: "nothing published yet" and "we could not ask" look identical
-/// otherwise, and only one of them is worth retrying.
-pub async fn list(
-    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
-) -> Response {
-    let Some(client) = runs.registry() else {
-        return err(
-            StatusCode::NOT_IMPLEMENTED,
-            "the workflow library is switched off on this harness",
-        );
-    };
-    let listing = match client.list().await {
-        Ok(l) => l,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()),
-    };
+/// The dialog needs a status code and a structured conflict so it can prompt
+/// for a name; an MCP client has only a sentence. Neither can be the other's
+/// shape, so the shared code returns the fact and each renders it.
+pub(crate) enum LibraryError {
+    /// No library configured here.
+    Off,
+    /// The registry could not be reached, or answered badly.
+    Unreachable(String),
+    NotFound(String),
+    /// The name is taken on this harness. Not a failure — a question.
+    Conflict {
+        name: String,
+        suggestion: Option<String>,
+    },
+    Failed(String),
+}
+
+impl LibraryError {
+    /// A sentence, for callers with nowhere to put structure.
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::Off => "the workflow library is switched off on this harness".into(),
+            Self::Unreachable(e) | Self::NotFound(e) | Self::Failed(e) => e.clone(),
+            Self::Conflict { name, suggestion } => match suggestion {
+                Some(s) => format!(
+                    "this harness already has a workflow called `{name}` — retry with name `{s}`, \
+                     or any other free name"
+                ),
+                None => format!(
+                    "this harness already has a workflow called `{name}`, and so is every \
+                     obvious alternative — retry with a name of your own"
+                ),
+            },
+        }
+    }
+
+    fn status(&self) -> StatusCode {
+        match self {
+            Self::Off => StatusCode::NOT_IMPLEMENTED,
+            Self::Unreachable(_) => StatusCode::BAD_GATEWAY,
+            Self::NotFound(_) => StatusCode::NOT_FOUND,
+            Self::Conflict { .. } => StatusCode::CONFLICT,
+            Self::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        }
+    }
+
+    fn into_response(self) -> Response {
+        // A conflict carries the taken name and a suggestion, so the caller can
+        // ask rather than guess. Everything else is a sentence.
+        if let Self::Conflict { name, suggestion } = &self {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": self.message(),
+                    "conflict": name,
+                    "suggested_name": suggestion,
+                })),
+            )
+                .into_response();
+        }
+        err(self.status(), self.message())
+    }
+}
+
+/// What an install did.
+#[derive(Debug, Serialize)]
+pub(crate) struct Installed {
+    pub installed_as: String,
+    pub version: i32,
+    /// The version taken has since been withdrawn by its publisher. Installed
+    /// anyway — it is the latest there is — but the caller is told.
+    pub withdrawn: bool,
+}
+
+/// The library listing, annotated with what is installed here.
+///
+/// A registry that cannot be reached is an error rather than an empty library:
+/// "nothing published yet" and "we could not ask" look identical otherwise, and
+/// only one of them is worth retrying.
+pub(crate) async fn browse(runs: &Arc<RunsState>) -> Result<Vec<LibraryEntry>, LibraryError> {
+    let client = runs.registry().ok_or(LibraryError::Off)?;
+    let listing = client
+        .list()
+        .await
+        .map_err(|e| LibraryError::Unreachable(e.to_string()))?;
 
     // Installed state is a local join. A harness with no database can still
     // browse — it just cannot say what is installed, which is honest rather
@@ -72,7 +140,7 @@ pub async fn list(
         Err(_) => Vec::new(),
     };
 
-    let entries: Vec<LibraryEntry> = listing
+    Ok(listing
         .into_iter()
         .map(|workflow| {
             let local = installed.iter().find(|i| i.slug == workflow.slug);
@@ -90,9 +158,17 @@ pub async fn list(
                 workflow,
             }
         })
-        .collect();
+        .collect())
+}
 
-    Json(entries).into_response()
+/// `GET /api/library`
+pub async fn list(
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+) -> Response {
+    match browse(&runs).await {
+        Ok(entries) => Json(entries).into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 /// What an install may ask for. Optional in full: the common case is a `POST`
@@ -105,170 +181,188 @@ pub struct InstallRequest {
     pub name: Option<String>,
 }
 
-/// `POST /api/library/{slug}/install`
+/// Install a library workflow, or move an installed one to the latest version —
+/// the same operation either way: fetch a version, write it, record it.
 ///
-/// Installs the latest version, or moves an existing install up to it. The same
-/// route for both because they are the same operation: fetch a version, write
-/// it, record it.
-///
-/// Answers `409` when the name is already in use here, naming the conflict and
-/// suggesting a free one. The caller repeats the request with `name` set.
-pub async fn install(
-    State(state): State<Arc<AppState>>,
-    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
-    headers: axum::http::HeaderMap,
-    Path(slug): Path<String>,
-    body: Option<Json<InstallRequest>>,
-) -> Response {
-    let req = body.map(|Json(b)| b).unwrap_or_default();
-    let Some(client) = runs.registry() else {
-        return err(
-            StatusCode::NOT_IMPLEMENTED,
-            "the workflow library is switched off on this harness",
-        );
-    };
+/// Shared by the HTTP route and the MCP tool so the two cannot drift. The
+/// difference between them is only how a [`LibraryError`] is rendered.
+pub(crate) async fn install_workflow(
+    runs: &Arc<RunsState>,
+    slug: &str,
+    requested_name: Option<&str>,
+    by: &super::runs_routes::TriggerInfo,
+) -> Result<Installed, LibraryError> {
+    let client = runs.registry().ok_or(LibraryError::Off)?;
+    let listing = client
+        .list()
+        .await
+        .map_err(|e| LibraryError::Unreachable(e.to_string()))?;
+    let entry = listing
+        .into_iter()
+        .find(|w| w.slug == slug)
+        .ok_or_else(|| LibraryError::NotFound(format!("the library has no workflow `{slug}`")))?;
+    let version = entry.latest_version.ok_or_else(|| {
+        LibraryError::Failed(format!("`{slug}` has no published version to install"))
+    })?;
+    let doc = client
+        .version(slug, version)
+        .await
+        .map_err(|e| LibraryError::Unreachable(e.to_string()))?;
 
-    let listing = match client.list().await {
-        Ok(l) => l,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()),
-    };
-    let Some(entry) = listing.into_iter().find(|w| w.slug == slug) else {
-        return err(
-            StatusCode::NOT_FOUND,
-            format!("the library has no workflow `{slug}`"),
-        );
-    };
-    let Some(version) = entry.latest_version else {
-        return err(
-            StatusCode::CONFLICT,
-            format!("`{slug}` has no published version to install"),
-        );
-    };
+    let store = runs
+        .installed_workflow_store()
+        .await
+        .map_err(LibraryError::Failed)?;
+    let existing = store.by_slug(slug).await.ok().flatten();
 
-    let doc = match client.version(&slug, version).await {
-        Ok(d) => d,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, e.to_string()),
-    };
-
-    let store = match runs.installed_workflow_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
-
-    let existing = store.by_slug(&slug).await.ok().flatten();
     let name = match destination(
-        &state.core.project_root,
-        &slug,
-        req.name.as_deref(),
+        &runs.project_root,
+        slug,
+        requested_name,
         existing.as_ref().map(|i| i.name.as_str()),
     ) {
         Destination::Free(name) => name,
         // A question rather than a workaround: the caller is asked which name
-        // to use, and nothing is written until it answers. The suggestion is
-        // offered, not applied.
+        // to use, and nothing is written until it answers.
         Destination::Taken { name, suggestion } => {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": format!(
-                        "this harness already has a workflow called `{name}`"
-                    ),
-                    "conflict": name,
-                    "suggested_name": suggestion,
-                })),
-            )
-                .into_response()
+            return Err(LibraryError::Conflict { name, suggestion })
         }
     };
 
     // Through the same door as hand-authored YAML: validated, and refused if the
     // DAG is broken. A registry that published something unrunnable must not be
     // able to put it on disk here.
-    if let Err(e) = authoring::save_workflow(&state.core.project_root, &name, &doc.yaml) {
-        return err(StatusCode::BAD_REQUEST, e);
-    }
+    authoring::save_workflow(&runs.project_root, &name, &doc.yaml).map_err(LibraryError::Failed)?;
 
-    if let Err(e) = store
+    store
         .record(&harness_persist::InstallRecord {
             name: &name,
-            slug: &slug,
+            slug,
             version: doc.version,
             publisher: Some(&entry.publisher),
             title: Some(&entry.title),
         })
         .await
-    {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-    }
+        .map_err(|e| LibraryError::Failed(e.to_string()))?;
 
-    // Who pressed the button, so the editor can say where this workflow came
-    // from and who brought it in.
-    super::workflows_routes::record_edit(
-        &runs,
-        &headers,
+    // Who brought it in, so the editor can say where this workflow came from.
+    super::workflows_routes::record_edit_as(
+        runs,
         &name,
+        by.user_id.as_deref(),
+        by.actor.as_deref(),
         super::workflows_routes::EDIT_SOURCE_LIBRARY,
     )
     .await;
 
-    // Best-effort, and last: the workflow is already installed by this point, and
-    // a registry that cannot be told must not turn a successful install into a
-    // failed request.
+    // Best-effort, and last: the workflow is already installed by this point, so
+    // a registry that cannot be told must not turn a success into a failure.
     if let Ok(installation_id) = runs.installation_id().await {
         if let Err(e) = client
-            .record_install(&slug, &installation_id, doc.version)
+            .record_install(slug, &installation_id, doc.version)
             .await
         {
             tracing::warn!("library: installed {slug} but could not report it: {e}");
         }
     }
 
-    Json(serde_json::json!({
-        "installed_as": name,
-        "version": doc.version,
-        "withdrawn": doc.withdrawn,
-    }))
-    .into_response()
+    Ok(Installed {
+        installed_as: name,
+        version: doc.version,
+        withdrawn: doc.withdrawn,
+    })
 }
 
-/// `DELETE /api/library/{slug}` — remove an installed workflow and stop being
-/// counted for it.
-pub async fn uninstall(
-    State(state): State<Arc<AppState>>,
+/// `POST /api/library/{slug}/install`
+///
+/// Answers `409` when the name is already in use here, naming the conflict and
+/// suggesting a free one. The caller repeats the request with `name` set.
+pub async fn install(
     axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     Path(slug): Path<String>,
+    body: Option<Json<InstallRequest>>,
 ) -> Response {
-    let store = match runs.installed_workflow_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
-    let Ok(Some(installed)) = store.by_slug(&slug).await else {
-        return err(
-            StatusCode::NOT_FOUND,
-            format!("`{slug}` is not installed here"),
-        );
-    };
+    let req = body.map(|Json(b)| b).unwrap_or_default();
+    let by = super::runs_routes::TriggerInfo::from_caller(
+        &runs,
+        &headers,
+        super::runs_routes::SOURCE_UI,
+    )
+    .await;
+    match install_workflow(&runs, &slug, req.name.as_deref(), &by).await {
+        Ok(done) => Json(done).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
 
-    if let Err(e) = authoring::delete_project_workflow(&state.core.project_root, &installed.name) {
-        return err(StatusCode::BAD_REQUEST, e);
-    }
-    if let Err(e) = store.forget(&installed.name).await {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-    }
+/// Remove an installed workflow. Returns the local name it had.
+pub(crate) async fn uninstall_workflow(
+    runs: &Arc<RunsState>,
+    slug: &str,
+) -> Result<String, LibraryError> {
+    let store = runs
+        .installed_workflow_store()
+        .await
+        .map_err(LibraryError::Failed)?;
+    let installed = store
+        .by_slug(slug)
+        .await
+        .ok()
+        .flatten()
+        .ok_or_else(|| LibraryError::NotFound(format!("`{slug}` is not installed here")))?;
+
+    authoring::delete_project_workflow(&runs.project_root, &installed.name)
+        .map_err(LibraryError::Failed)?;
+    forget_installed(runs, &installed.name).await;
     // The workflow's own provenance goes too, or a later workflow reusing the
     // name inherits an author who never saw it.
     if let Ok(authors) = runs.workflow_author_store().await {
         let _ = authors.forget(&installed.name).await;
     }
+    Ok(installed.name)
+}
 
-    // Best-effort, like the install side.
-    if let (Some(client), Ok(installation_id)) = (runs.registry(), runs.installation_id().await) {
-        if let Err(e) = client.forget_install(&slug, &installation_id).await {
-            tracing::warn!("library: uninstalled {slug} but could not report it: {e}");
+/// Forget that a workflow was installed from the library, and stop being
+/// counted for it.
+///
+/// **Called from every path that removes a workflow file**, not only the
+/// library's own uninstall: a workflow deleted through the editor or over MCP
+/// is just as gone, and leaving the record behind would have the Library dialog
+/// still calling it installed — offering an Update for a file that is not there
+/// — while the registry kept counting an install that no longer exists.
+///
+/// A no-op for a workflow that did not come from the library, which is the
+/// common case for those callers.
+pub(crate) async fn forget_installed(runs: &Arc<RunsState>, name: &str) {
+    let Ok(store) = runs.installed_workflow_store().await else {
+        return;
+    };
+    let Ok(Some(installed)) = store.get(name).await else {
+        return; // not from the library
+    };
+    if let Err(e) = store.forget(name).await {
+        tracing::warn!("library: could not forget the install of {name}: {e}");
+        return;
+    }
+    // Best-effort, like every other registry call: the file is already gone.
+    if let (Some(client), Ok(id)) = (runs.registry(), runs.installation_id().await) {
+        if let Err(e) = client.forget_install(&installed.slug, &id).await {
+            tracing::warn!("library: removed {name} but could not report it: {e}");
         }
     }
+}
 
-    Json(serde_json::json!({ "uninstalled": installed.name })).into_response()
+/// `DELETE /api/library/{slug}` — remove an installed workflow and stop being
+/// counted for it.
+pub async fn uninstall(
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    Path(slug): Path<String>,
+) -> Response {
+    match uninstall_workflow(&runs, &slug).await {
+        Ok(name) => Json(serde_json::json!({ "uninstalled": name })).into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 /// Whether a workflow name is already spoken for on this harness.

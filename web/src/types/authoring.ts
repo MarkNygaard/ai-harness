@@ -78,6 +78,12 @@ export interface WorkflowSummary {
   source: AuthoringSource;
   description: string | null;
   node_count: number;
+  /**
+   * This project workflow shadows a built-in of the same name. The built-in
+   * then vanishes from the listing, so without this an override is
+   * indistinguishable from a workflow written from scratch.
+   */
+  overrides_bundled: boolean;
   /** Declarative nav/report surfaces; absent for workflows that opt out. */
   ui?: WorkflowUi | null;
   /** Absent when nobody recorded who wrote it. */

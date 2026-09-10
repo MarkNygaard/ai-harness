@@ -202,6 +202,11 @@ pub async fn delete_workflow(
                         tracing::warn!("authoring: could not forget who wrote {name}: {e}");
                     }
                 }
+                // A workflow deleted here is as gone as one uninstalled from
+                // the library dialog. Without this the Library would still call
+                // it installed and offer an Update for a file that is not
+                // there, and the registry would keep counting it.
+                super::library_routes::forget_installed(&runs, &name).await;
             }
             Json(serde_json::json!({ "reset": reset, "name": name })).into_response()
         }

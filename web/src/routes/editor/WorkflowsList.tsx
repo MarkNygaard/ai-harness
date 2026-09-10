@@ -79,9 +79,10 @@ export function WorkflowsList() {
             Workflows
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Edit a workflow in the visual builder. Bundled defaults are
-            read-only templates — saving one creates an editable project copy
-            that shadows it.
+            Edit a workflow in the visual builder. Editing a built-in one never
+            changes the original: saving makes a copy that shadows it, and that
+            copy stops picking up future improvements until you reset it. The
+            library has more.
           </p>
         </div>
 
@@ -100,7 +101,7 @@ export function WorkflowsList() {
         <Section
           title="Custom"
           count={custom.length}
-          note="editable"
+          note="written here"
           view={view}
         >
           {custom.map((wf) => (
@@ -109,7 +110,8 @@ export function WorkflowsList() {
         </Section>
         {custom.length === 0 && all.length > 0 && (
           <p className="-mt-4 text-xs text-muted-foreground">
-            None yet — saving a template below creates an editable copy here.
+            None yet — saving a built-in one below creates an editable copy
+            here, or install one from the library.
           </p>
         )}
 
@@ -125,9 +127,9 @@ export function WorkflowsList() {
         </Section>
 
         <Section
-          title="Templates"
+          title="Built in"
           count={templates.length}
-          note="read-only"
+          note="ships with the harness"
           view={view}
         >
           {templates.map((wf) => (
@@ -217,6 +219,26 @@ function Section({
 }
 
 /**
+ * This workflow is standing in front of a built-in one.
+ *
+ * Saving an edit to a built-in writes a project file at the same name, and the
+ * built-in then disappears from the listing entirely — so without this an
+ * override reads as an ordinary custom workflow, and the fact that runs of that
+ * name no longer use the shipped version is invisible. Opening it offers
+ * "Reset to default".
+ */
+function OverrideBadge() {
+  return (
+    <span
+      className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+      title="Replaces the built-in workflow of this name. Open it and choose Reset to default to go back."
+    >
+      overrides built-in
+    </span>
+  );
+}
+
+/**
  * Who wrote this workflow, as one or two circles.
  *
  * The last editor only appears when they are not the creator — on a workflow
@@ -296,6 +318,7 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
             </p>
             <div className="mt-auto flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
               <span>{steps}</span>
+              {wf.overrides_bundled && <OverrideBadge />}
               <Authors wf={wf} />
             </div>
           </CardContent>
@@ -317,6 +340,7 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
                 </p>
               )}
             </div>
+            {wf.overrides_bundled && <OverrideBadge />}
             <Authors wf={wf} />
             <div className="shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
               {steps}
