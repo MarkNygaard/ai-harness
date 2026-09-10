@@ -409,14 +409,6 @@ pub(crate) async fn authenticated_user(
     }
 }
 
-/// What to stamp a run with, so it can later be said who asked for it.
-///
-/// `None` where nobody is signed in — an `open` install, or the legacy shared
-/// token, which identifies no one.
-pub(crate) async fn caller_id(state: &Arc<RunsState>, headers: &HeaderMap) -> Option<String> {
-    authenticated_user(state, headers).await.map(|u| u.id)
-}
-
 /// How to write a person on a run, for a reader rather than for a join.
 ///
 /// Name and address together because either alone loses something: two

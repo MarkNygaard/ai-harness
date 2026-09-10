@@ -17,7 +17,6 @@
 //! or the legacy shared token — the same two-layer arrangement `/ws` already
 //! uses, and for the same reason.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use axum::extract::Extension;
