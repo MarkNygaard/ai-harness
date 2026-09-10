@@ -106,6 +106,9 @@ pub struct RunsState {
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     finding_store: OnceCell<harness_persist::FindingStateStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
+    installed_workflow_store: OnceCell<harness_persist::InstalledWorkflowStore>,
+    /// Where the workflow library lives; `None` when it is switched off.
+    registry_url: Option<String>,
     user_store: OnceCell<harness_persist::UserStore>,
     settings_store: OnceCell<harness_persist::SettingsStore>,
     token_store: OnceCell<harness_persist::TokenStore>,
@@ -209,6 +212,8 @@ impl RunsState {
             linear_claim_store: OnceCell::new(),
             finding_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
+            installed_workflow_store: OnceCell::new(),
+            registry_url: None,
             user_store: OnceCell::new(),
             settings_store: OnceCell::new(),
             token_store: OnceCell::new(),
@@ -378,6 +383,68 @@ impl RunsState {
     }
 
     /// Lazily connect the unified finding triage-state store (all reports).
+    /// Point this harness at a workflow library.
+    ///
+    /// A builder method rather than a sixth argument to `new`, which already
+    /// takes three `Option`s in a row — one more would be a swapped-argument
+    /// bug waiting to happen, and would touch eight test call sites that do not
+    /// care about the library.
+    pub fn with_registry_url(mut self, url: Option<String>) -> Self {
+        self.registry_url = url
+            .map(|u| u.trim().trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty());
+        self
+    }
+
+    /// A client for the workflow library, or `None` when there is no library —
+    /// an install that switched it off, which is a supported state and not an
+    /// error.
+    pub(crate) fn registry(&self) -> Option<crate::registry::RegistryClient> {
+        crate::registry::RegistryClient::new(self.registry_url.as_deref())
+    }
+
+    /// This harness's opaque id at the registry, minted on first use.
+    ///
+    /// `set_if_absent` rather than read-then-write: two replicas starting
+    /// together must not each mint one and each believe theirs is the id, or
+    /// the same harness would be counted twice.
+    pub(crate) async fn installation_id(&self) -> Result<String, String> {
+        let settings = self.settings_store().await?;
+        let key = crate::registry::INSTALLATION_ID_KEY;
+        if let Ok(Some(existing)) = settings.get(key).await {
+            if !existing.trim().is_empty() {
+                return Ok(existing);
+            }
+        }
+        let minted = uuid::Uuid::new_v4().to_string();
+        settings
+            .set_if_absent(key, &minted)
+            .await
+            .map_err(|e| e.to_string())?;
+        // Whoever won the race owns the id, which may not be this process.
+        settings
+            .get(key)
+            .await
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| "could not mint an installation id".to_string())
+    }
+
+    pub(crate) async fn installed_workflow_store(
+        &self,
+    ) -> Result<&harness_persist::InstalledWorkflowStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.installed_workflow_store
+            .get_or_try_init(|| async {
+                harness_persist::InstalledWorkflowStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
     pub(crate) async fn workflow_author_store(
         &self,
     ) -> Result<&harness_persist::WorkflowAuthorStore, String> {

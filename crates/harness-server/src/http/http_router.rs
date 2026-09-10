@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use super::{
     auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
-    github_sso, health_check, invites_routes, linear_agent, linear_connections, linear_oauth,
-    linear_routes, linear_source_routes, mcp_routes, oidc, password_reset, run_linear_routes,
-    runs_routes, settings_routes, state::AppState, system_routes, tokens_routes, users_routes,
-    workflows_routes,
+    github_sso, health_check, invites_routes, library_routes, linear_agent, linear_connections,
+    linear_oauth, linear_routes, linear_source_routes, mcp_routes, oidc, password_reset,
+    run_linear_routes, runs_routes, settings_routes, state::AppState, system_routes, tokens_routes,
+    users_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -43,7 +43,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
                 secret_key,
                 config.server.public_url.clone(),
             )
-            .with_api_token(auth::resolve_api_token(&config.server)),
+            .with_api_token(auth::resolve_api_token(&config.server))
+            .with_registry_url(config.server.registry_url.clone()),
         )
     };
     // Periodically reap runs whose lease has gone stale (crashed/orphaned), so a
@@ -276,6 +277,13 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::put(billing_routes::save_billing_profile)
                 .delete(billing_routes::delete_billing_profile),
         )
+        // ── The workflow library ────────────────────────────────────────────
+        // Browsing is proxied rather than done from the browser: the listing is
+        // only useful once it says which entries are installed here, and only
+        // the server knows that.
+        .route("/api/library", get(library_routes::list))
+        .route("/api/library/{slug}/install", post(library_routes::install))
+        .route("/api/library/{slug}", delete(library_routes::uninstall))
         // ── Workflow authoring API (visual editor + MCP) ────────────────────
         .route("/api/authoring/catalog", get(workflows_routes::get_catalog))
         .route(

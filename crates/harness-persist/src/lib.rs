@@ -48,6 +48,9 @@ pub use invites::{Invite, InviteStore, KIND_INVITE, KIND_RESET};
 mod finding_state;
 pub use finding_state::{FindingState, FindingStateInput, FindingStateStore};
 
+mod installed_workflows;
+pub use installed_workflows::{InstallRecord, InstalledWorkflow, InstalledWorkflowStore};
+
 mod workflow_authors;
 pub use workflow_authors::{Editor, WorkflowAuthorStore, WorkflowAuthorship};
 

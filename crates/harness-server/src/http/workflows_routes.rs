@@ -77,6 +77,11 @@ pub(crate) async fn record_edit_as(
 /// only two ways in, and telling them apart is half of what the record is for.
 pub(crate) const EDIT_SOURCE_UI: &str = "ui";
 pub(crate) const EDIT_SOURCE_MCP: &str = "mcp";
+/// Not authored here at all — brought in from the library by whoever pressed
+/// Install. Worth its own value: "created by" on a library workflow means
+/// "installed by", and conflating it with hand-authoring would misattribute
+/// somebody else's work.
+pub(crate) const EDIT_SOURCE_LIBRARY: &str = "library";
 
 /// `GET /api/authoring/catalog`
 pub async fn get_catalog(State(state): State<Arc<AppState>>) -> Response {
