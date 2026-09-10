@@ -331,6 +331,36 @@ query IssueContext($id: String!) {
   }
 }"#;
 
+// Who set a run in motion, for a run the harness fires off a Linear issue.
+//
+// Both facts in one round trip because both paths need a person and neither
+// wants a second call: the webhook wants the assignee (Linear makes whoever
+// delegates an issue its assignee, so that IS the delegator), and the poller
+// wants the last human who moved the issue into the column it watches — which
+// is an event, not a field, so only the history has it.
+//
+// `first: 25` and sorted here rather than by the API: the connection's default
+// order is not documented as newest-first, and a transition older than 25
+// entries is one an issue has had a long life since — falling back to the
+// assignee there is better than paging through a year of edits.
+//
+// This is fetched once per run actually fired, never for the 50 issues a tick
+// previews, so nesting a connection here does not repeat the complexity problem
+// `COMMENTS_QUERY` avoids.
+const ISSUE_INITIATOR_QUERY: &str = r#"
+query IssueInitiator($id: String!) {
+  issue(id: $id) {
+    assignee { id name email }
+    history(first: 25) {
+      nodes {
+        createdAt
+        toState { id }
+        actor { id name email }
+      }
+    }
+  }
+}"#;
+
 // Issues in a team's column that are **delegated to this app**. `delegate`
 // (`IssueFilter.delegate: NullableUserFilter`) is Linear's agent-delegation
 // field — "the agent user that is delegated to work on this issue" — and is what
@@ -763,6 +793,55 @@ pub fn parse_agent_session_event(json: &[u8]) -> Result<Option<AgentSessionEvent
     }))
 }
 
+/// A person Linear knows about, as thin as attribution needs.
+///
+/// `email` is the join key to a harness account; `name` is what a human reads
+/// when there is no account to join to. Both optional because Linear will not
+/// always disclose an email (a guest, a restricted workspace), and a name with
+/// no email is still worth showing.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LinearPerson {
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub email: Option<String>,
+}
+
+impl LinearPerson {
+    /// Whether this is anyone at all — a row where Linear disclosed nothing is
+    /// indistinguishable from no row.
+    fn is_someone(&self) -> bool {
+        self.name.is_some() || self.email.is_some() || self.id.is_some()
+    }
+}
+
+/// Who to credit for a run fired off an issue.
+///
+/// Two candidates rather than one answer, because the caller knows which
+/// question it is asking: the poller wants `moved_into_state` (an event — who
+/// pushed this into the column being watched) and falls back to `assignee`;
+/// the webhook wants `assignee` outright, since delegation is itself the
+/// trigger and Linear assigns the delegator.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct IssueInitiator {
+    /// The issue's assignee. For a delegated issue this is the delegator.
+    pub assignee: Option<LinearPerson>,
+    /// The last human to move the issue into the requested state, if one was
+    /// requested and a transition was found.
+    pub moved_into_state: Option<LinearPerson>,
+}
+
+impl IssueInitiator {
+    /// The person to credit, preferring the state move over the assignee.
+    ///
+    /// The order is the whole point: an issue delegated by one person and later
+    /// dragged into a re-run column by another is a second run driven by the
+    /// second person, and crediting the original delegator would attribute a
+    /// reviewer's request to whoever happened to file the ticket.
+    pub fn best(&self) -> Option<&LinearPerson> {
+        self.moved_into_state.as_ref().or(self.assignee.as_ref())
+    }
+}
+
 /// Where an issue sits: the team it belongs to, the status it is in, and the
 /// agent (if any) it is delegated to. Every field is optional so an unresolvable
 /// id degrades instead of erroring.
@@ -791,6 +870,117 @@ pub struct IssueContext {
     /// Label names on the issue. `corrective` is how a fix round is counted,
     /// since the count lives in Linear rather than in a table here.
     pub labels: Vec<String>,
+}
+
+/// Parse who set an issue in motion.
+///
+/// `into_state` is the state whose most recent arrival we want (the column the
+/// poller watches); pass `None` to ask only for the assignee. `app_user_id` is
+/// this harness's own Linear identity, and excluding it is not a nicety: the
+/// harness moves issues itself — to in-progress on pickup, onward at completion
+/// — so its own transitions sit in the same history, and the most recent
+/// arrival into a column is quite often the harness putting it back. Crediting
+/// a run to the harness would make the whole field useless precisely on the
+/// issues it works hardest.
+///
+/// Entries with no `actor` are skipped for the same reason by a different
+/// route: Linear reports an OAuth app's actions under `botActor`, leaving
+/// `actor` null, so a null actor is a machine — never the human we are after.
+pub fn parse_issue_initiator(
+    json: &[u8],
+    into_state: Option<&str>,
+    app_user_id: Option<&str>,
+) -> Result<IssueInitiator, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        issue: Option<IssueWire>,
+    }
+    #[derive(Deserialize)]
+    struct IssueWire {
+        #[serde(default)]
+        assignee: Option<PersonWire>,
+        #[serde(default)]
+        history: Option<HistoryWire>,
+    }
+    #[derive(Deserialize)]
+    struct HistoryWire {
+        #[serde(default)]
+        nodes: Vec<HistoryNodeWire>,
+    }
+    #[derive(Deserialize)]
+    struct HistoryNodeWire {
+        #[serde(rename = "createdAt")]
+        #[serde(default)]
+        created_at: Option<String>,
+        #[serde(rename = "toState")]
+        #[serde(default)]
+        to_state: Option<StateWire>,
+        #[serde(default)]
+        actor: Option<PersonWire>,
+    }
+    #[derive(Deserialize)]
+    struct StateWire {
+        #[serde(default)]
+        id: Option<String>,
+    }
+    #[derive(Deserialize)]
+    struct PersonWire {
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default)]
+        email: Option<String>,
+    }
+    impl From<PersonWire> for LinearPerson {
+        fn from(p: PersonWire) -> Self {
+            LinearPerson {
+                id: p.id,
+                name: p.name,
+                email: p.email,
+            }
+        }
+    }
+
+    let data: Data = gql_data(json)?;
+    let Some(issue) = data.issue else {
+        return Ok(IssueInitiator::default());
+    };
+
+    let assignee = issue
+        .assignee
+        .map(LinearPerson::from)
+        .filter(LinearPerson::is_someone);
+
+    let moved_into_state = into_state.and_then(|want| {
+        let mut arrivals: Vec<HistoryNodeWire> = issue
+            .history
+            .map(|h| h.nodes)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| n.to_state.as_ref().and_then(|s| s.id.as_deref()) == Some(want))
+            .filter(|n| {
+                n.actor
+                    .as_ref()
+                    .is_some_and(|a| a.id.as_deref().is_none_or(|id| Some(id) != app_user_id))
+            })
+            .collect();
+        // Sorted here rather than trusted from the API. Missing timestamps sort
+        // last so a well-formed entry always wins over one we cannot place.
+        arrivals.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        arrivals
+            .into_iter()
+            .next()
+            .and_then(|n| n.actor)
+            .map(LinearPerson::from)
+            .filter(LinearPerson::is_someone)
+    });
+
+    Ok(IssueInitiator {
+        assignee,
+        moved_into_state,
+    })
 }
 
 /// Parse an issue's team / status / delegate. An unresolvable issue id yields a
@@ -1107,6 +1297,26 @@ impl LinearClient {
             "variables": { "id": issue_id },
         });
         parse_issue_context(&self.post(body).await?)
+    }
+
+    /// Who set this issue in motion: its assignee, and — when `into_state` is
+    /// given — the last human to move it into that state.
+    ///
+    /// `app_user_id` is this harness's own Linear identity, excluded from the
+    /// history so the harness's own status moves are never mistaken for a
+    /// person asking for something. Called once per run fired, not per issue
+    /// previewed.
+    pub async fn issue_initiator(
+        &self,
+        issue_id: &str,
+        into_state: Option<&str>,
+        app_user_id: Option<&str>,
+    ) -> Result<IssueInitiator, LinearError> {
+        let body = serde_json::json!({
+            "query": ISSUE_INITIATOR_QUERY,
+            "variables": { "id": issue_id },
+        });
+        parse_issue_initiator(&self.post(body).await?, into_state, app_user_id)
     }
 
     /// Emit an activity into an agent session.
@@ -1558,6 +1768,127 @@ mod tests {
                 "parameter": "idea-to-pr", "result": "done"
             })
         );
+    }
+
+    /// The case the whole feature exists for: one person delegates an issue and
+    /// a different person later drags it into the column the poller watches.
+    /// The second run belongs to the second person.
+    #[test]
+    fn initiator_prefers_who_moved_it_over_who_it_is_assigned_to() {
+        let json = br#"{"data":{"issue":{
+            "assignee":{"id":"u-andrius","name":"Andrius","email":"andrius@x.com"},
+            "history":{"nodes":[
+              {"createdAt":"2026-09-01T10:00:00Z","toState":{"id":"s-review"},
+               "actor":{"id":"u-andrius","name":"Andrius","email":"andrius@x.com"}},
+              {"createdAt":"2026-09-08T09:00:00Z","toState":{"id":"s-changes"},
+               "actor":{"id":"u-mark","name":"Mark","email":"mark@x.com"}}
+            ]}
+        }}}"#;
+        let got = super::parse_issue_initiator(json, Some("s-changes"), None).unwrap();
+        assert_eq!(
+            got.assignee.as_ref().unwrap().name.as_deref(),
+            Some("Andrius")
+        );
+        assert_eq!(
+            got.best().unwrap().email.as_deref(),
+            Some("mark@x.com"),
+            "the person who asked for this run is the one who moved it"
+        );
+    }
+
+    /// The harness moves issues itself — to in-progress on pickup, onward at
+    /// completion — so its own transitions are in the same history. Crediting
+    /// it would break attribution on exactly the issues it works hardest.
+    #[test]
+    fn initiator_ignores_the_harnesss_own_status_moves() {
+        let json = br#"{"data":{"issue":{
+            "assignee":{"id":"u-andrius","name":"Andrius","email":"andrius@x.com"},
+            "history":{"nodes":[
+              {"createdAt":"2026-09-08T09:00:00Z","toState":{"id":"s-todo"},
+               "actor":{"id":"u-mark","name":"Mark","email":"mark@x.com"}},
+              {"createdAt":"2026-09-09T09:00:00Z","toState":{"id":"s-todo"},
+               "actor":{"id":"app-harness","name":"AI Harness","email":null}}
+            ]}
+        }}}"#;
+        let got = super::parse_issue_initiator(json, Some("s-todo"), Some("app-harness")).unwrap();
+        assert_eq!(
+            got.best().unwrap().email.as_deref(),
+            Some("mark@x.com"),
+            "the harness's own move must not outrank the human's"
+        );
+    }
+
+    /// Linear reports an OAuth app's actions under `botActor`, leaving `actor`
+    /// null — so a null actor is a machine, never the human we want.
+    #[test]
+    fn initiator_skips_entries_with_no_actor_and_falls_back_to_assignee() {
+        let json = br#"{"data":{"issue":{
+            "assignee":{"id":"u-andrius","name":"Andrius","email":"andrius@x.com"},
+            "history":{"nodes":[
+              {"createdAt":"2026-09-09T09:00:00Z","toState":{"id":"s-todo"},"actor":null}
+            ]}
+        }}}"#;
+        let got = super::parse_issue_initiator(json, Some("s-todo"), None).unwrap();
+        assert_eq!(got.moved_into_state, None);
+        assert_eq!(got.best().unwrap().email.as_deref(), Some("andrius@x.com"));
+    }
+
+    /// The webhook asks only for the assignee: delegation is itself the
+    /// trigger, and Linear makes the delegator the assignee.
+    #[test]
+    fn initiator_without_a_state_reads_only_the_assignee() {
+        let json = br#"{"data":{"issue":{
+            "assignee":{"id":"u-andrius","name":"Andrius","email":"andrius@x.com"},
+            "history":{"nodes":[
+              {"createdAt":"2026-09-09T09:00:00Z","toState":{"id":"s-todo"},
+               "actor":{"id":"u-mark","name":"Mark","email":"mark@x.com"}}
+            ]}
+        }}}"#;
+        let got = super::parse_issue_initiator(json, None, None).unwrap();
+        assert_eq!(got.moved_into_state, None);
+        assert_eq!(got.best().unwrap().email.as_deref(), Some("andrius@x.com"));
+    }
+
+    /// An unresolvable issue, an unassigned one, and a history that never
+    /// reached the state must all degrade to "nobody" rather than erroring.
+    #[test]
+    fn initiator_degrades_when_there_is_nobody_to_credit() {
+        let none =
+            super::parse_issue_initiator(br#"{"data":{"issue":null}}"#, Some("s"), None).unwrap();
+        assert_eq!(none.best(), None);
+
+        let unassigned = super::parse_issue_initiator(
+            br#"{"data":{"issue":{"assignee":null,"history":{"nodes":[]}}}}"#,
+            Some("s-todo"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(unassigned.best(), None);
+
+        // History exists but never entered the watched column.
+        let elsewhere = super::parse_issue_initiator(
+            br#"{"data":{"issue":{"assignee":null,"history":{"nodes":[
+                {"createdAt":"2026-09-09T09:00:00Z","toState":{"id":"s-other"},
+                 "actor":{"id":"u-mark","name":"Mark","email":"mark@x.com"}}]}}}}"#,
+            Some("s-todo"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(elsewhere.best(), None);
+    }
+
+    /// Connection order is not documented as newest-first, so the newest
+    /// arrival has to win regardless of the order Linear returned.
+    #[test]
+    fn initiator_takes_the_newest_arrival_whatever_order_it_arrives_in() {
+        let json = br#"{"data":{"issue":{"assignee":null,"history":{"nodes":[
+            {"createdAt":"2026-09-09T09:00:00Z","toState":{"id":"s-todo"},
+             "actor":{"id":"u-new","name":"New","email":"new@x.com"}},
+            {"createdAt":"2026-09-02T09:00:00Z","toState":{"id":"s-todo"},
+             "actor":{"id":"u-old","name":"Old","email":"old@x.com"}}
+        ]}}}}"#;
+        let got = super::parse_issue_initiator(json, Some("s-todo"), None).unwrap();
+        assert_eq!(got.best().unwrap().email.as_deref(), Some("new@x.com"));
     }
 
     #[test]

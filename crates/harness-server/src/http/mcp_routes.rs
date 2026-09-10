@@ -17,7 +17,6 @@
 //! or the legacy shared token — the same two-layer arrangement `/ws` already
 //! uses, and for the same reason.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use axum::extract::Extension;
@@ -45,7 +44,12 @@ pub async fn handle_mcp(
 ) -> Response {
     // Whose token this is, if it is a personal one. The shared MCP key belongs
     // to nobody in particular, so a run it starts is attributed to nobody.
-    let actor = super::accounts::caller_id(&state, &headers).await;
+    let actor = super::runs_routes::TriggerInfo::from_caller(
+        &state,
+        &headers,
+        super::runs_routes::SOURCE_MCP,
+    )
+    .await;
     if !mcp_key::authorized(&state, &headers).await {
         // A plain 401 rather than a JSON-RPC error: the caller never got as far
         // as a session, and MCP clients surface the HTTP status.
@@ -61,7 +65,7 @@ pub async fn handle_mcp(
     if let Some(batch) = body.as_array() {
         let mut out = Vec::new();
         for req in batch {
-            if let Some(resp) = handle_one(&state, actor.as_deref(), req).await {
+            if let Some(resp) = handle_one(&state, &actor, req).await {
                 out.push(resp);
             }
         }
@@ -70,13 +74,17 @@ pub async fn handle_mcp(
         }
         return Json(Value::Array(out)).into_response();
     }
-    match handle_one(&state, actor.as_deref(), &body).await {
+    match handle_one(&state, &actor, &body).await {
         Some(resp) => Json(resp).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
 }
 
-async fn handle_one(state: &Arc<RunsState>, actor: Option<&str>, req: &Value) -> Option<Value> {
+async fn handle_one(
+    state: &Arc<RunsState>,
+    actor: &super::runs_routes::TriggerInfo,
+    req: &Value,
+) -> Option<Value> {
     let id = req.get("id").cloned();
     let method = req.get("method").and_then(Value::as_str).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
@@ -123,16 +131,38 @@ async fn handle_one(state: &Arc<RunsState>, actor: Option<&str>, req: &Value) ->
     }
 }
 
-/// After a successful authoring mutation, report the resulting DAG's node
-/// summaries (the build→validate→fix loop sees the new state).
-fn state_after(dir: &Path, name: &str, msg: String) -> Value {
-    match authoring::get_workflow(dir, name) {
+/// Echo the workflow's state after a successful authoring change, and note who
+/// made it.
+///
+/// The recording lives here for the same reason it lives in the HTTP layer's
+/// `mutation_result`: every node-level tool ends up here, so a tool added later
+/// cannot quietly forget to say who edited the workflow.
+async fn state_after(
+    state: &Arc<RunsState>,
+    actor: &super::runs_routes::TriggerInfo,
+    name: &str,
+    msg: String,
+) -> Value {
+    super::workflows_routes::record_edit_as(
+        state,
+        name,
+        actor.user_id.as_deref(),
+        actor.actor.as_deref(),
+        super::workflows_routes::EDIT_SOURCE_MCP,
+    )
+    .await;
+    match authoring::get_workflow(&state.project_root, name) {
         Ok(src) => to_result(msg, &authoring::validate_workflow(&src.yaml)),
         Err(e) => tool_error(e),
     }
 }
 
-async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args: &Value) -> Value {
+async fn call_tool(
+    state: &Arc<RunsState>,
+    actor: &super::runs_routes::TriggerInfo,
+    name: &str,
+    args: &Value,
+) -> Value {
     let s = |k: &str| {
         args.get(k)
             .and_then(Value::as_str)
@@ -147,7 +177,9 @@ async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args
             let req = CreateRunRequest {
                 // An editor triggering a run is not acting on a Linear issue.
                 issue_id: None,
-                triggered_by: actor.map(str::to_string),
+                triggered_by: actor.user_id.clone(),
+                trigger_source: actor.source.clone(),
+                trigger_actor: actor.actor.clone(),
                 workflow: s("workflow"),
                 title: args
                     .get("title")
@@ -357,7 +389,9 @@ async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args
                 );
             };
             let req = CreateRunPairRequest {
-                triggered_by: actor.map(str::to_string),
+                triggered_by: actor.user_id.clone(),
+                trigger_source: actor.source.clone(),
+                trigger_actor: actor.actor.clone(),
                 workflow: s("workflow"),
                 title: args
                     .get("title")
@@ -420,10 +454,20 @@ async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args
         }
         "workflow_save" => {
             match authoring::save_workflow(&state.project_root, &s("name"), &s("yaml")) {
-                Ok(()) => to_result(
-                    format!("saved `{}`", s("name")),
-                    &json!({ "saved": true, "name": s("name") }),
-                ),
+                Ok(()) => {
+                    super::workflows_routes::record_edit_as(
+                        state,
+                        &s("name"),
+                        actor.user_id.as_deref(),
+                        actor.actor.as_deref(),
+                        super::workflows_routes::EDIT_SOURCE_MCP,
+                    )
+                    .await;
+                    to_result(
+                        format!("saved `{}`", s("name")),
+                        &json!({ "saved": true, "name": s("name") }),
+                    )
+                }
                 Err(e) => tool_error(e),
             }
         }
@@ -431,10 +475,20 @@ async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args
         // deleted; the call reports that rather than silently no-op'ing).
         "workflow_delete" => {
             match authoring::delete_project_workflow(&state.project_root, &s("name")) {
-                Ok(true) => to_result(
-                    format!("deleted custom workflow `{}`", s("name")),
-                    &json!({ "deleted": true, "name": s("name") }),
-                ),
+                Ok(true) => {
+                    // The workflow is gone, so its provenance should be too —
+                    // otherwise a new workflow reusing the name inherits an
+                    // author who never saw it.
+                    if let Ok(store) = state.workflow_author_store().await {
+                        if let Err(e) = store.forget(&s("name")).await {
+                            tracing::warn!("mcp: could not forget who wrote {}: {e}", s("name"));
+                        }
+                    }
+                    to_result(
+                        format!("deleted custom workflow `{}`", s("name")),
+                        &json!({ "deleted": true, "name": s("name") }),
+                    )
+                }
                 Ok(false) => tool_error(format!(
                     "`{}` is not a custom workflow — bundled defaults can't be deleted",
                     s("name")
@@ -451,53 +505,67 @@ async fn call_tool(state: &Arc<RunsState>, actor: Option<&str>, name: &str, args
                 args.get("model").and_then(Value::as_str),
             );
             match r {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("created `{}`", s("name")),
-                ),
+                Ok(()) => {
+                    state_after(state, actor, &s("name"), format!("created `{}`", s("name"))).await
+                }
                 Err(e) => tool_error(e),
             }
         }
         "workflow_set_node" => {
             let node = args.get("node").cloned().unwrap_or(Value::Null);
             match authoring::set_node(&state.project_root, &s("name"), node) {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("set node in `{}`", s("name")),
-                ),
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("set node in `{}`", s("name")),
+                    )
+                    .await
+                }
                 Err(e) => tool_error(e),
             }
         }
         "workflow_set_ui" => {
             let ui = args.get("ui").cloned().unwrap_or(Value::Null);
             match authoring::set_ui(&state.project_root, &s("name"), ui) {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("set ui on `{}`", s("name")),
-                ),
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("set ui on `{}`", s("name")),
+                    )
+                    .await
+                }
                 Err(e) => tool_error(e),
             }
         }
         "workflow_remove_node" => {
             match authoring::remove_node(&state.project_root, &s("name"), &s("id")) {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("removed `{}` from `{}`", s("id"), s("name")),
-                ),
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("removed `{}` from `{}`", s("id"), s("name")),
+                    )
+                    .await
+                }
                 Err(e) => tool_error(e),
             }
         }
         "workflow_connect" => {
             match authoring::connect_nodes(&state.project_root, &s("name"), &s("from"), &s("to")) {
-                Ok(()) => state_after(
-                    &state.project_root,
-                    &s("name"),
-                    format!("connected `{}` -> `{}`", s("from"), s("to")),
-                ),
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("connected `{}` -> `{}`", s("from"), s("to")),
+                    )
+                    .await
+                }
                 Err(e) => tool_error(e),
             }
         }
@@ -559,7 +627,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "run_list",
-            "description": "List recent runs (most recent first) with status and per-node rows.",
+            "description": "List recent runs (most recent first) with status and per-node rows. Each run carries `trigger_source` (ui / mcp / linear-webhook / linear-poller, or the coarse `linear` on rows predating the split), `trigger_actor` (the person, for a reader), and `triggered_by` (their harness account id, absent when they have none here).",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,

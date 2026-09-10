@@ -6,6 +6,7 @@ import {
   IconLayoutList,
   IconPlus,
 } from "@tabler/icons-react";
+import { PersonBadge } from "@/components/PersonBadge";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -195,6 +196,39 @@ function Section({
   );
 }
 
+/**
+ * Who wrote this workflow, as one or two circles.
+ *
+ * The last editor only appears when they are not the creator — on a workflow
+ * one person made and keeps tending, two identical circles would be noise. When
+ * they differ, that is the fact worth showing.
+ */
+function Authors({ wf }: { wf: WorkflowSummary }) {
+  const a = wf.authorship;
+  if (!a) return null;
+  const sameHand = a.updated_actor === a.created_actor;
+  return (
+    <div className="flex shrink-0 items-center -space-x-1">
+      <PersonBadge
+        actor={a.created_actor}
+        source={a.created_source}
+        action="Created by"
+        size="sm"
+        className="ring-1 ring-background"
+      />
+      {!sameHand && (
+        <PersonBadge
+          actor={a.updated_actor}
+          source={a.updated_source}
+          action="Last edited by"
+          size="sm"
+          className="ring-1 ring-background"
+        />
+      )}
+    </div>
+  );
+}
+
 function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
   const steps = `${wf.node_count} step${wf.node_count === 1 ? "" : "s"}`;
   // Readable heading, canonical slug kept alongside: the slug is what you type
@@ -240,8 +274,9 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
             <p className="line-clamp-3 whitespace-pre-line text-xs leading-5 text-muted-foreground sm:line-clamp-8">
               {description}
             </p>
-            <div className="mt-auto text-[11px] tabular-nums text-muted-foreground">
-              {steps}
+            <div className="mt-auto flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
+              <span>{steps}</span>
+              <Authors wf={wf} />
             </div>
           </CardContent>
         ) : (
@@ -262,6 +297,7 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
                 </p>
               )}
             </div>
+            <Authors wf={wf} />
             <div className="shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
               {steps}
             </div>

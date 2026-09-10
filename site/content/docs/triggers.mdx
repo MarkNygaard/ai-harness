@@ -53,3 +53,22 @@ Whichever route it takes, a trigger names the same things:
 - free-form text exposed to the workflow as `$ARGUMENTS` and `$USER_MESSAGE`,
 - optionally a **model override**, which is how an A/B comparison holds
   everything else still.
+
+## Who a run belongs to
+
+Every run records who set it in motion, whichever route it arrived by.
+
+- **From the UI or MCP** — the signed-in person, or the account behind the
+  personal access token.
+- **From a Linear delegation** — the person who delegated. Linear makes whoever
+  delegates an issue its assignee, so that is who gets the credit.
+- **From the poller** — the last person to move the issue into the column the
+  binding watches. Not the assignee: an issue delegated by one person and later
+  dragged into a re-run column by someone else is a second run, asked for by the
+  second person. The harness's own status moves are excluded, so it never
+  credits itself for putting an issue back.
+
+A run carries three fields: `trigger_source` (which door it came in through),
+`trigger_actor` (the person, as a human reads them) and `triggered_by` (their
+harness account id). The last is empty for a colleague who works only in Linear
+and has no account here — `trigger_actor` still names them.

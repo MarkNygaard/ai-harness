@@ -642,6 +642,10 @@ export interface RunView {
   project: string | null;
   /** When the run row was last recorded (ISO); null if not yet persisted. */
   recordedAt: string | null;
+  /** Who asked for the run (`Name <email>`); null when nobody was identified. */
+  triggerActor: string | null;
+  /** Which door the run came in through; null on rows predating attribution. */
+  triggerSource: string | null;
 }
 
 /**
@@ -787,6 +791,10 @@ function useRunViewMemo(
       live: status === "running",
       project: d?.project ?? null,
       recordedAt: d?.recorded_at ?? null,
+      // Attribution is only ever persisted — the live stream carries node
+      // events, not who asked — so this stays null until the detail arrives.
+      triggerActor: d?.trigger_actor ?? null,
+      triggerSource: d?.trigger_source ?? null,
     };
   }, [d, state, liveTerminal, keepKnown, id]);
 }

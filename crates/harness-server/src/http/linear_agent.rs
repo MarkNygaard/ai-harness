@@ -47,7 +47,7 @@ use subtle::ConstantTimeEq;
 
 use super::linear_connections::{resolve_for_projects, ConnectionId};
 use super::linear_oauth::{linear_client, webhook_identities, WebhookIdentity};
-use super::runs_routes::{start_run, CreateRunRequest, RunsState};
+use super::runs_routes::{start_run, CreateRunRequest, RunsState, TriggerInfo};
 
 /// Header carrying the hex HMAC-SHA256 of the raw body.
 const SIGNATURE_HEADER: &str = "linear-signature";
@@ -633,8 +633,23 @@ async fn start_delegated_run(
         }
     }
 
+    // Delegation is the trigger, so the person is the issue's assignee — Linear
+    // makes whoever delegates an issue its assignee. No state is passed: there
+    // is no column move to attribute here, and asking for one would find the
+    // last unrelated status change instead.
+    let trigger = linear_trigger(
+        state,
+        &client,
+        event.issue_id.as_deref(),
+        None,
+        None,
+        super::runs_routes::SOURCE_LINEAR_WEBHOOK,
+    )
+    .await;
     let req = CreateRunRequest {
-        triggered_by: Some("linear".to_string()),
+        triggered_by: trigger.user_id.clone(),
+        trigger_source: trigger.source.clone(),
+        trigger_actor: trigger.actor.clone(),
         workflow: route.0.clone(),
         title,
         description,
@@ -1133,6 +1148,68 @@ fn epics_enabled(binding: &LinearSource, supervisor: Option<&LinearSource>) -> b
 /// Reads are ordered by what they can rule out. `issue_context` answers "is
 /// this a piece?" and costs one round trip; only an issue with no parent needs
 /// the second read to ask "is this an epic?".
+/// Work out who to credit for a run the harness is firing off a Linear issue.
+///
+/// `into_state` is the column whose most recent arrival identifies the person —
+/// the poller passes the state it watches, the webhook passes `None` because
+/// delegation is itself the trigger and Linear makes the delegator the
+/// assignee. `app_user_id` is this harness's own Linear identity, excluded so
+/// its own status moves are never read as somebody asking for work.
+///
+/// The person is matched to a harness account **by email**, and not matching is
+/// an ordinary outcome rather than a failure: a colleague who works entirely in
+/// Linear has no account here, and a run they set off should still say so by
+/// name. That is what `actor` is for, and it is filled either way.
+///
+/// Every failure degrades to source-only attribution. Losing a name is a
+/// blemish on a record; refusing to run the work over it would be the harness
+/// declining to do its job because it could not fill in a label.
+pub(crate) async fn linear_trigger(
+    state: &Arc<RunsState>,
+    client: &LinearClient,
+    issue_id: Option<&str>,
+    into_state: Option<&str>,
+    app_user_id: Option<&str>,
+    source: &str,
+) -> TriggerInfo {
+    let mut trigger = TriggerInfo {
+        source: Some(source.to_string()),
+        ..Default::default()
+    };
+    let Some(issue_id) = issue_id else {
+        return trigger;
+    };
+    let initiator = match client
+        .issue_initiator(issue_id, into_state, app_user_id)
+        .await
+    {
+        Ok(i) => i,
+        Err(e) => {
+            tracing::warn!(
+                "linear: could not resolve who triggered {issue_id}: {}",
+                e.0
+            );
+            return trigger;
+        }
+    };
+    let Some(person) = initiator.best() else {
+        return trigger;
+    };
+    trigger.actor = super::accounts::actor_label(person.name.as_deref(), person.email.as_deref());
+    if let Some(email) = person.email.as_deref() {
+        match state.user_store().await {
+            Ok(users) => match users.get_by_email(email).await {
+                Ok(Some(user)) => trigger.user_id = Some(user.id),
+                // No account for that address: `actor` still names them.
+                Ok(None) => {}
+                Err(e) => tracing::warn!("linear: user lookup failed for {email}: {e}"),
+            },
+            Err(e) => tracing::warn!("linear: no user store while attributing a run: {e}"),
+        }
+    }
+    trigger
+}
+
 pub(crate) async fn route_issue(
     state: &Arc<RunsState>,
     client: &LinearClient,
@@ -2145,6 +2222,8 @@ mod tests {
         };
         harness_persist::RunDetail {
             run: harness_persist::RunSummary {
+                trigger_source: None,
+                trigger_actor: None,
                 triggered_by: None,
                 id: "r1".into(),
                 workflow_name: "idea-to-pr".into(),

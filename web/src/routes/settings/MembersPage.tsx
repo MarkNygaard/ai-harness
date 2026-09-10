@@ -12,7 +12,7 @@ import {
   useSetUserRole,
   useUsers,
 } from "@/lib/users";
-import type { ProfileUpdate } from "@/lib/users";
+import type { ProfileUpdate, UserActivity } from "@/lib/users";
 import { useState } from "react";
 
 function whenever(iso: string | null): string {
@@ -34,7 +34,7 @@ function Row({
   onDelete,
   onSaved,
 }: {
-  user: AuthUser;
+  user: UserActivity;
   isMe: boolean;
   admins: number;
   busy: boolean;
@@ -67,8 +67,17 @@ function Row({
             <span className="text-[10px] text-muted-foreground">you</span>
           )}
         </div>
-        <div className="truncate text-[11px] text-muted-foreground">
-          {user.email} · last signed in {whenever(user.last_login_at)}
+        {/* "Last seen", not "last signed in". Using the harness extends a
+            session rather than starting one, so a daily user's sign-in can be
+            months old — accurate, and the wrong answer to the question this
+            line is actually asked. `title` keeps the sign-in for anyone who
+            wants it. */}
+        <div
+          className="truncate text-[11px] text-muted-foreground"
+          title={`Last signed in ${whenever(user.last_login_at)}`}
+        >
+          {user.email} · last seen{" "}
+          {whenever(user.last_active_at ?? user.last_login_at)}
         </div>
       </div>
 
