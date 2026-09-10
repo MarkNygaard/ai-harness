@@ -276,7 +276,15 @@ function WorkflowCard({ wf, view }: { wf: WorkflowSummary; view: View }) {
   // Readable heading, canonical slug kept alongside: the slug is what you type
   // in YAML, pass to MCP and bind Linear triggers to, so hiding it would cost
   // more than the prettier title gains.
-  const title = titleFromSlug(wf.name);
+  // An installed workflow keeps the title its publisher gave it. A slug cannot
+  // always carry one: "GEO Audit - Ecommerce" installs as `geo-audit`, and
+  // deriving the heading from that stem drops the half saying which audit it
+  // is — so the card disagreed with the library dialog it was installed from.
+  // Only for installed rows: `titleFromSlug` round-trips to the slug exactly
+  // (see `lib/workflow-name`), and that invariant is what makes it safe as a
+  // stand-in elsewhere. A publisher's title does not round-trip, which is fine
+  // here only because the canonical name is shown in mono directly below it.
+  const title = wf.installed?.title || titleFromSlug(wf.name);
   const description = wf.description ? reflowParagraphs(wf.description) : "";
 
   return (
