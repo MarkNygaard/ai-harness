@@ -120,6 +120,19 @@ const PROVIDERS: ProviderDef[] = [
     ],
   },
   {
+    id: "registry",
+    label: "Workflow library",
+    help: "Publishes your workflows to the shared library. Only needed to publish — browsing and installing need nothing. The token is issued by whoever runs the library; it identifies you as its author, so treat it like a password.",
+    fields: [
+      {
+        key: "token",
+        label: "Publisher token",
+        placeholder: "hrp_…",
+        help: "Sent to the registry when you publish. Never leaves the server.",
+      },
+    ],
+  },
+  {
     id: "linear",
     label: "Linear",
     help: "The OAuth application backing the workspace connection above. Create it in Linear → Settings → API → OAuth applications, registering the callback URL shown above.",

@@ -203,6 +203,167 @@ impl RegistryClient {
             resp.status()
         )))
     }
+
+    // ── Publishing ──────────────────────────────────────────────────────────
+    //
+    // The token is passed per call rather than held on the client. It lives
+    // encrypted in the credential store and is read when a request needs it, so
+    // a client built once at startup would either be stale after the token is
+    // replaced or would have to be rebuilt to notice — and the read side, which
+    // is the common path, needs no token at all.
+
+    /// Who this token publishes as.
+    ///
+    /// Doubles as the check that a token is live: there is otherwise no way to
+    /// find out except by publishing something and reading the error.
+    pub async fn me(&self, token: &str) -> Result<Publisher> {
+        let resp = self
+            .http
+            .get(self.url("/v1/me"))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error(resp, "publisher token").await
+    }
+
+    /// Set the name this publisher's entries are shown under.
+    ///
+    /// Scoped to the caller by the token, so this can only ever rename the
+    /// publisher it authenticates as.
+    pub async fn set_display_name(&self, token: &str, name: &str) -> Result<Publisher> {
+        let resp = self
+            .http
+            .patch(self.url("/v1/me"))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "display_name": name }))
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error(resp, "publisher token").await
+    }
+
+    /// Publish a workflow the library does not have yet, as version 1.
+    pub async fn create(&self, token: &str, new: &NewWorkflow<'_>) -> Result<Published> {
+        let resp = self
+            .http
+            .post(self.url("/v1/workflows"))
+            .bearer_auth(token)
+            .json(new)
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error(resp, "workflow").await
+    }
+
+    /// Publish a new version of a workflow this token already owns.
+    ///
+    /// The version number is the registry's to choose — it is a per-workflow
+    /// counter, not semver, and nobody wants to pick a number for a button.
+    pub async fn publish_version(
+        &self,
+        token: &str,
+        slug: &str,
+        yaml: &str,
+        changelog: Option<&str>,
+    ) -> Result<Published> {
+        let path = format!("/v1/workflows/{}/versions", urlencode(slug));
+        let resp = self
+            .http
+            .post(self.url(&path))
+            .bearer_auth(token)
+            .json(&serde_json::json!({ "yaml": yaml, "changelog": changelog }))
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error(resp, "workflow").await
+    }
+}
+
+/// The publisher a token authenticates as.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Publisher {
+    pub github_login: String,
+    /// What entries are shown under. `None` falls back to the login.
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub avatar_url: Option<String>,
+}
+
+impl Publisher {
+    /// The name to show, which is the display name when there is one.
+    pub fn name(&self) -> &str {
+        self.display_name
+            .as_deref()
+            .filter(|n| !n.is_empty())
+            .unwrap_or(&self.github_login)
+    }
+}
+
+/// A first publish: the entry's metadata plus its first version.
+#[derive(Debug, Serialize)]
+pub struct NewWorkflow<'a> {
+    pub slug: &'a str,
+    pub title: &'a str,
+    pub description: &'a str,
+    pub tags: &'a [String],
+    pub yaml: &'a str,
+    pub changelog: Option<&'a str>,
+}
+
+/// What a publish produced.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Published {
+    pub slug: String,
+    pub version: i32,
+}
+
+fn unreachable(e: reqwest::Error) -> RegistryError {
+    RegistryError(format!("could not reach the workflow library: {e}"))
+}
+
+/// Read a JSON body, turning the statuses a publisher actually hits into
+/// sentences.
+///
+/// A publish fails for reasons the person can fix — a token that was revoked, a
+/// name somebody else has, a workflow that is not theirs — and every one of them
+/// arrives as a status code. Reporting "the library answered 403" for "that
+/// workflow belongs to someone else" would leave them re-pressing the button.
+///
+/// The registry sends `{"error": "..."}` on a failure; where it says something
+/// specific that sentence is used, since it knows which of its rules was broken.
+async fn json_or_error<T: serde::de::DeserializeOwned>(
+    resp: reqwest::Response,
+    subject: &str,
+) -> Result<T> {
+    let status = resp.status();
+    if status.is_success() {
+        return resp.json().await.map_err(|e| {
+            RegistryError(format!(
+                "the workflow library sent something unreadable: {e}"
+            ))
+        });
+    }
+
+    let detail = resp
+        .json::<serde_json::Value>()
+        .await
+        .ok()
+        .and_then(|v| v.get("error")?.as_str().map(str::to_string))
+        .filter(|d| !d.is_empty());
+
+    Err(RegistryError(match (status, detail) {
+        (reqwest::StatusCode::UNAUTHORIZED, _) => {
+            "the library did not accept this publisher token — it may have been revoked".into()
+        }
+        (reqwest::StatusCode::FORBIDDEN, d) => d.unwrap_or_else(|| {
+            format!("this publisher token is not allowed to change that {subject}")
+        }),
+        (reqwest::StatusCode::NOT_FOUND, _) => format!("the library has no such {subject}"),
+        (_, Some(d)) => d,
+        (s, None) => format!("the workflow library answered {s}"),
+    }))
 }
 
 /// Percent-encode one path segment.
@@ -228,6 +389,27 @@ fn urlencode(segment: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn publisher(display_name: Option<&str>) -> Publisher {
+        Publisher {
+            github_login: "mnygaard".into(),
+            display_name: display_name.map(str::to_string),
+            avatar_url: None,
+        }
+    }
+
+    /// The name on a published entry. A harness account carries no GitHub
+    /// identity, so the login is whatever an operator recorded when minting the
+    /// token — the display name is the half the author chose, and it wins.
+    #[test]
+    fn a_publisher_shows_its_display_name_and_falls_back_to_the_login() {
+        assert_eq!(publisher(Some("Mark Nygaard")).name(), "Mark Nygaard");
+        assert_eq!(publisher(None).name(), "mnygaard");
+        // Cleared rather than unset: `PATCH /v1/me` stores a blank as NULL, but
+        // an older row or a hand-edited one can still hold "". Publishing under
+        // an empty string would leave the entry looking unattributed.
+        assert_eq!(publisher(Some("")).name(), "mnygaard");
+    }
 
     /// An empty or missing URL is how the library is switched off, and both must
     /// produce "no library" rather than a client pointed at nothing.
