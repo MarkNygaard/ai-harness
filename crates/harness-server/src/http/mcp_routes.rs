@@ -473,6 +473,41 @@ async fn call_tool(
         }
         // Delete a CUSTOM workflow (bundled defaults have no file → can't be
         // deleted; the call reports that rather than silently no-op'ing).
+        // ── The workflow library ────────────────────────────────────────────
+        "library_list" => match super::library_routes::browse(state).await {
+            Ok(entries) => to_result(
+                format!("{} workflow(s) in the library", entries.len()),
+                &entries,
+            ),
+            Err(e) => tool_error(e.message()),
+        },
+        "library_install" => {
+            let name = args.get("name").and_then(Value::as_str);
+            match super::library_routes::install_workflow(state, &s("slug"), name, actor).await {
+                Ok(done) => to_result(
+                    format!(
+                        "installed `{}` as `{}` at version {}",
+                        s("slug"),
+                        done.installed_as,
+                        done.version
+                    ),
+                    &done,
+                ),
+                // A name conflict is a question, not a failure: the caller
+                // retries with `name`. It reads as an error here because MCP
+                // has no other channel, so the message has to carry the answer.
+                Err(e) => tool_error(e.message()),
+            }
+        }
+        "library_uninstall" => {
+            match super::library_routes::uninstall_workflow(state, &s("slug")).await {
+                Ok(name) => to_result(
+                    format!("uninstalled `{}` (was `{name}`)", s("slug")),
+                    &json!({ "uninstalled": name, "slug": s("slug") }),
+                ),
+                Err(e) => tool_error(e.message()),
+            }
+        }
         "workflow_delete" => {
             match authoring::delete_project_workflow(&state.project_root, &s("name")) {
                 Ok(true) => {
@@ -484,6 +519,10 @@ async fn call_tool(
                             tracing::warn!("mcp: could not forget who wrote {}: {e}", s("name"));
                         }
                     }
+                    // Same for its library record, if it came from there: the
+                    // file is gone, so the Library must stop calling it
+                    // installed and the registry must stop counting it.
+                    super::library_routes::forget_installed(state, &s("name")).await;
                     to_result(
                         format!("deleted custom workflow `{}`", s("name")),
                         &json!({ "deleted": true, "name": s("name") }),
@@ -719,8 +758,36 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_list",
-            "description": "List workflows available (bundled defaults + global custom workflows; custom shadows bundled).",
+            "description": "List the workflows available here. Each row carries `source` (bundled = ships with the harness, project = written or installed here) and `overrides_bundled` — true when a project workflow is standing in front of a built-in of the same name, which is invisible otherwise because the built-in is then not listed at all. `installed` is present when it came from the library (with its slug and version), and `authorship` when somebody's edit was recorded.",
             "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+        }),
+        json!({
+            "name": "library_list",
+            "description": "Browse the public workflow library, annotated with what is installed on this harness. Each entry has `slug` (the library's id), `title`, `description`, `tags`, `official` (published by the project rather than by a person), `publisher`, `latest_version` and `installs`, plus `installed_as` / `installed_version` / `update_available` for this harness. Prefer installing an existing workflow over authoring a near-duplicate. Errors when the library is switched off or unreachable — which is not the same as it being empty.",
+            "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+        }),
+        json!({
+            "name": "library_install",
+            "description": "Install a library workflow, or update an already-installed one to the latest version — the same call for both. Makes a copy on this harness; nothing changes under it afterwards until asked. Answers with a conflict rather than overwriting when the name is already in use here: retry with `name` set to install it under a different one. A workflow that has no published version cannot be installed.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "slug": { "type": "string", "description": "The library's identifier for the workflow." },
+                    "name": { "type": "string", "description": "Install under this local name instead of the slug. How to answer a name conflict." }
+                },
+                "required": ["slug"],
+            }
+        }),
+        json!({
+            "name": "library_uninstall",
+            "description": "Remove a workflow installed from the library and stop this harness being counted as an install of it. Deletes the workflow file; a workflow that was written here rather than installed is not affected.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "slug": { "type": "string" } },
+                "required": ["slug"],
+            }
         }),
         json!({
             "name": "workflow_get",
@@ -920,9 +987,21 @@ mod tests {
             "linear_states",
             "linear_bindings",
             "linear_check",
+            // The library. An agent that can author a workflow should be able
+            // to find one that already exists first.
+            "library_list",
+            "library_install",
+            "library_uninstall",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
+
+        // Installing takes a slug; the local name is how a caller answers a
+        // name conflict, so it must stay optional.
+        let install = by_name("library_install").unwrap();
+        let req = install["inputSchema"]["required"].as_array().unwrap();
+        assert!(req.iter().any(|v| v == "slug"));
+        assert!(!req.iter().any(|v| v == "name"));
 
         // run_trigger needs a project + the task spec; authoring tools are global.
         let trigger = by_name("run_trigger").unwrap();
@@ -1081,6 +1160,11 @@ const AUTHORING_TOOLS: &[&str] = &[
     "workflow_delete",
     "workflow_catalog",
     "workflow_models",
+    // The library is part of authoring: reaching for an existing workflow is
+    // usually better than writing a near-duplicate of one.
+    "library_list",
+    "library_install",
+    "library_uninstall",
 ];
 
 fn connection_body(state: &Arc<RunsState>, token: Option<String>) -> Value {

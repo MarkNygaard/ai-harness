@@ -26,6 +26,7 @@ pub use http::credentials_routes::connected_clis;
 pub mod notify;
 pub mod overview;
 pub mod project_registry;
+pub mod registry;
 pub mod server;
 pub use harness_workflow::task_queue;
 pub mod trusted_proxy;

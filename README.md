@@ -13,15 +13,20 @@ runs anywhere a container does (Kubernetes or plain Docker).
   implement → validate → PR → review loops) in YAML or the visual editor. Nodes
   run different agents/models, with `when:` gating, `$node.output` wiring, and
   loop/until constructs.
-- **Bundled workflows.** Nine ship in the box, ready to run or fork into a
+- **Bundled workflows.** Seven ship in the box, ready to run or fork into a
   project's `.harness/workflows/`: `idea-to-pr` (a task → a reviewed PR),
-  `revise-pr` (address review feedback on an open PR), `merge-pr` (resolve
-  conflicts + merge a ready PR), `architect` (behavior-preserving codebase
-  health sweep), `review-area` (read-only cross-repo review of one area),
-  `geo-audit` (audit a site for AI-search readiness), `judge-ab` (score an A/B
-  model comparison), `linear-epic-supervise` (grade a merged epic piece and
-  advance the next), and `bc-idea-to-pr` (the idea-to-pr flow for Business
-  Central / AL repos — `al compile` build gate).
+  `revise-pr` (address review feedback on an open PR), `review-pr` (review an
+  open PR), `merge-pr` (resolve conflicts + merge a ready PR), `architect`
+  (behavior-preserving codebase health sweep), `judge-ab` (score an A/B model
+  comparison), and `linear-epic-supervise` (grade a merged epic piece and
+  advance the next).
+- **A workflow library.** The niche and the plural live in a registry rather
+  than in every image: browse it from the editor and install with a click.
+  `geo-audit` (audit an ecommerce site for AI-search readiness), `review-area`
+  (read-only cross-repo review of one area) and `bc-idea-to-pr` (the idea-to-pr
+  flow for Business Central / AL repos — `al compile` build gate) are published
+  there. Installing makes a copy that never changes under you; when the
+  original moves on, you are offered an update.
 - **Multiple agents in one pipeline.** Claude Code, Codex, Pi, and
   Cursor (`cursor-agent`) nodes, each picking its own model.
 - **Three ways to trigger a run:**

@@ -77,6 +77,11 @@ pub(crate) async fn record_edit_as(
 /// only two ways in, and telling them apart is half of what the record is for.
 pub(crate) const EDIT_SOURCE_UI: &str = "ui";
 pub(crate) const EDIT_SOURCE_MCP: &str = "mcp";
+/// Not authored here at all — brought in from the library by whoever pressed
+/// Install. Worth its own value: "created by" on a library workflow means
+/// "installed by", and conflating it with hand-authoring would misattribute
+/// somebody else's work.
+pub(crate) const EDIT_SOURCE_LIBRARY: &str = "library";
 
 /// `GET /api/authoring/catalog`
 pub async fn get_catalog(State(state): State<Arc<AppState>>) -> Response {
@@ -107,16 +112,39 @@ pub async fn list_workflows(
             // No database: the list is exactly what it always was.
             Err(_) => Default::default(),
         };
+    // Which of these came from the library. Read from the local table rather
+    // than the registry: this listing must be right with the registry down, and
+    // "where did this workflow come from" is a fact about this harness.
+    let installed: std::collections::HashMap<String, harness_persist::InstalledWorkflow> =
+        match runs.installed_workflow_store().await {
+            Ok(store) => store
+                .all()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|i| (i.name.clone(), i))
+                .collect(),
+            Err(_) => Default::default(),
+        };
+
     let rows: Vec<serde_json::Value> = workflows
         .into_iter()
         .map(|w| {
             let author = authors.get(&w.name);
             let mut row = serde_json::to_value(&w).unwrap_or_else(|_| serde_json::json!({}));
-            if let (Some(obj), Some(a)) = (row.as_object_mut(), author) {
-                obj.insert(
-                    "authorship".into(),
-                    serde_json::to_value(a).unwrap_or(serde_json::Value::Null),
-                );
+            if let Some(obj) = row.as_object_mut() {
+                if let Some(a) = author {
+                    obj.insert(
+                        "authorship".into(),
+                        serde_json::to_value(a).unwrap_or(serde_json::Value::Null),
+                    );
+                }
+                if let Some(i) = installed.get(&w.name) {
+                    obj.insert(
+                        "installed".into(),
+                        serde_json::to_value(i).unwrap_or(serde_json::Value::Null),
+                    );
+                }
             }
             row
         })
@@ -174,6 +202,11 @@ pub async fn delete_workflow(
                         tracing::warn!("authoring: could not forget who wrote {name}: {e}");
                     }
                 }
+                // A workflow deleted here is as gone as one uninstalled from
+                // the library dialog. Without this the Library would still call
+                // it installed and offer an Update for a file that is not
+                // there, and the registry would keep counting it.
+                super::library_routes::forget_installed(&runs, &name).await;
             }
             Json(serde_json::json!({ "reset": reset, "name": name })).into_response()
         }

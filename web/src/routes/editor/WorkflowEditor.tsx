@@ -18,6 +18,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Check,
+  Copy,
   Loader2,
   RotateCcw,
   Save,
@@ -34,6 +35,7 @@ import {
   useResetWorkflow,
   useSaveWorkflow,
   useValidateWorkflow,
+  useWorkflowList,
   useWorkflowSource,
 } from "@/lib/authoring";
 import { fromYaml, toYaml } from "@/lib/workflow-yaml";
@@ -76,6 +78,9 @@ function Editor() {
   const { name: routeName = null } = useParams();
   const catalog = useCatalog();
   const source = useWorkflowSource(routeName);
+  // Every name already in use here, so "Save as a copy" can refuse one that
+  // would replace an existing workflow rather than sit beside it.
+  const existing = useWorkflowList();
   const validate = useValidateWorkflow();
   const save = useSaveWorkflow();
   const reset = useResetWorkflow();
@@ -116,6 +121,13 @@ function Editor() {
   const currentWorkflow = useCallback(
     () => fromGraph(nodes, edges, meta),
     [nodes, edges, meta],
+  );
+
+  // Built-in names count as taken: saving over one replaces it for this
+  // harness, which is precisely what "save a copy" is meant to avoid.
+  const taken = useMemo(
+    () => new Set((existing.data ?? []).map((w) => w.name)),
+    [existing.data],
   );
 
   // Debounced live validation against the server.
@@ -255,6 +267,48 @@ function Editor() {
     save.mutate({ name: meta.name, yaml: toYaml(currentWorkflow()) });
   }, [save, meta.name, currentWorkflow]);
 
+  /**
+   * Save under a new name, leaving the original where it is.
+   *
+   * Plain Save on a built-in *replaces* it: the file is written at the same
+   * name, resolution prefers it, and every Linear binding and trigger pointing
+   * at that name now runs your version. That is usually what somebody wants —
+   * it is how you customise the pipeline without repointing anything — but not
+   * always. Wanting a variant beside the original had no way to say so, short
+   * of editing the name field and hoping you understood the difference.
+   *
+   * The new name is checked against what is already here, because saving over
+   * an existing workflow is the same silent replacement by another route.
+   */
+  const doSaveAsCopy = useCallback(() => {
+    const suggested = `${meta.name}-copy`;
+    const name = window.prompt(
+      `Save a copy under a new name. The original ${meta.name} is left alone.`,
+      suggested,
+    );
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (trimmed === meta.name) {
+      window.alert(
+        `That is the name it already has. Saving under it would replace ${meta.name} rather than copy it.`,
+      );
+      return;
+    }
+    if (taken.has(trimmed)) {
+      window.alert(
+        `There is already a workflow called ${trimmed}. Pick another name — saving over it would replace it.`,
+      );
+      return;
+    }
+    save.mutate(
+      { name: trimmed, yaml: toYaml({ ...currentWorkflow(), name: trimmed }) },
+      // Follow the copy: staying on the original would leave the editor showing
+      // a workflow that is not the one just saved.
+      { onSuccess: () => navigate(`/editor/${encodeURIComponent(trimmed)}`) },
+    );
+  }, [save, meta.name, currentWorkflow, navigate, taken]);
+
   // Discard the project override and reload the bundled default. Clearing
   // `loadedFor` lets the load effect re-run once the refetched source arrives.
   const doReset = useCallback(() => {
@@ -282,7 +336,9 @@ function Editor() {
       )
     )
       return;
-    reset.mutate(routeName, { onSuccess: () => navigate("/settings/workflows") });
+    reset.mutate(routeName, {
+      onSuccess: () => navigate("/settings/workflows"),
+    });
   }, [reset, routeName, navigate]);
 
   const selectedNode = useMemo(
@@ -313,7 +369,11 @@ function Editor() {
       {source.data?.source === "bundled" && (
         <Badge
           variant="outline"
-          title="Saving creates a project copy that shadows the bundled default"
+          // The consequence, not just the mechanism. "Creates a project copy"
+          // describes what happens; what matters is what stops happening —
+          // the copy is frozen at today's version and later improvements to
+          // the built-in one no longer reach this harness.
+          title="Saving makes a copy that shadows the built-in one. The copy stops picking up future improvements until you reset it."
         >
           bundled
         </Badge>
@@ -388,11 +448,34 @@ function Editor() {
       >
         Tidy
       </Button>
+      {/* Only once there is something to copy. On a new workflow there is no
+          original to leave alone, so the choice would be meaningless. */}
+      {routeName && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={doSaveAsCopy}
+          disabled={
+            save.isPending ||
+            validate.data?.valid === false ||
+            nodes.length === 0
+          }
+          title="Save under a new name and leave the original as it is"
+        >
+          <Copy className="h-3.5 w-3.5" />
+          Save as a copy
+        </Button>
+      )}
       <Button
         size="sm"
         onClick={doSave}
         disabled={
           save.isPending || validate.data?.valid === false || nodes.length === 0
+        }
+        title={
+          source.data?.source === "bundled"
+            ? "Replaces the built-in workflow of this name for this harness"
+            : undefined
         }
       >
         <Save className="h-3.5 w-3.5" />

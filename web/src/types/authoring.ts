@@ -59,15 +59,40 @@ export interface WorkflowAuthorship {
   updated_at: string;
 }
 
+/** A workflow installed from the library, as this harness recorded it. */
+export interface InstalledWorkflow {
+  /** Local file stem. */
+  name: string;
+  /** The registry's identifier, which may differ from the local name. */
+  slug: string;
+  /** The version on disk. */
+  version: number;
+  publisher: string | null;
+  title: string | null;
+  installed_at: string;
+  updated_at: string;
+}
+
 export interface WorkflowSummary {
   name: string;
   source: AuthoringSource;
   description: string | null;
   node_count: number;
+  /**
+   * This project workflow shadows a built-in of the same name. The built-in
+   * then vanishes from the listing, so without this an override is
+   * indistinguishable from a workflow written from scratch.
+   */
+  overrides_bundled: boolean;
   /** Declarative nav/report surfaces; absent for workflows that opt out. */
   ui?: WorkflowUi | null;
   /** Absent when nobody recorded who wrote it. */
   authorship?: WorkflowAuthorship | null;
+  /**
+   * Present when this workflow came from the library rather than being written
+   * here. Read from the local record, so it is right with the registry down.
+   */
+  installed?: InstalledWorkflow | null;
 }
 
 export interface WorkflowSource {

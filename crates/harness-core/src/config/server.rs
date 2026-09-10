@@ -88,9 +88,27 @@ pub struct ServerConfig {
     /// `HARNESS_PUBLIC_URL`. When unset, run-link features no-op.
     #[serde(default)]
     pub public_url: Option<String>,
+    /// Where the workflow library lives.
+    ///
+    /// Defaults to the public registry, so a fresh install browses and installs
+    /// workflows with no configuration at all — which is the point of having a
+    /// library rather than a folder of YAML people copy between machines.
+    ///
+    /// Two reasons to change it, and both are real: an air-gapped install should
+    /// not reach for a public service (set it empty to switch the feature off
+    /// entirely), and an organisation running its own registry points at that.
+    /// Overridable via `HARNESS_REGISTRY_URL`.
+    #[serde(default = "default_registry_url")]
+    pub registry_url: Option<String>,
     /// Staged HTTP shutdown configuration (drain, force, hard-exit deadlines).
     #[serde(default)]
     pub shutdown: ShutdownConfig,
+}
+
+/// The public workflow library. A default rather than a required setting: an
+/// install that has to be told where the library is does not have one.
+fn default_registry_url() -> Option<String> {
+    Some("https://registry.mnygaard.io".to_string())
 }
 
 impl ServerConfig {
@@ -109,6 +127,7 @@ impl ServerConfig {
     /// - `HARNESS_DATABASE_POOL_ACQUIRE_TIMEOUT_SECS` — `database_pool_acquire_timeout_secs`
     /// - `HARNESS_API_TOKEN`       — `api_token`
     /// - `HARNESS_PUBLIC_URL`      — `public_url`
+    /// - `HARNESS_REGISTRY_URL`    — `registry_url` (empty disables the library)
     /// - `GITHUB_TOKEN` / `GH_TOKEN` — `github_token`
     /// - `GITHUB_WEBHOOK_SECRET`   — `github_webhook_secret`
     pub fn apply_env_overrides(&mut self) -> anyhow::Result<()> {
@@ -154,6 +173,13 @@ impl ServerConfig {
             if !v.is_empty() {
                 self.public_url = Some(v);
             }
+        }
+        // Unlike the others, an **empty** value is meaningful here: it is how an
+        // air-gapped install switches the library off. Treating empty as "unset"
+        // like everywhere else would leave the default in place and have the
+        // install quietly reaching for a public service anyway.
+        if let Ok(v) = std::env::var("HARNESS_REGISTRY_URL") {
+            self.registry_url = (!v.trim().is_empty()).then(|| v.trim().to_string());
         }
         if self
             .github_token
@@ -224,6 +250,7 @@ impl fmt::Debug for ServerConfig {
             constitution_enabled,
             github_token,
             public_url,
+            registry_url,
             shutdown,
         } = self;
         f.debug_struct("ServerConfig")
@@ -262,6 +289,7 @@ impl fmt::Debug for ServerConfig {
             .field("constitution_enabled", constitution_enabled)
             .field("github_token", &github_token.as_ref().map(|_| "[REDACTED]"))
             .field("public_url", public_url)
+            .field("registry_url", registry_url)
             .field("shutdown", shutdown)
             .finish()
     }
@@ -290,6 +318,7 @@ impl Default for ServerConfig {
             constitution_enabled: true,
             github_token: None,
             public_url: None,
+            registry_url: default_registry_url(),
             shutdown: ShutdownConfig::default(),
         }
     }

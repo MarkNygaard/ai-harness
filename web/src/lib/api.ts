@@ -14,6 +14,16 @@ export class ApiError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    /**
+     * The parsed error body, when the server sent one.
+     *
+     * A failure is not always just a sentence: an install refused for a name
+     * collision also says which name and suggests a free one, and a caller that
+     * only had the message would have to parse prose to find them. Carried as
+     * `unknown` because it is whatever that route chose to send — the caller
+     * checks the shape it expects.
+     */
+    public readonly body?: unknown,
   ) {
     super(message);
     this.name = "ApiError";
@@ -40,10 +50,12 @@ export async function apiFetch(
   const resp = await fetch(path, merged);
   if (resp.status === 401) {
     unauthorizedEvents.dispatchEvent(new Event("unauthorized"));
-    throw new ApiError(401, await errorMessage(resp, path));
+    const { message, body } = await errorDetails(resp, path);
+    throw new ApiError(401, message, body);
   }
   if (!resp.ok) {
-    throw new ApiError(resp.status, await errorMessage(resp, path));
+    const { message, body } = await errorDetails(resp, path);
+    throw new ApiError(resp.status, message, body);
   }
   return resp;
 }
@@ -60,14 +72,21 @@ export async function apiFetch(
  * Falls back to the status line for anything that is not one of ours — a
  * proxy's HTML error page, an empty body, a truncated response.
  */
-async function errorMessage(resp: Response, path: string): Promise<string> {
+async function errorDetails(
+  resp: Response,
+  path: string,
+): Promise<{ message: string; body?: unknown }> {
   const fallback = `${path} → HTTP ${resp.status}`;
   try {
     const body: unknown = await resp.json();
     const message = (body as { error?: unknown })?.error;
-    return typeof message === "string" && message.trim() ? message : fallback;
+    return {
+      message:
+        typeof message === "string" && message.trim() ? message : fallback,
+      body,
+    };
   } catch {
-    return fallback;
+    return { message: fallback };
   }
 }
 

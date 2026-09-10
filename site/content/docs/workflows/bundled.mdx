@@ -1,9 +1,10 @@
 ---
 title: "Bundled workflows"
-description: "The ten workflows that ship in the box, what each is for, and how to fork one into your own project."
+description: "The workflows that ship in the box, what each is for, and how to fork one into your own project."
 ---
 
-These ship with the harness and are ready to run. To change one, copy it into
+These ship with the harness and are ready to run. More are installable from
+the [workflow library](/docs/workflows/library). To change one, copy it into
 the project's `.harness/workflows/` under the same name. Project workflows
 resolve before the bundled defaults, so the fork wins without any registration
 step.
@@ -28,16 +29,6 @@ via Pi, then Claude, each fixing what it finds. A final build gate, and a workfl
 diff and a commit breakdown across the three review-fix passes.
 
 19 nodes. Mixing the models is the point. The reviewer never wrote the code.
-
-### `bc-idea-to-pr`
-
-`idea-to-pr` adapted for Business Central / AL repositories. The cross-platform
-AL compiler is the build gate: `al compile`, with symbols downloaded read-only
-from the BC dev endpoint.
-
-It **never publishes to a server**. Read-only symbol download and local
-compilation only, so no database is touched and it cannot collide with a
-developer's environment. Deploying stays a human step.
 
 ## Working on an existing PR
 
@@ -103,28 +94,6 @@ behaviour-preservation review that **reverts any change that drifted
 semantics**.
 
 If the sweep finds nothing worth changing, no PR is opened at all.
-
-### `review-area`
-
-A read-only, cross-repo review of a specific area, in two stages to keep the
-expensive model economical. A cheap scout pass maps the area across every repo
-in the workspace into a curated dossier; a deep review then reasons *from the
-dossier* instead of exploring again, spending the expensive tokens on judgement
-rather than navigation.
-
-Works multi-repo (via `HARNESS_REPOS`) or single-repo.
-
-### `geo-audit`
-
-Audits a live ecommerce site for Generative Engine Optimization, meaning how
-ready it is to be cited by AI search, with traditional SEO underneath it.
-
-Runs against the project's `external_url`, exposed as `$EXTERNAL_URL`. It audits
-**three pages, not one**: a store's homepage carries no `Product` schema, no
-price and no reviews, so auditing only it reports the same non-findings for
-every shop. It fetches the entry URL plus `robots.txt`, `llms.txt`,
-`llms-full.txt`, `sitemap.xml` and `.well-known/ucp`, then picks real pages to
-examine.
 
 ### `judge-ab`
 

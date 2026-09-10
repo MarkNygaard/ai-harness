@@ -36,6 +36,17 @@ pub struct WorkflowSummary {
     pub source: Source,
     pub description: Option<String>,
     pub node_count: usize,
+    /// This project workflow is shadowing a bundled one of the same name.
+    ///
+    /// Saving an edit to a built-in writes a project file at the same name,
+    /// and resolution prefers it — so the bundled entry disappears from the
+    /// listing entirely and what remains is indistinguishable from a workflow
+    /// somebody wrote from scratch. Without this the list cannot say that a
+    /// built-in has been replaced, only that a custom workflow happens to share
+    /// its name.
+    ///
+    /// False on a bundled row: it *is* the default rather than overriding one.
+    pub overrides_bundled: bool,
     /// Optional UI surfaces (left-nav entry, report tab) the workflow declares;
     /// lets the web render nav/report generically instead of hard-coding names.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -320,6 +331,7 @@ pub fn list_workflows(project_root: &Path) -> Vec<WorkflowSummary> {
                     out.push(WorkflowSummary {
                         name: stem.to_string(),
                         source: Source::Project,
+                        overrides_bundled: defaults::default_workflow(stem).is_some(),
                         description: wf.description.clone(),
                         node_count: wf.nodes.len(),
                         ui: wf.ui.clone(),
@@ -338,6 +350,7 @@ pub fn list_workflows(project_root: &Path) -> Vec<WorkflowSummary> {
                 out.push(WorkflowSummary {
                     name: name.to_string(),
                     source: Source::Bundled,
+                    overrides_bundled: false,
                     description: wf.description.clone(),
                     node_count: wf.nodes.len(),
                     ui: wf.ui.clone(),
@@ -832,6 +845,48 @@ nodes:
 "#;
         let r = validate_workflow(yaml);
         assert!(!r.valid);
+    }
+
+    /// Overriding a built-in makes it vanish from the listing — the project
+    /// file wins and the bundled row is skipped — so the only thing that can
+    /// say a built-in has been replaced is this flag. Without it an override
+    /// reads as an ordinary custom workflow and the substitution is invisible.
+    #[test]
+    fn an_override_is_marked_and_a_plain_custom_workflow_is_not() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let root = dir.path();
+        let yaml = "name: x\nnodes:\n  - id: a\n    bash: echo hi\n";
+
+        // Shadowing a bundled name.
+        save_workflow(root, "idea-to-pr", yaml).unwrap();
+        // Not shadowing anything.
+        save_workflow(root, "something-of-my-own", yaml).unwrap();
+
+        let listed = list_workflows(root);
+        let by = |n: &str| listed.iter().find(|w| w.name == n).expect(n).clone();
+
+        let override_row = by("idea-to-pr");
+        assert_eq!(override_row.source, Source::Project);
+        assert!(
+            override_row.overrides_bundled,
+            "a project file at a bundled name is standing in front of it"
+        );
+
+        let mine = by("something-of-my-own");
+        assert!(!mine.overrides_bundled);
+
+        // The bundled row is gone rather than listed twice — which is exactly
+        // why the flag has to carry the information.
+        assert_eq!(
+            listed.iter().filter(|w| w.name == "idea-to-pr").count(),
+            1,
+            "the shadowed built-in must not also be listed"
+        );
+
+        // A bundled workflow does not override anything; it *is* the default.
+        let bundled = by("merge-pr");
+        assert_eq!(bundled.source, Source::Bundled);
+        assert!(!bundled.overrides_bundled);
     }
 
     #[test]
