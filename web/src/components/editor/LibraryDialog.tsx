@@ -53,8 +53,8 @@ export function LibraryDialog() {
 
         <div className="min-h-0 flex-1 overflow-y-auto px-1 py-2">
           <p className="px-3 pb-3 text-xs text-muted-foreground">
-            Installing makes a copy on this harness. It never changes on its own
-            — when the original moves on you are offered an update.
+            Installing makes a copy on this harness. It never changes on its
+            own. When the original moves on, you are offered an update.
           </p>
 
           {library.isLoading && (

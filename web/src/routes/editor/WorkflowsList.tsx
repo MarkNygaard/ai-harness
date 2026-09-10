@@ -120,8 +120,8 @@ export function WorkflowsList() {
         </Section>
         {custom.length === 0 && all.length > 0 && (
           <p className="-mt-4 text-xs text-muted-foreground">
-            None yet — saving a built-in one below creates an editable copy
-            here, or install one from the library.
+            None yet. Saving a built-in one below creates an editable copy here,
+            or install one from the library.
           </p>
         )}
 
