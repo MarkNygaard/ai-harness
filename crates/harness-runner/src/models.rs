@@ -597,7 +597,13 @@ mod tests {
             std::fs::write(&path, format!("{current}\n")).expect("write catalog");
             return;
         }
-        let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
+        // Compare content, not line endings. Git checks this file out with CRLF
+        // on Windows (`core.autocrlf`), while the generator writes LF — so a raw
+        // comparison failed on every Windows clone and passed on CI, which is
+        // the worst way round for a guard nobody would suspect of being wrong.
+        let on_disk = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         assert_eq!(
             on_disk.trim(),
             current.trim(),

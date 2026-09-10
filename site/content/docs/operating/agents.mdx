@@ -17,12 +17,12 @@ A node's `provider` selects the agent. Several names route to the same one:
 | `claude` | Claude Code CLI | Run headless. The default for planning and review steps in the bundled workflows. |
 | `openai-codex` | Codex | Also reachable through Pi on a ChatGPT subscription. |
 | `pi`, `kimi`, `omp` | Pi | Three aliases for one agent. Pi's CLI binary is named `omp`, which is why that spelling is accepted. |
-| `cursor` | `cursor-agent` | Ships in the image. Its own models are covered by the Cursor plan; Claude and GPT *through* Cursor are not. |
+| `cursor` | `cursor-agent` | Ships in the image. The Cursor plan covers Cursor's own models. It does not cover Claude and GPT reached through Cursor. |
 
-Pi's browser tool works out of the box — the image carries a Chromium and the
-fonts it needs, so a workflow that inspects a live page (`geo-audit` is the
-worked example) can take a screenshot an agent can actually read. Without the
-font package every glyph renders as a box, which is why they ship together.
+Pi's browser tool needs no setup. The image carries a Chromium and the fonts it
+needs, so a workflow that inspects a live page can take a screenshot an agent
+can read. `geo-audit` is the worked example. Without the font package every
+glyph renders as a box, which is why the two ship together.
 
 Anything the dispatcher does not recognise falls through to the default agent,
 so an unknown provider name falls back instead of failing. Worth knowing when a
@@ -45,8 +45,8 @@ The agent CLIs ship in the image, and they move faster than the image does. A
 new model usually arrives in the CLI before it arrives in a release here, so an
 old binary is the usual reason a model that should exist is rejected as unknown.
 
-**Settings → Agents** flags an out-of-date CLI and reinstalls it in place, no
-rebuild and no redeploy. The change lasts until the container is replaced — a
+**Settings → Agents** flags an out-of-date CLI and reinstalls it in place, with
+no rebuild and no redeploy. The change lasts until the container is replaced. A
 fresh pod is back to whatever the image carries, so an update worth keeping is
 also worth taking an image that has it.
 

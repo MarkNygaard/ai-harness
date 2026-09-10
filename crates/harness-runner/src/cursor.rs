@@ -179,6 +179,12 @@ fn write_atomic(path: &Path, contents: &[u8], mode: Option<u32>) -> Result<(), A
         .unwrap_or("cursor-hook");
     let tmp_path = path.with_file_name(format!(".{file_name}.tmp-{}", std::process::id()));
 
+    // A Unix file mode, and only the `cfg(unix)` arm below has anywhere to put
+    // it. Without this the parameter reads as unused on Windows, which is a
+    // warning there and silence on CI.
+    #[cfg(not(unix))]
+    let _ = mode;
+
     std::fs::write(&tmp_path, contents).map_err(|e| AgentError(e.to_string()))?;
     #[cfg(unix)]
     if let Some(mode) = mode {

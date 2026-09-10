@@ -26,20 +26,19 @@ key rather than a login, and covers `moonshotai/*` models.
 
 ## Cursor bills its own models differently from the rest
 
-Worth knowing before a workflow runs for a week on the wrong one.
+Read this before a workflow spends a week on the wrong model.
 
-Cursor's own models — Composer and Grok — are covered by the plan. Claude, GPT
-and Gemini *through* Cursor are not: they draw from a separate pool **charged at
-the model's API price**. Both kinds work with the same API key and neither asks
-for another one, which is exactly why the difference is easy to miss.
+The plan covers Cursor's own models, Composer and Grok. It does not cover
+Claude, GPT and Gemini reached through Cursor. Those draw from a separate pool,
+charged at the model's API price. Both kinds work with the same API key and
+neither asks for another one, which is why the difference is easy to miss.
 
 The editor marks it. A model the subscription does not cover carries an
 **API price** badge in the model dropdown, and the chosen one says so under the
-field. Nothing is blocked — it is a cost worth choosing deliberately, not a
-mistake to prevent.
+field. Nothing is blocked. Picking a metered model is a decision, not an error.
 
-The same model can fall on either side depending on which agent reaches it:
-`sonnet` on Claude Code is the Claude subscription, `sonnet` on the Anthropic
+The same model can fall on either side depending on which agent reaches it.
+`sonnet` on Claude Code is the Claude subscription. `sonnet` on the Anthropic
 API provider is a per-token bill.
 
 ## Connect ChatGPT covers two providers

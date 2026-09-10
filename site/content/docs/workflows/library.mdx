@@ -80,21 +80,21 @@ Works multi-repo (via `HARNESS_REPOS`) or single-repo.
 
 ## Publishing your own
 
-Publishing needs a **publisher token**, issued by whoever runs the registry.
-Paste it once under **Settings → Integrations → Workflow library**. It is stored
-encrypted and never sent to the browser — a token that reached the page could
-publish under your name from anything that could read it.
+Publishing needs a publisher token, issued by whoever runs the registry. Paste
+it once under **Settings → Integrations → Workflow library**. The harness stores
+it encrypted and never sends it to the browser. A token that reached the page
+could publish under your name from anything that could read it.
 
 After that, a workflow under **Custom** on the workflows page has a **Publish**
 button. Publish it once and the same button becomes **Publish update**, which
-sends a new version. Nothing asks you which of the two you want: the harness
-records what it published, and the two wrong answers — a duplicate entry, or a
-version aimed at somebody else's workflow — are worse than the question is
-worth.
+sends a new version. Nothing asks you which of the two you want, because the
+harness records what it published. Both wrong answers cost more than the
+question is worth: a duplicate entry, or a version aimed at somebody else's
+workflow.
 
 <Callout>
 Only workflows under **Custom** can be published. A built-in is not yours to
-share, and an installed one is somebody else's to update — for those, the button
+share, and an installed one is somebody else's to update. For those the button
 you want is **Update**, which takes their newer version.
 </Callout>
 
@@ -102,19 +102,19 @@ you want is **Update**, which takes their newer version.
 
 Harness accounts carry no GitHub identity, so the library needs a name of its
 own. The publish dialog prefills **Published as** with your harness account
-name, and you can change it. It applies to every workflow you publish, not just
-the one in front of you, and only ever to your own entries — the token decides
-whose name is being set, so it cannot be used to rename anyone else.
+name, and you can change it. The name applies to every workflow you publish, not
+only the one in front of you. It reaches your own entries and nobody else's,
+because the token decides whose name is being set.
 
 ### What is enforced
 
 A slug belongs to whoever created it. Only that publisher can release a new
 version, so nobody can push an update to a workflow you shared, and the
-**Update** button on someone else's harness only ever fetches something *you*
-published.
+**Update** button on someone else's harness fetches only what you published.
 
-Two things are checked at publish time rather than left to review: a version has
-to parse as a workflow, and it cannot take the name of a built-in.
+The registry checks two things at publish time rather than leaving them to
+review. A version has to parse as a workflow, and it cannot take the name of a
+built-in.
 
 ## Turning it off
 

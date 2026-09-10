@@ -1,43 +1,43 @@
 name: review-pr
 description: |
-  Review an existing pull request and fix what is concretely wrong — a Kimi
-  simplify pass, then two model-diverse review-and-fix passes (GPT-6 Astra,
-  then Claude Opus). No new PR is opened; commits are pushed to the PR's own
-  branch.
+  Review an existing pull request and fix what is concretely wrong. A Kimi
+  simplify pass runs first, then two review-and-fix passes on different model
+  families, GPT-6 Astra and then Claude Opus. No new PR is opened. Commits go to
+  the PR's own branch.
 
-  Flow: resolve the PR -> check its branch out -> record what the author says
-  the change is for -> compute the changed-file set from git -> Kimi simplifies
-  only those files -> Astra reviews and fixes -> Opus reviews and fixes -> final
-  verify gate -> one summary comment on the PR.
+  The run resolves the PR, checks its branch out, and records what the author says
+  the change is for. It computes the changed-file set from git. Kimi simplifies
+  only those files, Astra reviews and fixes, then Opus reviews and fixes. A verify
+  gate runs last, and the workflow posts one summary comment on the PR.
 
-  **There is no plan node, deliberately.** The PR was not planned here, so
-  there is nothing to review it against except the code itself and the author's
-  stated intent. Scope comes from git — `scope.json`, diffed per repo against
-  that repo's own base branch, with `guard-scope` reverting any repo the run
-  had no business touching. Intent comes from `pr-intent.md`: the PR body, its
-  linked issue and its commits, recorded as claims rather than as a contract.
-  Where the diff and the description disagree, that is a finding to report, not
-  something to quietly fix.
+  There is no plan node, deliberately. The PR was not planned here, so there is
+  nothing to review it against except the code itself and the author's stated
+  intent. Scope comes from git, as `scope.json`, diffed per repo against that
+  repo's own base branch, and `guard-scope` reverts any repo the run had no
+  business touching. Intent comes from `pr-intent.md`, built from the PR body, its
+  linked issue and its commits, and recorded as claims rather than as a contract.
+  Where the diff and the description disagree, the run reports that instead of
+  quietly fixing it.
 
-  What this catches: bugs, security and performance defects, sloppiness,
-  dishonest tests, guardrail violations. What it cannot catch: "this was the
-  wrong thing to build" — without a plan there is no authority on what the
-  change was supposed to be, and the reviewers are told to flag scope doubts
-  for the human instead of acting on them.
+  It catches bugs, security and performance defects, sloppiness, dishonest tests
+  and guardrail violations. It cannot catch "this was the wrong thing to build",
+  because without a plan there is no authority on what the change was supposed to
+  be. The reviewers are told to flag scope doubts for a human rather than act on
+  them.
 
-  Input (`$ARGUMENTS`): a PR number, a PR URL, or a Linear issue identifier
-  whose linked PR should be reviewed.
+  `$ARGUMENTS` takes a PR number, a PR URL, or a Linear issue identifier whose
+  linked PR should be reviewed.
 
   Notes:
-  - It PUSHES to the PR's branch. A PR from a fork the harness cannot push to
-    will fail at the first review that finds something; use `review-area` for a
+  - It pushes to the PR's branch. A PR from a fork the harness cannot push to will
+    fail at the first review that finds something. Use `review-area` for a
     read-only assessment instead.
-  - Reviewing a PR this same harness just produced is redundant — `idea-to-pr`
-    already ran these two passes on it.
+  - Reviewing a PR this same harness just produced is redundant, because
+    `idea-to-pr` already ran these two passes on it.
 
-  NOT for: opening a PR, addressing human review feedback (that is `revise-pr`,
-  which reads the reviews and cancels when there are none), or a read-only
-  assessment (`review-area`).
+  NOT for opening a PR, for addressing human review feedback, or for a read-only
+  assessment. Use `revise-pr` for feedback, which reads the reviews and cancels
+  when there are none, and `review-area` for an assessment.
 
 provider: pi
 model: kimi-code/kimi-for-coding

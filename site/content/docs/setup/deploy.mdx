@@ -29,10 +29,9 @@ back *to*. Deploy `1.2.3` if you track releases, or `main-<sha>` if you track
 `main`, and let your image automation move the pin.
 
 <Callout>
-The agent CLIs ship **in** the image — `claude`, `codex`, `cursor-agent` and
-`omp` — so `cursor` nodes spawn on a stock deployment. A CLI can be updated
-without rebuilding: **Settings → Agents** flags an out-of-date one and
-reinstalls it in place.
+The agent CLIs ship in the image: `claude`, `codex`, `cursor-agent` and
+`omp`. A `cursor` node spawns on a stock deployment. **Settings → Agents**
+flags an out-of-date CLI and reinstalls it in place, with no rebuild.
 </Callout>
 
 ```bash

@@ -1,63 +1,41 @@
 name: linear-epic-supervise
 description: |
-  Grade a merged epic piece against its own acceptance criteria, then advance
-  the next one — or file a corrective.
+  Grade a merged epic piece against its own acceptance criteria, then either
+  advance the next piece or file a corrective.
 
   Bind this to the column a piece lands in once its PR is merged. It reads the
-  sub-issue's acceptance criteria, judges the code that is now on the base
-  branch, and does one of three things: start the next piece, file a corrective
-  sub-issue, or stop and ask for a human.
+  sub-issue's acceptance criteria, judges the code now on the base branch, and
+  does one of three things: starts the next piece, files a corrective sub-issue,
+  or stops and asks for a human.
 
-  **The verdict is the gate.** A piece that was built but built wrong does not
-  advance the epic, because everything after it is written against what it was
+  The verdict is the gate. A piece that was built but built wrong does not advance
+  the epic, because everything after it is written against what that piece was
   supposed to do.
 
-  **Nothing is stored here.** The epic's memory is its board: the pieces, their
+  Nothing is stored here. The board holds the whole state: the pieces, their
   order, their columns, and a `Corrects: AIH-12` line in each corrective's body.
-  That line is what counts fix rounds — a label would be prettier, but it would
-  make the cap depend on configuration, and an uncountable cap is no cap.
+  That line is what counts fix rounds. A label would look better, but it would
+  make the cap depend on configuration, and a cap nobody can count is not a cap.
 
-  Bounded, per the design's decided defaults:
+  Two limits apply, per the design's decided defaults. A piece gets two corrective
+  rounds, so the build plus two fixes. Three failures almost always means the
+  specification is wrong, and a fourth attempt spends money proving it again. An
+  epic gets 15 correctives in total, which stops a runaway. On either limit the
+  epic stops and says so rather than spending more.
 
-    * **2 corrective rounds per piece** (the build plus two fixes). Three
-      failures is almost always a specification problem, and a fourth attempt
-      spends money to prove it again.
-    * **15 correctives per epic**, as a runaway backstop.
+  Three project env vars are optional. Without them the workflow reports what it
+  would have done instead of doing it, which is the right way to fail for
+  something that writes to your board.
 
-  On either limit the epic stops and says so, rather than continuing to spend.
+    * `EPIC_READY_STATE` overrides the column a piece starts in. It is normally
+      unnecessary, because that column is derived from the claims the poller
+      already records.
+    * `EPIC_BLOCKED_STATE` is where a stalled epic goes.
+    * `EPIC_CORRECTIVE_LABEL` is a label id put on correctives, for display only.
 
-  Project env vars, all optional — without them the workflow reports what it
-  would have done instead of doing it, which is the right failure for something
-  that writes to your board:
-
-    * `EPIC_READY_STATE` — normally unnecessary. The column a piece starts in
-      is derived from the claims the poller already records, so this is only
-      an override for a board that wants somewhere else.
-    * `EPIC_BLOCKED_STATE` — where a stalled epic goes.
-    * `EPIC_CORRECTIVE_LABEL` — a label id put on correctives, for looks.
-
-  It also **starts** an epic. Hand it the epic itself — an issue with
-  sub-issues and no parent — and it creates the integration branch
-  `epic/<identifier>` and moves the first piece into the build column.
-
-  **Every piece is built on that branch and merged into it**, so the feature
-  accumulates in one place and `main` sees it once, finished, rather than in
-  pieces. When the last piece is accepted the branch becomes a single pull
-  request against the default branch, and the epic moves to `EPIC_REVIEW_STATE`
-  if that is set. **Nothing merges it** — it is the whole feature, and the one
-  review that was never a piece. Piece N+1 branches from something that already contains 1..N. The
-  poller derives the branch name from a piece's parent, so nothing has to be
-  configured for this — but it does mean the branch must exist before the first
-  piece starts, which is why it is created here. Hand it a merged piece and it grades that piece. The two are told
-  apart by whether the issue has a parent, which needs no configuration and
-  cannot be set wrong.
-
-  An issue that is neither — no parent, no children — cancels cleanly rather
-  than failing, since the likely cause is a column that also holds ordinary
-  work.
-
-  NOT for: building a piece — that is `idea-to-pr`, bound to whichever column
-  you park pieces in.
+  It also starts an epic. Hand it the epic itself, an issue that has sub-issues
+  and no parent, and it creates the integration branch `epic/<identifier>` and
+  moves the first piece into the build column.
 
 provider: claude
 model: opus

@@ -1,25 +1,26 @@
 name: idea-to-pr
 description: |
-  The default pipeline: turn a task (title + description, or a PRD path)
-  into a reviewed PR, end-to-end.
+  The default pipeline. It turns a task into a reviewed PR, taking either a title
+  and description or the path to a PRD.
 
-  Flow: Claude plans (a read-only Sonnet `explore` feeding a lean Opus
-  `create-plan`), Kimi (via Pi, on the Kimi-for-Coding subscription)
-  implements and self-reviews up to 5x, GPT-6 Astra via omp does a second-pass
-  review-with-fixes, and Claude Opus does a third model-diverse
-  review-with-fixes — then a final build gate and a workflow-summary comment.
+  Claude plans first, with a read-only Sonnet `explore` step feeding a lean Opus
+  `create-plan`. Kimi then implements and self-reviews up to five times, running
+  through Pi on the Kimi-for-Coding subscription. GPT-6 Astra reviews and fixes
+  second, and Claude Opus reviews and fixes third, so two different model families
+  check the work. A final build gate runs, then the workflow posts a summary
+  comment.
 
-  Output: a PR against the project's base branch (auto-detected from
-  `$BASE_BRANCH`), with a single workflow-summary comment (diff + commit
-  breakdown across the three review-fix passes).
+  The PR targets the project's base branch, detected from `$BASE_BRANCH`. One
+  comment summarizes it, carrying the diff and a commit breakdown across the three
+  review-and-fix passes.
 
-  Project-specific rules — package manager, verify chain, conventional-
-  commit scope vocabulary, agent prohibitions (no `--no-verify`, no
-  migration auto-execute, etc.) — live in the project's `CLAUDE.md`
-  and/or `AGENTS.md`. The harness auto-loads those into every agent's
-  context. This workflow is provider/orchestration only.
+  Project rules live in the project's `CLAUDE.md` or `AGENTS.md`, and the harness
+  loads them into every agent's context. They cover the package manager, the
+  verify chain, the conventional-commit scope vocabulary, and what agents may not
+  do, such as passing `--no-verify` or running migrations automatically. This
+  workflow only orchestrates.
 
-  NOT for: standalone reviews, or plans without implementation.
+  NOT for standalone reviews, or for plans without implementation.
 
 provider: pi
 model: kimi-code/kimi-for-coding
