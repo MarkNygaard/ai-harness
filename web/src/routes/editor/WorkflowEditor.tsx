@@ -539,6 +539,8 @@ function Editor() {
             <PropertiesDrawer
               node={selectedNode}
               catalog={catalog.data}
+              workflowProvider={meta.provider}
+              workflowModel={meta.model}
               onChange={updateNode}
               onClose={() => setSelectedId(null)}
             />

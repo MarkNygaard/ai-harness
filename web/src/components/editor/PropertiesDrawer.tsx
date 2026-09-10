@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { X } from "lucide-react";
 import { Markdown, ViewToggle } from "@/components/Markdown";
 import type { Catalog, EditorNode, NodeKindId } from "@/types/authoring";
@@ -31,11 +31,25 @@ const BODY_KEYS = [
 export function PropertiesDrawer({
   node,
   catalog,
+  workflowProvider,
+  workflowModel,
   onChange,
   onClose,
 }: {
   node: EditorNode;
   catalog: Catalog | undefined;
+  /**
+   * What the workflow itself sets, for a node that does not override it.
+   *
+   * A node inheriting the workflow's agent and model is the normal case —
+   * `judge-ab` deliberately has none of its own, so the judge model stays
+   * constant across both arms of a comparison. But "inherits" and "unset" then
+   * look identical in this panel, and a workflow that plainly runs on Opus
+   * reads as having no model at all. Naming what is inherited is the whole
+   * difference.
+   */
+  workflowProvider?: string;
+  workflowModel?: string;
   onChange: (next: EditorNode) => void;
   onClose: () => void;
 }) {
@@ -55,6 +69,14 @@ export function PropertiesDrawer({
     }
     onChange({ ...cleared, ...body } as EditorNode);
   };
+
+  // Only these dispatch to an agent, so only these have an agent, a model, an
+  // effort or a context to set. The executor already knows this — a bash,
+  // script, approval or cancel node is given no provider even when the workflow
+  // has one — so offering the fields here promised a setting that would be
+  // ignored, and a Shell step showing "Agent" reads as though it runs one.
+  const isAgentStep =
+    kind === "prompt" || kind === "command" || kind === "loop";
 
   const provider = node.provider ?? "";
   const providerModels =
@@ -244,69 +266,87 @@ export function PropertiesDrawer({
           />
         </Field>
 
-        <div className="mt-1 border-t border-border pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-          AI options
-        </div>
+        {isAgentStep && (
+          <>
+            <div className="mt-1 border-t border-border pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              AI options
+            </div>
 
-        <SelectField
-          label="Agent"
-          value={provider || DEFAULT_SENTINEL}
-          onValueChange={(v) =>
-            set({ provider: v === DEFAULT_SENTINEL ? undefined : v })
-          }
-        >
-          <SelectItem value={DEFAULT_SENTINEL}>(workflow default)</SelectItem>
-          {(catalog?.providers ?? []).map((p) => (
-            <SelectItem key={p.id} value={p.id}>
-              {p.label}
-            </SelectItem>
-          ))}
-        </SelectField>
-        <SelectField
-          label="Model"
-          value={node.model ?? DEFAULT_SENTINEL}
-          onValueChange={(v) =>
-            set({ model: v === DEFAULT_SENTINEL ? undefined : v })
-          }
-        >
-          <SelectItem value={DEFAULT_SENTINEL}>(workflow default)</SelectItem>
-          {modelOptions.map((m) => (
-            <SelectItem key={m} value={m}>
-              {m}
-            </SelectItem>
-          ))}
-        </SelectField>
-        <SelectField
-          label="Effort"
-          value={node.effort ?? DEFAULT_SENTINEL}
-          onValueChange={(v) =>
-            set({
-              effort:
-                v === DEFAULT_SENTINEL
-                  ? undefined
-                  : (v as EditorNode["effort"]),
-            })
-          }
-        >
-          <SelectItem value={DEFAULT_SENTINEL}>(agent default)</SelectItem>
-          {EFFORT_LEVELS.map((e) => (
-            <SelectItem key={e} value={e}>
-              {e}
-            </SelectItem>
-          ))}
-        </SelectField>
-        <div className="grid grid-cols-2 gap-2">
-          <SelectField
-            label="Context"
-            value={node.context ?? "shared"}
-            onValueChange={(v) => set({ context: v as EditorNode["context"] })}
-          >
-            {(catalog?.context_modes ?? ["fresh", "shared"]).map((c) => (
-              <SelectItem key={c} value={c}>
-                {c}
+            <SelectField
+              label="Agent"
+              value={provider || DEFAULT_SENTINEL}
+              onValueChange={(v) =>
+                set({ provider: v === DEFAULT_SENTINEL ? undefined : v })
+              }
+            >
+              <SelectItem value={DEFAULT_SENTINEL}>
+                {inheritedLabel(
+                  catalog?.providers.find((p) => p.id === workflowProvider)
+                    ?.label ?? workflowProvider,
+                )}
               </SelectItem>
-            ))}
-          </SelectField>
+              {(catalog?.providers ?? []).map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectField>
+            <SelectField
+              label="Model"
+              value={node.model ?? DEFAULT_SENTINEL}
+
+              onValueChange={(v) =>
+                set({ model: v === DEFAULT_SENTINEL ? undefined : v })
+              }
+            >
+              <SelectItem value={DEFAULT_SENTINEL}>
+                {inheritedLabel(workflowModel)}
+              </SelectItem>
+              {modelOptions.map((m) => (
+                <SelectItem key={m} value={m}>
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectField>
+            <SelectField
+              label="Effort"
+              value={node.effort ?? DEFAULT_SENTINEL}
+              onValueChange={(v) =>
+                set({
+                  effort:
+                    v === DEFAULT_SENTINEL
+                      ? undefined
+                      : (v as EditorNode["effort"]),
+                })
+              }
+            >
+              <SelectItem value={DEFAULT_SENTINEL}>(agent default)</SelectItem>
+              {EFFORT_LEVELS.map((e) => (
+                <SelectItem key={e} value={e}>
+                  {e}
+                </SelectItem>
+              ))}
+            </SelectField>
+          </>
+        )}
+        {/* Trigger rule is about this step's dependencies and applies to every
+            kind; context is the agent's session and does not. */}
+        <div className={isAgentStep ? "grid grid-cols-2 gap-2" : undefined}>
+          {isAgentStep && (
+            <SelectField
+              label="Context"
+              value={node.context ?? "shared"}
+              onValueChange={(v) =>
+                set({ context: v as EditorNode["context"] })
+              }
+            >
+              {(catalog?.context_modes ?? ["fresh", "shared"]).map((c) => (
+                <SelectItem key={c} value={c}>
+                  {c}
+                </SelectItem>
+              ))}
+            </SelectField>
+          )}
           <SelectField
             label="Trigger rule"
             value={node.trigger_rule ?? "all_success"}
@@ -439,6 +479,46 @@ const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /** A labelled shadcn Select (replaces the native `<select>` for a styled popup).
  *  Not wrapped in a `<label>` — the trigger is a button. */
+/**
+ * What the workflow's own setting is, for the "inherit" option.
+ *
+ * Named rather than left as a bare "(workflow default)": a reader looking at
+ * `judge-ab` sees a step with no agent and no model and concludes none is set,
+ * when the workflow plainly runs on Claude/Opus and the step is inheriting it
+ * on purpose.
+ */
+function inheritedLabel(value: string | undefined): string {
+  return value ? `Workflow default (${value})` : "Workflow default";
+}
+
+/**
+ * The text each option shows, read off the options themselves.
+ *
+ * Base UI's `Select.Value` renders the **raw value** unless given a formatter,
+ * so every field here whose label differs from its value displayed the value:
+ * the agent read `claude` after you picked "Claude Code", the type read
+ * `prompt` rather than "Agent step", and an inherited setting read
+ * `__default__`. Deriving the map from the items means a field cannot be added
+ * with the bug still in it, which listing the labels by hand at each call site
+ * would not prevent.
+ *
+ * A non-string label (an element) has no text to reuse, so those fall back to
+ * the value rather than rendering nothing.
+ */
+export function optionLabels(
+  children: React.ReactNode,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const child of React.Children.toArray(children)) {
+    if (!React.isValidElement(child)) continue;
+    const props = child.props as { value?: unknown; children?: unknown };
+    if (typeof props.value === "string" && typeof props.children === "string") {
+      out[props.value] = props.children;
+    }
+  }
+  return out;
+}
+
 function SelectField({
   label,
   value,
@@ -450,6 +530,7 @@ function SelectField({
   onValueChange: (v: string) => void;
   children: React.ReactNode;
 }) {
+  const labels = optionLabels(children);
   return (
     <div className="flex flex-col gap-1">
       <span className="text-[11px] font-medium text-muted-foreground">
@@ -460,7 +541,9 @@ function SelectField({
         onValueChange={(v) => v != null && onValueChange(v)}
       >
         <SelectTrigger className="h-8 w-full text-[13px]">
-          <SelectValue />
+          <SelectValue>
+            {(v: string | null) => (v != null && labels[v]) || v || ""}
+          </SelectValue>
         </SelectTrigger>
         <SelectContent>{children}</SelectContent>
       </Select>
