@@ -4,6 +4,7 @@ import { Markdown, ViewToggle } from "@/components/Markdown";
 import type { Catalog, EditorNode, NodeKindId } from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
 import { useCategories } from "@/lib/categories";
+import { isMetered } from "@/lib/models";
 import {
   Select,
   SelectContent,
@@ -87,6 +88,12 @@ export function PropertiesDrawer({
     node.model && !providerModels.includes(node.model)
       ? [node.model, ...providerModels]
       : providerModels;
+  // What this step will actually run on, following both inheritances — the
+  // metered warning below has to be true of the effective pair, not just of an
+  // explicit override. A node that inherits Cursor + `claude-opus-5` from the
+  // workflow bills the same as one that names them.
+  const effProvider = provider || workflowProvider;
+  const effModel = node.model ?? workflowModel;
 
   return (
     <div className="flex w-1/3 min-w-[20rem] flex-none flex-col border-l border-border bg-card">
@@ -291,23 +298,41 @@ export function PropertiesDrawer({
                 </SelectItem>
               ))}
             </SelectField>
-            <SelectField
-              label="Model"
-              value={node.model ?? DEFAULT_SENTINEL}
-
-              onValueChange={(v) =>
-                set({ model: v === DEFAULT_SENTINEL ? undefined : v })
-              }
-            >
-              <SelectItem value={DEFAULT_SENTINEL}>
-                {inheritedLabel(workflowModel)}
-              </SelectItem>
-              {modelOptions.map((m) => (
-                <SelectItem key={m} value={m}>
-                  {m}
+            {/* Field + its note in one tight column, so the note reads as
+                belonging to the model rather than floating between fields. */}
+            <div className="flex flex-col gap-1">
+              <SelectField
+                label="Model"
+                value={node.model ?? DEFAULT_SENTINEL}
+                onValueChange={(v) =>
+                  set({ model: v === DEFAULT_SENTINEL ? undefined : v })
+                }
+              >
+                <SelectItem value={DEFAULT_SENTINEL}>
+                  {inheritedLabel(workflowModel)}
                 </SelectItem>
-              ))}
-            </SelectField>
+                {modelOptions.map((m) => (
+                  <SelectItem key={m} value={m}>
+                    {/* An element rather than a bare string, which also keeps
+                        `optionLabels` from registering a label for it — so the
+                        closed trigger shows the plain id and not the badge. */}
+                    <span className="flex items-center gap-2">
+                      {m}
+                      {isMetered(provider, m) && <MeteredBadge />}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectField>
+              {/* The badge above is only visible while the list is open, and
+                  this is the one property worth still knowing once it is
+                  closed. */}
+              {isMetered(effProvider, effModel) && (
+                <p className="text-[11px] text-muted-foreground">
+                  Billed on top of the subscription, at this model&rsquo;s API
+                  price.
+                </p>
+              )}
+            </div>
             <SelectField
               label="Effort"
               value={node.effort ?? DEFAULT_SENTINEL}
@@ -489,6 +514,25 @@ const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
  */
 function inheritedLabel(value: string | undefined): string {
   return value ? `Workflow default (${value})` : "Workflow default";
+}
+
+/**
+ * This model is not covered by the agent's subscription.
+ *
+ * Only the exception is marked. Most models in most lists are included, so a
+ * badge on every row would be noise that says nothing — it is the Cursor list,
+ * where four included models sit above nine metered ones with nothing in the
+ * ids to tell them apart, that this exists for.
+ */
+function MeteredBadge() {
+  return (
+    <span
+      className="shrink-0 rounded-sm bg-muted px-1 py-px text-[10px] font-medium text-muted-foreground"
+      title="Not included in the subscription — charged per token at this model's API price."
+    >
+      API price
+    </span>
+  );
 }
 
 /**
