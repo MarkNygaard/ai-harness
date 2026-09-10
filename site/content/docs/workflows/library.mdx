@@ -78,6 +78,20 @@ rather than navigation.
 
 Works multi-repo (via `HARNESS_REPOS`) or single-repo.
 
+## Publishing your own
+
+Publishing goes to the registry, not through the harness: the harness only
+reads the library, so there is no publish button in it today. You need a
+**publisher token** from whoever runs the registry, and you push with it.
+
+A slug belongs to whoever created it. Only that publisher can release a new
+version of it, so nobody can push an update to a workflow you shared, and the
+**Update** button on someone else's harness can only ever fetch something you
+published.
+
+Two constraints are enforced at publish time rather than left to review: a
+version has to parse as a workflow, and it cannot take the name of a built-in.
+
 ## Turning it off
 
 The library points at a public registry by default, so a new install has one
