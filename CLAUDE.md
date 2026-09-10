@@ -144,6 +144,14 @@ you're editing the agent-adapter code, NOT instructions for how you (the agent
 reading this) should invoke tools. The invariants below are guarded by tests; the
 tests are the source of truth.*
 
+- **Models live in one table** — `crates/harness-runner/src/models.rs`. Adding a
+  model is a row in `MODELS`; changing a price is a number in `FAMILIES`. Do NOT
+  add a model to the editor's provider list, a price arm, or
+  `web/src/lib/cost.ts` — all three read this table, and the TypeScript copy
+  (`web/src/lib/model-catalog.json`) is **generated**: regenerate with
+  `UPDATE_MODEL_CATALOG=1 cargo test -p harness-runner`, which is also the test
+  that fails when it goes stale. Prefer a vendor's unversioned alias (`sonnet`)
+  to a pinned id where the agent offers one — a pinned id rots.
 - **Claude Code CLI** runs headless via `-p` (`--print`): the prompt is the
   *value* of `-p` (`claude -p "<prompt>" --model …`), not a trailing positional —
   else "Input must be provided". Two paths spawn it and must stay in sync:
@@ -156,9 +164,12 @@ tests are the source of truth.*
   (`provider: cursor`). Headless: `cursor-agent -p "<prompt>" --output-format json
   --model <id> --force --trust`; the completion is a single `type:"result"` JSON
   object (`result`, `session_id`, `usage.*Tokens`). Auth is `CURSOR_API_KEY`
-  (materialized from the `cursor` credential). **Deploy prereq:** the
-  `cursor-agent` binary must be on `PATH` in the container image — without it,
-  `cursor` nodes fail to spawn. Verify with `cargo test -p harness-runner`.
+  (materialized from the `cursor` credential). The binary ships in the image
+  (`/opt/cursor-agent`, symlinked onto `PATH`) and is reinstallable at run time
+  from Settings → Agents. Its install is unpinned, so its layer carries a
+  `CURSOR_REFRESHED` arg — bump it to get a newer CLI into the image, or the
+  cache serves whatever was current when the layer was first built. Model ids
+  live in `models.rs`, not here. Verify with `cargo test -p harness-runner`.
   Routing for all three lives in `dispatch.rs` (`DispatchAgent`).
 - **Agent browser tool** — omp's browser tool needs a Chromium on `PATH`; the
   image installs one plus `fonts-liberation` (without a font package every glyph

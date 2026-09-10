@@ -282,6 +282,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // only useful once it says which entries are installed here, and only
         // the server knows that.
         .route("/api/library", get(library_routes::list))
+        .route("/api/library/publisher", get(library_routes::who_publishes))
+        .route("/api/library/publish", post(library_routes::publish))
         .route("/api/library/{slug}/install", post(library_routes::install))
         .route("/api/library/{slug}", delete(library_routes::uninstall))
         // ── Workflow authoring API (visual editor + MCP) ────────────────────

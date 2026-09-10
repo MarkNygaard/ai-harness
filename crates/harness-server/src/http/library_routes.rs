@@ -60,6 +60,9 @@ pub(crate) enum LibraryError {
         name: String,
         suggestion: Option<String>,
     },
+    /// No publisher token on this harness. Not a failure of the request —
+    /// the normal state of an install that has never published.
+    NoToken,
     Failed(String),
 }
 
@@ -68,6 +71,7 @@ impl LibraryError {
     pub(crate) fn message(&self) -> String {
         match self {
             Self::Off => "the workflow library is switched off on this harness".into(),
+            Self::NoToken => "no publisher token is connected on this harness — add one under Settings, Integrations to publish".into(),
             Self::Unreachable(e) | Self::NotFound(e) | Self::Failed(e) => e.clone(),
             Self::Conflict { name, suggestion } => match suggestion {
                 Some(s) => format!(
@@ -85,6 +89,7 @@ impl LibraryError {
     fn status(&self) -> StatusCode {
         match self {
             Self::Off => StatusCode::NOT_IMPLEMENTED,
+            Self::NoToken => StatusCode::FORBIDDEN,
             Self::Unreachable(_) => StatusCode::BAD_GATEWAY,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict { .. } => StatusCode::CONFLICT,
@@ -241,6 +246,9 @@ pub(crate) async fn install_workflow(
             version: doc.version,
             publisher: Some(&entry.publisher),
             title: Some(&entry.title),
+            // Installed, not published here: this harness took somebody else's
+            // version rather than sending one.
+            published: false,
         })
         .await
         .map_err(|e| LibraryError::Failed(e.to_string()))?;
@@ -427,6 +435,217 @@ fn destination(
         };
     }
     Destination::Free(name.to_string())
+}
+
+// ── Publishing ──────────────────────────────────────────────────────────────
+//
+// Publishing needs a **publisher token**, stored encrypted like any other
+// credential and never sent to the browser. The proxy rule the read side
+// follows for its own reasons applies with much more force here: a token that
+// reached the page could publish under its owner's name from anything that
+// could read it.
+//
+// Whether a publish creates an entry or adds a version is not asked. The local
+// record already knows — a workflow this harness published has a row saying so —
+// and making the caller choose invites choosing wrong, which is either a
+// duplicate slug or a version pushed at somebody else's workflow.
+
+/// Read the publisher token, or say what is missing in a way that names the fix.
+async fn publisher_token(runs: &Arc<RunsState>) -> Result<String, LibraryError> {
+    let store = runs.cred_store().await.map_err(LibraryError::Failed)?;
+    store
+        .get("registry")
+        .await
+        .map_err(|e| LibraryError::Failed(e.to_string()))?
+        .and_then(|c| c.get("token").filter(|t| !t.is_empty()).map(String::from))
+        .ok_or(LibraryError::NoToken)
+}
+
+/// Who this harness publishes as, or `None` when no token is configured.
+///
+/// Not an error without one: "you have not connected a publisher token" is the
+/// normal state of most installs, and the UI shows a different thing for it
+/// rather than an error.
+pub(crate) async fn publisher(
+    runs: &Arc<RunsState>,
+) -> Result<Option<crate::registry::Publisher>, LibraryError> {
+    let client = runs.registry().ok_or(LibraryError::Off)?;
+    let token = match publisher_token(runs).await {
+        Ok(t) => t,
+        Err(LibraryError::NoToken) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    client
+        .me(&token)
+        .await
+        .map(Some)
+        .map_err(|e| LibraryError::Unreachable(e.to_string()))
+}
+
+/// What a publish sends.
+#[derive(Debug, serde::Deserialize)]
+pub struct PublishRequest {
+    /// The local workflow to publish, by file stem.
+    pub name: String,
+    /// Shown in the library. Defaults to a title derived from the name.
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// What changed, for a version after the first.
+    #[serde(default)]
+    pub changelog: Option<String>,
+    /// Rename the publisher before publishing, so the name on the entry is the
+    /// one the author expects rather than whatever an operator recorded when
+    /// minting their token.
+    #[serde(default)]
+    pub publish_as: Option<String>,
+}
+
+/// What a publish produced.
+#[derive(Debug, Serialize)]
+pub(crate) struct PublishResult {
+    pub slug: String,
+    pub version: i32,
+    /// The name the entry now carries.
+    pub publisher: String,
+    /// This was the workflow's first appearance in the library.
+    pub created: bool,
+}
+
+/// Publish a local workflow, or add a version to one this harness published.
+///
+/// Shared by the HTTP route and the MCP tool, like the install path.
+pub(crate) async fn publish_workflow(
+    runs: &Arc<RunsState>,
+    req: &PublishRequest,
+) -> Result<PublishResult, LibraryError> {
+    let client = runs.registry().ok_or(LibraryError::Off)?;
+    let token = publisher_token(runs).await?;
+
+    // The YAML is read from disk rather than taken from the request: what gets
+    // published must be what this harness actually runs, not what a caller says
+    // it is.
+    let source = authoring::get_workflow(&runs.project_root, &req.name)
+        .map_err(|_| LibraryError::NotFound(format!("no workflow called `{}` here", req.name)))?;
+
+    // A built-in cannot be published. The registry refuses those slugs anyway,
+    // but failing here says why in terms of this harness rather than reporting
+    // a rejection from a service the author did not know was involved.
+    if matches!(source.source, authoring::Source::Bundled) {
+        return Err(LibraryError::Failed(format!(
+            "`{}` is a built-in workflow — save a copy under your own name and publish that",
+            req.name
+        )));
+    }
+
+    if let Some(name) = req
+        .publish_as
+        .as_deref()
+        .map(str::trim)
+        .filter(|n| !n.is_empty())
+    {
+        client
+            .set_display_name(&token, name)
+            .await
+            .map_err(|e| LibraryError::Failed(e.to_string()))?;
+    }
+
+    let store = runs
+        .installed_workflow_store()
+        .await
+        .map_err(LibraryError::Failed)?;
+    let existing = store.get(&req.name).await.ok().flatten();
+
+    // Publish a version only for a workflow this harness published. A row that
+    // came from an *install* names somebody else's slug, and pushing a version
+    // at it would be publishing into their entry — which the registry refuses,
+    // but which should never be attempted.
+    let own = existing.as_ref().filter(|r| r.published);
+
+    let published = match own {
+        Some(record) => client
+            .publish_version(&token, &record.slug, &source.yaml, req.changelog.as_deref())
+            .await
+            .map_err(|e| LibraryError::Failed(e.to_string()))?,
+        None => {
+            let title = req
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .unwrap_or(&req.name);
+            let description = req.description.as_deref().unwrap_or_default();
+            client
+                .create(
+                    &token,
+                    &crate::registry::NewWorkflow {
+                        slug: &req.name,
+                        title,
+                        description,
+                        tags: &req.tags,
+                        yaml: &source.yaml,
+                        changelog: req.changelog.as_deref(),
+                    },
+                )
+                .await
+                .map_err(|e| LibraryError::Failed(e.to_string()))?
+        }
+    };
+
+    let who = client
+        .me(&token)
+        .await
+        .map(|p| p.name().to_string())
+        .unwrap_or_default();
+
+    // Record the link locally, so the next publish adds a version instead of
+    // trying to create the entry again — and so the editor can say this one is
+    // published without asking the registry.
+    store
+        .record(&harness_persist::InstallRecord {
+            name: &req.name,
+            slug: &published.slug,
+            version: published.version,
+            publisher: Some(&who),
+            title: req.title.as_deref(),
+            published: true,
+        })
+        .await
+        .map_err(|e| LibraryError::Failed(e.to_string()))?;
+
+    Ok(PublishResult {
+        slug: published.slug,
+        version: published.version,
+        publisher: who,
+        created: own.is_none(),
+    })
+}
+
+pub async fn publish(
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    Json(req): Json<PublishRequest>,
+) -> Response {
+    match publish_workflow(&runs, &req).await {
+        Ok(done) => Json(done).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+pub async fn who_publishes(
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+) -> Response {
+    match publisher(&runs).await {
+        Ok(p) => Json(serde_json::json!({
+            "configured": p.is_some(),
+            "name": p.as_ref().map(|p| p.name()),
+            "login": p.as_ref().map(|p| p.github_login.clone()),
+        }))
+        .into_response(),
+        Err(e) => e.into_response(),
+    }
 }
 
 #[cfg(test)]
