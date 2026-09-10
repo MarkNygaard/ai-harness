@@ -3,10 +3,12 @@
 //! [`providers`] reports what each agent provider's CLI actually is in this
 //! image -- present or missing, and at what version -- which the credentials
 //! page needs in order to say anything truthful about whether a provider can
-//! run. Updating covers the CLIs installed **from npm** -- Claude Code and
-//! Codex -- because they share one mechanism. `omp` comes from bun and
-//! `cursor-agent` from a vendor installer, so neither can use this path and
-//! both report version only. The image bakes a copy via
+//! run. Updating covers Claude Code and Codex (npm) and `cursor-agent` (its
+//! vendor install script) — different fetches, the same destination. Only npm
+//! answers "what is the newest", so those two get an *update available* badge
+//! while Cursor gets a Reinstall button and no claim about whether one is due.
+//! `omp` comes from bun into `/opt`, which this user cannot write, so it reports
+//! its version and nothing more. The image bakes a copy via
 //! `npm install -g` as root, but that global dir isn't writable by the non-root
 //! `harness` user, so an in-place update can't touch it (and wouldn't survive a
 //! redeploy anyway). Instead we install/update into `$HOME/.local`, whose `bin`
@@ -35,37 +37,59 @@ use super::accounts::AdminOnly;
 use super::runs_routes::RunsState;
 use super::state::AppState;
 
+/// How a CLI is installed, which decides what this page can offer to do about
+/// it.
+#[derive(Clone, Copy)]
+enum Installer {
+    /// An npm package. The registry also answers "what is the newest", so these
+    /// get an *update available* badge rather than only a button.
+    Npm(&'static str),
+    /// A vendor install script, fetched and run.
+    ///
+    /// Cursor publishes no version endpoint — its script carries the version
+    /// hardcoded in a download URL — so there is nothing to compare against and
+    /// no badge to show. Reinstalling is still worth offering: it is the only
+    /// way to move the CLI without rebuilding the image, and the alternative is
+    /// an install that silently stays on whatever the Docker layer cached.
+    Script(&'static str),
+}
+
 /// The agent providers that run through a CLI: the executable each needs, and
-/// the npm package it comes from when it has one.
+/// how — if at all — it can be installed from here.
 ///
 /// Mirrors the dispatch table in `harness-runner`: a provider whose binary is
 /// missing from the image cannot run a node, and that is worth saying on the
 /// credentials page rather than at the first failed run.
 ///
-/// The package is what makes a CLI updatable here. `None` is not "we haven't
-/// got round to it" -- `omp` is installed by bun into `/opt/bun` and
-/// `cursor-agent` by a vendor script, so `npm install --prefix` cannot manage
-/// either, and offering the button would be a lie.
+/// An `install` of `None` is not "we haven't got round to it": `omp` is
+/// installed by bun into `/opt/bun`, which the non-root user cannot write, so
+/// offering a button would be a lie.
 const AGENT_CLIS: &[AgentCli] = &[
     AgentCli {
         provider: "claude",
         binary: "claude",
-        package: Some("@anthropic-ai/claude-code"),
+        install: Some(Installer::Npm("@anthropic-ai/claude-code")),
     },
     AgentCli {
         provider: "codex",
         binary: "codex",
-        package: Some("@openai/codex"),
+        install: Some(Installer::Npm("@openai/codex")),
     },
     AgentCli {
         provider: "pi",
         binary: "omp",
-        package: None,
+        install: None,
     },
     AgentCli {
         provider: "cursor",
         binary: "cursor-agent",
-        package: None,
+        // The script unpacks into `$HOME/.local/share/cursor-agent/versions/`
+        // and symlinks `$HOME/.local/bin/cursor-agent` — the same user-writable,
+        // PATH-priority, volume-persistent place the npm installs target, so a
+        // runtime install shadows the copy baked into the image and survives a
+        // restart. The build only relocates it to /opt because *root's* $HOME is
+        // unreadable by uid 1000, which is not a constraint here.
+        install: Some(Installer::Script("https://cursor.com/install")),
     },
 ];
 
@@ -73,8 +97,17 @@ const AGENT_CLIS: &[AgentCli] = &[
 struct AgentCli {
     provider: &'static str,
     binary: &'static str,
-    /// npm package, when that is how it is installed.
-    package: Option<&'static str>,
+    install: Option<Installer>,
+}
+
+impl AgentCli {
+    /// The npm package, when that is how it is installed.
+    fn npm_package(&self) -> Option<&'static str> {
+        match self.install {
+            Some(Installer::Npm(pkg)) => Some(pkg),
+            _ => None,
+        }
+    }
 }
 
 /// The CLI a provider key names, if the harness knows one.
@@ -97,6 +130,13 @@ pub(crate) struct ProviderHealth {
     /// never offers a button that has nothing behind it.
     latest: Option<String>,
     update_available: bool,
+    /// This CLI can be installed from here at all.
+    ///
+    /// Distinct from `update_available`, which additionally means *we know*
+    /// something newer exists. A vendor-script CLI can be reinstalled but has no
+    /// version to compare against, so the UI offers "reinstall" without claiming
+    /// there is an update — a claim it has no way to check.
+    reinstallable: bool,
     /// Why the update check came back empty (offline, registry down).
     error: Option<String>,
 }
@@ -120,9 +160,10 @@ pub(crate) async fn providers(
         } else {
             None
         };
-        // A CLI with no package cannot be updated from here, so it is not worth
-        // a request to ask what the newest one would be.
-        let latest = match cli.package {
+        // Only an npm package has a registry to ask. A vendor-script CLI is
+        // installable but unknowable, so asking would be a round trip for a
+        // question with no answer.
+        let latest = match cli.npm_package() {
             Some(pkg) => Some(latest_version(pkg).await),
             None => None,
         };
@@ -148,6 +189,7 @@ pub(crate) async fn providers(
                         (version.as_deref(), latest.as_deref()),
                         (Some(i), Some(l)) if is_newer(l, i)
                     ),
+                    reinstallable: cli.install.is_some(),
                     latest,
                     error,
                     version,
@@ -291,9 +333,9 @@ async fn update_provider(
     let Some(cli) = agent_cli(provider) else {
         return Json(refused(format!("no agent CLI named `{provider}`")));
     };
-    let Some(pkg) = cli.package else {
+    let Some(installer) = cli.install else {
         let mut r = refused(format!(
-            "`{}` is not installed from npm, so it cannot be updated here",
+            "`{}` is installed into the image and cannot be updated from here",
             cli.binary
         ));
         r.installed = cli_version(cli.binary).await;
@@ -322,7 +364,10 @@ async fn update_provider(
         return Json(ClaudeUpdateResult {
             ok: true,
             installed: cli_version(cli.binary).await,
-            latest: latest_version(pkg).await.ok(),
+            latest: match installer {
+                Installer::Npm(pkg) => latest_version(pkg).await.ok(),
+                Installer::Script(_) => None,
+            },
             update_available: true,
             queued: true,
             message: format!(
@@ -333,7 +378,7 @@ async fn update_provider(
     }
     // Lease held: no run can start (see the interlock in `start_run`) and none
     // was running, so nothing is spawning the tree we are about to replace.
-    let result = install_provider(&state.core.home_dir, cli, pkg).await;
+    let result = install_provider(&state.core.home_dir, cli, installer).await;
     release_install_lease(runs).await;
     let mut pending = read_pending(settings).await;
     if pending.remove(cli.provider) {
@@ -358,12 +403,26 @@ fn refused(message: String) -> ClaudeUpdateResult {
 /// Install one CLI at latest and report what came out. Assumes the caller holds
 /// [`INSTALL_LEASE_KEY`] — the interlock, not the install, is what keeps a run
 /// from being spawned into a half-extracted package tree.
-async fn install_provider(home_dir: &Path, cli: &AgentCli, pkg: &str) -> ClaudeUpdateResult {
+async fn install_provider(
+    home_dir: &Path,
+    cli: &AgentCli,
+    installer: Installer,
+) -> ClaudeUpdateResult {
     let prefix = home_dir.join(".local");
-    match run_npm_install_latest(&prefix, pkg).await {
+    let outcome = match installer {
+        Installer::Npm(pkg) => run_npm_install_latest(&prefix, pkg).await,
+        Installer::Script(url) => run_vendor_install(home_dir, url).await,
+    };
+    match outcome {
         Ok(log) => {
             let installed = cli_version(cli.binary).await;
-            let latest = latest_version(pkg).await.ok();
+            // Only an npm CLI can say whether what it just installed is the
+            // newest. A script install reports the version it landed on and
+            // stops there rather than implying a comparison it did not make.
+            let latest = match installer {
+                Installer::Npm(pkg) => latest_version(pkg).await.ok(),
+                Installer::Script(_) => None,
+            };
             let update_available = match (installed.as_deref(), latest.as_deref()) {
                 (Some(i), Some(l)) => is_newer(l, i),
                 _ => false,
@@ -380,7 +439,10 @@ async fn install_provider(home_dir: &Path, cli: &AgentCli, pkg: &str) -> ClaudeU
         Err(e) => ClaudeUpdateResult {
             ok: false,
             installed: cli_version(cli.binary).await,
-            latest: latest_version(pkg).await.ok(),
+            latest: match installer {
+                Installer::Npm(pkg) => latest_version(pkg).await.ok(),
+                Installer::Script(_) => None,
+            },
             update_available: false,
             queued: false,
             message: e,
@@ -548,7 +610,7 @@ async fn read_pending(store: &harness_persist::SettingsStore) -> BTreeSet<String
 fn parse_pending(raw: &str) -> BTreeSet<String> {
     raw.split(',')
         .map(str::trim)
-        .filter(|p| agent_cli(p).is_some_and(|c| c.package.is_some()))
+        .filter(|p| agent_cli(p).is_some_and(|c| c.install.is_some()))
         .map(str::to_string)
         .collect()
 }
@@ -669,9 +731,14 @@ async fn drain_queued_updates(runs: &Arc<RunsState>, home_dir: &Path) {
         let Some(cli) = agent_cli(provider) else {
             continue;
         };
-        let Some(pkg) = cli.package else { continue };
-        tracing::info!("agent CLI update: cluster is idle — installing queued {pkg}@latest");
-        let result = install_provider(home_dir, cli, pkg).await;
+        let Some(installer) = cli.install else {
+            continue;
+        };
+        tracing::info!(
+            "agent CLI update: cluster is idle — installing queued {}",
+            cli.binary
+        );
+        let result = install_provider(home_dir, cli, installer).await;
         if result.ok {
             tracing::info!(
                 "agent CLI update: {} is now {}",
@@ -710,7 +777,9 @@ async fn drain_queued_updates(runs: &Arc<RunsState>, home_dir: &Path) {
 pub(crate) async fn bootstrap_agent_clis(home_dir: PathBuf) {
     let prefix = home_dir.join(".local");
     for cli in AGENT_CLIS {
-        let Some(pkg) = cli.package else { continue };
+        let Some(Installer::Npm(pkg)) = cli.install else {
+            continue;
+        };
         let bin = prefix.join("bin").join(cli.binary);
         if bin.exists() {
             continue;
@@ -760,6 +829,45 @@ const INSTALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// `npm install -g --prefix <prefix> <pkg>@latest`.
 /// Targets a user-writable prefix whose `bin` is first on PATH.
+/// Fetch a vendor install script and run it as this process's user.
+///
+/// `HOME` is set explicitly rather than inherited: the script installs relative
+/// to it, and that is the whole reason this works — it lands in the same
+/// user-writable, PATH-priority, volume-persistent `$HOME/.local` the npm
+/// installs use, so it shadows the copy baked into the image.
+///
+/// Piping a fetched script into a shell is what the vendor documents and what
+/// the Dockerfile already does at build time; doing it here changes when it
+/// runs, not what is trusted. The URL is a constant in this file, never
+/// anything a caller supplies.
+async fn run_vendor_install(home_dir: &Path, url: &str) -> Result<String, String> {
+    let script = format!("set -euo pipefail; curl -fsS {url} | bash");
+    let out = tokio::time::timeout(
+        INSTALL_TIMEOUT,
+        tokio::process::Command::new("bash")
+            .arg("-c")
+            .arg(&script)
+            .env("HOME", home_dir)
+            .output(),
+    )
+    .await
+    .map_err(|_| format!("install timed out after {}s", INSTALL_TIMEOUT.as_secs()))?
+    .map_err(|e| format!("spawn bash: {e}"))?;
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if out.status.success() {
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        Ok(format!("{}\n{}", stdout.trim(), stderr.trim())
+            .trim()
+            .to_string())
+    } else {
+        Err(format!(
+            "install exited {}: {}",
+            out.status.code().unwrap_or(-1),
+            stderr.trim()
+        ))
+    }
+}
+
 async fn run_npm_install_latest(prefix: &Path, pkg: &str) -> Result<String, String> {
     let spec = format!("{pkg}@latest");
     let out = tokio::time::timeout(
@@ -828,22 +936,27 @@ mod tests {
     /// package added here without an installer to match -- or removed while a
     /// button still expects it -- is a button that does nothing.
     #[test]
-    fn only_the_npm_installed_clis_offer_an_update() {
-        let updatable: Vec<&str> = AGENT_CLIS
+    fn a_cli_offers_only_what_its_installer_can_actually_do() {
+        // Installable at all — the button.
+        let installable: Vec<&str> = AGENT_CLIS
             .iter()
-            .filter(|c| c.package.is_some())
+            .filter(|c| c.install.is_some())
             .map(|c| c.provider)
             .collect();
-        assert_eq!(updatable, vec!["claude", "codex"]);
+        assert_eq!(installable, vec!["claude", "codex", "cursor"]);
 
-        // omp comes from bun and cursor-agent from a vendor script; neither can
-        // be reached by `npm install --prefix`.
-        for provider in ["pi", "cursor"] {
-            assert!(
-                agent_cli(provider).expect(provider).package.is_none(),
-                "{provider} is not installed from npm"
-            );
-        }
+        // Installable *and* knowable — the "update available" badge. Only npm
+        // has a registry to ask; Cursor publishes no version endpoint, so
+        // claiming an update existed would be a claim nothing checked.
+        let knowable: Vec<&str> = AGENT_CLIS
+            .iter()
+            .filter(|c| c.npm_package().is_some())
+            .map(|c| c.provider)
+            .collect();
+        assert_eq!(knowable, vec!["claude", "codex"]);
+
+        // omp comes from bun into /opt, which the non-root user cannot write.
+        assert!(agent_cli("pi").expect("pi").install.is_none());
     }
 
     #[test]
@@ -920,8 +1033,14 @@ mod tests {
             ["claude"].into_iter().map(str::to_string).collect()
         );
         assert!(parse_pending("").is_empty());
-        // Known providers, but not installable from here.
-        assert!(parse_pending("pi,cursor").is_empty());
+        // `cursor` is installable — by a vendor script rather than npm, but the
+        // queue is about whether an install can happen at all, not about how.
+        assert_eq!(
+            parse_pending("pi,cursor"),
+            ["cursor"].into_iter().map(str::to_string).collect()
+        );
+        // `pi` is not: omp lives in /opt, which this user cannot write.
+        assert!(parse_pending("pi").is_empty());
         // A provider from another build entirely.
         assert!(parse_pending("gpt").is_empty());
     }

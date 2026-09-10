@@ -10,6 +10,7 @@ function health(over: Partial<ProviderHealth> = {}): ProviderHealth {
     version: "1.2.3",
     latest: null,
     update_available: false,
+    reinstallable: true,
     error: null,
     ...over,
   };

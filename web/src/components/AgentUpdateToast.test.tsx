@@ -37,6 +37,7 @@ const STALE_CLAUDE: ProviderHealth = {
   version: "2.0.9",
   latest: "2.1.4",
   update_available: true,
+  reinstallable: true,
   error: null,
 };
 

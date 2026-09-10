@@ -137,7 +137,22 @@ RUN mkdir -p /opt/omp-plugins \
 # make it world-readable, and symlink the versioned executable onto PATH. The version
 # dir is date-named, so pick the latest by sort rather than hard-coding it. Auth is
 # materialized at run time via CURSOR_API_KEY — no login during build.
-RUN curl https://cursor.com/install -fsS | bash \
+#
+# **Bump this date to actually get a newer CLI.** The installer takes no version
+# argument — it carries one hardcoded in its download URL — so this cannot be a
+# true pin like omp's. What it can do is change this layer's text: Docker keys a
+# layer on that, so without the ARG every rebuild reuses the cached layer and
+# ships whatever cursor-agent was current the first time it was built. That is
+# the same trap that shipped a stale omp, and "unpinned" means "latest" only on
+# a cache miss.
+#
+# The date is what was current when the layer was last refreshed, so at least
+# the age of what ships is answerable from the repo. It is also no longer the
+# only route: `cursor` can now be reinstalled from Settings → Agents, which
+# lands in $HOME/.local and shadows this copy.
+ARG CURSOR_REFRESHED=2026-09-10
+RUN echo "cursor-agent refreshed ${CURSOR_REFRESHED}" \
+    && curl https://cursor.com/install -fsS | bash \
     && mv /root/.local/share/cursor-agent /opt/cursor-agent \
     && chmod -R a+rX /opt/cursor-agent \
     && ln -sf "$(ls -d /opt/cursor-agent/versions/*/cursor-agent | sort | tail -1)" /usr/local/bin/cursor-agent \

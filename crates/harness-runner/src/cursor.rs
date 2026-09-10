@@ -8,7 +8,7 @@
 //! outputTokens, cacheReadTokens, cacheWriteTokens } }`. `-p` grants full
 //! tool access (write + shell); `--force`/`--trust` keep it non-interactive.
 //!
-//! Models are bare Cursor ids (e.g. `composer-2.5`, `sonnet-4`, `gpt-5`); the
+//! Models are bare Cursor ids (e.g. `composer-2.5`, `claude-sonnet-5`, `gpt-5.6-sol`); the
 //! node's `model` is passed through verbatim, defaulting to [`DEFAULT_MODEL`].
 //! Note a `-fast` suffix selects Cursor's pricier "fast" tier (e.g.
 //! `composer-2.5-fast`, which is the account default if no model is given) — the
@@ -542,7 +542,10 @@ mod tests {
         let agent = CursorAgent::from_env();
         assert_eq!(agent.resolve_model(None), DEFAULT_MODEL);
         assert_eq!(agent.resolve_model(Some("")), DEFAULT_MODEL);
-        assert_eq!(agent.resolve_model(Some("sonnet-4")), "sonnet-4");
+        assert_eq!(
+            agent.resolve_model(Some("claude-sonnet-5")),
+            "claude-sonnet-5"
+        );
         assert_eq!(agent.resolve_model(Some("composer-2.5")), "composer-2.5");
     }
 

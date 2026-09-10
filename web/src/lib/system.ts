@@ -15,9 +15,17 @@ export interface ProviderHealth {
   on_path: boolean;
   /** Version it reports, when it is there to be asked. */
   version: string | null;
-  /** Latest on npm. Claude Code only, since it is the one we can install. */
+  /** Latest on npm. Only for the CLIs installed from there. */
   latest: string | null;
   update_available: boolean;
+  /**
+   * This CLI can be installed from here at all.
+   *
+   * Distinct from `update_available`, which also means we know something newer
+   * exists. `cursor-agent` comes from a vendor script with no version endpoint,
+   * so it can be reinstalled but never announced as out of date.
+   */
+  reinstallable: boolean;
   /** Set when the latest-version lookup failed (e.g. no egress). */
   error: string | null;
 }

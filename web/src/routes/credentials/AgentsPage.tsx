@@ -111,7 +111,14 @@ function AgentRow({
           </span>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/* Offered whenever an install is possible, not only when we know one
+              is due. A vendor-script CLI has no version endpoint to compare
+              against, so it would otherwise be stuck on whatever the image
+              baked in with no way to move it short of a rebuild — and the
+              button reads "Reinstall" rather than claiming an update nobody
+              checked for. */}
           {(health?.update_available ||
+            health?.reinstallable ||
             queue?.pending.includes(agent.provider)) && (
             <CliUpdateButton
               provider={agent.provider}
