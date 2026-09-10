@@ -201,17 +201,38 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
         });
     }
     // Cursor CLI — shown once a CURSOR_API_KEY credential is connected. Bare
-    // Cursor model ids (any model string is still accepted).
+    // Cursor model ids (any model string is still accepted, so this list is a
+    // set of suggestions rather than a gate).
+    //
+    // **Two pools, and the difference is money.** Cursor's own models are
+    // included in the subscription; everything else draws from the "Other
+    // Models" pool and is charged at that model's API price. Both are reachable
+    // without a separate API key, which is exactly why the distinction is easy
+    // to miss — so the included ones are listed first and the metered ones are
+    // marked here rather than left to be discovered on an invoice.
+    //
+    // Cursor renamed its Anthropic ids: the old `sonnet-4` / `sonnet-4-thinking`
+    // no longer exist, and Claude models are now `claude-<version>-<family>`.
     if creds.cursor {
         providers.push(ProviderInfo {
             id: "cursor",
             label: "Cursor",
             models: vec![
-                "composer",
+                // Included in the subscription.
                 "composer-2.5",
-                "sonnet-4",
-                "sonnet-4-thinking",
-                "gpt-5",
+                "composer-2.5-fast",
+                "grok-4.6",
+                "grok-4.6-fast",
+                // Metered against the "Other Models" pool, at API prices.
+                "claude-sonnet-5",
+                "claude-opus-5",
+                "claude-fable-5.1",
+                "claude-4.5-haiku",
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-5.5",
+                "gemini-3-pro",
             ],
         });
     }
@@ -1071,7 +1092,13 @@ nodes:
             },
         );
         assert!(has(&cursor, "cursor"));
-        assert!(models(&cursor, "cursor").contains(&"composer"));
+        // The subscription-included model, and the one the agent defaults to.
+        assert!(models(&cursor, "cursor").contains(&"composer-2.5"));
+        // Cursor renamed its Anthropic ids; `sonnet-4` is not one of them any
+        // more, and listing an id the CLI does not know is a suggestion that
+        // fails at run time rather than in the editor.
+        assert!(models(&cursor, "cursor").contains(&"claude-sonnet-5"));
+        assert!(!models(&cursor, "cursor").contains(&"sonnet-4"));
         assert!(!has(&none, "cursor"));
     }
     #[test]

@@ -439,7 +439,7 @@ export function CliUpdateButton({
       <span className="flex items-center gap-1.5">
         <span
           className="text-[11px] text-muted-foreground"
-          title={`${label} will be updated to ${to} once no run is in flight — ${busy}.`}
+          title={`${label} will be ${to ? `updated to ${to}` : "reinstalled"} once no run is in flight — ${busy}.`}
         >
           <Clock className="mr-1 inline size-3 align-[-2px]" />
           Queued — {busy}
@@ -475,8 +475,10 @@ export function CliUpdateButton({
       onClick={() => update.mutate(provider)}
       title={
         willQueue
-          ? `${runsPhrase(queue?.active_runs ?? 0)} in flight — ${label} will be updated to ${to} as soon as the last one finishes`
-          : `Update ${label} to ${to}`
+          ? `${runsPhrase(queue?.active_runs ?? 0)} in flight — ${label} will be ${to ? `updated to ${to}` : "reinstalled"} as soon as the last one finishes`
+          : to
+            ? `Update ${label} to ${to}`
+            : `Reinstall ${label} at whatever its installer currently ships — this CLI publishes no version to check against`
       }
     >
       {update.isPending ? (
@@ -485,11 +487,17 @@ export function CliUpdateButton({
         </>
       ) : willQueue ? (
         <>
-          <Clock className="size-3" /> Update when idle
+          <Clock className="size-3" /> {to ? "Update" : "Reinstall"} when idle
         </>
-      ) : (
+      ) : to ? (
         <>
           <ArrowUpCircle className="size-3" /> Update to {to}
+        </>
+      ) : (
+        // No version to compare against, so the button says what it does rather
+        // than claiming an update exists.
+        <>
+          <ArrowUpCircle className="size-3" /> Reinstall
         </>
       )}
     </Button>
