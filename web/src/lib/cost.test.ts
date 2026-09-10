@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatCost, usageCost } from "./cost";
+import { formatCost, ratesFor, usageCost } from "./cost";
 import type { Usage } from "@/types/run";
 
 const u = (p: Partial<Usage>): Usage => ({
@@ -55,5 +55,47 @@ describe("formatCost", () => {
     expect(formatCost(0.0001234)).toBe("$0.0001");
     expect(formatCost(0.123)).toBe("$0.123");
     expect(formatCost(12.345)).toBe("$12.35");
+  });
+});
+
+describe("the generated catalog", () => {
+  /**
+   * The rates come from `model-catalog.json`, generated from the Rust table a
+   * Rust test keeps in step. These pin the reading of it — that an id the
+   * harness lists resolves exactly, and that one it does not still prices by
+   * shape rather than falling to zero.
+   */
+  it("prices a listed model exactly", () => {
+    // Cursor's versioned id and Claude Code's alias are the same model, so the
+    // same price — an A/B across the two agents measures the models, not us.
+    expect(ratesFor("claude-sonnet-5")).toEqual(ratesFor("sonnet"));
+    expect(ratesFor("openai-codex/gpt-6-astra")).toEqual(
+      ratesFor("gpt-6-astra"),
+    );
+  });
+
+  it("keeps the tiers apart, which is what the fallback order is for", () => {
+    // All three contain "gpt-5"; reached in the wrong order they would collapse
+    // onto one rate, and they are 25x apart end to end.
+    expect(ratesFor("gpt-5.6-luna").output).toBeLessThan(
+      ratesFor("gpt-5.6-terra").output,
+    );
+    expect(ratesFor("gpt-5.6-terra").output).toBeLessThan(
+      ratesFor("gpt-5.6-sol").output,
+    );
+    // And "gpt-6-astra" must not be read as a gpt-5.
+    expect(ratesFor("gpt-6-astra").output).toBeGreaterThan(
+      ratesFor("gpt-5.6-sol").output,
+    );
+  });
+
+  it("prices an unlisted model rather than treating it as free", () => {
+    // A version nobody has listed yet still resolves by shape.
+    expect(ratesFor("claude-opus-4.8")).toEqual(ratesFor("opus"));
+    // And something entirely unknown falls to the default tier, not to zero,
+    // which would read as a run that cost nothing.
+    const unknown = ratesFor("who-knows-1");
+    expect(unknown.input).toBeGreaterThan(0);
+    expect(unknown).toEqual(ratesFor("sonnet"));
   });
 });

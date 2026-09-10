@@ -1,13 +1,15 @@
 /**
  * Notional USD cost basis for token usage — a common dollar yardstick for
- * comparing runs (including subscription models that aren't billed per-token).
+ * comparing runs, including subscription models that are not billed per token.
  *
- * ⚠️ Keep this price table in sync with the server's authoritative one in
- * `crates/harness-server/src/handlers/token_usage.rs` (`rates_for_model` /
- * `record_cost`). Same families, same per-MTok rates, same no-cache-breakdown
- * heuristic. This is a client-side mirror so the run overview can price per-node
- * usage without a round trip; the server endpoint remains the source of truth.
+ * The rates are **not written here.** `model-catalog.json` is generated from
+ * `crates/harness-runner/src/models.rs`, which the editor's model list and the
+ * server's own pricing also read, and a Rust test fails when the generated copy
+ * goes stale. This file used to carry a second hand-maintained table with three
+ * comments saying "mirrors token_usage.rs" — a comment doing a compiler's job,
+ * and nothing that failed when the two drifted apart.
  */
+import catalog from "./model-catalog.json";
 import type { Usage } from "@/types/run";
 
 interface Rates {
@@ -17,40 +19,44 @@ interface Rates {
   cacheWrite: number;
 }
 
-/** Per-MTok USD rates by model family, matched on a lowercased substring. */
-function ratesFor(model: string): Rates {
+const FAMILIES = new Map<string, Rates>(
+  catalog.families.map((f) => [
+    f.id,
+    {
+      input: f.rates.input,
+      output: f.rates.output,
+      cacheRead: f.rates.cache_read,
+      cacheWrite: f.rates.cache_write,
+    },
+  ]),
+);
+
+const BY_ID = new Map<string, string>(
+  catalog.models.map((m) => [m.id.toLowerCase(), m.family]),
+);
+
+function family(id: string): Rates {
+  const rates = FAMILIES.get(id);
+  if (!rates) throw new Error(`no pricing family "${id}"`);
+  return rates;
+}
+
+/**
+ * Per-MTok rates for a model: exact when it is one the harness lists, and by
+ * the id's shape when it is not.
+ *
+ * Any model string is accepted — a workflow can pin an id nobody listed — so
+ * this always answers. The fallback order comes from the generated table rather
+ * than being re-derived here, because the order is the subtle part: `gpt-6` and
+ * the 5.6 tiers have to be reached before the general `gpt-5` arm that also
+ * matches them, and those tiers are 25x apart.
+ */
+export function ratesFor(model: string): Rates {
   const m = model.toLowerCase();
-  if (m.includes("opus"))
-    return { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
-  if (m.includes("haiku"))
-    return { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 };
-  if (m.includes("fable"))
-    return { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
-  if (m.includes("sonnet"))
-    return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
-  // GPT-6 Astra standard tier, short context. Must precede the gpt-5 check —
-  // `openai-codex/gpt-6-astra` matches that one too. (mirrors token_usage.rs)
-  if (m.includes("gpt-6"))
-    return { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 };
-  // The 5.6 tiers are 25x apart end to end, so Terra and Luna get their own
-  // arms ahead of the generic gpt-5 one. (mirrors token_usage.rs)
-  if (m.includes("5.6-terra"))
-    return { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 };
-  if (m.includes("5.6-luna"))
-    return { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 };
-  // The rest of the gpt-5.x line, at GPT-5.6 Sol's rate.
-  if (m.includes("gpt-5") || m.includes("codex") || m.includes("openai"))
-    return { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 5 };
-  if (m.includes("kimi") || m.includes("moonshot"))
-    return { input: 0.95, output: 4, cacheRead: 0.16, cacheWrite: 0.95 };
-  if (m.includes("composer"))
-    // Cursor Composer 2.5 standard tier: $0.50 in / $2.50 out / $0.20 cache-read
-    // (published). cache_read dominates a coding run, so this is the figure that
-    // reconciles notional cost with Cursor's usage dashboard. No write-cache rate
-    // is published; keep input-rate as a safe upper bound. (mirrors token_usage.rs)
-    return { input: 0.5, output: 2.5, cacheRead: 0.2, cacheWrite: 0.5 };
-  // Unknown model → Sonnet-tier fallback (matches the server).
-  return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+  const exact = BY_ID.get(m);
+  if (exact) return family(exact);
+  const hit = catalog.fallbacks.find(([needle]) => m.includes(needle));
+  return family(hit ? hit[1] : catalog.default_family);
 }
 
 /**

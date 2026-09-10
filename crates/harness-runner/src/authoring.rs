@@ -18,6 +18,7 @@ use harness_dag::{parse_workflow, NodeKind, Workflow};
 use serde::{Deserialize, Serialize};
 
 use crate::defaults;
+use crate::models;
 
 /// Where a workflow or command came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -137,112 +138,42 @@ pub struct ConnectedCreds {
 /// (no point offering a CLI that can't run); Anthropic API stays listed as the
 /// always-available direct-key fallback.
 fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
-    let mut providers = Vec::new();
-    if creds.claude {
-        providers.push(ProviderInfo {
-            id: "claude",
-            label: "Claude Code",
-            models: vec!["sonnet", "opus", "haiku", "fable"],
-        });
-    }
-    if creds.codex {
-        // Codex CLI on a ChatGPT account: the general models (not the `-codex`
-        // variants, which need API-key auth). `gpt-6-astra` needs Codex CLI
-        // >= 0.153.1 and is still rolling out per plan, so the older ids stay
-        // listed for an account that doesn't have it yet.
-        providers.push(ProviderInfo {
-            id: "codex",
-            label: "Codex",
-            models: vec![
-                "gpt-6-astra",
-                // The 5.6 tiers, most capable first: Sol is the Codex CLI's own
-                // default (see `harness_agents::codex`), Terra the everyday
-                // tier, Luna the cheap one. Bare `gpt-5.6` aliases to Sol.
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "gpt-5.6-luna",
-                "gpt-5.5",
-                "gpt-5.4",
-                "gpt-5.4-mini",
-            ],
-        });
-    }
-    // omp (`pi`) is shown when at least one omp backend is authenticated; its
-    // models reflect which ones (Codex via ChatGPT and/or Kimi-for-Coding).
-    if creds.codex || creds.kimi {
-        let mut pi_models: Vec<&'static str> = Vec::new();
-        if creds.codex {
-            pi_models.extend([
-                // Astra entered omp's openai-codex catalog in omp v18.1.12.
-                "openai-codex/gpt-6-astra",
-                // Sol is what every bundled workflow's gpt review node pins.
-                "openai-codex/gpt-5.6-sol",
-                "openai-codex/gpt-5.6-terra",
-                "openai-codex/gpt-5.6-luna",
-                "openai-codex/gpt-5.5",
-                "openai-codex/gpt-5.4-nano",
-                "openai-codex/gpt-5.2-codex",
-                "openai-codex/gpt-5.1-codex-max",
-                "openai-codex/gpt-5.1-codex",
-            ]);
-        }
-        if creds.kimi {
-            pi_models.extend([
-                "kimi-code/kimi-for-coding",
-                "kimi-code/kimi-k2",
-                "kimi-code/kimi-k2-turbo-preview",
-                "kimi-code/kimi-k2.5",
-            ]);
-        }
-        providers.push(ProviderInfo {
-            id: "pi",
-            label: "Pi",
-            models: pi_models,
-        });
-    }
-    // Cursor CLI — shown once a CURSOR_API_KEY credential is connected. Bare
-    // Cursor model ids (any model string is still accepted, so this list is a
-    // set of suggestions rather than a gate).
+    // Which CLIs to offer, and under what label. The models come from
+    // `models::MODELS` — one table, so adding a model is a row there rather
+    // than an edit here *and* a matching one in the price table.
     //
-    // **Two pools, and the difference is money.** Cursor's own models are
-    // included in the subscription; everything else draws from the "Other
-    // Models" pool and is charged at that model's API price. Both are reachable
-    // without a separate API key, which is exactly why the distinction is easy
-    // to miss — so the included ones are listed first and the metered ones are
-    // marked here rather than left to be discovered on an invoice.
-    //
-    // Cursor renamed its Anthropic ids: the old `sonnet-4` / `sonnet-4-thinking`
-    // no longer exist, and Claude models are now `claude-<version>-<family>`.
-    if creds.cursor {
-        providers.push(ProviderInfo {
-            id: "cursor",
-            label: "Cursor",
-            models: vec![
-                // Included in the subscription.
-                "composer-2.5",
-                "composer-2.5-fast",
-                "grok-4.6",
-                "grok-4.6-fast",
-                // Metered against the "Other Models" pool, at API prices.
-                "claude-sonnet-5",
-                "claude-opus-5",
-                "claude-fable-5.1",
-                "claude-4.5-haiku",
-                "gpt-5.6-sol",
-                "gpt-5.6-terra",
-                "gpt-5.6-luna",
-                "gpt-5.5",
-                "gemini-3-pro",
-            ],
-        });
-    }
-    // Direct Anthropic API (API key, not a subscription CLI) — always offered.
-    providers.push(ProviderInfo {
-        id: "anthropic-api",
-        label: "Anthropic API",
-        models: vec!["sonnet", "opus"],
-    });
-    providers
+    // A subscription CLI is shown only once its credential is present (no point
+    // offering one that cannot run); Anthropic API stays listed as the
+    // always-available direct-key fallback.
+    let offered: &[(&str, &str, bool)] = &[
+        ("claude", "Claude Code", creds.claude),
+        ("codex", "Codex", creds.codex),
+        // omp reaches Codex and Kimi, so it is shown when either is
+        // authenticated — and lists only the backends that are.
+        ("pi", "Pi", creds.codex || creds.kimi),
+        ("cursor", "Cursor", creds.cursor),
+        ("anthropic-api", "Anthropic API", true),
+    ];
+
+    offered
+        .iter()
+        .filter(|(_, _, connected)| *connected)
+        .map(|(id, label, _)| ProviderInfo {
+            id,
+            label,
+            models: models::models_for(id)
+                .into_iter()
+                // omp's list depends on which of its backends is connected:
+                // offering a Kimi model with no Kimi credential is a node that
+                // cannot run.
+                .filter(|m| {
+                    *id != "pi"
+                        || (m.starts_with("kimi-code/") && creds.kimi)
+                        || (m.starts_with("openai-codex/") && creds.codex)
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// A command available to `command:` nodes.

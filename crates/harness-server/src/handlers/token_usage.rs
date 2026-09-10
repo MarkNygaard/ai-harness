@@ -1,146 +1,54 @@
 //! Model → billing-lane and per-MTok rate helpers, shared by `usage_routes` and
-//! `billing_calibration`. (The legacy `/api/token-usage` handler was removed with
-//! the task subsystem; only these pure pricing helpers remain.)
+//! `billing_calibration`.
+//!
+//! Both are now one lookup into [`harness_runner::models`], which is the table
+//! the editor's model list also reads. It used to be a substring matcher here
+//! and the same matcher again in TypeScript, with three comments saying
+//! "mirrors token_usage.rs" — a comment doing a compiler's job, and nothing
+//! that failed when the two drifted.
 
-/// Per-MTok USD rates for a model family.
-pub(crate) struct ModelRates {
-    input: f64,
-    output: f64,
-    cache_read: f64,
-    cache_write: f64,
-}
+pub(crate) use harness_runner::models::Rates as ModelRates;
 
-impl ModelRates {
-    /// Notional USD cost of a token breakdown at these per-MTok rates.
-    pub(crate) fn cost_usd(
-        &self,
-        input: u64,
-        output: u64,
-        cache_read: u64,
-        cache_write: u64,
-    ) -> f64 {
-        (input as f64 * self.input
-            + output as f64 * self.output
-            + cache_read as f64 * self.cache_read
-            + cache_write as f64 * self.cache_write)
-            / 1_000_000.0
-    }
-}
-
-/// The billing **lane** a model belongs to — the coarse family that shares one
-/// subscription / rate bucket (`claude`, `gpt`, `kimi`, `composer`), matched the
-/// same way as [`rates_for_model`]. `other` for anything unrecognized.
+/// The billing **lane** a model belongs to — the coarse family sharing one
+/// subscription bucket (`claude`, `gpt`, `kimi`, `composer`), `other` for
+/// anything unrecognised.
 pub(crate) fn lane_for_model(model: &str) -> &'static str {
-    let m = model.to_ascii_lowercase();
-    if m.contains("opus") || m.contains("haiku") || m.contains("fable") || m.contains("sonnet") {
-        "claude"
-    } else if m.contains("gpt-5")
-        || m.contains("gpt-6")
-        || m.contains("codex")
-        || m.contains("openai")
-    {
-        "gpt"
-    } else if m.contains("kimi") || m.contains("moonshot") {
-        "kimi"
-    } else if m.contains("composer") {
-        "composer"
-    } else {
-        "other"
-    }
+    harness_runner::models::family_for(model).lane
 }
 
-/// Notional per-MTok price table, matched by substring on the (lowercased) model
-/// id so id variants resolve to a family (`claude-opus-5`, `openai-codex/gpt-5.6-sol`,
-/// `kimi-for-coding`, …). Notional cost basis — comparable across subscription and
-/// API-billed runs, NOT an invoice. Unknown models fall back to Sonnet-tier.
+/// Notional per-MTok rates for a model.
+///
+/// Exact for a listed model, and by the id's shape for one nobody listed —
+/// a workflow can pin any string, so this always answers with something
+/// defensible rather than zero.
 pub(crate) fn rates_for_model(model: &str) -> ModelRates {
-    let m = model.to_ascii_lowercase();
-    if m.contains("opus") {
-        ModelRates {
-            input: 5.0,
-            output: 25.0,
-            cache_read: 0.5,
-            cache_write: 6.25,
-        }
-    } else if m.contains("haiku") {
-        ModelRates {
-            input: 1.0,
-            output: 5.0,
-            cache_read: 0.1,
-            cache_write: 1.25,
-        }
-    } else if m.contains("fable") {
-        ModelRates {
-            input: 10.0,
-            output: 50.0,
-            cache_read: 1.0,
-            cache_write: 12.5,
-        }
-    } else if m.contains("sonnet") {
-        ModelRates {
-            input: 3.0,
-            output: 15.0,
-            cache_read: 0.3,
-            cache_write: 3.75,
-        }
-    } else if m.contains("gpt-6") {
-        // GPT-6 Astra, standard tier at short context (<= 272K input): $10 in /
-        // $50 out / $1 cache-read / $12.50 cache-write. A request above that
-        // threshold prices at long-context rates; not modelled — this is a
-        // notional basis, and the id carries no context tier. Must precede the
-        // gpt-5/codex/openai arm, which `openai-codex/gpt-6-astra` also matches.
-        ModelRates {
-            input: 10.0,
-            output: 50.0,
-            cache_read: 1.0,
-            cache_write: 12.5,
-        }
-    } else if m.contains("5.6-terra") {
-        // GPT-5.6 Terra, the everyday tier. Its own arm because the 5.6 tiers
-        // are 25x apart end to end — pricing Luna at the generic gpt-5 rate
-        // would make an A/B against Sol meaningless.
-        ModelRates {
-            input: 2.0,
-            output: 12.0,
-            cache_read: 0.20,
-            cache_write: 2.50,
-        }
-    } else if m.contains("5.6-luna") {
-        // GPT-5.6 Luna, the fast/cheap tier.
-        ModelRates {
-            input: 0.20,
-            output: 1.20,
-            cache_read: 0.02,
-            cache_write: 0.25,
-        }
-    } else if m.contains("gpt-5") || m.contains("codex") || m.contains("openai") {
-        // The rest of the gpt-5.x line, at GPT-5.6 Sol's rate.
-        ModelRates {
-            input: 5.0,
-            output: 30.0,
-            cache_read: 0.50,
-            cache_write: 5.0,
-        }
-    } else if m.contains("kimi") || m.contains("moonshot") {
-        ModelRates {
-            input: 0.95,
-            output: 4.0,
-            cache_read: 0.16,
-            cache_write: 0.95,
-        }
-    } else if m.contains("composer") {
-        ModelRates {
-            input: 0.50,
-            output: 2.50,
-            cache_read: 0.20,
-            cache_write: 0.50,
-        }
-    } else {
-        ModelRates {
-            input: 3.0,
-            output: 15.0,
-            cache_read: 0.3,
-            cache_write: 3.75,
-        }
+    harness_runner::models::family_for(model).rates
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The ids that actually appear in bundled workflows and run rows, pinned
+    /// here because this is what the dashboard's cost column is computed from.
+    #[test]
+    fn the_ids_runs_actually_carry_land_in_the_right_lane() {
+        assert_eq!(lane_for_model("opus"), "claude");
+        assert_eq!(lane_for_model("claude-sonnet-5"), "claude");
+        assert_eq!(lane_for_model("openai-codex/gpt-6-astra"), "gpt");
+        assert_eq!(lane_for_model("gpt-5.6-sol"), "gpt");
+        assert_eq!(lane_for_model("kimi-code/kimi-for-coding"), "kimi");
+        assert_eq!(lane_for_model("composer-2.5"), "composer");
+    }
+
+    /// A cost is a number somebody reads as money, so the arithmetic is worth
+    /// pinning rather than trusting to the rate table alone.
+    #[test]
+    fn a_cost_is_the_sum_of_its_four_rates_per_million() {
+        let rates = rates_for_model("opus");
+        // 1M input at $5, 1M output at $25 — the two that dominate.
+        assert!((rates.cost_usd(1_000_000, 1_000_000, 0, 0) - 30.0).abs() < 1e-9);
+        // Nothing spent is nothing owed, rather than a minimum.
+        assert_eq!(rates.cost_usd(0, 0, 0, 0), 0.0);
     }
 }
