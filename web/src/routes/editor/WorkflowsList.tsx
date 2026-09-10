@@ -6,6 +6,7 @@ import {
   IconLayoutList,
   IconPlus,
 } from "@tabler/icons-react";
+import { LibraryDialog } from "@/components/editor/LibraryDialog";
 import { PersonBadge } from "@/components/PersonBadge";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
@@ -47,7 +48,14 @@ export function WorkflowsList() {
   // "Custom", not "Yours": the harness is a shared instance, so a project
   // workflow was as likely authored by a teammate as by whoever is looking.
   const all = workflows.data ?? [];
-  const custom = all.filter((wf) => wf.source === "project");
+  // Three groups, not two. An installed workflow is written to
+  // `.harness/workflows/` like any other, so it arrives as `project` and would
+  // otherwise be indistinguishable from something written here — which loses
+  // the whole distinction the library exists to make the moment you close its
+  // dialog. `installed` is the local record, so this grouping is right even
+  // with the registry unreachable.
+  const installed = all.filter((wf) => wf.source === "project" && wf.installed);
+  const custom = all.filter((wf) => wf.source === "project" && !wf.installed);
   const templates = all.filter((wf) => wf.source === "bundled");
 
   return (
@@ -56,6 +64,7 @@ export function WorkflowsList() {
       viewActions={
         <>
           <ViewToggle view={view} onChange={setView} />
+          <LibraryDialog />
           <Button size="sm" render={<Link to="/editor/new" />}>
             <IconPlus className="size-4" />
             New workflow
@@ -103,6 +112,17 @@ export function WorkflowsList() {
             None yet — saving a template below creates an editable copy here.
           </p>
         )}
+
+        <Section
+          title="Installed"
+          count={installed.length}
+          note="from the library"
+          view={view}
+        >
+          {installed.map((wf) => (
+            <WorkflowCard key={wf.name} wf={wf} view={view} />
+          ))}
+        </Section>
 
         <Section
           title="Templates"

@@ -112,16 +112,39 @@ pub async fn list_workflows(
             // No database: the list is exactly what it always was.
             Err(_) => Default::default(),
         };
+    // Which of these came from the library. Read from the local table rather
+    // than the registry: this listing must be right with the registry down, and
+    // "where did this workflow come from" is a fact about this harness.
+    let installed: std::collections::HashMap<String, harness_persist::InstalledWorkflow> =
+        match runs.installed_workflow_store().await {
+            Ok(store) => store
+                .all()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|i| (i.name.clone(), i))
+                .collect(),
+            Err(_) => Default::default(),
+        };
+
     let rows: Vec<serde_json::Value> = workflows
         .into_iter()
         .map(|w| {
             let author = authors.get(&w.name);
             let mut row = serde_json::to_value(&w).unwrap_or_else(|_| serde_json::json!({}));
-            if let (Some(obj), Some(a)) = (row.as_object_mut(), author) {
-                obj.insert(
-                    "authorship".into(),
-                    serde_json::to_value(a).unwrap_or(serde_json::Value::Null),
-                );
+            if let Some(obj) = row.as_object_mut() {
+                if let Some(a) = author {
+                    obj.insert(
+                        "authorship".into(),
+                        serde_json::to_value(a).unwrap_or(serde_json::Value::Null),
+                    );
+                }
+                if let Some(i) = installed.get(&w.name) {
+                    obj.insert(
+                        "installed".into(),
+                        serde_json::to_value(i).unwrap_or(serde_json::Value::Null),
+                    );
+                }
             }
             row
         })
