@@ -149,3 +149,30 @@ export function useCancelAgentCliUpdate() {
     },
   });
 }
+
+/**
+ * Whether to offer the update/reinstall button for one agent CLI.
+ *
+ * `reinstallable` on its own is not a reason. It is true of every CLI the
+ * harness knows how to install, so OR-ing it into the condition put an
+ * "Update to 2.1.268" button next to `v2.1.268` — an update to the version
+ * already installed, which never went away however many times you pressed it.
+ *
+ * It earns the button only when there is no `latest` to compare against. That
+ * is the vendor-script case: Cursor publishes no version endpoint, so without
+ * this it would be stuck on whatever the image baked in with no way to move it
+ * short of a rebuild. The button then reads "Reinstall" rather than claiming an
+ * update nobody checked for.
+ *
+ * Split out from the JSX because the bug it fixes was invisible in review and
+ * obvious in a screenshot.
+ */
+export function offersCliUpdate(
+  health: ProviderHealth | undefined,
+  queue: CliUpdateStatus | undefined,
+  provider: string,
+): boolean {
+  if (queue?.pending.includes(provider)) return true;
+  if (health?.update_available) return true;
+  return Boolean(health?.reinstallable && !health?.latest);
+}
