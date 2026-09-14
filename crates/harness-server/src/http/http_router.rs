@@ -1,6 +1,6 @@
 use axum::{
     middleware,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Extension, Router,
 };
 use std::sync::Arc;
@@ -286,6 +286,21 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/library/publish", post(library_routes::publish))
         .route("/api/library/{slug}/install", post(library_routes::install))
         .route("/api/library/{slug}", delete(library_routes::uninstall))
+        // Amending and withdrawing an entry this harness published. Keyed on
+        // the local workflow name rather than the slug, which is what the
+        // editor knows and what proves the entry is ours to change. A static
+        // first segment keeps these clear of `/api/library/{slug}`.
+        .route(
+            "/api/library/published/{name}",
+            patch(library_routes::amend).delete(library_routes::unpublish),
+        )
+        // Getting a publisher token without asking an operator. Admin-only:
+        // both ends of this write the credential store.
+        .route("/api/library/enroll", post(library_routes::enroll_start))
+        .route(
+            "/api/library/enroll/poll",
+            post(library_routes::enroll_poll),
+        )
         // ── Workflow authoring API (visual editor + MCP) ────────────────────
         .route("/api/authoring/catalog", get(workflows_routes::get_catalog))
         .route(

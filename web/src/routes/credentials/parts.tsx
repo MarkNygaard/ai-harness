@@ -38,6 +38,7 @@ import {
   type CodexConnectStart,
 } from "@/lib/credentials";
 import { LANE_FOR_CREDENTIAL } from "@/lib/billing";
+import { useEnrollment, usePublisher } from "@/lib/library";
 import {
   AddLinearConnection,
   LinearConnectionCard,
@@ -122,13 +123,13 @@ const PROVIDERS: ProviderDef[] = [
   {
     id: "registry",
     label: "Workflow library",
-    help: "Publishes your workflows to the shared library. Only needed to publish — browsing and installing need nothing. The token is issued by whoever runs the library; it identifies you as its author, so treat it like a password.",
+    help: "Publishes your workflows to the shared library. Only needed to publish — browsing and installing need nothing. Sign in with GitHub to get a token, or paste one issued by whoever runs the library. It identifies you as an entry's author, so treat it like a password.",
     fields: [
       {
         key: "token",
         label: "Publisher token",
         placeholder: "hrp_…",
-        help: "Sent to the registry when you publish. Never leaves the server.",
+        help: "Only needed if you were given one, or are moving an existing token to this install. Sent to the registry when you publish, and never leaves the server.",
       },
     ],
   },
@@ -878,6 +879,120 @@ export function ProviderCard({
           <BillingFields lane={LANE_FOR_CREDENTIAL[provider.id]} />
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Connect the workflow library, so this harness can publish.
+ *
+ * Two paths, and which ones exist depends on the registry. A registry that runs
+ * a GitHub app can issue a token to anyone who signs in, which is what makes
+ * publishing self-serve; a private one with no app configured can only have its
+ * tokens minted by an operator, so the paste field stays for that case and as
+ * the way to move an existing token between installs.
+ *
+ * Browsing and installing need none of this. Only publishing does, which is why
+ * the row can honestly read "not connected" while the library works.
+ */
+export function RegistryConnectCard({ configured }: { configured: boolean }) {
+  const publisher = usePublisher(true);
+  const { flow, error, busy, start, reset } = useEnrollment();
+  const offered = publisher.data?.enrollment === true;
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-center gap-2 text-sm font-semibold">
+        Workflow library
+        {configured ? (
+          <Badge variant="success">
+            <Check className="h-3 w-3" /> connected
+          </Badge>
+        ) : (
+          <Badge variant="outline">not connected</Badge>
+        )}
+      </div>
+
+      <p className="text-xs text-muted-foreground">
+        Needed only to publish. Browsing the library and installing from it work
+        without it.
+      </p>
+
+      {configured && publisher.data?.name && (
+        <p className="text-xs text-muted-foreground">
+          Publishing as{" "}
+          <span className="font-medium text-foreground">
+            {publisher.data.name}
+          </span>
+          {publisher.data.login && (
+            <span className="font-mono"> (@{publisher.data.login})</span>
+          )}
+          .
+        </p>
+      )}
+
+      {offered && !flow && (
+        <Button
+          size="sm"
+          className="self-start"
+          onClick={start}
+          disabled={busy}
+        >
+          {busy && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+          {configured ? "Sign in again" : "Sign in with GitHub"}
+        </Button>
+      )}
+
+      {flow && (
+        <Card>
+          <CardContent className="flex flex-col gap-3 text-sm">
+            <p className="text-muted-foreground">
+              Enter this code on GitHub. This page finishes on its own once you
+              have.
+            </p>
+            <div className="font-mono text-2xl tracking-[0.3em]">
+              {flow.user_code}
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  window.open(flow.verification_uri, "_blank", "noopener")
+                }
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open GitHub
+              </Button>
+              <Button size="sm" variant="ghost" onClick={reset}>
+                Cancel
+              </Button>
+              {busy && (
+                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> waiting
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              The app asks for no permissions. It reads your public profile to
+              confirm who you are, and nothing else.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {error && <p className="text-sm text-destructive">{error}</p>}
+
+      {offered && (
+        <p className="text-xs text-muted-foreground">
+          Already have a token from whoever runs the library? Paste it below
+          instead.
+        </p>
+      )}
+      <ProviderCard
+        provider={providerDef("registry")}
+        configured={configured}
+      />
     </div>
   );
 }

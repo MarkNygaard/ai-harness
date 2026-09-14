@@ -80,10 +80,21 @@ Works multi-repo (via `HARNESS_REPOS`) or single-repo.
 
 ## Publishing your own
 
-Publishing needs a publisher token, issued by whoever runs the registry. Paste
-it once under **Settings → Integrations → Workflow library**. The harness stores
-it encrypted and never sends it to the browser. A token that reached the page
-could publish under your name from anything that could read it.
+Publishing needs a one-off sign-in, under **Settings → Integrations → Workflow
+library**. Press **Sign in with GitHub**, enter the code it shows you, and the
+harness receives a publisher token and stores it encrypted. The token is never
+sent to the browser: one that reached the page could publish under your name
+from anything that could read it.
+
+The sign-in asks for no permissions. The library reads your public profile to
+confirm which account an entry belongs to, and nothing else — no repositories,
+no email, no write of any kind. GitHub is used because an entry's owner has to
+mean something across installs, and a harness account is per-install: your
+address on one harness is not the same identity as on another.
+
+A registry that has no GitHub app configured cannot issue tokens itself, so it
+shows a field to paste one issued by whoever runs it. That is also how you move
+an existing token to another install.
 
 After that, a workflow under **Custom** on the workflows page has a **Publish**
 button. Publish it once and the same button becomes **Publish update**, which
@@ -91,6 +102,22 @@ sends a new version. Nothing asks you which of the two you want, because the
 harness records what it published. Both wrong answers cost more than the
 question is worth: a duplicate entry, or a version aimed at somebody else's
 workflow.
+
+A published workflow stays under **Custom**. It is still yours to edit and run,
+and the only thing that changes is the button.
+
+### Fixing the wording, and taking one back
+
+The publish dialog's **Title** and **Description** are editable after the first
+publish. Changing them amends the entry without cutting a version, so a typo in
+a description does not tell everyone holding the workflow that something
+changed when nothing did.
+
+**Remove from library** withdraws an entry. It removes nothing locally, your
+copy is untouched, and it breaks nobody's install: a copy somebody already took
+keeps working, and the version they hold is still served. What stops is the
+entry appearing in the library for anyone new. Publishing it again puts it
+back.
 
 <Callout>
 Only workflows under **Custom** can be published. A built-in is not yours to
@@ -100,11 +127,11 @@ you want is **Update**, which takes their newer version.
 
 ### The name your workflows appear under
 
-Harness accounts carry no GitHub identity, so the library needs a name of its
-own. The publish dialog prefills **Published as** with your harness account
-name, and you can change it. The name applies to every workflow you publish, not
-only the one in front of you. It reaches your own entries and nobody else's,
-because the token decides whose name is being set.
+Your GitHub login identifies the account; the name shown on an entry is
+separate, and yours to choose. The publish dialog prefills **Published as** with
+your harness account name, and you can change it. The name applies to every
+workflow you publish, not only the one in front of you. It reaches your own
+entries and nobody else's, because the token decides whose name is being set.
 
 ### What is enforced
 
@@ -115,6 +142,11 @@ version, so nobody can push an update to a workflow you shared, and the
 The registry checks two things at publish time rather than leaving them to
 review. A version has to parse as a workflow, and it cannot take the name of a
 built-in.
+
+A public registry also sets a minimum age on the GitHub account that may
+publish, and a cap on how many entries one account may hold at once. Withdrawing
+an entry frees its place. Both are configured by whoever runs the registry, so a
+private one among colleagues can switch them off.
 
 ## Turning it off
 

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "./api";
-import { InstallNameConflict, asConflict, installRequestInit } from "./library";
+import {
+  InstallNameConflict,
+  amendmentsFor,
+  asConflict,
+  installRequestInit,
+} from "./library";
 
 describe("asConflict", () => {
   /**
@@ -94,5 +99,67 @@ describe("installRequestInit", () => {
   /** An empty name is no name — it must not become a body either. */
   it("treats an empty name as no name", () => {
     expect(installRequestInit("").body).toBeUndefined();
+  });
+});
+
+describe("amendmentsFor", () => {
+  const published = { title: "GEO Audit", description: "Audits a store." };
+
+  /**
+   * The ordinary republish: nothing about the entry changed, so no amendment
+   * is sent and publishing an update stays one request.
+   */
+  it("sends nothing when nothing changed", () => {
+    expect(amendmentsFor({ ...published }, published)).toEqual({});
+  });
+
+  it("sends only the field that changed", () => {
+    expect(
+      amendmentsFor(
+        { title: "GEO Audit — Ecommerce", description: published.description },
+        published,
+      ),
+    ).toEqual({ title: "GEO Audit — Ecommerce" });
+
+    expect(
+      amendmentsFor(
+        { title: published.title, description: "Audits an ecommerce store." },
+        published,
+      ),
+    ).toEqual({ description: "Audits an ecommerce store." });
+  });
+
+  /**
+   * Whitespace is not an edit. Without the trim, focusing a field and leaving
+   * it would send an amendment that changes nothing.
+   */
+  it("ignores whitespace-only differences", () => {
+    expect(
+      amendmentsFor(
+        { title: "  GEO Audit  ", description: " Audits a store. " },
+        published,
+      ),
+    ).toEqual({});
+  });
+
+  /**
+   * A title cleared to nothing means "leave it alone". The registry has no
+   * entry without a title, so treating a blank field as an erasure would send
+   * a value it must refuse.
+   */
+  it("treats a cleared title as no change", () => {
+    expect(
+      amendmentsFor(
+        { title: "   ", description: published.description },
+        published,
+      ),
+    ).toEqual({});
+  });
+
+  /** A description, unlike a title, may genuinely be emptied. */
+  it("allows a description to be cleared", () => {
+    expect(
+      amendmentsFor({ title: published.title, description: "" }, published),
+    ).toEqual({ description: "" });
   });
 });
