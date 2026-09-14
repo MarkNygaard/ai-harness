@@ -12,7 +12,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { useAuthStatus } from "@/lib/auth";
-import { usePublishWorkflow, usePublisher } from "@/lib/library";
+import {
+  amendmentsFor,
+  useAmendPublished,
+  usePublishWorkflow,
+  usePublisher,
+  useUnpublishWorkflow,
+} from "@/lib/library";
 import { titleFromSlug } from "@/lib/workflow-name";
 import type { WorkflowSummary } from "@/types/authoring";
 
@@ -72,11 +78,20 @@ function PublishForm({
   const auth = useAuthStatus();
   const publisher = usePublisher(true);
   const publish = usePublishWorkflow();
+  const amend = useAmendPublished();
+  const unpublish = useUnpublishWorkflow();
 
-  const [title, setTitle] = useState(() => titleFromSlug(wf.name));
-  const [description, setDescription] = useState(wf.description ?? "");
+  // A published workflow keeps the title its author gave it, which is not
+  // necessarily one derived from the file name. Seeding from the recorded title
+  // is what stops "Publish update" quietly renaming the entry back.
+  const seededTitle = wf.installed?.title || titleFromSlug(wf.name);
+  const seededDescription = wf.description ?? "";
+
+  const [title, setTitle] = useState(seededTitle);
+  const [description, setDescription] = useState(seededDescription);
   const [changelog, setChangelog] = useState("");
   const [publishAs, setPublishAs] = useState("");
+  const [confirmRemove, setConfirmRemove] = useState(false);
 
   // Prefilled once the registry says who the token is, and only when it has no
   // name of its own yet. A harness account carries no GitHub identity, so the
@@ -109,8 +124,10 @@ function PublishForm({
     return (
       <div className="flex flex-col gap-2 text-sm">
         <p className="text-muted-foreground">
-          Publishing needs a publisher token, which the person running the
-          library issues. Add it under{" "}
+          {publisher.data?.enrollment
+            ? "Publishing needs a one-off sign-in with GitHub, which the library uses to confirm who an entry belongs to."
+            : "Publishing needs a publisher token, which the person running the library issues."}{" "}
+          Connect it under{" "}
           <span className="font-medium text-foreground">
             Settings → Integrations
           </span>
@@ -120,7 +137,28 @@ function PublishForm({
     );
   }
 
-  const submit = () => {
+  const submit = async () => {
+    // On a republish the entry already exists, so its title and description are
+    // amended rather than sent with the version: the registry takes them on
+    // create only, and a version is not the place to change what the entry says
+    // about itself. Sent only when they actually changed, so the ordinary
+    // "publish an update" stays one request.
+    if (republish) {
+      const amendments = amendmentsFor(
+        { title, description },
+        { title: seededTitle, description: seededDescription },
+      );
+      if (Object.keys(amendments).length > 0) {
+        try {
+          await amend.mutateAsync({ name: wf.name, ...amendments });
+        } catch {
+          // The mutation carries the message; publishing anyway would report
+          // success for a half-applied change.
+          return;
+        }
+      }
+    }
+
     publish.mutate(
       {
         name: wf.name,
@@ -164,21 +202,21 @@ function PublishForm({
         </p>
       </Field>
 
-      {!republish && (
-        <>
-          <Field label="Title">
-            <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-          </Field>
-          <Field label="Description">
-            <Textarea
-              rows={3}
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="What it does, and who it is for."
-            />
-          </Field>
-        </>
-      )}
+      {/* Editable on a republish too. The entry's title and description are
+          what people read in the library, and before this the only way to fix
+          one was to publish the workflow again — which tells everyone holding
+          it that something changed when nothing did. */}
+      <Field label="Title">
+        <Input value={title} onChange={(e) => setTitle(e.target.value)} />
+      </Field>
+      <Field label="Description">
+        <Textarea
+          rows={3}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="What it does, and who it is for."
+        />
+      </Field>
 
       <Field label={republish ? "What changed" : "Release note"}>
         <Textarea
@@ -192,13 +230,24 @@ function PublishForm({
       {publish.isError && (
         <p className="text-sm text-destructive">{publish.error.message}</p>
       )}
+      {amend.isError && (
+        <p className="text-sm text-destructive">{amend.error.message}</p>
+      )}
+      {unpublish.isError && (
+        <p className="text-sm text-destructive">{unpublish.error.message}</p>
+      )}
 
-      <div className="flex justify-end gap-2 pt-1">
-        <Button variant="ghost" size="sm" onClick={onDone}>
+      <div className="flex items-center gap-2 pt-1">
+        {republish && <WithdrawControl />}
+        <Button variant="ghost" size="sm" className="ml-auto" onClick={onDone}>
           Cancel
         </Button>
-        <Button size="sm" onClick={submit} disabled={publish.isPending}>
-          {publish.isPending
+        <Button
+          size="sm"
+          onClick={submit}
+          disabled={publish.isPending || amend.isPending}
+        >
+          {publish.isPending || amend.isPending
             ? "Publishing…"
             : republish
               ? "Publish update"
@@ -207,6 +256,48 @@ function PublishForm({
       </div>
     </div>
   );
+
+  /**
+   * Take the entry out of the library.
+   *
+   * Two presses, because it is the one action here that other people can see
+   * the result of. It removes nothing locally and breaks nobody's install: the
+   * copy they took is theirs and goes on working, and publishing again puts the
+   * entry back.
+   */
+  function WithdrawControl() {
+    if (!confirmRemove) {
+      return (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-destructive"
+          onClick={() => setConfirmRemove(true)}
+        >
+          Remove from library
+        </Button>
+      );
+    }
+    return (
+      <div className="flex items-center gap-2">
+        <Button
+          variant="destructive"
+          size="sm"
+          disabled={unpublish.isPending}
+          onClick={() => unpublish.mutate(wf.name, { onSuccess: onDone })}
+        >
+          {unpublish.isPending ? "Removing…" : "Really remove"}
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => setConfirmRemove(false)}
+        >
+          Keep
+        </Button>
+      </div>
+    );
+  }
 }
 
 function Field({

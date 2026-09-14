@@ -637,15 +637,242 @@ pub async fn publish(
 pub async fn who_publishes(
     axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
 ) -> Response {
+    let offered = match runs.registry() {
+        Some(client) => client.enrollment_offered().await,
+        None => false,
+    };
     match publisher(&runs).await {
         Ok(p) => Json(serde_json::json!({
             "configured": p.is_some(),
             "name": p.as_ref().map(|p| p.name()),
             "login": p.as_ref().map(|p| p.github_login.clone()),
+            // Whether this registry can issue a token without an operator. The
+            // page shows Connect when it can and the paste field when it
+            // cannot, rather than offering a button that could only fail.
+            "enrollment": offered,
         }))
         .into_response(),
         Err(e) => e.into_response(),
     }
+}
+
+// ── Amending and withdrawing ────────────────────────────────────────────────
+//
+// Publishing could only ever go forward: the registry has served `PATCH` and
+// `DELETE` since it was written, and the client never called either. So a typo
+// in a description could only be fixed by publishing the workflow again, and a
+// workflow published by mistake could not be taken back at all.
+//
+// Both are keyed on the **local name**, not the slug. That is what the editor
+// knows, and resolving it through the local record is also what proves this
+// harness published the thing being changed: a row that came from an install
+// names somebody else's entry.
+
+/// Resolve a local workflow name to the slug this harness published it under.
+async fn published_slug(runs: &Arc<RunsState>, name: &str) -> Result<String, LibraryError> {
+    let store = runs
+        .installed_workflow_store()
+        .await
+        .map_err(LibraryError::Failed)?;
+    let record = store
+        .get(name)
+        .await
+        .ok()
+        .flatten()
+        .filter(|r| r.published)
+        .ok_or_else(|| {
+            LibraryError::NotFound(format!("`{name}` has not been published from this harness"))
+        })?;
+    Ok(record.slug)
+}
+
+/// What an amendment may change. An omitted field is left alone.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct AmendRequest {
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Option<Vec<String>>,
+}
+
+/// Change what a published entry says about itself, without cutting a version.
+pub(crate) async fn amend_published(
+    runs: &Arc<RunsState>,
+    name: &str,
+    req: &AmendRequest,
+) -> Result<(), LibraryError> {
+    let client = runs.registry().ok_or(LibraryError::Off)?;
+    let token = publisher_token(runs).await?;
+    let slug = published_slug(runs, name).await?;
+
+    client
+        .update_metadata(
+            &token,
+            &slug,
+            &crate::registry::WorkflowMetadata {
+                title: req.title.as_deref(),
+                description: req.description.as_deref(),
+                tags: req.tags.as_deref(),
+            },
+        )
+        .await
+        .map_err(|e| LibraryError::Failed(e.to_string()))?;
+
+    // Keep the local title in step, or the workflows page would keep showing
+    // the old one: the card reads the recorded title rather than asking the
+    // registry, which is what makes it right with the library unreachable.
+    if let Some(title) = req.title.as_deref() {
+        let store = runs
+            .installed_workflow_store()
+            .await
+            .map_err(LibraryError::Failed)?;
+        if let Ok(Some(record)) = store.get(name).await {
+            let _ = store
+                .record(&harness_persist::InstallRecord {
+                    name,
+                    slug: &record.slug,
+                    version: record.version,
+                    publisher: record.publisher.as_deref(),
+                    title: Some(title),
+                    published: true,
+                })
+                .await;
+        }
+    }
+
+    Ok(())
+}
+
+/// Take a published workflow out of the library.
+///
+/// The local file is untouched. It is yours, you wrote it, and withdrawing an
+/// entry is a statement about the library rather than about your harness.
+///
+/// The local record is kept, and kept marked as published, so the link between
+/// this file and that slug survives. Publishing again puts the entry back
+/// rather than colliding with a slug that is still taken by the withdrawn one.
+pub(crate) async fn unpublish_workflow(
+    runs: &Arc<RunsState>,
+    name: &str,
+) -> Result<String, LibraryError> {
+    let client = runs.registry().ok_or(LibraryError::Off)?;
+    let token = publisher_token(runs).await?;
+    let slug = published_slug(runs, name).await?;
+
+    client
+        .unlist(&token, &slug)
+        .await
+        .map_err(|e| LibraryError::Failed(e.to_string()))?;
+
+    Ok(slug)
+}
+
+pub async fn amend(
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    Path(name): Path<String>,
+    Json(req): Json<AmendRequest>,
+) -> Response {
+    match amend_published(&runs, &name, &req).await {
+        Ok(()) => Json(serde_json::json!({ "amended": name })).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+pub async fn unpublish(
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    Path(name): Path<String>,
+) -> Response {
+    match unpublish_workflow(&runs, &name).await {
+        Ok(slug) => Json(serde_json::json!({ "unpublished": slug })).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+// ── Enrollment ──────────────────────────────────────────────────────────────
+//
+// Getting a publisher token without asking whoever runs the registry. The
+// harness proxies the registry's device flow and stores the token it produces,
+// so the browser never holds a credential that could publish under its owner's
+// name.
+//
+// Admin-only, because the outcome is a write to the credential store. The rest
+// of the library is not: browsing and installing need no credential and no
+// particular role.
+
+/// `POST /api/library/enroll` — start a device flow.
+///
+/// `device_code` goes to the browser and comes back on each poll, which is what
+/// keeps this stateless across replicas and restarts. It is not the credential:
+/// it is a short-lived handle to a flow this harness started, and the token it
+/// eventually produces is written server-side and never sent back.
+pub async fn enroll_start(
+    _: super::accounts::AdminOnly,
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+) -> Response {
+    let Some(client) = runs.registry() else {
+        return LibraryError::Off.into_response();
+    };
+    match client.enroll_start().await {
+        Ok(flow) => Json(serde_json::json!({
+            "device_code": flow.device_code,
+            "user_code": flow.user_code,
+            "verification_uri": flow.verification_uri,
+            "expires_in": flow.expires_in,
+            "interval": flow.interval,
+        }))
+        .into_response(),
+        Err(e) => LibraryError::Unreachable(e.to_string()).into_response(),
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct EnrollPollRequest {
+    pub device_code: String,
+}
+
+/// `POST /api/library/enroll/poll` — ask whether the person has authorized yet.
+///
+/// On completion the token is written to the credential store under `registry`,
+/// which is where every other publish path already reads it from, and the
+/// response says only who it belongs to.
+pub async fn enroll_poll(
+    _: super::accounts::AdminOnly,
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    Json(req): Json<EnrollPollRequest>,
+) -> Response {
+    let Some(client) = runs.registry() else {
+        return LibraryError::Off.into_response();
+    };
+
+    let poll = match client.enroll_poll(&req.device_code).await {
+        Ok(p) => p,
+        Err(e) => return LibraryError::Failed(e.to_string()).into_response(),
+    };
+
+    let Some(token) = poll.token.filter(|t| !t.is_empty()) else {
+        // Still waiting. `slow_down` is passed through rather than flattened
+        // into `pending`: it is GitHub asking the caller to poll less often,
+        // and ignoring it gets the flow throttled.
+        return Json(serde_json::json!({ "status": poll.status })).into_response();
+    };
+
+    let store = match runs.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return LibraryError::Failed(e).into_response(),
+    };
+    let mut fields = std::collections::BTreeMap::new();
+    fields.insert("token".to_string(), token);
+    if let Err(e) = store.set("registry", &fields).await {
+        return LibraryError::Failed(e.to_string()).into_response();
+    }
+
+    Json(serde_json::json!({
+        "status": "complete",
+        "github_login": poll.github_login,
+    }))
+    .into_response()
 }
 
 #[cfg(test)]

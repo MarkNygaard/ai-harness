@@ -278,6 +278,145 @@ impl RegistryClient {
             .map_err(unreachable)?;
         json_or_error(resp, "workflow").await
     }
+
+    /// Change what an entry says about itself, without cutting a version.
+    ///
+    /// The title, description and tags are the entry's shop window and the
+    /// version is the code. Tying them together would mean a typo in a
+    /// description could only be fixed by publishing the workflow again, which
+    /// tells everyone holding it that something changed when nothing did.
+    ///
+    /// An omitted field keeps its value at the registry, so this is a patch in
+    /// the real sense rather than a replace with the old values sent back.
+    pub async fn update_metadata(
+        &self,
+        token: &str,
+        slug: &str,
+        meta: &WorkflowMetadata<'_>,
+    ) -> Result<()> {
+        let path = format!("/v1/workflows/{}", urlencode(slug));
+        let resp = self
+            .http
+            .patch(self.url(&path))
+            .bearer_auth(token)
+            .json(meta)
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error::<serde_json::Value>(resp, "workflow").await?;
+        Ok(())
+    }
+
+    /// Take an entry out of the library.
+    ///
+    /// Soft at the registry, and that is the point rather than an
+    /// implementation detail: an install is a copy on disk and keeps working,
+    /// and a version somebody already holds is still served so their harness is
+    /// told rather than broken. What stops is the entry appearing in the
+    /// library for anyone new.
+    pub async fn unlist(&self, token: &str, slug: &str) -> Result<()> {
+        let path = format!("/v1/workflows/{}", urlencode(slug));
+        let resp = self
+            .http
+            .delete(self.url(&path))
+            .bearer_auth(token)
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error::<serde_json::Value>(resp, "workflow").await?;
+        Ok(())
+    }
+
+    // ── Enrollment ──────────────────────────────────────────────────────────
+    //
+    // How a harness gets a publisher token at all. No token is held or sent
+    // here, obviously: these are the calls made by somebody who has none.
+    //
+    // The harness does not speak to GitHub. The registry runs the device flow
+    // and hands back GitHub's own codes, so the client id and the exchange stay
+    // on the service that owns them, and this half stays a thin proxy.
+
+    /// Whether this registry offers self-serve enrollment.
+    ///
+    /// Asked before showing a Connect button, so an install pointed at a
+    /// private registry with no GitHub app configured gets the paste-a-token
+    /// path instead of a button that can only fail.
+    pub async fn enrollment_offered(&self) -> bool {
+        let Ok(resp) = self.http.get(self.url("/v1/enroll")).send().await else {
+            return false;
+        };
+        if !resp.status().is_success() {
+            return false;
+        }
+        resp.json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| v.get("enrollment")?.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Begin a device flow. The codes returned are GitHub's.
+    pub async fn enroll_start(&self) -> Result<DeviceFlow> {
+        let resp = self
+            .http
+            .post(self.url("/v1/enroll"))
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error(resp, "sign-in").await
+    }
+
+    /// Ask whether the person has finished authorizing yet.
+    pub async fn enroll_poll(&self, device_code: &str) -> Result<EnrollPoll> {
+        let resp = self
+            .http
+            .post(self.url("/v1/enroll/poll"))
+            .json(&serde_json::json!({ "device_code": device_code }))
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error(resp, "sign-in").await
+    }
+}
+
+/// What an entry says about itself. Every field optional: an omitted one is
+/// left alone rather than cleared.
+#[derive(Debug, Default, Serialize)]
+pub struct WorkflowMetadata<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tags: Option<&'a [String]>,
+}
+
+/// A device flow that has started.
+///
+/// `user_code` and `verification_uri` are shown to the person. `device_code` is
+/// the harness's to keep and send back, and is never shown: it is the flow's
+/// secret, and the browser has no use for it.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DeviceFlow {
+    pub device_code: String,
+    pub user_code: String,
+    pub verification_uri: String,
+    pub expires_in: i64,
+    pub interval: i64,
+}
+
+/// Where a poll got to.
+///
+/// `status` is `pending`, `slow_down` or `complete`. A declined or expired flow
+/// arrives as an error rather than as a status, because both end it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct EnrollPoll {
+    pub status: String,
+    /// Present exactly once, on the poll that completes the flow.
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub github_login: Option<String>,
 }
 
 /// The publisher a token authenticates as.

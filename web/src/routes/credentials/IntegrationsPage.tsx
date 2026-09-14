@@ -6,6 +6,7 @@ import {
   LinearAccounts,
   ProviderCard,
   ProviderSummary,
+  RegistryConnectCard,
   Section,
   providerDef,
 } from "./parts";
@@ -62,10 +63,7 @@ export function IntegrationsPage() {
             help={providerDef("registry").help}
             configured={is("registry")}
           >
-            <ProviderCard
-              provider={providerDef("registry")}
-              configured={is("registry")}
-            />
+            <RegistryConnectCard configured={is("registry")} />
           </ProviderSummary>
           <ProviderSummary
             provider="linear"
