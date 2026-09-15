@@ -358,7 +358,7 @@ nodes:
     category: validation
     depends_on: [validate]
     when: "$validate.output.passed != 'true'"
-    cancel: "Validation failed after revising PR #$resolve-pr.output.pr — refusing to leave the PR red. $validate.output.summary"
+    cancel: "refusing to leave PR #$resolve-pr.output.pr red — validation did not return a pass. An empty summary below means its verdict could not be read, rather than a check having failed. $validate.output.summary"
 
   # 10. Kimi self-review loop on the updated revision diff.
   - id: pi-review-fix-loop
@@ -593,7 +593,7 @@ nodes:
     category: validation
     depends_on: [final-validate]
     when: "$final-validate.output.passed != 'true'"
-    cancel: "Final validation failed after review fixes for PR #$resolve-pr.output.pr — refusing to mark the PR ready. $final-validate.output.summary"
+    cancel: "refusing to mark PR #$resolve-pr.output.pr ready — final validation did not return a pass. An empty summary below means its verdict could not be read, rather than a check having failed. $final-validate.output.summary"
 
   # 15. Reply IN-THREAD to each reviewer's inline comment, so reviewers see how
   #     their point was handled — in the GitHub thread, not as new code comments
