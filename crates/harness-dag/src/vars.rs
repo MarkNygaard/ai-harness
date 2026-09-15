@@ -124,19 +124,36 @@ impl VarContext {
 
 /// Best-effort JSON parse of an agent's output for field access. Agents commonly
 /// wrap their JSON in a ```` ```json ```` fence or surround it with prose despite
-/// instructions, so if a direct parse fails we extract the outermost `{…}`/`[…]`
-/// span and parse that. Returns `None` if no JSON is found.
+/// instructions, so a direct parse is only the first attempt.
+///
+/// The verdict is the **last** JSON value in the message, because an agent that
+/// adds prose puts it before the payload. Scanning for the *first* `{` instead
+/// cost a run: a `validate` node emitted a preamble quoting its own verdict —
+/// "Verdict stands: `{"passed": true, ...}`" — followed by the real object. The
+/// first `{` was the one inside the prose, the span from there to the last `}`
+/// was not JSON, the whole parse failed, and `$validate.output.passed` resolved
+/// to "" — which read as "not true" and cancelled a run whose implementation had
+/// passed every check in both repos.
+///
+/// So walk candidate openings from the end and take the first that parses to the
+/// close. A nested opening can't win by accident: the span from an inner `{` to
+/// the outermost `}` carries an unbalanced tail and fails, leaving the real
+/// outer object to match. Returns `None` if no JSON is found.
 fn extract_json(raw: &str) -> Option<serde_json::Value> {
     let trimmed = raw.trim();
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
         return Some(v);
     }
-    let start = trimmed.find(['{', '['])?;
     let end = trimmed.rfind(['}', ']'])?;
-    if end <= start {
-        return None;
-    }
-    serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]).ok()
+    let openings: Vec<usize> = trimmed[..end]
+        .char_indices()
+        .filter(|(_, c)| *c == '{' || *c == '[')
+        .map(|(i, _)| i)
+        .collect();
+    openings
+        .into_iter()
+        .rev()
+        .find_map(|start| serde_json::from_str::<serde_json::Value>(&trimmed[start..=end]).ok())
 }
 
 /// Walk a JSON value along a dotted field path, rendering the leaf as a plain
@@ -301,6 +318,45 @@ mod tests {
         assert_eq!(
             substitute("$validate.output.summary", &ctx).unwrap(),
             "all green"
+        );
+    }
+
+    #[test]
+    fn json_field_access_past_a_preamble_quoting_the_verdict() {
+        // Regression: run idea-to-pr-v2-1789462234244. `validate` passed, then
+        // prefaced its verdict with prose that quoted the verdict. Reading from
+        // the FIRST `{` started inside that prose, so nothing parsed, `passed`
+        // resolved to "" and the gate cancelled a green run. The real object is
+        // the last one; find it.
+        let ctx = VarContext::new().set_node_output(
+            "validate",
+            "All 8 items complete. Verdict stands: `{\"passed\": true, ...}` \
+             — all quick pre-checks green in both repos.\n\n\
+             {\"passed\": true, \"summary\": \"backend + frontend green\"}",
+        );
+        assert_eq!(substitute("$validate.output.passed", &ctx).unwrap(), "true");
+        assert_eq!(
+            substitute("$validate.output.summary", &ctx).unwrap(),
+            "backend + frontend green"
+        );
+    }
+
+    #[test]
+    fn json_field_access_keeps_the_outer_object_when_nested() {
+        // The backwards scan must not settle for an inner object: the span from
+        // a nested `{` to the final `}` has an unbalanced tail and fails, so the
+        // outer object still wins.
+        let ctx = VarContext::new().set_node_output(
+            "validate",
+            "Verdict:\n{\"passed\": false, \"detail\": {\"passed\": true}}",
+        );
+        assert_eq!(
+            substitute("$validate.output.passed", &ctx).unwrap(),
+            "false"
+        );
+        assert_eq!(
+            substitute("$validate.output.detail.passed", &ctx).unwrap(),
+            "true"
         );
     }
 

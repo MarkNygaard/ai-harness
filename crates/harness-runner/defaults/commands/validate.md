@@ -95,7 +95,17 @@ record for the human; keep it factual.
 ## Phase 4 — Verdict (this becomes the node's output)
 
 Your **final message** is consumed by the workflow to gate PR creation, so it
-must be the verdict and nothing else. Emit a single JSON object:
+must be the verdict and nothing else: no preamble announcing what you are about
+to emit, no summary of the work, no sign-off, no fence. In particular **do not
+quote the verdict in prose before emitting it** — a `{"passed": …}` written as
+narration is indistinguishable from the real one to anything reading this
+message.
+
+That matters more than it looks: a verdict that cannot be read is not treated as
+a pass. A run whose implementation was green in both repos has already been
+cancelled this way.
+
+Emit a single JSON object:
 
 ```json
 { "passed": true,  "summary": "fmt+clippy+build green; fixed 2 type errors" }

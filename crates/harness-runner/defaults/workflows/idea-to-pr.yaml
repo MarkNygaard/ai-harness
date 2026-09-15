@@ -460,13 +460,59 @@ nodes:
         summary: { type: string }
       required: [passed]
 
-  # Fail the run loudly if validation didn't pass — never open a PR on a branch
-  # that doesn't build/test clean. (Skipped when validation passed.)
-  - id: abort-on-invalid
+  # A cancelled run's worktree is deleted with everything in it, and nothing has
+  # been pushed at this point — `finalize-pr` is what pushes. So a run that fails
+  # here loses every commit it made, however much of the work was sound. Push the
+  # run's own branches first: a branch on the remote can be read, rebased or
+  # cherry-picked, and `run/…` branches are cheap to prune. Never a PR — this
+  # work did not pass. Best-effort by construction: it must not stop the abort.
+  - id: preserve-on-invalid
     category: validation
     depends_on: [validate]
     when: "$validate.output.passed != 'true'"
-    cancel: "validation failed — refusing to open a PR. $validate.output.summary"
+    timeout: 120000
+    bash: |
+      set -uo pipefail
+      scope="$ARTIFACTS_DIR/scope.json"
+      [ -f "$scope" ] || { echo "no scope.json — nothing to preserve"; exit 0; }
+      pushed=0
+      while IFS= read -r folder; do
+        [ -n "$folder" ] || continue
+        [ -d "$folder/.git" ] || continue
+        branch=$(git -C "$folder" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+        # Only ever this run's own branch. A base branch or a detached HEAD is
+        # not ours to push, and pushing unvalidated work to a shared branch is
+        # a worse outcome than losing it.
+        case "$branch" in
+          run/*) ;;
+          *) echo "[$folder] on '$branch', not a run branch — skipping"; continue ;;
+        esac
+        if git -C "$folder" push -u origin "$branch"; then
+          echo "[$folder] pushed $branch"
+          pushed=$((pushed + 1))
+        else
+          echo "[$folder] could not push $branch — this work exists only in the worktree" >&2
+        fi
+      done < <(jq -r '.[] | select(.files | length > 0) | .folder' "$scope")
+      if [ "$pushed" -eq 0 ]; then
+        echo "nothing preserved"
+      else
+        echo "preserved $pushed branch(es) for inspection — no PR opened; delete them when done"
+      fi
+      exit 0
+
+  # Fail the run loudly if validation didn't pass — never open a PR on a branch
+  # that doesn't build/test clean. (Skipped when validation passed.)
+  #
+  # `all_done` so the preserve step above always runs to completion first, and so
+  # this gate still fires when that step was skipped (validation passed) or
+  # failed (nothing could be pushed). The gate must never depend on the rescue.
+  - id: abort-on-invalid
+    category: validation
+    depends_on: [preserve-on-invalid]
+    trigger_rule: all_done
+    when: "$validate.output.passed != 'true'"
+    cancel: "refusing to open a PR — validation did not return a pass. An empty summary below means its verdict could not be read, rather than a check having failed. $validate.output.summary"
 
   # Record the exact commit `validate` just certified, per repo, so the final
   # gate can tell whether anything was actually pushed after it. Runs before
