@@ -236,12 +236,8 @@ impl PromptAgent for PiAgent {
             }
         }
 
-        // A clean run is a zero exit with either the `agent_end` marker OR at
-        // least an assistant message. We do NOT hard-require `agent_end`: omp's
-        // terminal-event schema drifts by version, and requiring it previously
-        // failed runs that actually completed (and produced the full output).
         let saw_end = parsed.saw_end;
-        let success = status.success() && (saw_end || !parsed.text.is_empty());
+        let success = omp_run_succeeded(status.success(), &parsed);
         if !success {
             let tail: String = stderr
                 .trim()
@@ -267,13 +263,22 @@ impl PromptAgent for PiAgent {
                 .into_iter()
                 .rev()
                 .collect();
+            // Tokens are in the message because their absence is diagnostic: a
+            // run reporting 0/0 never reached the model, which points at the
+            // environment (credentials, quota, the CLI itself) rather than at
+            // the prompt or the repo.
+            let tokens = format!(
+                "{}/{}",
+                parsed.usage.input.unwrap_or(0),
+                parsed.usage.output.unwrap_or(0)
+            );
             tracing::warn!(
-                "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B); events: [{events}]; stdout tail: {stdout_tail}",
+                "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B, tokens in/out={tokens}); events: [{events}]; stdout tail: {stdout_tail}",
                 status.code(),
                 parsed.text.len()
             );
             return Err(AgentError(format!(
-                "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B; events: [{events}]): {tail}",
+                "omp run did not complete (exit={:?}, saw_end={saw_end}, text={}B, tokens in/out={tokens}; events: [{events}]): {tail}",
                 status.code(),
                 parsed.text.len()
             )));
@@ -469,6 +474,26 @@ fn sandbox_allowlist(cwd: &Path) -> Vec<PathBuf> {
         }
     }
     paths
+}
+
+/// Whether an `omp` invocation counts as a completed run.
+///
+/// An assistant message is the primary signal. `agent_end` alone still excuses
+/// an empty final message — omp's terminal-event schema drifts by version, and
+/// hard-requiring text once failed runs that had genuinely completed — but only
+/// when the usage counters show a model was actually invoked.
+///
+/// That last clause is the whole point. In production every `pi` node started
+/// returning in about four seconds with no text, no `agent_end`-worthy content
+/// and **zero tokens in either direction**: omp was exiting 0 without ever
+/// reaching the model. `agent_end || !text.is_empty()` called that a success, so
+/// the stderr tail — the only record of what omp had objected to — was thrown
+/// away, and the empty output flowed downstream, where a validation gate read it
+/// as "not a pass" and cancelled a run whose work was sound. A run that spent no
+/// tokens did nothing, whatever events it emitted on the way out.
+fn omp_run_succeeded(exited_cleanly: bool, parsed: &ParsedOmp) -> bool {
+    let spent_tokens = parsed.usage.input.unwrap_or(0) > 0 || parsed.usage.output.unwrap_or(0) > 0;
+    exited_cleanly && (!parsed.text.is_empty() || (parsed.saw_end && spent_tokens))
 }
 
 /// The distilled result of an `omp --mode json` stream.
@@ -877,6 +902,45 @@ mod tests {
         // Thinking-only partial → no recoverable text.
         let thinking = r#"{"type":"message_update","message":{"role":"assistant","content":[{"type":"thinking","thinking":"…"}]}}"#;
         assert_eq!(parse_update_text(thinking), None);
+    }
+
+    #[test]
+    fn an_agent_end_that_spent_no_tokens_is_not_a_completed_run() {
+        // The production signature: omp exits 0 in a few seconds having emitted
+        // `agent_end`, with no assistant text and no usage at all. It never
+        // reached the model, so it must fail and surface omp's stderr — not
+        // return an empty output that a downstream gate reads as "not a pass".
+        let empty = ParsedOmp {
+            saw_end: true,
+            ..Default::default()
+        };
+        assert!(!omp_run_succeeded(true, &empty));
+    }
+
+    #[test]
+    fn an_agent_end_with_usage_but_no_text_still_completes() {
+        // omp's terminal-event schema drifts by version, so an empty final
+        // message is tolerated — the tokens prove a model actually ran.
+        let quiet = ParsedOmp {
+            saw_end: true,
+            usage: Usage {
+                input: Some(1200),
+                output: Some(0),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(omp_run_succeeded(true, &quiet));
+    }
+
+    #[test]
+    fn text_alone_completes_and_a_dirty_exit_never_does() {
+        let spoke = ParsedOmp {
+            text: "done.".to_string(),
+            ..Default::default()
+        };
+        assert!(omp_run_succeeded(true, &spoke));
+        assert!(!omp_run_succeeded(false, &spoke));
     }
 
     #[test]
