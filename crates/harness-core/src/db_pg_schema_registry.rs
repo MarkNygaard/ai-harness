@@ -54,20 +54,38 @@ impl PgSchemaOwnership {
     }
 }
 
-/// Whether a store path lives inside the system temporary directory.
+/// Whether a store path lives inside a *private* temporary directory — one
+/// created by `tempfile` and named `.tmpXXXXXX`, which is what a test run
+/// produces and what vanishes with it.
 ///
-/// Both sides are canonicalised where possible, because `/tmp` is a symlink to
-/// `/private/tmp` on macOS and a comparison of the literal strings would say no
-/// on the platform most likely to be running the tests.
+/// Deliberately narrower than "somewhere under /tmp". `/tmp/harness/tasks.db`
+/// is a stable path: the file can be deleted and recreated, and the schema
+/// behind it holds the actual data, so treating a missing file as permission
+/// to drop would destroy a live store. That is precisely what the Keep rule
+/// exists to prevent. A `.tmpiPHtSS` directory has a random name, so the path
+/// cannot recur and nothing will ever derive that schema again.
 ///
-/// A path that cannot be canonicalised (the usual case at cleanup time, when
-/// the directory is long gone) falls back to the uncanonicalised prefix, which
-/// is exactly the comparison that still works then.
+/// Both sides are canonicalised where possible, because /tmp is a symlink to
+/// /private/tmp on macOS. A path that cannot be canonicalised — the usual case
+/// at cleanup time, when the directory is long gone — falls back to the
+/// uncanonicalised comparison, which is the one that still works then.
 fn is_ephemeral_path(path: &Path) -> bool {
     let temp_dir = std::env::temp_dir();
     let canonical_temp = temp_dir.canonicalize().unwrap_or_else(|_| temp_dir.clone());
     let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    canonical_path.starts_with(&canonical_temp) || path.starts_with(&temp_dir)
+
+    let relative = canonical_path
+        .strip_prefix(&canonical_temp)
+        .or_else(|_| path.strip_prefix(&temp_dir));
+    let Ok(relative) = relative else {
+        return false;
+    };
+
+    relative
+        .components()
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .is_some_and(|name| name.starts_with(".tmp"))
 }
 
 pub fn is_legacy_path_schema_name(schema: &str) -> bool {
@@ -647,6 +665,18 @@ mod tests {
         let ownership = PgSchemaOwnership::path_derived("h3333333333333333".to_string(), path)?;
 
         assert_eq!(ownership.retention_class, "ephemeral_path");
+        Ok(())
+    }
+
+    #[test]
+    fn a_stable_path_under_tmp_is_not_ephemeral() -> anyhow::Result<()> {
+        // The case that makes the narrow rule necessary: this path can be
+        // deleted and recreated, and the schema behind it holds the data. A
+        // missing file here is not permission to drop anything.
+        let path = std::env::temp_dir().join("harness").join("tasks.db");
+        let ownership = PgSchemaOwnership::path_derived("h7777777777777777".to_string(), path)?;
+
+        assert_eq!(ownership.retention_class, "path_derived");
         Ok(())
     }
 
