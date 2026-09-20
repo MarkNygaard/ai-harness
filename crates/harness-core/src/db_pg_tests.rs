@@ -327,7 +327,11 @@ async fn pg_store_context_registers_path_schema_with_shared_setup_pool() -> anyh
     assert_eq!(row.0, "path_derived_store");
     assert_eq!(row.1, expected_owner_path);
     assert_eq!(row.2.as_deref(), Some(expected_owner_path.as_str()));
-    assert_eq!(row.3, "path_derived");
+    // A tempdir store against a real database — the exact shape that filled a
+    // production instance with 9,636 dead schemas. Here the database is
+    // disposable, and the registration now says so, which is what lets the
+    // reaper clean up after runs like this one.
+    assert_eq!(row.3, "ephemeral_path");
     Ok(())
 }
 

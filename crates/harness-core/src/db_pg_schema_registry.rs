@@ -9,6 +9,21 @@ pub const PG_SCHEMA_REGISTRY_TABLE: &str = "schema_ownership";
 const PATH_DERIVED_OWNER_KIND: &str = "path_derived_store";
 const PATH_DERIVED_RETENTION_CLASS: &str = "path_derived";
 
+/// A store whose path was inside a temporary directory.
+///
+/// `path_derived` treats `owner_path` as an identity key rather than a
+/// liveness check, which is right for `~/.local/share/harness/tasks.db`: the
+/// file can be deleted and legitimately recreated, and the schema has to
+/// survive that. It is wrong for `/tmp/.tmpiPHtSS/tasks.db`. That directory
+/// had a random name, it is gone, and nothing will ever derive that schema
+/// again — so keeping it forever is a leak with no upside.
+///
+/// This is not hypothetical: running the test suite with DATABASE_URL pointed
+/// at a real database left 9,636 of these behind, 2.3 GB of empty schemas, and
+/// they were invisible to the reaper because every registered path-derived
+/// schema was classified Keep.
+const EPHEMERAL_RETENTION_CLASS: &str = "ephemeral_path";
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PgSchemaOwnership {
     pub schema_name: String,
@@ -24,14 +39,53 @@ impl PgSchemaOwnership {
             .to_str()
             .ok_or_else(|| anyhow::anyhow!("path is not valid UTF-8: {:?}", canonical_path))?
             .to_string();
+        let retention_class = if is_ephemeral_path(&canonical_path) {
+            EPHEMERAL_RETENTION_CLASS
+        } else {
+            PATH_DERIVED_RETENTION_CLASS
+        };
         Ok(Self {
             schema_name,
             owner_kind: PATH_DERIVED_OWNER_KIND.to_string(),
             owner_key: owner_path.clone(),
             owner_path: Some(owner_path),
-            retention_class: PATH_DERIVED_RETENTION_CLASS.to_string(),
+            retention_class: retention_class.to_string(),
         })
     }
+}
+
+/// Whether a store path lives inside a *private* temporary directory — one
+/// created by `tempfile` and named `.tmpXXXXXX`, which is what a test run
+/// produces and what vanishes with it.
+///
+/// Deliberately narrower than "somewhere under /tmp". `/tmp/harness/tasks.db`
+/// is a stable path: the file can be deleted and recreated, and the schema
+/// behind it holds the actual data, so treating a missing file as permission
+/// to drop would destroy a live store. That is precisely what the Keep rule
+/// exists to prevent. A `.tmpiPHtSS` directory has a random name, so the path
+/// cannot recur and nothing will ever derive that schema again.
+///
+/// Both sides are canonicalised where possible, because /tmp is a symlink to
+/// /private/tmp on macOS. A path that cannot be canonicalised — the usual case
+/// at cleanup time, when the directory is long gone — falls back to the
+/// uncanonicalised comparison, which is the one that still works then.
+fn is_ephemeral_path(path: &Path) -> bool {
+    let temp_dir = std::env::temp_dir();
+    let canonical_temp = temp_dir.canonicalize().unwrap_or_else(|_| temp_dir.clone());
+    let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+
+    let relative = canonical_path
+        .strip_prefix(&canonical_temp)
+        .or_else(|_| path.strip_prefix(&temp_dir));
+    let Ok(relative) = relative else {
+        return false;
+    };
+
+    relative
+        .components()
+        .next()
+        .and_then(|component| component.as_os_str().to_str())
+        .is_some_and(|name| name.starts_with(".tmp"))
 }
 
 pub fn is_legacy_path_schema_name(schema: &str) -> bool {
@@ -335,11 +389,27 @@ fn classify_schema_cleanup_candidate(row: PgSchemaInventoryRow) -> PgSchemaClean
             "unregistered path-derived schema; cleanup requires explicit allowlist".to_string(),
         )
     } else if row.owner_kind.as_deref() == Some(PATH_DERIVED_OWNER_KIND) {
-        (
-            PgSchemaCleanupAction::Keep,
-            "registered path-derived schema; owner_path is an identity key, not a liveness check"
-                .to_string(),
-        )
+        // Decided on the path itself, not only on the retention class, so that
+        // rows written before `ephemeral_path` existed are cleanable too —
+        // there are thousands of them and a data migration to relabel them
+        // would be a worse way to say the same thing.
+        match row.owner_path.as_deref() {
+            Some(owner_path)
+                if is_ephemeral_path(Path::new(owner_path))
+                    && matches!(Path::new(owner_path).try_exists(), Ok(false)) =>
+            {
+                (
+                    PgSchemaCleanupAction::DropCandidate,
+                    "path-derived schema under a temporary directory that no longer exists"
+                        .to_string(),
+                )
+            }
+            _ => (
+                PgSchemaCleanupAction::Keep,
+                "registered path-derived schema; owner_path is an identity key, not a liveness check"
+                    .to_string(),
+            ),
+        }
     } else if let Some(owner_path) = row.owner_path.as_deref() {
         match Path::new(owner_path).try_exists() {
             Ok(true) => (
@@ -545,6 +615,19 @@ mod tests {
             ownership.owner_path.as_deref(),
             Some(path.to_string_lossy().as_ref())
         );
+        // A tempdir, so this is ephemeral by construction. The persistent case
+        // is covered below; this test is about recording the path.
+        assert_eq!(ownership.retention_class, "ephemeral_path");
+        Ok(())
+    }
+
+    #[test]
+    fn a_store_outside_the_temp_directory_keeps_its_schema() -> anyhow::Result<()> {
+        // The case the Keep rule exists for: this file can be deleted and
+        // legitimately recreated, and the schema has to survive that.
+        let path = PathBuf::from("/home/harness/.local/share/harness/tasks.db");
+        let ownership = PgSchemaOwnership::path_derived("h6666666666666666".to_string(), path)?;
+
         assert_eq!(ownership.retention_class, "path_derived");
         Ok(())
     }
@@ -570,6 +653,80 @@ mod tests {
             candidate.reason,
             "registered path-derived schema; owner_path is an identity key, not a liveness check"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn ephemeral_ownership_is_recorded_for_a_temp_directory_store() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("tasks.db");
+        std::fs::write(&path, b"")?;
+
+        let ownership = PgSchemaOwnership::path_derived("h3333333333333333".to_string(), path)?;
+
+        assert_eq!(ownership.retention_class, "ephemeral_path");
+        Ok(())
+    }
+
+    #[test]
+    fn a_stable_path_under_tmp_is_not_ephemeral() -> anyhow::Result<()> {
+        // The case that makes the narrow rule necessary: this path can be
+        // deleted and recreated, and the schema behind it holds the data. A
+        // missing file here is not permission to drop anything.
+        let path = std::env::temp_dir().join("harness").join("tasks.db");
+        let ownership = PgSchemaOwnership::path_derived("h7777777777777777".to_string(), path)?;
+
+        assert_eq!(ownership.retention_class, "path_derived");
+        Ok(())
+    }
+
+    #[test]
+    fn cleanup_drops_a_temp_directory_schema_once_the_directory_is_gone() {
+        // The shape that leaked: a store opened in a tempdir during a test run
+        // against a real database. The directory is random and deleted, so the
+        // schema can never be derived again.
+        let missing = std::env::temp_dir().join(".tmpiPHtSS").join("tasks.db");
+        let row = PgSchemaInventoryRow {
+            schema_name: "h4444444444444444".to_string(),
+            owner_kind: Some("path_derived_store".to_string()),
+            owner_key: Some(missing.to_string_lossy().to_string()),
+            owner_path: Some(missing.to_string_lossy().to_string()),
+            // Deliberately the OLD class: rows written before ephemeral_path
+            // existed must be cleanable without relabelling them first.
+            retention_class: Some("path_derived".to_string()),
+            table_count: 5,
+            estimated_row_count: 0,
+        };
+
+        let candidate = classify_schema_cleanup_candidate(row);
+
+        assert_eq!(candidate.action, PgSchemaCleanupAction::DropCandidate);
+        assert_eq!(
+            candidate.reason,
+            "path-derived schema under a temporary directory that no longer exists"
+        );
+    }
+
+    #[test]
+    fn cleanup_keeps_a_temp_directory_schema_while_the_directory_still_exists() -> anyhow::Result<()>
+    {
+        // A test run in progress. Its schema is in use.
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("tasks.db");
+        std::fs::write(&path, b"")?;
+        let row = PgSchemaInventoryRow {
+            schema_name: "h5555555555555555".to_string(),
+            owner_kind: Some("path_derived_store".to_string()),
+            owner_key: Some(path.to_string_lossy().to_string()),
+            owner_path: Some(path.to_string_lossy().to_string()),
+            retention_class: Some("ephemeral_path".to_string()),
+            table_count: 5,
+            estimated_row_count: 0,
+        };
+
+        let candidate = classify_schema_cleanup_candidate(row);
+
+        assert_eq!(candidate.action, PgSchemaCleanupAction::Keep);
         Ok(())
     }
 
