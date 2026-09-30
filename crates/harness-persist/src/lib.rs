@@ -116,6 +116,16 @@ pub struct AbPairing<'a> {
     pub label: Option<&'a str>,
 }
 
+/// A queued run the dispatcher has just taken ownership of.
+#[derive(Debug, Clone)]
+pub struct ClaimedRun {
+    pub run_id: String,
+    /// The request as submitted, parked on the row while it waited. `None` only
+    /// for a row queued by an older build, which the dispatcher cannot launch
+    /// and must fail rather than guess at.
+    pub request: Option<serde_json::Value>,
+}
+
 /// One (project, day, status) tally for the dashboard aggregate.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunDailyCount {
@@ -395,6 +405,20 @@ const ALTER_RUNS_AB_ARM: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS ab_arm text";
 const ALTER_RUNS_AB_LABEL: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS ab_label text";
+/// The submitted request, parked on the row while a run waits for a slot.
+///
+/// Only ever set on a `queued` row. The dispatcher reads it back and launches
+/// the run exactly as it would have launched at submission time — rebuilding it
+/// from the row's own columns instead would quietly drop everything the row has
+/// no column for (base branch, the A/B swap, `real`), and a queued run that
+/// behaves differently from a direct one is worse than no queue.
+const ALTER_RUNS_QUEUED_REQUEST: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS queued_request jsonb";
+/// The queue is global FIFO, so the dispatcher orders every `queued` row by
+/// submission time. Partial: the index carries only what is waiting, which is
+/// normally nothing.
+const INDEX_RUNS_QUEUED: &str =
+    "CREATE INDEX IF NOT EXISTS idx_harness_workflow_runs_queued ON harness_workflow_runs(recorded_at) WHERE status = 'queued'";
 const INDEX_RUNS_AB_PAIR: &str =
     "CREATE INDEX IF NOT EXISTS idx_harness_workflow_runs_ab_pair ON harness_workflow_runs(ab_pair_id) WHERE ab_pair_id IS NOT NULL";
 const INDEX_RUNS_RECORDED_AT: &str =
@@ -515,6 +539,10 @@ impl RunStore {
             .await?;
         sqlx::query(ALTER_RUNS_AB_ARM).execute(&self.pool).await?;
         sqlx::query(ALTER_RUNS_AB_LABEL).execute(&self.pool).await?;
+        sqlx::query(ALTER_RUNS_QUEUED_REQUEST)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(INDEX_RUNS_QUEUED).execute(&self.pool).await?;
         sqlx::query(CREATE_NODES).execute(&self.pool).await?;
         sqlx::query(ALTER_NODES_ARTIFACT)
             .execute(&self.pool)
@@ -682,6 +710,89 @@ impl RunStore {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    /// Record a run as **queued**: submitted, visible in the list, but waiting
+    /// for a concurrency slot. No `owner` and no heartbeat, because nothing is
+    /// executing it — which is also why the stale-lease reaper leaves it alone
+    /// (it only reaps `running`).
+    ///
+    /// The row carries its graph and node count like any other, so a waiting
+    /// run shows what it is going to do; and `request`, so the dispatcher can
+    /// launch it later without guessing.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn enqueue_run(
+        &self,
+        run_id: &str,
+        workflow: &str,
+        title: Option<&str>,
+        description: Option<&str>,
+        project: Option<&str>,
+        total_nodes: usize,
+        graph: &[NodeMeta],
+        ab: Option<&AbPairing<'_>>,
+        trigger: Option<&Trigger<'_>>,
+        request: &serde_json::Value,
+    ) -> Result<(), PersistError> {
+        sqlx::query(
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, ab_pair_id, ab_arm, ab_label, triggered_by, trigger_source, trigger_actor, queued_request, recorded_at)
+             VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+             ON CONFLICT (id) DO NOTHING",
+        )
+        .bind(run_id)
+        .bind(workflow)
+        .bind(title)
+        .bind(description)
+        .bind(project)
+        .bind(total_nodes as i32)
+        .bind(Json(graph))
+        .bind(ab.map(|a| a.pair_id))
+        .bind(ab.map(|a| a.arm))
+        .bind(ab.and_then(|a| a.label))
+        .bind(trigger.and_then(|t| t.user_id))
+        .bind(trigger.and_then(|t| t.source))
+        .bind(trigger.and_then(|t| t.actor))
+        .bind(Json(request))
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Take the oldest queued run and mark it running for `owner`, atomically.
+    ///
+    /// `FOR UPDATE SKIP LOCKED` is what makes this safe to call from several
+    /// places at once — the completion hook of every finishing run, the periodic
+    /// sweep, and startup — without two of them claiming the same row. A caller
+    /// that loses the race gets the next row, or `None`.
+    ///
+    /// Flipping the status here and not in `start_run` is deliberate: that
+    /// method's `ON CONFLICT` branch never touches `status`, so a dispatched run
+    /// would otherwise stay `queued` for its whole life.
+    pub async fn claim_next_queued(&self, owner: &str) -> Result<Option<ClaimedRun>, PersistError> {
+        let row: Option<(String, Option<serde_json::Value>)> = sqlx::query_as(
+            "UPDATE harness_workflow_runs SET status = 'running', owner = $1, heartbeat_at = now()
+             WHERE id = (
+                 SELECT id FROM harness_workflow_runs
+                 WHERE status = 'queued'
+                 ORDER BY recorded_at
+                 FOR UPDATE SKIP LOCKED
+                 LIMIT 1
+             )
+             RETURNING id, queued_request",
+        )
+        .bind(owner)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(run_id, request)| ClaimedRun { run_id, request }))
+    }
+
+    /// How many runs are waiting for a slot.
+    pub async fn count_queued(&self) -> Result<i64, PersistError> {
+        let row: (i64,) =
+            sqlx::query_as("SELECT count(*) FROM harness_workflow_runs WHERE status = 'queued'")
+                .fetch_one(&self.pool)
+                .await?;
+        Ok(row.0)
     }
 
     /// Renew a running run's lease (`heartbeat_at = now()`). Called periodically
@@ -960,10 +1071,14 @@ impl RunStore {
     /// Cancel a still-running run: flip the run and any in-flight (`running`)
     /// node rows to `cancelled`. No-op (returns `false`) if the run is absent or
     /// already terminal, so a finished run can't be "un-finished".
+    ///
+    /// `queued` counts as cancellable. A run waiting for a slot is exactly the
+    /// one an operator is most likely to change their mind about, and leaving it
+    /// uncancellable would also strand its Linear claim until it ran.
     pub async fn cancel_run(&self, run_id: &str) -> Result<bool, PersistError> {
         let res = sqlx::query(
             "UPDATE harness_workflow_runs SET status = 'cancelled', recorded_at = now()
-             WHERE id = $1 AND status = 'running'",
+             WHERE id = $1 AND status IN ('running', 'queued')",
         )
         .bind(run_id)
         .execute(&self.pool)

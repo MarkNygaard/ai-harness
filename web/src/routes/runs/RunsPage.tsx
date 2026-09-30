@@ -1,3 +1,4 @@
+import { RUN_STATUS_VARIANT } from "@/components/runflow/format";
 import { useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ArrowRight, Play, Trash2 } from "lucide-react";
@@ -17,17 +18,7 @@ import {
 import { NO_PROJECT } from "@/lib/dashboard";
 import { useProjects } from "@/lib/projects";
 import { useWorkflowList } from "@/lib/authoring";
-import type { RunStatus, RunSummary } from "@/types/run";
-
-const STATUS_VARIANT: Record<
-  RunStatus,
-  "running" | "success" | "failed" | "skipped"
-> = {
-  running: "running",
-  completed: "success",
-  failed: "failed",
-  cancelled: "failed",
-};
+import type { RunSummary } from "@/types/run";
 
 function relativeTime(iso: string): string {
   const then = Date.parse(iso);
@@ -118,7 +109,7 @@ function RunRow({ run }: { run: RunSummary }) {
     <Link to={`/runs/${run.id}`} className="group block">
       <Card className="transition-colors group-hover:border-accent-orange/50">
         <CardContent className="flex items-center gap-3 py-2.5">
-          <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>
+          <Badge variant={RUN_STATUS_VARIANT[run.status] ?? "default"}>
             {run.status}
           </Badge>
           <PersonBadge actor={run.trigger_actor} source={run.trigger_source} />

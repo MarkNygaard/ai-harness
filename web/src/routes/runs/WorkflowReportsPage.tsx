@@ -1,3 +1,4 @@
+import { RUN_STATUS_VARIANT } from "@/components/runflow/format";
 /**
  * Generic list page for a workflow that declares `ui.nav` — the declaration-
  * driven counterpart to the bespoke GeoAudits / Reviews pages. A new-run form
@@ -15,17 +16,7 @@ import { Button } from "@/components/ui/button";
 import { useCreateRun, useRuns } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
 import { useWorkflowList } from "@/lib/authoring";
-import type { RunStatus, RunSummary } from "@/types/run";
-
-const STATUS_VARIANT: Record<
-  RunStatus,
-  "running" | "success" | "failed" | "skipped"
-> = {
-  running: "running",
-  completed: "success",
-  failed: "failed",
-  cancelled: "failed",
-};
+import type { RunSummary } from "@/types/run";
 
 function relativeTime(iso: string): string {
   const then = Date.parse(iso);
@@ -169,7 +160,7 @@ function RunRow({ run }: { run: RunSummary }) {
               {run.title || run.workflow_name}
             </span>
             <div className="mt-1 flex flex-wrap items-center gap-1.5">
-              <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>
+              <Badge variant={RUN_STATUS_VARIANT[run.status] ?? "default"}>
                 {run.status}
               </Badge>
               {run.project && <Badge variant="outline">{run.project}</Badge>}

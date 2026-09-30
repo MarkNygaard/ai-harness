@@ -604,6 +604,18 @@ impl RunsState {
         }
         DEFAULT_MAX_CONCURRENT_RUNS
     }
+
+    /// Whether `wanted` more runs fit alongside what is executing right now.
+    ///
+    /// Approximate by construction: the count is read a moment before a caller
+    /// registers its run, so two submissions in the same instant can both see
+    /// room. That is fine here — over-admitting by one is a slower host, and
+    /// the dispatcher's claim is atomic where it actually matters.
+    pub(crate) async fn has_capacity_for(&self, wanted: usize) -> bool {
+        let limit = self.max_concurrent_runs().await;
+        let live = self.live.lock().await.len();
+        fits_under_limit(live, wanted, limit)
+    }
 }
 
 /// Runs executed at once when nothing says otherwise.
@@ -693,7 +705,7 @@ impl TriggerInfo {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct CreateRunRequest {
     /// Who asked for this run, stamped on the row so it can later be said.
     ///
@@ -970,6 +982,34 @@ pub(crate) fn spawn_worktree_sweeper(state: Arc<RunsState>) {
         loop {
             tick.tick().await;
             sweep_orphan_worktrees(&state).await;
+        }
+    });
+}
+
+/// How often the dispatcher looks for queued work on its own.
+///
+/// The primary trigger is a run finishing, which is immediate. This is the
+/// backstop: it catches a queue left behind by a restart, and anything queued
+/// while the instance happened to be idle — so a run waits at worst this long
+/// past its slot becoming free, rather than forever.
+pub(crate) const QUEUE_SWEEP_EVERY_SECS: u64 = 30;
+
+/// Spawn the periodic queue dispatcher (also dispatches once at startup, which
+/// is what picks up runs left queued by a restart).
+/// No-op outside a Tokio runtime (e.g. a synchronous router-build test).
+pub(crate) fn spawn_queue_dispatcher(state: Arc<RunsState>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick =
+            tokio::time::interval(std::time::Duration::from_secs(QUEUE_SWEEP_EVERY_SECS));
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tick.tick().await;
+            // One per tick, not a drain: each dispatch re-checks capacity, and
+            // a finishing run dispatches its own successor anyway.
+            dispatch_next_queued(state.clone()).await;
         }
     });
 }
@@ -1743,10 +1783,10 @@ pub(crate) async fn start_run_pair(
         ab_arm: Some(arm.to_string()),
         ab_label: Some(variant.label()),
     };
-    // Both arms or neither. Checking for two up front stops the pair starting
-    // arm A and then failing on B, which would leave a half-pair running and
-    // nothing to compare it against.
-    admit_runs(state, 2).await?;
+    // No capacity check for the pair: both arms are accepted either way, and an
+    // arm that has to wait queues like anything else. Running them in sequence
+    // is if anything a fairer comparison than running them alongside each other
+    // on a host with no headroom.
     let run_id_a = start_run(state, arm("a", &req.variant_a)).await?;
     let run_id_b = start_run(state, arm("b", &req.variant_b)).await?;
     Ok(CreateRunPairResponse {
@@ -1834,51 +1874,95 @@ async fn wait_out_cli_update(state: &Arc<RunsState>) -> Result<(), (StatusCode, 
 /// wait indefinitely for one that has hung.
 const CLI_UPDATE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Refuse to start `wanted` more runs when this instance is already at its
-/// limit.
+/// Take the oldest queued run, if there is one and there is room for it.
 ///
-/// The cap is global on purpose. `max_concurrent_runs` on a Linear binding is
-/// per `(project, workflow)`, and a UI or MCP trigger passes none of those
-/// gates — so three bindings and a person clicking Review can put arbitrarily
-/// much work on one host, which is how three multi-repo runs came to saturate a
-/// 12-core box at once.
+/// Called when a run finishes and from a periodic sweep, so the queue never
+/// depends on a single notification arriving — a panic or a restart between
+/// "queued" and "dispatched" costs a sweep interval, not the run.
 ///
-/// Refusing is safe for the trigger source that matters: Linear work stays in
-/// its column and the poller comes back for it. A person who clicked something
-/// gets told to try again.
-///
-/// The count is read a moment before the caller registers its run, so two
-/// triggers landing in the same instant can both pass. That is tolerable — the
-/// cap exists to stop a pile-up, not to be a precise semaphore — and the window
-/// is far shorter than the runs it is protecting.
-async fn admit_runs(state: &Arc<RunsState>, wanted: usize) -> Result<(), (StatusCode, String)> {
-    let limit = state.max_concurrent_runs().await;
-    let live = state.live.lock().await.len();
-    if fits_under_limit(live, wanted, limit) {
-        return Ok(());
+/// The claim is atomic in the database (`FOR UPDATE SKIP LOCKED`), which is
+/// what lets the capacity check above it be approximate: two dispatchers racing
+/// take different rows, or one takes none.
+/// Returns a **boxed** future, and that is load-bearing rather than style. A
+/// finishing run dispatches the next one, which launches a run, which finishes
+/// and dispatches again — a cycle the compiler cannot prove `Send` by
+/// inference, because each link's auto-traits depend on the next one's. Boxing
+/// asserts it at one point and breaks the cycle.
+pub(crate) fn dispatch_next_queued(
+    state: Arc<RunsState>,
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+    Box::pin(dispatch_next_queued_inner(state))
+}
+
+async fn dispatch_next_queued_inner(state: Arc<RunsState>) {
+    let state = &state;
+    if !state.has_capacity_for(1).await {
+        return;
     }
-    tracing::info!(
-        live,
-        wanted,
-        limit,
-        "refusing to start: instance is at its concurrent-run limit"
-    );
-    Err((
-        StatusCode::SERVICE_UNAVAILABLE,
-        format!(
-            "at capacity: {live} run(s) in flight, limit {limit}. A Linear-triggered \
-             issue stays where it is and the poller will come back for it; anything \
-             else can be retried. Raise {ENV_MAX_CONCURRENT_RUNS} or the \
-             `{SETTING_MAX_CONCURRENT_RUNS}` setting if this host has the headroom."
-        ),
-    ))
+    let Ok(store) = state.store().await else {
+        return;
+    };
+    let claimed = match store.claim_next_queued(state.instance_id()).await {
+        Ok(Some(c)) => c,
+        Ok(None) => return,
+        Err(e) => {
+            tracing::warn!("dispatcher: could not claim a queued run: {e}");
+            return;
+        }
+    };
+    // Claimed but unlaunchable: a row from an older build, or one whose request
+    // no longer parses. It must not sit marked `running` with nothing running,
+    // so fail it where someone can see it.
+    let failed = |reason: &str| {
+        tracing::error!(run_id = %claimed.run_id, "queued run cannot be launched: {reason}");
+    };
+    let req: Option<CreateRunRequest> =
+        claimed
+            .request
+            .clone()
+            .and_then(|v| match serde_json::from_value(v) {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    failed(&format!("its parked request no longer parses: {e}"));
+                    None
+                }
+            });
+    let Some(req) = req else {
+        if claimed.request.is_none() {
+            failed("no request was parked with it");
+        }
+        let _ = store
+            .finish_run(&claimed.run_id, harness_dag::RunStatus::Failed)
+            .await;
+        return;
+    };
+    if let Err((_, msg)) = start_run_inner(state, req, Some(claimed.run_id.clone())).await {
+        failed(&msg);
+        let _ = store
+            .finish_run(&claimed.run_id, harness_dag::RunStatus::Failed)
+            .await;
+    }
 }
 
 pub(crate) async fn start_run(
     state: &Arc<RunsState>,
     req: CreateRunRequest,
 ) -> Result<String, (StatusCode, String)> {
-    admit_runs(state, 1).await?;
+    start_run_inner(state, req, None).await
+}
+
+/// `start_run`, plus the one thing only the dispatcher may do: launch a run
+/// under an id that already exists as a `queued` row, whose slot it has already
+/// claimed in the database. `Some(id)` therefore also means "skip admission" —
+/// checking again would send a dispatched run back to the queue it just left.
+async fn start_run_inner(
+    state: &Arc<RunsState>,
+    req: CreateRunRequest,
+    dispatched_id: Option<String>,
+) -> Result<String, (StatusCode, String)> {
+    // Captured before anything moves out of `req`, so a queued run is launched
+    // later from exactly what was submitted rather than from a reconstruction.
+    let parked = serde_json::to_value(&req).ok();
     // The other half of the agent-CLI update interlock (see
     // `system_routes::cli_update`): an install deletes and re-extracts the
     // package tree, so a CLI spawned into the middle of one can fail to exec at
@@ -1961,11 +2045,54 @@ pub(crate) async fn start_run(
         _ => None,
     };
 
-    let run_id = format!(
-        "{}-{}",
-        sanitize_branch_component(&workflow.name),
-        now_millis()
-    );
+    let run_id = dispatched_id.clone().unwrap_or_else(|| {
+        format!(
+            "{}-{}",
+            sanitize_branch_component(&workflow.name),
+            now_millis()
+        )
+    });
+
+    // At capacity: park the run rather than refuse it. It gets a row, an id and
+    // a place in the list immediately, so "why hasn't this started?" has an
+    // answer on the page — and the dispatcher launches it when a slot frees.
+    //
+    // The row goes in with no graph: the node list arrives with the executor's
+    // `RunStarted`, which has not happened yet. `start_run`'s upsert fills it in
+    // on dispatch.
+    if dispatched_id.is_none() && !state.has_capacity_for(1).await {
+        let description = if req.description.is_empty() {
+            req.args.as_str()
+        } else {
+            req.description.as_str()
+        };
+        let ab_ref = ab.as_ref().map(|a| harness_persist::AbPairing {
+            pair_id: &a.pair_id,
+            arm: &a.arm,
+            label: a.label.as_deref(),
+        });
+        let store = state
+            .store()
+            .await
+            .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
+        store
+            .enqueue_run(
+                &run_id,
+                &workflow.name,
+                req.title.as_deref(),
+                Some(description),
+                Some(&project),
+                0,
+                &[],
+                ab_ref.as_ref(),
+                Some(&trigger.as_trigger()),
+                parked.as_ref().unwrap_or(&serde_json::Value::Null),
+            )
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        tracing::info!(run_id = %run_id, "queued: no free slot");
+        return Ok(run_id);
+    }
 
     // Register a broadcast channel so /stream subscribers see live events.
     let (btx, _) = broadcast::channel::<RunEvent>(256);
@@ -2086,6 +2213,7 @@ async fn execute_run_task(
                 status: harness_dag::RunStatus::Failed,
             });
             state.live.lock().await.remove(&run_id);
+            dispatch_next_queued(state.clone()).await;
             return;
         }
     };
@@ -2436,6 +2564,8 @@ async fn execute_run_task(
     }
 
     state.live.lock().await.remove(&run_id);
+    // A slot just freed. Hand it to whatever has been waiting longest.
+    dispatch_next_queued(state.clone()).await;
 }
 
 /// Cleans up a run's workspace on drop. Single-repo runs use a git worktree
@@ -2697,8 +2827,11 @@ pub async fn stream_run(
     resp
 }
 
-/// `POST /runs/{id}/cancel` — stop a running run: abort its in-flight task (if
-/// this process owns it) and mark the run + its in-flight nodes cancelled.
+/// `POST /runs/{id}/cancel` — stop a run: abort its in-flight task (if this
+/// process owns it) and mark the run + its in-flight nodes cancelled.
+///
+/// Works on a queued run too, which owns no task — the `live` lookup simply
+/// misses and the row flips straight to cancelled.
 pub async fn cancel_run(
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(id): AxumPath<String>,
@@ -2716,7 +2849,7 @@ pub async fn cancel_run(
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => err(
             StatusCode::CONFLICT,
-            format!("run `{id}` is not running (already finished or unknown)"),
+            format!("run `{id}` is neither running nor queued (already finished or unknown)"),
         ),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }

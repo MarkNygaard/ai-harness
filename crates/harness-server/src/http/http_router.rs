@@ -55,6 +55,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     runs_routes::spawn_worktree_sweeper(runs_state.clone());
     // Bound the shared cargo build cache (size-gated) so it can't fill the disk.
     runs_routes::spawn_cache_sweeper(runs_state.clone());
+    // Launch runs that are waiting for a concurrency slot. A finishing run
+    // dispatches its own successor; this is the backstop, and the thing that
+    // picks the queue back up after a restart.
+    runs_routes::spawn_queue_dispatcher(runs_state.clone());
     // Self-host a loopback omp auth-broker so the dashboard's subscription-usage
     // cards work off the local omp creds (skipped if OMP_AUTH_BROKER_URL is set).
     super::usage_routes::spawn_local_broker();

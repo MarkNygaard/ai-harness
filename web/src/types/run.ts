@@ -11,8 +11,12 @@
  */
 export type NodeStatus =
   "pending" | "running" | "success" | "failed" | "skipped" | "cancelled";
-/** Terminal run status (+ derived live "running"). */
-export type RunStatus = "running" | "completed" | "failed" | "cancelled";
+/**
+ * Terminal run status, plus the two non-terminal ones: "running", and "queued"
+ * for a run that has been accepted and is waiting for a concurrency slot.
+ */
+export type RunStatus =
+  "queued" | "running" | "completed" | "failed" | "cancelled";
 
 /** Per-invocation token usage; counters a provider doesn't report are null. */
 export interface Usage {

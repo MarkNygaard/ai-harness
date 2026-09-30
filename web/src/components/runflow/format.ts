@@ -1,4 +1,22 @@
-import type { NodeStatus, Usage } from "@/types/run";
+import type { NodeStatus, RunStatus, Usage } from "@/types/run";
+
+/**
+ * Badge variant for a run's status, in one place.
+ *
+ * Six pages carried their own copy of this map, which is how adding a status
+ * turns into six compile errors. "queued" is muted rather than coloured: a run
+ * waiting for a slot is not doing anything, and should not read as if it were.
+ */
+export const RUN_STATUS_VARIANT: Record<
+  RunStatus,
+  "running" | "success" | "failed" | "skipped"
+> = {
+  queued: "skipped",
+  running: "running",
+  completed: "success",
+  failed: "failed",
+  cancelled: "failed",
+};
 
 /** Total billable tokens reported for a node (input + output; nulls = 0). */
 export function totalTokens(usage: Usage): number {
@@ -7,7 +25,12 @@ export function totalTokens(usage: Usage): number {
 
 /** Sum every counter across many usages, preserving null when none reported. */
 export function sumUsage(usages: Usage[]): Usage {
-  const acc: Usage = { input: null, output: null, cache_read: null, cache_write: null };
+  const acc: Usage = {
+    input: null,
+    output: null,
+    cache_read: null,
+    cache_write: null,
+  };
   for (const u of usages) {
     for (const k of ["input", "output", "cache_read", "cache_write"] as const) {
       if (u[k] != null) acc[k] = (acc[k] ?? 0) + u[k]!;

@@ -1,3 +1,4 @@
+import { RUN_STATUS_VARIANT } from "@/components/runflow/format";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
@@ -7,17 +8,7 @@ import { Badge } from "@/components/ui/badge";
 import { distinctInitiators } from "@/lib/initiator";
 import { useRuns } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
-import type { RunStatus, RunSummary } from "@/types/run";
-
-const STATUS_VARIANT: Record<
-  RunStatus,
-  "running" | "success" | "failed" | "skipped"
-> = {
-  running: "running",
-  completed: "success",
-  failed: "failed",
-  cancelled: "failed",
-};
+import type { RunSummary } from "@/types/run";
 
 /** Sentinel filter value meaning "all projects". */
 const ALL = "__all__";
@@ -246,7 +237,7 @@ function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
             title={`${r.workflow_name} — ${r.status}`}
           >
             <Badge
-              variant={STATUS_VARIANT[r.status] ?? "default"}
+              variant={RUN_STATUS_VARIANT[r.status] ?? "default"}
               className="font-mono text-[10px] hover:opacity-80"
             >
               {r.workflow_name}
