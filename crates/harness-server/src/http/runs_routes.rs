@@ -618,7 +618,7 @@ impl RunsState {
 /// machine, so auto-sizing would over-provision exactly where it matters.
 const DEFAULT_MAX_CONCURRENT_RUNS: usize = 2;
 const ENV_MAX_CONCURRENT_RUNS: &str = "HARNESS_MAX_CONCURRENT_RUNS";
-const SETTING_MAX_CONCURRENT_RUNS: &str = "max_concurrent_runs";
+pub(crate) const SETTING_MAX_CONCURRENT_RUNS: &str = "max_concurrent_runs";
 
 /// A run limit from configuration. Zero and unparseable both mean "not
 /// configured" and fall through to the next source: a limit of zero would stop
