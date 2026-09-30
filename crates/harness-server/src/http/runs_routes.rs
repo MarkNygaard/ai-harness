@@ -582,6 +582,54 @@ impl RunsState {
     pub(crate) fn instance_id(&self) -> &str {
         &self.instance_id
     }
+
+    /// How many runs this instance will execute at once.
+    ///
+    /// `HARNESS_MAX_CONCURRENT_RUNS` wins when set: a deployment that cannot
+    /// reach the UI — a docker-compose host, a restart in the middle of an
+    /// incident — needs a lever that does not go through Postgres. Otherwise
+    /// the stored setting, otherwise [`DEFAULT_MAX_CONCURRENT_RUNS`].
+    pub(crate) async fn max_concurrent_runs(&self) -> usize {
+        if let Ok(raw) = std::env::var(ENV_MAX_CONCURRENT_RUNS) {
+            if let Some(n) = parse_run_limit(&raw) {
+                return n;
+            }
+        }
+        if let Ok(settings) = self.settings_store().await {
+            if let Ok(Some(raw)) = settings.get(SETTING_MAX_CONCURRENT_RUNS).await {
+                if let Some(n) = parse_run_limit(&raw) {
+                    return n;
+                }
+            }
+        }
+        DEFAULT_MAX_CONCURRENT_RUNS
+    }
+}
+
+/// Runs executed at once when nothing says otherwise.
+///
+/// Two, because a run is near-idle while waiting on a model and then spikes
+/// hard through dependency install, build, typecheck and tests. Three
+/// concurrent multi-repo runs saturated a 12-core host and had to be CPU-capped
+/// from outside; one would leave most of that host idle for most of a run.
+///
+/// Deliberately not derived from the core count: under a CPU *quota* — which is
+/// how Docker's `--cpus` works — `nproc` still reports every core on the
+/// machine, so auto-sizing would over-provision exactly where it matters.
+const DEFAULT_MAX_CONCURRENT_RUNS: usize = 2;
+const ENV_MAX_CONCURRENT_RUNS: &str = "HARNESS_MAX_CONCURRENT_RUNS";
+const SETTING_MAX_CONCURRENT_RUNS: &str = "max_concurrent_runs";
+
+/// A run limit from configuration. Zero and unparseable both mean "not
+/// configured" and fall through to the next source: a limit of zero would stop
+/// the harness doing anything at all, which nobody types on purpose.
+fn parse_run_limit(raw: &str) -> Option<usize> {
+    raw.trim().parse::<usize>().ok().filter(|n| *n > 0)
+}
+
+/// Whether `wanted` more runs fit alongside `live` already in flight.
+fn fits_under_limit(live: usize, wanted: usize, limit: usize) -> bool {
+    live + wanted <= limit
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -1695,6 +1743,10 @@ pub(crate) async fn start_run_pair(
         ab_arm: Some(arm.to_string()),
         ab_label: Some(variant.label()),
     };
+    // Both arms or neither. Checking for two up front stops the pair starting
+    // arm A and then failing on B, which would leave a half-pair running and
+    // nothing to compare it against.
+    admit_runs(state, 2).await?;
     let run_id_a = start_run(state, arm("a", &req.variant_a)).await?;
     let run_id_b = start_run(state, arm("b", &req.variant_b)).await?;
     Ok(CreateRunPairResponse {
@@ -1782,10 +1834,51 @@ async fn wait_out_cli_update(state: &Arc<RunsState>) -> Result<(), (StatusCode, 
 /// wait indefinitely for one that has hung.
 const CLI_UPDATE_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
 
+/// Refuse to start `wanted` more runs when this instance is already at its
+/// limit.
+///
+/// The cap is global on purpose. `max_concurrent_runs` on a Linear binding is
+/// per `(project, workflow)`, and a UI or MCP trigger passes none of those
+/// gates — so three bindings and a person clicking Review can put arbitrarily
+/// much work on one host, which is how three multi-repo runs came to saturate a
+/// 12-core box at once.
+///
+/// Refusing is safe for the trigger source that matters: Linear work stays in
+/// its column and the poller comes back for it. A person who clicked something
+/// gets told to try again.
+///
+/// The count is read a moment before the caller registers its run, so two
+/// triggers landing in the same instant can both pass. That is tolerable — the
+/// cap exists to stop a pile-up, not to be a precise semaphore — and the window
+/// is far shorter than the runs it is protecting.
+async fn admit_runs(state: &Arc<RunsState>, wanted: usize) -> Result<(), (StatusCode, String)> {
+    let limit = state.max_concurrent_runs().await;
+    let live = state.live.lock().await.len();
+    if fits_under_limit(live, wanted, limit) {
+        return Ok(());
+    }
+    tracing::info!(
+        live,
+        wanted,
+        limit,
+        "refusing to start: instance is at its concurrent-run limit"
+    );
+    Err((
+        StatusCode::SERVICE_UNAVAILABLE,
+        format!(
+            "at capacity: {live} run(s) in flight, limit {limit}. A Linear-triggered \
+             issue stays where it is and the poller will come back for it; anything \
+             else can be retried. Raise {ENV_MAX_CONCURRENT_RUNS} or the \
+             `{SETTING_MAX_CONCURRENT_RUNS}` setting if this host has the headroom."
+        ),
+    ))
+}
+
 pub(crate) async fn start_run(
     state: &Arc<RunsState>,
     req: CreateRunRequest,
 ) -> Result<String, (StatusCode, String)> {
+    admit_runs(state, 1).await?;
     // The other half of the agent-CLI update interlock (see
     // `system_routes::cli_update`): an install deletes and re-extracts the
     // package tree, so a CLI spawned into the middle of one can fail to exec at
@@ -2651,6 +2744,33 @@ pub async fn delete_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_run_limit_counts_what_is_about_to_start_too() {
+        // One slot left, one run wanted: fits exactly.
+        assert!(fits_under_limit(1, 1, 2));
+        // One slot left, an A/B pair wanted: both arms or neither.
+        assert!(!fits_under_limit(1, 2, 2));
+        assert!(fits_under_limit(0, 2, 2));
+        // At the limit, nothing more starts. This is the case that had three
+        // multi-repo runs saturating a 12-core host.
+        assert!(!fits_under_limit(2, 1, 2));
+        assert!(!fits_under_limit(3, 1, 2));
+        // An idle instance always admits.
+        assert!(fits_under_limit(0, 1, 1));
+    }
+
+    #[test]
+    fn a_zero_or_junk_run_limit_is_not_configured() {
+        assert_eq!(parse_run_limit("4"), Some(4));
+        assert_eq!(parse_run_limit("  3 "), Some(3));
+        // Zero would stop the harness doing anything at all; treat it as unset
+        // and fall through to the next source rather than bricking the install.
+        assert_eq!(parse_run_limit("0"), None);
+        assert_eq!(parse_run_limit(""), None);
+        assert_eq!(parse_run_limit("lots"), None);
+        assert_eq!(parse_run_limit("-1"), None);
+    }
 
     #[test]
     fn find_pr_url_extracts_and_trims() {
