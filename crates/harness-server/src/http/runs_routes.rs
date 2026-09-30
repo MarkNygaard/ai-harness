@@ -605,6 +605,39 @@ impl RunsState {
         DEFAULT_MAX_CONCURRENT_RUNS
     }
 
+    /// Whether a queued run's own `(project, workflow)` has room, on top of the
+    /// instance-wide limit.
+    ///
+    /// This is a Linear binding's **Max simultaneous tasks**, enforced here at
+    /// dispatch rather than at submission. Enforcing it at submission is what
+    /// made three issues delegated together produce one queued run and two that
+    /// looked dropped: the binding refused the first two outright, before the
+    /// queue ever saw them.
+    ///
+    /// No binding — a UI or MCP run, or a workflow Linear does not drive — means
+    /// no per-workflow cap, and the global limit is the only gate.
+    pub(crate) async fn binding_has_room_for(&self, run: &harness_persist::QueuedRun) -> bool {
+        let Some(project) = run.project.as_deref() else {
+            return true;
+        };
+        let Ok(sources) = self.linear_source_store().await else {
+            return true;
+        };
+        let limit = match sources.get(project, &run.workflow_name).await {
+            Ok(Some(binding)) => binding.max_concurrent_runs.max(1) as i64,
+            // No binding, or the lookup failed: do not hold work back over a
+            // missing row or a database hiccup. The global limit still applies.
+            _ => return true,
+        };
+        let Ok(store) = self.store().await else {
+            return true;
+        };
+        match store.count_running_for(project, &run.workflow_name).await {
+            Ok(running) => running < limit,
+            Err(_) => true,
+        }
+    }
+
     /// Whether `wanted` more runs fit alongside what is executing right now.
     ///
     /// Approximate by construction: the count is read a moment before a caller
@@ -993,6 +1026,13 @@ pub(crate) fn spawn_worktree_sweeper(state: Arc<RunsState>) {
 /// while the instance happened to be idle — so a run waits at worst this long
 /// past its slot becoming free, rather than forever.
 pub(crate) const QUEUE_SWEEP_EVERY_SECS: u64 = 30;
+
+/// How far down the queue the dispatcher looks for something it may start.
+///
+/// Not the whole queue: one run is started per dispatch, and a deep scan costs
+/// a binding lookup per candidate. Far enough that a handful of runs blocked on
+/// one busy binding cannot hide the rest.
+const QUEUE_SCAN_DEPTH: i64 = 25;
 
 /// Spawn the periodic queue dispatcher (also dispatches once at startup, which
 /// is what picks up runs left queued by a restart).
@@ -1902,13 +1942,40 @@ async fn dispatch_next_queued_inner(state: Arc<RunsState>) {
     let Ok(store) = state.store().await else {
         return;
     };
-    let claimed = match store.claim_next_queued(state.instance_id()).await {
-        Ok(Some(c)) => c,
-        Ok(None) => return,
+    // Oldest first, but not blindly: a run's binding may be at its own limit
+    // while the instance has room, and the head of the queue must not hold up
+    // everything behind it. Look, then claim the first one that may start.
+    let waiting = match store.list_queued(QUEUE_SCAN_DEPTH).await {
+        Ok(w) if !w.is_empty() => w,
+        Ok(_) => return,
         Err(e) => {
-            tracing::warn!("dispatcher: could not claim a queued run: {e}");
+            tracing::warn!("dispatcher: could not list queued runs: {e}");
             return;
         }
+    };
+    let mut claimed = None;
+    for candidate in &waiting {
+        if !state.binding_has_room_for(candidate).await {
+            continue;
+        }
+        // `None` means someone else took it between the list and the claim.
+        match store
+            .claim_queued(&candidate.run_id, state.instance_id())
+            .await
+        {
+            Ok(Some(c)) => {
+                claimed = Some(c);
+                break;
+            }
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!(run_id = %candidate.run_id, "dispatcher: claim failed: {e}");
+                continue;
+            }
+        }
+    }
+    let Some(claimed) = claimed else {
+        return;
     };
     // Claimed but unlaunchable: a row from an older build, or one whose request
     // no longer parses. It must not sit marked `running` with nothing running,

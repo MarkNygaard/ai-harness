@@ -537,46 +537,13 @@ async fn start_delegated_run(
         }
     }
 
-    // Honour **Max simultaneous tasks** before touching anything. Checked here,
-    // ahead of the status move and the run start, so a refused delegation leaves the
-    // issue exactly where it was: still delegated, still in the source status — which
-    // is precisely what a live binding's poller looks for, so it starts by itself
-    // once a slot frees.
-    if let Ok(claims) = state.linear_claim_store().await {
-        match claims
-            .count_active(&binding.project, &binding.workflow)
-            .await
-        {
-            Ok(active) if at_capacity(active, binding.max_concurrent_runs) => {
-                tracing::info!(
-                    "linear webhook: {}/{} at capacity ({active} active) — leaving {} for the \
-                     poller",
-                    binding.project,
-                    binding.workflow,
-                    event.issue_identifier.as_deref().unwrap_or("(delegated)")
-                );
-                // A `response`, not an `error`: nothing failed, and it closes this
-                // session cleanly rather than leaving it open to go stale. The run
-                // that eventually starts opens a session of its own.
-                let _ = client
-                    .create_agent_activity(
-                        &session,
-                        &AgentActivity::Response {
-                            body: at_capacity_message(&binding),
-                        },
-                    )
-                    .await;
-                return;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                // Can't count — proceed rather than refuse work over a database
-                // hiccup. The poller's own cap still applies to its claims.
-                tracing::warn!("linear webhook: count_active failed, proceeding: {e}");
-            }
-        }
-    }
-
+    // **Max simultaneous tasks** is no longer checked here. It used to refuse a
+    // delegation outright and leave the issue in its source status for the
+    // poller — correct, but invisible: three issues delegated together produced
+    // one run and two that looked dropped, with nothing in the harness to say
+    // why. The binding's limit is now applied where the run is *started*
+    // instead, so an over-limit delegation becomes a `queued` run that a person
+    // can see, in the order it was asked for.
     let title = match (&event.issue_identifier, &event.issue_title) {
         (Some(id), Some(t)) => Some(format!("{id} {t}")),
         (Some(id), None) => Some(id.clone()),
@@ -1352,34 +1319,6 @@ pub(crate) fn at_capacity(active: i64, max_concurrent_runs: i32) -> bool {
     active >= max_concurrent_runs.max(1) as i64
 }
 
-/// What to say when a delegation arrives while the binding is already at capacity.
-///
-/// Deliberately not phrased as an error — nothing is wrong, the work is simply
-/// waiting. What is *true* about the wait depends on `live`: only a live binding
-/// has a poller that will come back for the issue. Promising a pickup that will
-/// never happen would be worse than saying nothing.
-fn at_capacity_message(binding: &LinearSource) -> String {
-    let limit = binding.max_concurrent_runs.max(1);
-    let running = if limit == 1 {
-        "Another task is already running".to_string()
-    } else {
-        format!("{limit} tasks are already running")
-    };
-    if binding.live {
-        format!(
-            "{running} for `{}`, which is its limit. I've left this issue where it is \
-             and will start it automatically once a slot frees.",
-            binding.workflow
-        )
-    } else {
-        format!(
-            "{running} for `{}`, which is its limit. I've left this issue where it is \
-             — delegate it again once the current work finishes.",
-            binding.workflow
-        )
-    }
-}
-
 /// Explain a refusal by naming the statuses that *do* trigger something.
 ///
 /// Best-effort: status names come from discovery, falling back to bare workflow
@@ -2152,45 +2091,6 @@ mod tests {
         assert!(at_capacity(1, 0));
         assert!(!at_capacity(0, -5));
         assert!(at_capacity(1, -5));
-    }
-
-    /// Only a live binding has a poller that comes back for the issue, so only a
-    /// live binding may promise an automatic start.
-    #[test]
-    fn a_live_binding_promises_pickup_and_a_dry_one_does_not() {
-        let mut b = binding("ecom", "idea-to-pr", "todo");
-        b.live = true;
-        let live = at_capacity_message(&b);
-        assert!(live.contains("Another task is already running"), "{live}");
-        assert!(live.contains("automatically"), "{live}");
-        assert!(!live.contains("delegate it again"), "{live}");
-
-        b.live = false;
-        let dry = at_capacity_message(&b);
-        assert!(dry.contains("delegate it again"), "{dry}");
-        assert!(
-            !dry.contains("automatically"),
-            "a dry binding has no poller to keep that promise: {dry}"
-        );
-    }
-
-    /// Both wordings name the workflow and read as information, not failure.
-    #[test]
-    fn the_capacity_message_never_reads_as_an_error() {
-        let mut b = binding("ecom", "idea-to-pr", "todo");
-        b.max_concurrent_runs = 3;
-        for live in [true, false] {
-            b.live = live;
-            let msg = at_capacity_message(&b);
-            assert!(msg.contains("3 tasks are already running"), "{msg}");
-            assert!(msg.contains("idea-to-pr"), "{msg}");
-            for word in ["error", "fail", "cannot", "Unable"] {
-                assert!(
-                    !msg.to_lowercase().contains(&word.to_lowercase()),
-                    "capacity is not a failure, but the message says {word:?}: {msg}"
-                );
-            }
-        }
     }
 
     fn run_detail_for_answering() -> harness_persist::RunDetail {
