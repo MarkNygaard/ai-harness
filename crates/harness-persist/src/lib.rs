@@ -126,6 +126,14 @@ pub struct ClaimedRun {
     pub request: Option<serde_json::Value>,
 }
 
+/// A run waiting for a slot, with just enough to decide whether it may start.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct QueuedRun {
+    pub run_id: String,
+    pub project: Option<String>,
+    pub workflow_name: String,
+}
+
 /// One (project, day, status) tally for the dashboard aggregate.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunDailyCount {
@@ -758,40 +766,79 @@ impl RunStore {
         Ok(())
     }
 
-    /// Take the oldest queued run and mark it running for `owner`, atomically.
-    ///
-    /// `FOR UPDATE SKIP LOCKED` is what makes this safe to call from several
-    /// places at once — the completion hook of every finishing run, the periodic
-    /// sweep, and startup — without two of them claiming the same row. A caller
-    /// that loses the race gets the next row, or `None`.
-    ///
-    /// Flipping the status here and not in `start_run` is deliberate: that
-    /// method's `ON CONFLICT` branch never touches `status`, so a dispatched run
-    /// would otherwise stay `queued` for its whole life.
-    pub async fn claim_next_queued(&self, owner: &str) -> Result<Option<ClaimedRun>, PersistError> {
-        let row: Option<(String, Option<serde_json::Value>)> = sqlx::query_as(
-            "UPDATE harness_workflow_runs SET status = 'running', owner = $1, heartbeat_at = now()
-             WHERE id = (
-                 SELECT id FROM harness_workflow_runs
-                 WHERE status = 'queued'
-                 ORDER BY recorded_at
-                 FOR UPDATE SKIP LOCKED
-                 LIMIT 1
-             )
-             RETURNING id, queued_request",
-        )
-        .bind(owner)
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(row.map(|(run_id, request)| ClaimedRun { run_id, request }))
-    }
-
     /// How many runs are waiting for a slot.
     pub async fn count_queued(&self) -> Result<i64, PersistError> {
         let row: (i64,) =
             sqlx::query_as("SELECT count(*) FROM harness_workflow_runs WHERE status = 'queued'")
                 .fetch_one(&self.pool)
                 .await?;
+        Ok(row.0)
+    }
+
+    /// The runs waiting for a slot, oldest first.
+    ///
+    /// The dispatcher needs to *look* before it claims, because whether a run
+    /// may start depends on its own `(project, workflow)` and not only on the
+    /// global limit — so "take the oldest" is not always the right answer, and
+    /// the head of the queue must not block the rest of it.
+    pub async fn list_queued(&self, limit: i64) -> Result<Vec<QueuedRun>, PersistError> {
+        let rows = sqlx::query_as::<_, QueuedRun>(
+            "SELECT id AS run_id, project, workflow_name
+             FROM harness_workflow_runs
+             WHERE status = 'queued'
+             ORDER BY recorded_at
+             LIMIT $1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Take one specific queued run and mark it running for `owner`.
+    ///
+    /// Returns `None` when the row is no longer queued — someone else claimed
+    /// it, or it was cancelled while the dispatcher was deciding. That is the
+    /// race check: the `WHERE status = 'queued'` is what makes it safe to call
+    /// from several dispatchers at once, so a caller that gets `None` should
+    /// simply move on to the next candidate.
+    pub async fn claim_queued(
+        &self,
+        run_id: &str,
+        owner: &str,
+    ) -> Result<Option<ClaimedRun>, PersistError> {
+        let row: Option<(String, Option<serde_json::Value>)> = sqlx::query_as(
+            "UPDATE harness_workflow_runs SET status = 'running', owner = $2, heartbeat_at = now()
+             WHERE id = $1 AND status = 'queued'
+             RETURNING id, queued_request",
+        )
+        .bind(run_id)
+        .bind(owner)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|(run_id, request)| ClaimedRun { run_id, request }))
+    }
+
+    /// How many runs are executing right now for one `(project, workflow)`.
+    ///
+    /// This is what a Linear binding's **Max simultaneous tasks** now limits.
+    /// Counting *running* rows rather than active claims is the difference that
+    /// lets the cap coexist with a queue: a queued run holds a claim but is not
+    /// consuming the binding's slot, so counting claims would have the queue
+    /// block itself.
+    pub async fn count_running_for(
+        &self,
+        project: &str,
+        workflow: &str,
+    ) -> Result<i64, PersistError> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT count(*) FROM harness_workflow_runs
+             WHERE status = 'running' AND project = $1 AND workflow_name = $2",
+        )
+        .bind(project)
+        .bind(workflow)
+        .fetch_one(&self.pool)
+        .await?;
         Ok(row.0)
     }
 
@@ -2191,6 +2238,93 @@ mod tests {
             store.run_status(&run_id).await.unwrap().as_deref(),
             Some("cancelled")
         );
+    }
+
+    /// A queued run is visible, claimable exactly once, and counts against its
+    /// own `(project, workflow)` only after it starts — which is what lets a
+    /// binding's cap coexist with the queue instead of blocking it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_queued_run_is_claimable_once_and_counts_only_when_running() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set to a test database");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let stamp = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let project = format!("proj-{stamp}");
+        let report = sample_report();
+        let ids = [format!("q-{stamp}-a"), format!("q-{stamp}-b")];
+
+        for id in &ids {
+            store
+                .enqueue_run(
+                    id,
+                    &report.workflow,
+                    None,
+                    None,
+                    Some(&project),
+                    0,
+                    &[],
+                    None,
+                    None,
+                    &serde_json::json!({ "workflow": report.workflow }),
+                )
+                .await
+                .expect("enqueue");
+        }
+
+        // Queued, so nothing is running for the binding yet.
+        assert_eq!(
+            store
+                .count_running_for(&project, &report.workflow)
+                .await
+                .unwrap(),
+            0
+        );
+
+        let waiting: Vec<String> = store
+            .list_queued(50)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|q| q.project.as_deref() == Some(project.as_str()))
+            .map(|q| q.run_id)
+            .collect();
+        assert_eq!(waiting, ids, "oldest first");
+
+        // Claiming flips it to running, and a second claim of the same row
+        // finds nothing — that is the race check the dispatcher relies on.
+        let first = store.claim_queued(&ids[0], "owner-1").await.unwrap();
+        assert!(first.is_some());
+        assert!(store
+            .claim_queued(&ids[0], "owner-2")
+            .await
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            store.run_status(&ids[0]).await.unwrap().as_deref(),
+            Some("running")
+        );
+        assert_eq!(
+            store
+                .count_running_for(&project, &report.workflow)
+                .await
+                .unwrap(),
+            1,
+            "only the claimed one counts against the binding"
+        );
+
+        // A queued run can be cancelled; `cancel_run` used to accept `running` only.
+        assert!(store.cancel_run(&ids[1]).await.unwrap());
+        assert_eq!(
+            store.run_status(&ids[1]).await.unwrap().as_deref(),
+            Some("cancelled")
+        );
+
+        for id in &ids {
+            let _ = store.delete_run(id).await;
+        }
     }
 
     #[tokio::test]
