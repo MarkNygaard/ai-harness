@@ -19,7 +19,7 @@ use serde_json::json;
 
 use super::accounts::{authenticated_user, AdminOnly};
 use super::mail;
-use super::runs_routes::RunsState;
+use super::runs_routes::{RunsState, SETTING_MAX_CONCURRENT_RUNS};
 
 /// Where the public URL is stored, once an administrator sets one.
 const PUBLIC_URL_KEY: &str = "public_url";
@@ -28,10 +28,14 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "error": msg.into() }))).into_response()
 }
 
-/// `GET /api/settings/general` — the public URL, and where it came from.
+/// `GET /api/settings/general` — the public URL and the concurrency limit,
+/// each with where it came from.
 pub async fn general(_: AdminOnly, Extension(state): Extension<Arc<RunsState>>) -> Response {
-    let stored = match state.settings_store().await {
-        Ok(s) => s.get(PUBLIC_URL_KEY).await.ok().flatten(),
+    let (stored_url, stored_runs) = match state.settings_store().await {
+        Ok(s) => (
+            s.get(PUBLIC_URL_KEY).await.ok().flatten(),
+            s.get(SETTING_MAX_CONCURRENT_RUNS).await.ok().flatten(),
+        ),
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
     Json(json!({
@@ -39,16 +43,39 @@ pub async fn general(_: AdminOnly, Extension(state): Extension<Arc<RunsState>>) 
         "public_url": state.public_url(),
         // Set here, as opposed to inherited from the environment — so the page
         // can say which one is in force and offer to clear the override.
-        "stored": stored,
+        "stored": stored_url,
         "from_environment": std::env::var("HARNESS_PUBLIC_URL").ok().filter(|v| !v.is_empty()),
+        "concurrency": {
+            // The number `start_run` actually gates on, after precedence.
+            "effective": state.max_concurrent_runs().await,
+            "stored": stored_runs,
+            "from_environment": std::env::var("HARNESS_MAX_CONCURRENT_RUNS")
+                .ok()
+                .filter(|v| !v.trim().is_empty()),
+            // Context for choosing a number, not a limit. Reported by the host;
+            // under a CPU *quota* (Docker's `--cpus`) this still counts every
+            // core on the machine, so it is an upper bound on what is available,
+            // not a promise of it.
+            "host_parallelism": std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(0),
+        },
     }))
     .into_response()
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GeneralRequest {
-    /// The base URL, or `null` to fall back to the environment.
-    pub public_url: Option<String>,
+    /// Absent leaves the stored value alone; `null` clears it back to the
+    /// environment. Two different intentions that a plain `Option` cannot tell
+    /// apart — and conflating them would have the concurrency form wipe the
+    /// public URL every time it saved.
+    #[serde(default)]
+    pub public_url: Option<Option<String>>,
+    /// Absent leaves it alone; `null` clears it back to the environment or the
+    /// built-in default.
+    #[serde(default)]
+    pub max_concurrent_runs: Option<Option<u32>>,
 }
 
 /// `PUT /api/settings/general` — set or clear the public URL.
@@ -61,39 +88,61 @@ pub async fn set_general(
     Extension(state): Extension<Arc<RunsState>>,
     Json(req): Json<GeneralRequest>,
 ) -> Response {
-    let value = req
-        .public_url
-        .map(|u| u.trim().trim_end_matches('/').to_string())
-        .filter(|u| !u.is_empty());
-
-    if let Some(url) = &value {
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return err(
-                StatusCode::BAD_REQUEST,
-                "the URL needs a scheme — start it with https://",
-            );
-        }
-    }
-
     let store = match state.settings_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    let result = match &value {
-        Some(url) => store.set(PUBLIC_URL_KEY, url).await,
-        None => store.delete(PUBLIC_URL_KEY).await.map(|_| ()),
-    };
-    if let Err(e) = result {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+
+    if let Some(runs) = req.max_concurrent_runs {
+        // Zero would stop the harness starting anything, with no clue on the
+        // page as to why. Clearing is what the operator means by "no limit of
+        // my own", and that is `null`.
+        if runs == Some(0) {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "a limit of 0 would stop every run — clear the field to fall back to the default",
+            );
+        }
+        let result = match runs {
+            Some(n) => store.set(SETTING_MAX_CONCURRENT_RUNS, &n.to_string()).await,
+            None => store.delete(SETTING_MAX_CONCURRENT_RUNS).await.map(|_| ()),
+        };
+        if let Err(e) = result {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
     }
 
-    // Cleared means "go back to the environment", not "no public URL".
-    let effective = value.or_else(|| {
-        std::env::var("HARNESS_PUBLIC_URL")
-            .ok()
-            .filter(|v| !v.trim().is_empty())
-    });
-    state.set_public_url(effective);
+    if let Some(url) = req.public_url {
+        let value = url
+            .map(|u| u.trim().trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty());
+
+        if let Some(url) = &value {
+            if !url.starts_with("http://") && !url.starts_with("https://") {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    "the URL needs a scheme — start it with https://",
+                );
+            }
+        }
+
+        let result = match &value {
+            Some(url) => store.set(PUBLIC_URL_KEY, url).await,
+            None => store.delete(PUBLIC_URL_KEY).await.map(|_| ()),
+        };
+        if let Err(e) = result {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+
+        // Cleared means "go back to the environment", not "no public URL".
+        let effective = value.or_else(|| {
+            std::env::var("HARNESS_PUBLIC_URL")
+                .ok()
+                .filter(|v| !v.trim().is_empty())
+        });
+        state.set_public_url(effective);
+    }
+
     general(AdminOnly, Extension(state)).await
 }
 

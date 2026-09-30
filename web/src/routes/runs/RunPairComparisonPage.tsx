@@ -10,6 +10,7 @@ import {
   formatTokens,
   sumUsage,
   totalTokens,
+  RUN_STATUS_VARIANT,
 } from "@/components/runflow/format";
 import { formatCost, usageCost } from "@/lib/cost";
 import {
@@ -18,23 +19,7 @@ import {
   useRunPair,
   useWorkflowModels,
 } from "@/lib/runs";
-import type {
-  AbJudge,
-  ModelRef,
-  NodeView,
-  RunDetail,
-  RunStatus,
-} from "@/types/run";
-
-const STATUS_VARIANT: Record<
-  RunStatus,
-  "running" | "success" | "failed" | "skipped"
-> = {
-  running: "running",
-  completed: "success",
-  failed: "failed",
-  cancelled: "failed",
-};
+import type { AbJudge, ModelRef, NodeView, RunDetail } from "@/types/run";
 
 interface ArmStats {
   detail: RunDetail;
@@ -154,14 +139,14 @@ export function RunPairComparisonPage() {
                 <Row label="Status">
                   <Td>
                     <Badge
-                      variant={STATUS_VARIANT[a.detail.status] ?? "default"}
+                      variant={RUN_STATUS_VARIANT[a.detail.status] ?? "default"}
                     >
                       {a.detail.status}
                     </Badge>
                   </Td>
                   <Td>
                     <Badge
-                      variant={STATUS_VARIANT[b.detail.status] ?? "default"}
+                      variant={RUN_STATUS_VARIANT[b.detail.status] ?? "default"}
                     >
                       {b.detail.status}
                     </Badge>

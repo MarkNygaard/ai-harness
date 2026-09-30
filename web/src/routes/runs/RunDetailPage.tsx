@@ -1,3 +1,4 @@
+import { RUN_STATUS_VARIANT } from "@/components/runflow/format";
 import { useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ReactFlowProvider } from "@xyflow/react";
@@ -21,17 +22,6 @@ import { WorkflowReport } from "@/components/report/WorkflowReport";
 import { useCancelRun, useRerunRun, useRunView } from "@/lib/runs";
 import { parseInitiator, sourceLabel } from "@/lib/initiator";
 import { parseWorkflowVerdict, useWorkflowUi } from "@/lib/report";
-import type { RunStatus } from "@/types/run";
-const STATUS_VARIANT: Record<
-  RunStatus,
-  "running" | "success" | "failed" | "skipped"
-> = {
-  running: "running",
-  completed: "success",
-  failed: "failed",
-  cancelled: "failed",
-};
-
 type Panel = "graph" | "overview" | "report";
 
 export function RunDetailPage() {
@@ -60,7 +50,7 @@ export function RunDetailPage() {
     <AppShell title={run.title ?? run.workflow ?? id ?? "run"}>
       <div className="flex h-full flex-col">
         <div className="flex flex-none items-center gap-3 border-b border-border px-6 py-3">
-          <Badge variant={STATUS_VARIANT[run.status] ?? "default"}>
+          <Badge variant={RUN_STATUS_VARIANT[run.status] ?? "default"}>
             {run.status}
           </Badge>
           <PersonBadge actor={run.triggerActor} source={run.triggerSource} />

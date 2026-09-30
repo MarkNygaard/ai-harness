@@ -5,13 +5,37 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "./api";
 
+export interface ConcurrencySettings {
+  /** The number run submission actually gates on, after precedence. */
+  effective: number;
+  /** Set here, as opposed to inherited or the built-in default. */
+  stored: string | null;
+  from_environment: string | null;
+  /**
+   * Cores the host reports. Context for choosing a number, not a limit — under
+   * a CPU quota this still counts every core on the machine.
+   */
+  host_parallelism: number;
+}
+
 export interface GeneralSettings {
   /** What everything actually uses right now. */
   public_url: string | null;
   /** Set here, as opposed to inherited from the environment. */
   stored: string | null;
   from_environment: string | null;
+  concurrency: ConcurrencySettings;
 }
+
+/**
+ * Omitted fields are left alone; `null` clears one back to the environment.
+ * The two forms on the page save independently, so neither may send a field it
+ * isn't editing.
+ */
+export type GeneralInput = Partial<{
+  public_url: string | null;
+  max_concurrent_runs: number | null;
+}>;
 
 export interface MailSettings {
   configured: boolean;
@@ -37,7 +61,7 @@ export function useGeneralSettings(enabled: boolean) {
 
 export function useSetGeneralSettings() {
   const qc = useQueryClient();
-  return useMutation<GeneralSettings, Error, { public_url: string | null }>({
+  return useMutation<GeneralSettings, Error, GeneralInput>({
     mutationFn: (body) =>
       apiJson<GeneralSettings>("/api/settings/general", {
         method: "PUT",

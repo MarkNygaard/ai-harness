@@ -1,3 +1,4 @@
+import { RUN_STATUS_VARIANT } from "@/components/runflow/format";
 import { Link } from "react-router-dom";
 import { ArrowRight, GitCompare } from "lucide-react";
 import { AppShell } from "@/components/AppShell";
@@ -5,17 +6,7 @@ import { AbTestForm } from "@/components/runs/AbTestForm";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { useRuns } from "@/lib/runs";
-import type { RunStatus, RunSummary } from "@/types/run";
-
-const STATUS_VARIANT: Record<
-  RunStatus,
-  "running" | "success" | "failed" | "skipped"
-> = {
-  running: "running",
-  completed: "success",
-  failed: "failed",
-  cancelled: "failed",
-};
+import type { RunSummary } from "@/types/run";
 
 function relativeTime(iso: string): string {
   const then = Date.parse(iso);
@@ -112,7 +103,7 @@ function ArmBadge({ arm, run }: { arm: string; run: RunSummary | null }) {
     );
   return (
     <Badge
-      variant={STATUS_VARIANT[run.status] ?? "default"}
+      variant={RUN_STATUS_VARIANT[run.status] ?? "default"}
       className="shrink-0"
     >
       {arm}: {run.ab_label ?? run.id}
