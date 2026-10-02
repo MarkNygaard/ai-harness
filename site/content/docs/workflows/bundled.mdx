@@ -78,6 +78,11 @@ needed, then squash-merging. `$ARGUMENTS` names the PR as a number, a URL, or a
 Linear issue whose linked PR should be merged.
 
 Linear-agnostic: works from a manual trigger or a "Ready for merge" binding.
+
+It waits for the PR's CI checks and merges only when they pass. A repository
+with no CI at all is merged anyway, after a short wait to rule out checks that
+are slow to register. A PR it does not merge ends the run cancelled, so the
+issue stays where it is instead of moving on to its ready column.
 Project rules about merge strategy and verification live in the project's
 `CLAUDE.md` / `AGENTS.md` and are loaded into every agent's context
 automatically.
