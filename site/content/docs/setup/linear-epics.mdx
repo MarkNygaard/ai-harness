@@ -92,6 +92,15 @@ that was never a piece.
 
 ## Setting it up
 
+**The short way.** Add the binding that builds issues, then press **Set up
+epics** in the project's Linear dialog. Choose where a built piece waits to be
+merged, where a merged piece goes, and (optionally) where the finished epic
+goes. It writes the `merge-pr` and supervisor bindings and the build binding's
+**Ready (epic piece)**. The dialog's **Wiring** panel then shows whether every
+column hands its work on, which is the same check as `linear_check`.
+
+The rest of this section is what that writes, for setting it up by hand.
+
 **1. Three bindings on the team.** On the project's Linear dialog:
 
 | claims from | workflow | Ready | Ready (epic piece) |
@@ -122,8 +131,9 @@ Optional, all project env vars and all overrides rather than setup:
 `EPIC_BLOCKED_STATE` (where a stalled epic goes), `EPIC_REVIEW_STATE` (the older
 way to say **Ready (finished epic)**), `EPIC_CORRECTIVE_LABEL`.
 
-**3. Check it.** Over MCP: `linear_check({ project })`. It walks the relay and
-reports what breaks, in column names rather than state ids.
+**3. Check it.** The **Wiring** panel in the project's Linear dialog, or over
+MCP: `linear_check({ project })`. It walks the relay and reports what breaks,
+in column names rather than state ids.
 
 ## Writing the epic
 
