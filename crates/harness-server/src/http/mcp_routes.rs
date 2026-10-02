@@ -240,7 +240,7 @@ async fn call_tool(
             if project.is_empty() {
                 return tool_error("`project` is required");
             }
-            match linear_check(state, &project).await {
+            match super::linear_diagnose::check_project(state, &project).await {
                 Ok(findings) => {
                     // Lead with the count that decides whether anything needs
                     // doing, so a caller that only reads the summary is not
@@ -1066,23 +1066,6 @@ async fn linear_states(state: &Arc<RunsState>, project: &str) -> Result<Value, S
     Ok(serde_json::to_value(discovery.teams).unwrap_or_else(|_| json!([])))
 }
 
-/// Every state id this project's Linear connection knows, mapped to its column
-/// name — what turns a stored id back into something a person recognises.
-async fn state_names(
-    state: &Arc<RunsState>,
-    project: &str,
-) -> Result<super::linear_diagnose::States, String> {
-    let conn = super::linear_connections::resolve_for_project(state, project).await?;
-    let client = super::linear_oauth::linear_client(state, &conn).await?;
-    let discovery = client.discover().await.map_err(|e| e.0)?;
-    Ok(discovery
-        .teams
-        .into_iter()
-        .flat_map(|t| t.states)
-        .map(|st| (st.id, st.name))
-        .collect())
-}
-
 /// This project's bindings, with statuses named rather than left as ids.
 async fn linear_bindings(state: &Arc<RunsState>, project: &str) -> Result<Vec<Value>, String> {
     let store = state
@@ -1093,7 +1076,9 @@ async fn linear_bindings(state: &Arc<RunsState>, project: &str) -> Result<Vec<Va
     let mine: Vec<_> = all.into_iter().filter(|b| b.project == project).collect();
     // Best-effort: a binding list is still useful when Linear is unreachable, so
     // fall back to bare ids rather than failing the call.
-    let names = state_names(state, project).await.unwrap_or_default();
+    let names = super::linear_diagnose::state_names(state, project)
+        .await
+        .unwrap_or_default();
     let show = |id: Option<&str>| -> Value {
         match id {
             Some(id) => json!(names.get(id).cloned().unwrap_or_else(|| id.to_string())),
@@ -1118,23 +1103,6 @@ async fn linear_bindings(state: &Arc<RunsState>, project: &str) -> Result<Vec<Va
             })
         })
         .collect())
-}
-
-/// Whether this project's relay of columns actually joins up.
-async fn linear_check(
-    state: &Arc<RunsState>,
-    project: &str,
-) -> Result<Vec<super::linear_diagnose::Finding>, String> {
-    let store = state
-        .linear_source_store()
-        .await
-        .map_err(|e| e.to_string())?;
-    let all = store.list_all().await.map_err(|e| e.to_string())?;
-    let mine: Vec<_> = all.into_iter().filter(|b| b.project == project).collect();
-    // Unlike the listing, this one needs the names: half the findings are about
-    // a status that no longer exists, which cannot be told from an id alone.
-    let names = state_names(state, project).await?;
-    Ok(super::linear_diagnose::diagnose(&mine, &names))
 }
 
 /// Tools this endpoint exposes, grouped as the settings page lists them.

@@ -8,6 +8,7 @@ import type {
   CreateLinearIssueInput,
   LinearConnection,
   LinearDiscovery,
+  LinearFinding,
   LinearSource,
   LinearSourceInput,
 } from "@/types/linear";
@@ -202,6 +203,20 @@ export function useLinearSources(project: string | null) {
   });
 }
 
+/** Whether the project's bindings hand work on to one another. */
+export function useLinearCheck(project: string | null) {
+  return useQuery<LinearFinding[], Error>({
+    queryKey: ["linear", "check", project],
+    enabled: !!project,
+    queryFn: ({ signal }) =>
+      apiJson<LinearFinding[]>(
+        `/api/projects/${encodeURIComponent(project!)}/linear-check`,
+        { signal },
+      ),
+    retry: false,
+  });
+}
+
 export function useLinearSource(
   project: string | null,
   workflow: string | null,
@@ -249,6 +264,7 @@ export function useSaveLinearSource(project: string | null) {
         queryKey: ["linear", "source", project, variables.workflow],
       });
       qc.invalidateQueries({ queryKey: ["linear", "sources", project] });
+      qc.invalidateQueries({ queryKey: ["linear", "check", project] });
     },
   });
 }
@@ -266,6 +282,7 @@ export function useDeleteLinearSource(project: string | null) {
         queryKey: ["linear", "source", project, workflow],
       });
       qc.invalidateQueries({ queryKey: ["linear", "sources", project] });
+      qc.invalidateQueries({ queryKey: ["linear", "check", project] });
     },
   });
 }

@@ -14,10 +14,12 @@
 //! uses — column names, not the state ids the rows actually store.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use harness_persist::LinearSource;
 
 use super::linear_agent::EPIC_SUPERVISOR;
+use super::runs_routes::RunsState;
 
 /// How much a finding matters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -42,6 +44,38 @@ pub struct Finding {
 
 /// A team's columns, by state id.
 pub type States = HashMap<String, String>;
+
+/// Every state id this project's Linear connection knows, mapped to its column
+/// name — what turns a stored id back into something a person recognises.
+pub(crate) async fn state_names(state: &Arc<RunsState>, project: &str) -> Result<States, String> {
+    let conn = super::linear_connections::resolve_for_project(state, project).await?;
+    let client = super::linear_oauth::linear_client(state, &conn).await?;
+    let discovery = client.discover().await.map_err(|e| e.0)?;
+    Ok(discovery
+        .teams
+        .into_iter()
+        .flat_map(|t| t.states)
+        .map(|st| (st.id, st.name))
+        .collect())
+}
+
+/// Whether this project's relay of columns actually joins up. The MCP
+/// `linear_check` tool and the project's Linear dialog both read this.
+pub(crate) async fn check_project(
+    state: &Arc<RunsState>,
+    project: &str,
+) -> Result<Vec<Finding>, String> {
+    let store = state
+        .linear_source_store()
+        .await
+        .map_err(|e| e.to_string())?;
+    let all = store.list_all().await.map_err(|e| e.to_string())?;
+    let mine: Vec<_> = all.into_iter().filter(|b| b.project == project).collect();
+    // Unlike the listing, this one needs the names: half the findings are about
+    // a status that no longer exists, which cannot be told from an id alone.
+    let names = state_names(state, project).await?;
+    Ok(diagnose(&mine, &names))
+}
 
 fn name<'a>(states: &'a States, id: &'a str) -> &'a str {
     states.get(id).map(String::as_str).unwrap_or(id)

@@ -89,6 +89,17 @@ export interface LinearSource {
   updated_at: string;
 }
 
+/**
+ * One line of the wiring check: whether a binding's columns hand work on to
+ * another binding. `error` means work will be dropped or never start.
+ */
+export interface LinearFinding {
+  level: "error" | "warn" | "ok";
+  /** The binding this is about; absent for project-wide notes. */
+  workflow: string | null;
+  message: string;
+}
+
 /** A Linear issue created via the harness (the fields surfaced back). */
 export interface CreatedLinearIssue {
   id: string;
