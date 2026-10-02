@@ -293,8 +293,8 @@ impl LinearClaimStore {
         Ok(row.0)
     }
 
-    /// The column an issue was last picked up from to be **built**, ignoring
-    /// claims made by `exclude_workflow`.
+    /// The column an issue was picked up from to be **built**, ignoring claims
+    /// made by `exclude_workflow`.
     ///
     /// This is what "where does a piece of an epic start" resolves to without
     /// anybody configuring it. The poller records `original_state_id` on every
@@ -302,6 +302,17 @@ impl LinearClaimStore {
     /// down: for an epic it is where the epic itself was claimed from, and for a
     /// merged piece it is where that piece was claimed from — the same binding
     /// in both cases, because an epic and its pieces are picked up by one.
+    ///
+    /// The **first** claim, not the latest. A piece is built before anything
+    /// else touches it, and by the time it has merged it has also been claimed
+    /// from the merge column (and perhaps from a revise column). Taking the
+    /// latest handed back "Ready for merge", so the next piece was sent to be
+    /// merged before it had been built, and the epic stalled there.
+    ///
+    /// Only claims whose run **completed** count. That misrouted piece was then
+    /// claimed by the merge workflow, which found no PR and cancelled: its first
+    /// claim is the merge column, and the build that follows is the one that
+    /// says where pieces start.
     ///
     /// `exclude_workflow` is the supervisor: it claims from the column a merged
     /// piece rests in, which is where work *ends*, and returning that would send
@@ -312,10 +323,12 @@ impl LinearClaimStore {
         exclude_workflow: &str,
     ) -> Result<Option<String>, PersistError> {
         let row: Option<(String,)> = sqlx::query_as(
-            "SELECT original_state_id
-             FROM harness_linear_claims
-             WHERE issue_id = $1 AND workflow <> $2 AND original_state_id <> ''
-             ORDER BY created_at DESC
+            "SELECT c.original_state_id
+             FROM harness_linear_claims c
+             JOIN harness_workflow_runs r ON r.id = c.run_id
+             WHERE c.issue_id = $1 AND c.workflow <> $2 AND c.original_state_id <> ''
+               AND r.status = 'completed'
+             ORDER BY c.created_at ASC
              LIMIT 1",
         )
         .bind(issue_id)
@@ -734,5 +747,58 @@ mod tests {
             0
         );
         assert!(store.claim_for_run(&rr1).await.unwrap().is_none());
+    }
+
+    /// A merged piece has been claimed to be built, then to be merged, then by
+    /// the supervisor. Its build column is the first of those, not the latest:
+    /// returning the merge column sent the next piece of ERP-138 to be merged
+    /// before it had been built. That piece's own history then opened with a
+    /// cancelled merge claim, which must not count either.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn build_state_is_the_first_completed_claim_not_the_merge() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        crate::RunStore::connect(&url).await.expect("runs schema");
+        let store = LinearClaimStore::connect(&url).await.expect("connect");
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .expect("pool");
+        let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let issue = format!("issue-{ts}");
+        for (run, workflow, column, status) in [
+            ("misrouted", "merge-pr", "ready-for-merge", "cancelled"),
+            ("build", "bc-idea-to-pr", "todo", "completed"),
+            ("merge", "merge-pr", "ready-for-merge", "completed"),
+            ("supervise", "linear-epic-supervise", "done", "completed"),
+        ] {
+            let run_id = format!("{run}-{ts}");
+            put_run(&pool, &run_id, status).await;
+            store
+                .record(&run_id, "proj", workflow, &issue, "P-1", column, None)
+                .await
+                .unwrap();
+            store.set_phase(&run_id, "done").await.unwrap();
+        }
+
+        assert_eq!(
+            store
+                .build_state_for_issue(&issue, "linear-epic-supervise")
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("todo")
+        );
+        assert_eq!(
+            store
+                .build_state_for_issue("no-such-issue", "linear-epic-supervise")
+                .await
+                .unwrap(),
+            None
+        );
     }
 }

@@ -117,11 +117,20 @@ nodes:
            `gh pr checks $resolve-pr.output.pr --watch --fail-fast`
          This waits until every check completes and exits non-zero the moment one
          fails.
-         - If it exits non-zero (a check failed/was cancelled), or it reports that
-           no checks exist at all: do NOT merge. Report the failing check(s) and
-           stop — leave the PR for a human. Never merge a red or unverified PR.
-      4. Only after every check has passed, squash-merge and delete the branch:
+         - If a check failed or was cancelled: do NOT merge. Report the failing
+           check(s) and stop — leave the PR for a human. Never merge a red PR.
+         - If it reports that **no checks** exist ("no checks reported"), CI may
+           simply not have registered yet after a fresh push. Wait 30 seconds
+           and run `gh pr checks $resolve-pr.output.pr` again, up to 4 times.
+           If checks appear, go back to watching them as above. If there are
+           still none after that, the repository has no CI for this PR: that is
+           not a failure, so continue to step 4 and say in the summary that it
+           merged without CI checks.
+      4. Squash-merge and delete the branch — only once every check has passed,
+         or once step 3 established that there are none:
            `gh pr merge $resolve-pr.output.pr --squash --delete-branch`
+         If GitHub refuses (branch protection requires a check or a review that
+         is missing), do NOT merge another way — report what it said.
       5. Never bypass branch protection, never admin-override, never `--no-verify`,
          and do not use `--auto` — confirm the checks are green here yourself.
 
@@ -129,7 +138,7 @@ nodes:
     output_format:
       type: object
       properties:
-        merged: { type: boolean, description: "true if merged (after all checks passed)" }
+        merged: { type: boolean, description: "true if merged (after all checks passed, or with no checks at all)" }
         summary: { type: string, description: "one line: merged / queued / why not" }
       required: [merged, summary]
 
@@ -142,6 +151,18 @@ nodes:
     trigger_rule: all_done
     prompt: |
       Summarize the outcome for PR #$resolve-pr.output.pr in 2-3 lines: whether
-      it merged (only after CI passed), whether conflicts had to be resolved,
-      and anything a human still needs to do. Merge verdict:
+      it merged (after CI passed, or with no CI configured), whether conflicts
+      had to be resolved, and anything a human still needs to do. Merge verdict:
       $merge.output.summary
+
+  # 6. A merge that did not happen is not a completed run. A completed run moves
+  #    the issue to its ready column, and for a piece of an epic that column is
+  #    where the supervisor reviews it and starts the next piece. ERP-141 was
+  #    declined here, still landed in Done, and its successor was started against
+  #    an epic branch that did not contain it. Cancelling leaves the issue where
+  #    it is, for a human or a rerun.
+  - id: not-merged
+    category: delivery
+    depends_on: [merge, summary]
+    when: "$merge.output.merged != 'true'"
+    cancel: "The PR was not merged, so this issue stays where it is. See the merge step for why."

@@ -346,6 +346,35 @@ mod tests {
         );
     }
 
+    /// A repository with no CI is merged, not parked; and a merge that did not
+    /// happen ends the run cancelled. A *completed* run moves the issue to its
+    /// ready column, and for a piece of an epic that is where the supervisor
+    /// grades it and starts the next one: ERP-141 was declined for having no
+    /// checks, still reached Done, and the epic advanced without it.
+    #[test]
+    fn merge_pr_merges_without_ci_and_cancels_when_it_does_not_merge() {
+        let yaml = default_workflow("merge-pr").expect("registered");
+        let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow must parse");
+        let node = |id: &str| wf.nodes.iter().find(|n| n.id == id).expect(id);
+
+        let harness_dag::NodeKind::Prompt(merge) = &node("merge").kind else {
+            panic!("merge is a prompt node");
+        };
+        assert!(
+            !merge.contains("no checks exist at all: do NOT merge"),
+            "a repository without CI must still be merged"
+        );
+        assert!(
+            merge.contains("no checks reported"),
+            "the no-checks case must be handled explicitly, with a re-check for slow CI"
+        );
+
+        let gate = node("not-merged");
+        assert!(matches!(gate.kind, harness_dag::NodeKind::Cancel(_)));
+        assert_eq!(gate.when.as_deref(), Some("$merge.output.merged != 'true'"));
+        assert!(gate.depends_on.contains(&"merge".to_string()));
+    }
+
     #[test]
     fn the_supervisor_derives_the_build_column_in_both_places() {
         let yaml = super::WORKFLOWS
