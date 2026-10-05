@@ -315,6 +315,11 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/authoring/workflows/{name}",
             get(workflows_routes::get_workflow).delete(workflows_routes::delete_workflow),
         )
+        .route("/api/authoring/trash", get(workflows_routes::list_trash))
+        .route(
+            "/api/authoring/trash/{id}/restore",
+            post(workflows_routes::restore_workflow),
+        )
         .route(
             "/api/authoring/validate",
             post(workflows_routes::validate_workflow),

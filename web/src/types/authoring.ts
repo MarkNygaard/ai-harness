@@ -75,6 +75,19 @@ export interface InstalledWorkflow {
   updated_at: string;
 }
 
+/** A deleted workflow in the bin, restorable until `expires_at`. */
+export interface TrashedWorkflow {
+  /** What the restore call takes. */
+  id: string;
+  name: string;
+  description: string | null;
+  node_count: number;
+  /** Unix seconds. */
+  deleted_at: number;
+  /** Unix seconds; cleared out after this. */
+  expires_at: number;
+}
+
 export interface WorkflowSummary {
   name: string;
   source: AuthoringSource;
