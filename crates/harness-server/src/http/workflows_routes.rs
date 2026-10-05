@@ -214,6 +214,35 @@ pub async fn delete_workflow(
     }
 }
 
+/// `GET /api/authoring/trash` — deleted workflows that can still be restored,
+/// newest first.
+pub async fn list_trash(State(state): State<Arc<AppState>>) -> Response {
+    Json(authoring::list_trash(&state.core.project_root)).into_response()
+}
+
+/// `POST /api/authoring/trash/{id}/restore` — put a deleted workflow back.
+/// `409` when a workflow of that name exists again: restoring never overwrites.
+pub async fn restore_workflow(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<super::runs_routes::RunsState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    match authoring::restore_workflow(&state.core.project_root, &id) {
+        Ok(name) => {
+            // The delete forgot who wrote it; the restorer is who brought it
+            // back, which is the honest record now.
+            record_edit(&runs, &headers, &name, EDIT_SOURCE_UI).await;
+            Json(serde_json::json!({ "restored": true, "name": name })).into_response()
+        }
+        Err(e @ authoring::RestoreError::NameTaken(_)) => err(StatusCode::CONFLICT, e.to_string()),
+        Err(e @ authoring::RestoreError::NotInBin(_)) => err(StatusCode::NOT_FOUND, e.to_string()),
+        Err(e @ authoring::RestoreError::Io(_)) => {
+            err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+        }
+    }
+}
+
 /// Echo the resulting workflow's node summaries after a mutation so the client
 /// sees the new DAG state (the build→validate→fix loop).
 ///

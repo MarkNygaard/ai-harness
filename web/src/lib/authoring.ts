@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "./api";
 import type {
   Catalog,
+  TrashedWorkflow,
   ValidationResult,
   WorkflowSource,
   WorkflowSummary,
@@ -85,6 +86,34 @@ export function useResetWorkflow() {
     onSuccess: (_data, name) => {
       qc.invalidateQueries({ queryKey: ["authoring", "workflow", name] });
       qc.invalidateQueries({ queryKey: ["authoring", "workflows"] });
+      // The deleted copy is in the bin now.
+      qc.invalidateQueries({ queryKey: ["authoring", "trash"] });
+    },
+  });
+}
+
+/** Deleted workflows that can still be restored, newest first. */
+export function useWorkflowTrash() {
+  return useQuery<TrashedWorkflow[], Error>({
+    queryKey: ["authoring", "trash"],
+    queryFn: ({ signal }) =>
+      apiJson<TrashedWorkflow[]>("/api/authoring/trash", { signal }),
+  });
+}
+
+/** Put a deleted workflow back under its own name. */
+export function useRestoreWorkflow() {
+  const qc = useQueryClient();
+  return useMutation<{ restored: boolean; name: string }, Error, string>({
+    mutationFn: (id) =>
+      apiJson<{ restored: boolean; name: string }>(
+        `/api/authoring/trash/${encodeURIComponent(id)}/restore`,
+        { method: "POST" },
+      ),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["authoring", "trash"] });
+      qc.invalidateQueries({ queryKey: ["authoring", "workflows"] });
+      qc.invalidateQueries({ queryKey: ["authoring", "workflow", data.name] });
     },
   });
 }

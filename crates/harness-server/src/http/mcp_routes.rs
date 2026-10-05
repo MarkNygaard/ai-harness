@@ -524,7 +524,11 @@ async fn call_tool(
                     // installed and the registry must stop counting it.
                     super::library_routes::forget_installed(state, &s("name")).await;
                     to_result(
-                        format!("deleted custom workflow `{}`", s("name")),
+                        format!(
+                            "deleted custom workflow `{}` — it is in the bin for {} days (workflow_trash / workflow_restore)",
+                            s("name"),
+                            authoring::TRASH_RETENTION_DAYS
+                        ),
                         &json!({ "deleted": true, "name": s("name") }),
                     )
                 }
@@ -535,6 +539,30 @@ async fn call_tool(
                 Err(e) => tool_error(e),
             }
         }
+        "workflow_trash" => {
+            let bin = authoring::list_trash(&state.project_root);
+            to_result(
+                format!("{} deleted workflow(s) in the bin", bin.len()),
+                &json!({ "trash": bin }),
+            )
+        }
+        "workflow_restore" => match authoring::restore_workflow(&state.project_root, &s("id")) {
+            Ok(name) => {
+                super::workflows_routes::record_edit_as(
+                    state,
+                    &name,
+                    actor.user_id.as_deref(),
+                    actor.actor.as_deref(),
+                    super::workflows_routes::EDIT_SOURCE_MCP,
+                )
+                .await;
+                to_result(
+                    format!("restored `{name}`"),
+                    &json!({ "restored": true, "name": name }),
+                )
+            }
+            Err(e) => tool_error(e.to_string()),
+        },
         "workflow_create" => {
             let r = authoring::create_workflow(
                 &state.project_root,
@@ -821,12 +849,27 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_delete",
-            "description": "Delete a CUSTOM workflow by name. Bundled defaults have no file and can't be deleted.",
+            "description": "Delete a CUSTOM workflow by name. Bundled defaults have no file and can't be deleted. It goes to the bin for 14 days, where workflow_trash lists it and workflow_restore puts it back.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": { "name": { "type": "string" } },
                 "required": ["name"],
+            }
+        }),
+        json!({
+            "name": "workflow_trash",
+            "description": "List deleted workflows that can still be restored, newest first: each has `id` (what workflow_restore takes), `name`, `deleted_at` and `expires_at` (unix seconds). Entries are cleared out 14 days after deletion.",
+            "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+        }),
+        json!({
+            "name": "workflow_restore",
+            "description": "Restore a deleted workflow from the bin by its `id` from workflow_trash, under its original name. Refuses when a workflow of that name exists again rather than overwriting it.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"],
             }
         }),
         json!({
@@ -1126,6 +1169,8 @@ const AUTHORING_TOOLS: &[&str] = &[
     "workflow_connect",
     "workflow_set_ui",
     "workflow_delete",
+    "workflow_trash",
+    "workflow_restore",
     "workflow_catalog",
     "workflow_models",
     // The library is part of authoring: reaching for an existing workflow is

@@ -9,6 +9,7 @@ import {
 import { LibraryDialog } from "@/components/editor/LibraryDialog";
 import { PersonBadge } from "@/components/PersonBadge";
 import { PublishDialog } from "@/components/editor/PublishDialog";
+import { RecentlyDeleted } from "@/components/editor/RecentlyDeleted";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -146,6 +147,8 @@ export function WorkflowsList() {
             <WorkflowCard key={wf.name} wf={wf} view={view} />
           ))}
         </Section>
+
+        <RecentlyDeleted />
       </div>
     </SettingsShell>
   );

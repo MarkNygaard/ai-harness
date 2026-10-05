@@ -315,7 +315,7 @@ function Editor() {
     if (!routeName) return;
     if (
       !window.confirm(
-        `Reset "${routeName}" to its bundled default? This discards the project copy of this workflow.`,
+        `Reset "${routeName}" to its bundled default? The project copy goes under Recently deleted on the Workflows page for 14 days.`,
       )
     )
       return;
@@ -332,7 +332,7 @@ function Editor() {
     if (!routeName) return;
     if (
       !window.confirm(
-        `Delete the custom workflow "${routeName}"? This can't be undone.`,
+        `Delete the custom workflow "${routeName}"? It stays under Recently deleted on the Workflows page for 14 days, where it can be restored.`,
       )
     )
       return;

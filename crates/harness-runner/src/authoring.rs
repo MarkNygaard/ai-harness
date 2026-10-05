@@ -345,19 +345,203 @@ pub fn get_workflow(project_root: &Path, name: &str) -> Result<WorkflowSource, S
 /// Delete a project's workflow override (`.harness/workflows/<name>.yaml`) so a
 /// bundled workflow reverts to its built-in default. Never touches bundled
 /// defaults; returns whether a project file was actually removed.
+///
+/// The file is moved to the bin rather than removed (see [`list_trash`]), so a
+/// workflow deleted by mistake can be restored for [`TRASH_RETENTION_DAYS`].
+/// Workflows live only on the server's disk, so a delete with no bin left
+/// nothing to restore from — which is how a team's main pipeline was lost.
 pub fn delete_project_workflow(project_root: &Path, name: &str) -> Result<bool, String> {
+    delete_project_workflow_at(project_root, name, unix_now())
+}
+
+fn delete_project_workflow_at(project_root: &Path, name: &str, now: i64) -> Result<bool, String> {
     if !is_safe_name(name) {
         return Err(format!("invalid workflow name `{name}`"));
     }
-    let path = project_root
-        .join(".harness")
-        .join("workflows")
-        .join(format!("{name}.yaml"));
+    let path = workflows_dir(project_root).join(format!("{name}.yaml"));
     if !path.is_file() {
         return Ok(false);
     }
-    std::fs::remove_file(&path).map_err(|e| format!("failed to remove {}: {e}", path.display()))?;
+    let bin = trash_dir(project_root);
+    std::fs::create_dir_all(&bin)
+        .map_err(|e| format!("failed to create {}: {e}", bin.display()))?;
+    // Deleting the same name twice in one second would otherwise overwrite the
+    // first copy in the bin; step the stamp forward until the slot is free.
+    let mut stamp = now;
+    while bin
+        .join(format!("{name}{TRASH_SEPARATOR}{stamp}.yaml"))
+        .exists()
+    {
+        stamp += 1;
+    }
+    let dest = bin.join(format!("{name}{TRASH_SEPARATOR}{stamp}.yaml"));
+    std::fs::rename(&path, &dest)
+        .map_err(|e| format!("failed to move {} to the bin: {e}", path.display()))?;
+    purge_trash_at(project_root, now);
     Ok(true)
+}
+
+// ── The bin ──────────────────────────────────────────────────────────────────
+
+/// How long a deleted workflow stays restorable.
+pub const TRASH_RETENTION_DAYS: i64 = 14;
+
+/// Between a workflow's name and its deletion time in a bin file name. Not a
+/// character [`is_safe_name`] allows, so the split is never ambiguous.
+const TRASH_SEPARATOR: char = '~';
+
+/// A deleted workflow waiting in the bin.
+#[derive(Debug, Clone, Serialize)]
+pub struct TrashedWorkflow {
+    /// What [`restore_workflow`] takes. Unique even when one name was deleted
+    /// more than once.
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub node_count: usize,
+    /// Unix seconds.
+    pub deleted_at: i64,
+    /// Unix seconds; after this it is cleared out.
+    pub expires_at: i64,
+}
+
+fn workflows_dir(project_root: &Path) -> std::path::PathBuf {
+    project_root.join(".harness").join("workflows")
+}
+
+/// Inside the workflows directory, under a name the listing skips: it reads
+/// only `*.yaml` files, never directories.
+fn trash_dir(project_root: &Path) -> std::path::PathBuf {
+    workflows_dir(project_root).join(".trash")
+}
+
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// `(name, deleted_at)` out of a bin file's stem, or `None` for anything that
+/// is not one.
+fn parse_trash_id(id: &str) -> Option<(&str, i64)> {
+    let (name, stamp) = id.rsplit_once(TRASH_SEPARATOR)?;
+    let stamp = stamp.parse().ok()?;
+    is_safe_name(name).then_some((name, stamp))
+}
+
+/// What is in the bin, newest first. Anything past its retention is cleared
+/// out first, so what is listed is exactly what can still be restored.
+pub fn list_trash(project_root: &Path) -> Vec<TrashedWorkflow> {
+    list_trash_at(project_root, unix_now())
+}
+
+fn list_trash_at(project_root: &Path, now: i64) -> Vec<TrashedWorkflow> {
+    purge_trash_at(project_root, now);
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(trash_dir(project_root)) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Some((name, deleted_at)) = parse_trash_id(id) else {
+            continue;
+        };
+        // A file that no longer parses is still listed: restoring it is how
+        // somebody gets the text back to fix it.
+        let wf = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|yaml| parse_workflow(&yaml).ok());
+        out.push(TrashedWorkflow {
+            id: id.to_string(),
+            name: name.to_string(),
+            description: wf.as_ref().and_then(|w| w.description.clone()),
+            node_count: wf.as_ref().map_or(0, |w| w.nodes.len()),
+            deleted_at,
+            expires_at: deleted_at + TRASH_RETENTION_DAYS * 86_400,
+        });
+    }
+    out.sort_by_key(|t| std::cmp::Reverse(t.deleted_at));
+    out
+}
+
+/// Why a restore did not happen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RestoreError {
+    /// No such entry: never there, already restored, or cleared out.
+    NotInBin(String),
+    /// A workflow of that name exists again.
+    NameTaken(String),
+    /// The move itself failed.
+    Io(String),
+}
+
+impl std::fmt::Display for RestoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotInBin(id) => write!(
+                f,
+                "`{id}` is not in the bin — it may have been restored already, or \
+                 cleared out after {TRASH_RETENTION_DAYS} days"
+            ),
+            Self::NameTaken(name) => write!(
+                f,
+                "a workflow named `{name}` exists again; rename or delete it first, \
+                 then restore this one"
+            ),
+            Self::Io(e) => f.write_str(e),
+        }
+    }
+}
+
+/// Put a deleted workflow back under its own name, and return that name.
+///
+/// Refuses when a workflow of that name exists again, rather than overwriting
+/// it: whoever made the new one meant it, and the bin entry stays put for them
+/// to decide.
+pub fn restore_workflow(project_root: &Path, id: &str) -> Result<String, RestoreError> {
+    let Some((name, _)) = parse_trash_id(id) else {
+        return Err(RestoreError::NotInBin(id.to_string()));
+    };
+    let from = trash_dir(project_root).join(format!("{id}.yaml"));
+    if !from.is_file() {
+        return Err(RestoreError::NotInBin(id.to_string()));
+    }
+    let to = workflows_dir(project_root).join(format!("{name}.yaml"));
+    if to.exists() {
+        return Err(RestoreError::NameTaken(name.to_string()));
+    }
+    std::fs::rename(&from, &to)
+        .map_err(|e| RestoreError::Io(format!("failed to restore `{name}`: {e}")))?;
+    Ok(name.to_string())
+}
+
+/// Clear out bin entries older than [`TRASH_RETENTION_DAYS`]; returns how many
+/// went. Best-effort: a file that cannot be removed now is tried again next
+/// time, and never blocks the delete or listing that triggered this.
+fn purge_trash_at(project_root: &Path, now: i64) -> usize {
+    let cutoff = now - TRASH_RETENTION_DAYS * 86_400;
+    let Ok(entries) = std::fs::read_dir(trash_dir(project_root)) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .path()
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .and_then(parse_trash_id)
+                .is_some_and(|(_, deleted_at)| deleted_at < cutoff)
+        })
+        .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
+        .count()
 }
 
 /// A workflow/command name safe to use as a file stem (no traversal).
@@ -885,6 +1069,86 @@ nodes:
         assert!(!delete_project_workflow(root, "idea-to-pr").unwrap());
         // Unsafe names are refused.
         assert!(delete_project_workflow(root, "../escape").is_err());
+    }
+
+    #[test]
+    fn a_deleted_workflow_waits_in_the_bin_and_can_be_restored() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let good = "name: t\ndescription: kept\nnodes:\n  - id: a\n    bash: \"echo hi\"\n";
+        save_workflow(root, "my-custom", good).unwrap();
+
+        assert!(delete_project_workflow_at(root, "my-custom", 1_000).unwrap());
+        // Gone from the listing and from resolution...
+        assert!(!list_workflows(root).iter().any(|w| w.name == "my-custom"));
+        assert!(get_workflow(root, "my-custom").is_err());
+        // ...but in the bin, with its description and when it expires.
+        let bin = list_trash_at(root, 1_000);
+        assert_eq!(bin.len(), 1);
+        assert_eq!(bin[0].name, "my-custom");
+        assert_eq!(bin[0].description.as_deref(), Some("kept"));
+        assert_eq!(bin[0].expires_at, 1_000 + TRASH_RETENTION_DAYS * 86_400);
+
+        let restored = restore_workflow(root, &bin[0].id).unwrap();
+        assert_eq!(restored, "my-custom");
+        assert_eq!(get_workflow(root, "my-custom").unwrap().yaml, good);
+        assert!(list_trash_at(root, 1_000).is_empty());
+        // Restoring twice finds nothing to restore.
+        assert!(restore_workflow(root, &bin[0].id).is_err());
+    }
+
+    #[test]
+    fn restore_never_overwrites_a_workflow_made_since() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let first = "name: t\nnodes:\n  - id: a\n    bash: \"echo first\"\n";
+        let second = "name: t\nnodes:\n  - id: a\n    bash: \"echo second\"\n";
+        save_workflow(root, "wf", first).unwrap();
+        delete_project_workflow_at(root, "wf", 1_000).unwrap();
+        save_workflow(root, "wf", second).unwrap();
+
+        let id = list_trash_at(root, 1_000)[0].id.clone();
+        assert_eq!(
+            restore_workflow(root, &id),
+            Err(RestoreError::NameTaken("wf".into()))
+        );
+        assert_eq!(get_workflow(root, "wf").unwrap().yaml, second);
+        // The bin entry is still there to restore once the name is free.
+        assert_eq!(list_trash_at(root, 1_000).len(), 1);
+
+        // The same name deleted twice in one second keeps both copies.
+        delete_project_workflow_at(root, "wf", 1_000).unwrap();
+        assert_eq!(list_trash_at(root, 1_000).len(), 2);
+    }
+
+    #[test]
+    fn the_bin_clears_out_after_its_retention() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let good = "name: t\nnodes:\n  - id: a\n    bash: \"echo hi\"\n";
+        save_workflow(root, "old", good).unwrap();
+        save_workflow(root, "new", good).unwrap();
+        let day = 86_400;
+        delete_project_workflow_at(root, "old", 0).unwrap();
+        delete_project_workflow_at(root, "new", 10 * day).unwrap();
+
+        // Day 14 exactly: both still restorable.
+        let names: Vec<_> = list_trash_at(root, TRASH_RETENTION_DAYS * day)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, ["new", "old"], "newest first");
+
+        // A second later the oldest is cleared out, and only it.
+        let names: Vec<_> = list_trash_at(root, TRASH_RETENTION_DAYS * day + 1)
+            .into_iter()
+            .map(|t| t.name)
+            .collect();
+        assert_eq!(names, ["new"]);
+
+        // Nothing that is not a bin entry is ever touched or restored.
+        assert!(restore_workflow(root, "../escape~1").is_err());
+        assert!(restore_workflow(root, "no-stamp").is_err());
     }
 
     #[test]
