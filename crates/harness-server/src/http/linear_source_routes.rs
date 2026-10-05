@@ -345,6 +345,7 @@ pub async fn put_source(
 /// `DELETE /api/projects/{project}/linear-source?workflow=` — remove a binding.
 pub async fn delete_source(
     Extension(state): Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(project): axum::extract::Path<String>,
     Query(q): Query<WorkflowQuery>,
 ) -> Response {
@@ -354,14 +355,21 @@ pub async fn delete_source(
     if let Err(r) = ensure_project(&state, &project).await {
         return r;
     }
-    let store = match state.linear_source_store().await {
+    // Into the bin, not gone: a binding's columns are the part of the setup
+    // that is hard to get right, and one missing stops a whole relay.
+    let trash = match state.trash_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    match store.delete(&project, &workflow).await {
-        Ok(deleted) => Json(serde_json::json!({
-            "deleted": deleted,
+    let (_, actor) = super::accounts::caller_trigger(&state, &headers).await;
+    match trash
+        .trash_linear_binding(&project, &workflow, actor.as_deref())
+        .await
+    {
+        Ok(entry) => Json(serde_json::json!({
+            "deleted": entry.is_some(),
             "workflow": workflow,
+            "trash_id": entry.map(|e| e.id),
         }))
         .into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clearedIn, daysAgo } from "./RecentlyDeleted";
+import { clearedIn, daysAgo } from "./bin-age";
 
 const DAY = 86_400;
 

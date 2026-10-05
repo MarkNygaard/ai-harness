@@ -271,9 +271,13 @@ export function useSaveLinearSource(project: string | null) {
 
 export function useDeleteLinearSource(project: string | null) {
   const qc = useQueryClient();
-  return useMutation<{ deleted: boolean; workflow: string }, Error, string>({
+  return useMutation<
+    { deleted: boolean; workflow: string; trash_id: string | null },
+    Error,
+    string
+  >({
     mutationFn: (workflow) =>
-      apiJson<{ deleted: boolean; workflow: string }>(
+      apiJson<{ deleted: boolean; workflow: string; trash_id: string | null }>(
         `/api/projects/${encodeURIComponent(project!)}/linear-source?workflow=${encodeURIComponent(workflow)}`,
         { method: "DELETE" },
       ),
@@ -283,6 +287,8 @@ export function useDeleteLinearSource(project: string | null) {
       });
       qc.invalidateQueries({ queryKey: ["linear", "sources", project] });
       qc.invalidateQueries({ queryKey: ["linear", "check", project] });
+      // It went to the bin, so the bin changed too.
+      qc.invalidateQueries({ queryKey: ["trash"] });
     },
   });
 }

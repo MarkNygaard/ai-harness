@@ -3,7 +3,8 @@
  *
  * - `useProjects()`        — `GET /api/projects` (list).
  * - `useRegisterProject()` — `POST /api/projects` (register/update; clones the repo).
- * - `useDeleteProject()`   — `DELETE /api/projects/{name}` (deregister + remove checkout).
+ * - `useDeleteProject()`   — `DELETE /api/projects/{name}` (to the bin + remove checkout).
+ * - `useTrash()` / `useRestoreTrash()` — `GET /api/trash`, `POST /api/trash/{id}/restore`.
  * - `useProjectCacheSize(name)` — `GET /api/projects/{name}/cache-size`.
  * - `useSetProjectCacheCap()`   — `PUT /api/projects/{name}/cache-cap`.
  * - `useClearProjectCache()`    — `POST /api/projects/{name}/cache/clear`.
@@ -15,6 +16,7 @@ import type {
   CacheSize,
   Project,
   RegisterProjectRequest,
+  TrashEntry,
 } from "@/types/project";
 
 export function useProjects() {
@@ -52,12 +54,19 @@ export function useRegisterProject() {
 
 export function useDeleteProject() {
   const qc = useQueryClient();
-  return useMutation<{ deleted: boolean; project: string }, Error, string>({
+  return useMutation<
+    { deleted: boolean; project: string; trash_id: string | null },
+    Error,
+    string
+  >({
     mutationFn: (name) =>
       apiJson(`/api/projects/${encodeURIComponent(name)}`, {
         method: "DELETE",
       }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["projects"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({ queryKey: ["trash"] });
+    },
   });
 }
 
@@ -121,5 +130,41 @@ export function useSweepProjectCache() {
       ),
     onSuccess: (_, name) =>
       qc.invalidateQueries({ queryKey: ["project-cache-size", name] }),
+  });
+}
+
+/** Deleted projects and Linear bindings that can still be restored. */
+export function useTrash() {
+  return useQuery<TrashEntry[], Error>({
+    queryKey: ["trash"],
+    queryFn: ({ signal }) => apiJson<TrashEntry[]>("/api/trash", { signal }),
+  });
+}
+
+/**
+ * Put a deleted project or binding back. A restored project's repo is cloned
+ * again; if that fails it is still restored, and the warning says why.
+ */
+export function useRestoreTrash() {
+  const qc = useQueryClient();
+  return useMutation<
+    { restored: boolean; entry: TrashEntry; warning: string | null },
+    Error,
+    string
+  >({
+    mutationFn: (id) =>
+      apiJson(`/api/trash/${encodeURIComponent(id)}/restore`, {
+        method: "POST",
+      }),
+    onSuccess: (data) => {
+      qc.invalidateQueries({ queryKey: ["trash"] });
+      qc.invalidateQueries({ queryKey: ["projects"] });
+      qc.invalidateQueries({
+        queryKey: ["linear", "sources", data.entry.project],
+      });
+      qc.invalidateQueries({
+        queryKey: ["linear", "check", data.entry.project],
+      });
+    },
   });
 }

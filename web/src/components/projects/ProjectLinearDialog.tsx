@@ -16,6 +16,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { useWorkflowList } from "@/lib/authoring";
+import { useRestoreTrash } from "@/lib/projects";
 import {
   useDeleteLinearSource,
   useLinearConnections,
@@ -202,6 +203,14 @@ function DialogBody({
   const sources = useLinearSources(project);
   const workflows = useWorkflowList();
   const del = useDeleteLinearSource(project);
+  const restore = useRestoreTrash();
+  // The binding just deleted, so it can be undone on the spot. Delete takes
+  // one click with no confirmation; an Undo is quicker than a dialog, and the
+  // binding also waits on the Projects page's Recently deleted for 14 days.
+  const [justDeleted, setJustDeleted] = useState<{
+    workflow: string;
+    trashId: string;
+  } | null>(null);
 
   // `null` = closed, "" = new binding, otherwise the workflow being edited.
   const [editing, setEditing] = useState<string | null>(null);
@@ -329,7 +338,16 @@ function DialogBody({
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={() => del.mutate(s.workflow)}
+                onClick={() =>
+                  del.mutate(s.workflow, {
+                    onSuccess: (res) =>
+                      setJustDeleted(
+                        res.trash_id
+                          ? { workflow: res.workflow, trashId: res.trash_id }
+                          : null,
+                      ),
+                  })
+                }
                 disabled={del.isPending}
                 title="Delete binding"
               >
@@ -342,6 +360,31 @@ function DialogBody({
       {del.isError && (
         <span className="text-[10px] text-destructive">
           {del.error.message}
+        </span>
+      )}
+      {justDeleted && (
+        <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-[12px]">
+          <span className="min-w-0 flex-1">
+            Deleted the{" "}
+            <span className="font-mono">{justDeleted.workflow}</span> binding.
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={restore.isPending}
+            onClick={() =>
+              restore.mutate(justDeleted.trashId, {
+                onSuccess: () => setJustDeleted(null),
+              })
+            }
+          >
+            Undo
+          </Button>
+        </div>
+      )}
+      {restore.isError && (
+        <span className="text-[10px] text-destructive">
+          {restore.error.message}
         </span>
       )}
       {sources.data && sources.data.length > 0 && (

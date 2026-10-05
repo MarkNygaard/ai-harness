@@ -66,3 +66,20 @@ export interface CacheSize {
   workflow_bytes: number;
   workflow_cap_gb: number;
 }
+
+/** A deleted project or Linear binding in the bin, restorable until `expires_at`. */
+export interface TrashEntry {
+  id: string;
+  kind: "project" | "linear_binding";
+  /** The project name, or `project / workflow` for a binding. */
+  label: string;
+  project: string;
+  /** For a binding, the workflow it ran. */
+  workflow: string | null;
+  /** RFC 3339. */
+  deleted_at: string;
+  /** RFC 3339; cleared out after this. */
+  expires_at: string;
+  /** Who deleted it, if known. */
+  deleted_actor: string | null;
+}
