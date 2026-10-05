@@ -75,6 +75,14 @@ export interface InstalledWorkflow {
   updated_at: string;
 }
 
+/** An earlier version of a workflow, kept when a save replaced it. */
+export interface WorkflowVersion {
+  id: string;
+  /** When this content was saved, in unix seconds. */
+  saved_at: number;
+  node_count: number;
+}
+
 /** A deleted workflow in the bin, restorable until `expires_at`. */
 export interface TrashedWorkflow {
   /** What the restore call takes. */

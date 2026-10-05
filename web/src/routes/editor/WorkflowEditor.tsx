@@ -49,6 +49,7 @@ import { EditorNode as EditorNodeView } from "@/components/editor/EditorNode";
 import { EditorActionsContext } from "@/components/editor/context";
 import { Palette } from "@/components/editor/Palette";
 import { PropertiesDrawer } from "@/components/editor/PropertiesDrawer";
+import { VersionHistoryDialog } from "@/components/editor/VersionHistoryDialog";
 import { WorkflowDescriptionDrawer } from "@/components/editor/WorkflowDescriptionDrawer";
 import { WorkflowSettingsDrawer } from "@/components/editor/WorkflowSettingsDrawer";
 import {
@@ -414,6 +415,17 @@ function Editor() {
             {reset.isPending ? "Deleting…" : "Delete"}
           </Button>
         )}
+      {/* Only a workflow saved here has a history; a built-in one is the
+          binary's, until somebody saves over it. Clearing `loadedFor` reloads
+          the restored version, as Reset does. */}
+      {routeName && source.data?.source === "project" && (
+        <VersionHistoryDialog
+          name={routeName}
+          onRestored={() => {
+            loadedFor.current = null;
+          }}
+        />
+      )}
       <Button
         variant="outline"
         size="sm"

@@ -530,18 +530,45 @@ fn purge_trash_at(project_root: &Path, now: i64) -> usize {
     let Ok(entries) = std::fs::read_dir(trash_dir(project_root)) else {
         return 0;
     };
-    entries
+    let mut cleared = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some((name, deleted_at)) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .and_then(parse_trash_id)
+        else {
+            continue;
+        };
+        if deleted_at < cutoff && std::fs::remove_file(&path).is_ok() {
+            cleared.push(name.to_string());
+        }
+    }
+    // A workflow cleared out of the bin takes its versions with it — unless
+    // the name is in use again, or another deletion of it is still waiting.
+    for name in &cleared {
+        let live = workflows_dir(project_root)
+            .join(format!("{name}.yaml"))
+            .exists();
+        let waiting = list_trash_ids(project_root).any(|(n, _)| n == *name);
+        if !live && !waiting {
+            let _ = std::fs::remove_dir_all(versions_dir(project_root, name));
+        }
+    }
+    cleared.len()
+}
+
+/// `(name, deleted_at)` for every entry in the bin, without clearing anything.
+fn list_trash_ids(project_root: &Path) -> impl Iterator<Item = (String, i64)> {
+    std::fs::read_dir(trash_dir(project_root))
+        .into_iter()
         .flatten()
-        .filter(|entry| {
-            entry
-                .path()
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .and_then(parse_trash_id)
-                .is_some_and(|(_, deleted_at)| deleted_at < cutoff)
+        .flatten()
+        .filter_map(|entry| {
+            let stem = entry.path().file_stem()?.to_str()?.to_string();
+            let (name, at) = parse_trash_id(&stem)?;
+            Some((name.to_string(), at))
         })
-        .filter(|entry| std::fs::remove_file(entry.path()).is_ok())
-        .count()
 }
 
 /// A workflow/command name safe to use as a file stem (no traversal).
@@ -558,7 +585,24 @@ fn is_safe_name(name: &str) -> bool {
 /// Validate then save a workflow to `<project_root>/.harness/workflows/<name>.yaml`.
 /// Rejects an invalid workflow (so the editor can never persist a broken DAG) and
 /// unsafe names.
+///
+/// Saving over an existing workflow keeps what it replaces as a version (see
+/// [`list_versions`]), so an edit can be rolled back.
 pub fn save_workflow(project_root: &Path, name: &str, yaml: &str) -> Result<(), String> {
+    save_workflow_at(project_root, name, yaml, unix_now(), false)
+}
+
+/// [`save_workflow`] with the clock passed in. `keep_current` keeps the file
+/// being replaced as a version even when it was written moments ago, which a
+/// restore needs: otherwise restoring right after an edit would lose that edit
+/// with no way back.
+fn save_workflow_at(
+    project_root: &Path,
+    name: &str,
+    yaml: &str,
+    now: i64,
+    keep_current: bool,
+) -> Result<(), String> {
     if !is_safe_name(name) {
         return Err(format!(
             "invalid workflow name `{name}` (use letters, digits, `-`, `_`, `.`)"
@@ -571,12 +615,145 @@ pub fn save_workflow(project_root: &Path, name: &str, yaml: &str) -> Result<(), 
             result.error.unwrap_or_else(|| "unknown error".into())
         ));
     }
-    let dir = project_root.join(".harness").join("workflows");
+    let dir = workflows_dir(project_root);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
     let path = dir.join(format!("{name}.yaml"));
+    keep_version(project_root, name, &path, yaml, now, keep_current)?;
     std::fs::write(&path, yaml).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
     Ok(())
+}
+
+// ── Versions ─────────────────────────────────────────────────────────────────
+
+/// How many earlier versions are kept per workflow; the oldest go first.
+pub const MAX_VERSIONS: usize = 20;
+
+/// A file written less than this long ago is an edit in progress, not a
+/// version. The MCP tools change a workflow one node per call, so without this
+/// one session of building would push every real version out in minutes. What
+/// is kept is the workflow as it stood before the burst of edits began.
+const VERSION_SETTLE_SECS: i64 = 300;
+
+/// An earlier version of a workflow.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkflowVersion {
+    /// What [`get_version`] and [`restore_version`] take.
+    pub id: String,
+    /// When this content was saved, in unix seconds.
+    pub saved_at: i64,
+    pub node_count: usize,
+}
+
+/// `.harness/workflows/.versions/<name>/`, one `<saved_at>.yaml` per version.
+/// A hidden directory, so the workflow listing skips it like the bin.
+fn versions_dir(project_root: &Path, name: &str) -> std::path::PathBuf {
+    workflows_dir(project_root).join(".versions").join(name)
+}
+
+fn modified_secs(path: &Path) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let secs = modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(secs as i64)
+}
+
+/// Copy the file at `path`, about to be replaced by `incoming`, into the
+/// workflow's versions — unless there is nothing to keep (no file, or no
+/// change) or it is an edit still in progress.
+fn keep_version(
+    project_root: &Path,
+    name: &str,
+    path: &Path,
+    incoming: &str,
+    now: i64,
+    keep_current: bool,
+) -> Result<(), String> {
+    let Ok(current) = std::fs::read_to_string(path) else {
+        return Ok(());
+    };
+    if current == incoming {
+        return Ok(());
+    }
+    let saved_at = modified_secs(path).unwrap_or(now);
+    if !keep_current && now - saved_at < VERSION_SETTLE_SECS {
+        return Ok(());
+    }
+    let dir = versions_dir(project_root, name);
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("failed to create {}: {e}", dir.display()))?;
+    let mut stamp = saved_at;
+    while dir.join(format!("{stamp}.yaml")).exists() {
+        stamp += 1;
+    }
+    std::fs::write(dir.join(format!("{stamp}.yaml")), current)
+        .map_err(|e| format!("failed to keep the previous version of `{name}`: {e}"))?;
+    // Only the newest are kept. Best-effort: a version that cannot be removed
+    // now is removed on a later save, and never blocks this one.
+    for old in list_versions(project_root, name)
+        .unwrap_or_default()
+        .into_iter()
+        .skip(MAX_VERSIONS)
+    {
+        let _ = std::fs::remove_file(dir.join(format!("{}.yaml", old.id)));
+    }
+    Ok(())
+}
+
+/// A workflow's earlier versions, newest first. Empty for a workflow nobody
+/// has saved over yet, and still there after the workflow is deleted, so a
+/// restore from the bin brings its history back with it.
+pub fn list_versions(project_root: &Path, name: &str) -> Result<Vec<WorkflowVersion>, String> {
+    if !is_safe_name(name) {
+        return Err(format!("invalid workflow name `{name}`"));
+    }
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(versions_dir(project_root, name)) else {
+        return Ok(out);
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("yaml") {
+            continue;
+        }
+        let Some(id) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let Ok(saved_at) = id.parse::<i64>() else {
+            continue;
+        };
+        let node_count = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|yaml| parse_workflow(&yaml).ok())
+            .map_or(0, |w| w.nodes.len());
+        out.push(WorkflowVersion {
+            id: id.to_string(),
+            saved_at,
+            node_count,
+        });
+    }
+    out.sort_by_key(|v| std::cmp::Reverse(v.saved_at));
+    Ok(out)
+}
+
+/// One earlier version's YAML.
+pub fn get_version(project_root: &Path, name: &str, id: &str) -> Result<String, String> {
+    if !is_safe_name(name) || id.parse::<i64>().is_err() {
+        return Err(format!("no version `{id}` of `{name}`"));
+    }
+    std::fs::read_to_string(versions_dir(project_root, name).join(format!("{id}.yaml")))
+        .map_err(|_| format!("no version `{id}` of `{name}`"))
+}
+
+/// Make an earlier version the current one. A restore is a save, so what it
+/// replaces is kept as a version first: restoring the wrong one is undone by
+/// restoring again. A version that no longer validates is refused, as any
+/// save would be.
+pub fn restore_version(project_root: &Path, name: &str, id: &str) -> Result<(), String> {
+    let yaml = get_version(project_root, name, id)?;
+    save_workflow_at(project_root, name, &yaml, unix_now(), true)
 }
 
 // ── Structured (node-level) authoring ────────────────────────────────────────
@@ -1149,6 +1326,132 @@ nodes:
         // Nothing that is not a bin entry is ever touched or restored.
         assert!(restore_workflow(root, "../escape~1").is_err());
         assert!(restore_workflow(root, "no-stamp").is_err());
+    }
+
+    /// Backdate a workflow file, as if it had been saved `secs_ago` before `now`.
+    fn backdate(root: &Path, name: &str, now: i64, secs_ago: i64) {
+        let path = workflows_dir(root).join(format!("{name}.yaml"));
+        let at = std::time::UNIX_EPOCH + std::time::Duration::from_secs((now - secs_ago) as u64);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    }
+
+    fn wf(tag: &str) -> String {
+        format!("name: t\nnodes:\n  - id: a\n    bash: \"echo {tag}\"\n")
+    }
+
+    #[test]
+    fn saving_over_a_workflow_keeps_the_previous_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let now = 1_000_000;
+        save_workflow_at(root, "w", &wf("one"), now, false).unwrap();
+        // Nothing replaced yet, so nothing kept.
+        assert!(list_versions(root, "w").unwrap().is_empty());
+
+        backdate(root, "w", now, 3_600);
+        save_workflow_at(root, "w", &wf("two"), now, false).unwrap();
+        let versions = list_versions(root, "w").unwrap();
+        assert_eq!(versions.len(), 1);
+        // Labelled with when that content was saved, not when it was replaced.
+        assert_eq!(versions[0].saved_at, now - 3_600);
+        assert_eq!(get_version(root, "w", &versions[0].id).unwrap(), wf("one"));
+
+        // Saving identical content keeps nothing.
+        backdate(root, "w", now, 3_600);
+        save_workflow_at(root, "w", &wf("two"), now, false).unwrap();
+        assert_eq!(list_versions(root, "w").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_burst_of_edits_is_one_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let now = 1_000_000;
+        save_workflow_at(root, "w", &wf("before"), now, false).unwrap();
+        backdate(root, "w", now, 3_600);
+
+        // Ten node edits a few seconds apart, as the MCP tools make them.
+        for i in 0..10 {
+            save_workflow_at(root, "w", &wf(&format!("edit-{i}")), now, false).unwrap();
+            backdate(root, "w", now, 5);
+        }
+        let versions = list_versions(root, "w").unwrap();
+        assert_eq!(versions.len(), 1, "the edits in progress are not versions");
+        assert_eq!(
+            get_version(root, "w", &versions[0].id).unwrap(),
+            wf("before")
+        );
+    }
+
+    #[test]
+    fn restoring_a_version_can_itself_be_undone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let now = unix_now();
+        save_workflow_at(root, "w", &wf("good"), now, false).unwrap();
+        backdate(root, "w", now, 3_600);
+        save_workflow_at(root, "w", &wf("bad"), now, false).unwrap();
+
+        // Restoring straight after the bad edit still keeps the bad edit.
+        let good = list_versions(root, "w").unwrap()[0].id.clone();
+        restore_version(root, "w", &good).unwrap();
+        assert_eq!(get_workflow(root, "w").unwrap().yaml, wf("good"));
+        let kept: Vec<_> = list_versions(root, "w")
+            .unwrap()
+            .iter()
+            .map(|v| get_version(root, "w", &v.id).unwrap())
+            .collect();
+        assert!(
+            kept.contains(&wf("bad")),
+            "the replaced edit is a version too"
+        );
+
+        assert!(get_version(root, "w", "../../escape").is_err());
+        assert!(list_versions(root, "../escape").is_err());
+    }
+
+    #[test]
+    fn only_the_newest_versions_are_kept() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let mut now = 1_000_000;
+        save_workflow_at(root, "w", &wf("v0"), now, false).unwrap();
+        for i in 1..=(MAX_VERSIONS + 5) {
+            backdate(root, "w", now, 3_600);
+            now += 7_200;
+            save_workflow_at(root, "w", &wf(&format!("v{i}")), now, false).unwrap();
+        }
+        let versions = list_versions(root, "w").unwrap();
+        assert_eq!(versions.len(), MAX_VERSIONS);
+        // The newest kept version is the one just replaced.
+        let newest = get_version(root, "w", &versions[0].id).unwrap();
+        assert_eq!(newest, wf(&format!("v{}", MAX_VERSIONS + 4)));
+    }
+
+    #[test]
+    fn versions_survive_the_bin_and_go_when_it_clears_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let now = 1_000_000;
+        save_workflow_at(root, "w", &wf("one"), now, false).unwrap();
+        backdate(root, "w", now, 3_600);
+        save_workflow_at(root, "w", &wf("two"), now, false).unwrap();
+
+        delete_project_workflow_at(root, "w", now).unwrap();
+        // Restored from the bin, it has its history back.
+        let id = list_trash_at(root, now)[0].id.clone();
+        restore_workflow(root, &id).unwrap();
+        assert_eq!(list_versions(root, "w").unwrap().len(), 1);
+
+        // Deleted again and left past its retention: the history goes too.
+        delete_project_workflow_at(root, "w", now).unwrap();
+        list_trash_at(root, now + TRASH_RETENTION_DAYS * 86_400 + 1);
+        assert!(list_versions(root, "w").unwrap().is_empty());
     }
 
     #[test]
