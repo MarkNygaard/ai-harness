@@ -111,6 +111,36 @@ fn duplicate_remote(repos: &[ProjectRepo]) -> Option<String> {
     }
     None
 }
+/// Clone `git_url` into `dest`, or fetch it when the checkout is already there.
+/// With `detect`, also returns the repo's default branch (`origin/HEAD`).
+async fn sync_checkout(
+    dest: PathBuf,
+    git_url: String,
+    token: Option<String>,
+    detect: bool,
+) -> Result<Result<Option<String>, harness_runner::WorktreeError>, tokio::task::JoinError> {
+    tokio::task::spawn_blocking(
+        move || -> Result<Option<String>, harness_runner::WorktreeError> {
+            if dest.exists() {
+                harness_runner::fetch_repo(&dest, token.as_deref())?;
+            } else {
+                if let Some(parent) = dest.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        harness_runner::WorktreeError(format!("create projects dir: {e}"))
+                    })?;
+                }
+                harness_runner::clone_repo(&git_url, &dest, token.as_deref())?;
+            }
+            Ok(if detect {
+                harness_runner::default_branch(&dest)
+            } else {
+                None
+            })
+        },
+    )
+    .await
+}
+
 /// `POST /api/projects` — register/update a project and ensure its repo is
 /// cloned into `projects_dir/<name>`. Idempotent: re-registering an existing
 /// project updates the row and `git fetch`es the existing checkout.
@@ -155,29 +185,7 @@ pub async fn register_project(
         );
     }
     let git_url = req.git_url.trim().to_string();
-    let clone_url = git_url.clone();
-    let exists = dest.exists();
-    let git_result = tokio::task::spawn_blocking(
-        move || -> Result<Option<String>, harness_runner::WorktreeError> {
-            if exists {
-                harness_runner::fetch_repo(&dest, token.as_deref())?;
-            } else {
-                if let Some(parent) = dest.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        harness_runner::WorktreeError(format!("create projects dir: {e}"))
-                    })?;
-                }
-                harness_runner::clone_repo(&clone_url, &dest, token.as_deref())?;
-            }
-            // Detect origin/HEAD only when the caller didn't specify a branch.
-            Ok(if detect {
-                harness_runner::default_branch(&dest)
-            } else {
-                None
-            })
-        },
-    )
-    .await;
+    let git_result = sync_checkout(dest, git_url.clone(), token, detect).await;
 
     // Resolve the branch to store, and any non-fatal git warning.
     let (base_branch, warning) = match git_result {
@@ -259,26 +267,93 @@ pub async fn register_project(
 }
 
 /// `DELETE /api/projects/{name}` — deregister and remove the checkout.
+///
+/// The row goes to the bin for 14 days (`GET /api/trash`). The checkout is
+/// removed anyway: it is a clone, and a restore clones it again.
 pub async fn delete_project(
     Extension(state): Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
     if !valid_name(&name) {
         return err(StatusCode::BAD_REQUEST, "invalid project name");
     }
-    let store = match state.project_store().await {
+    let trash = match state.trash_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
-    if let Err(e) = store.delete(&name).await {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
-    }
+    let (_, actor) = super::accounts::caller_trigger(&state, &headers).await;
+    let entry = match trash.trash_project(&name, actor.as_deref()).await {
+        Ok(entry) => entry,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
     // Best-effort: remove the checkout so a re-register clones fresh.
     let dest = state.projects_dir.join(&name);
     if dest.exists() {
         let _ = tokio::task::spawn_blocking(move || std::fs::remove_dir_all(dest)).await;
     }
-    Json(serde_json::json!({ "deleted": true, "project": name })).into_response()
+    Json(serde_json::json!({
+        "deleted": entry.is_some(),
+        "project": name,
+        "trash_id": entry.map(|e| e.id),
+    }))
+    .into_response()
+}
+
+/// `GET /api/trash` — deleted projects and Linear bindings that can still be
+/// restored, newest first.
+pub async fn list_trash(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    let trash = match state.trash_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match trash.list().await {
+        Ok(entries) => Json(entries).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `POST /api/trash/{id}/restore` — put a deleted project or binding back.
+///
+/// `409` when its name is in use again. A restored project's checkout is
+/// cloned again here, as registering does; if that fails the project is still
+/// restored, with the reason as a warning, so the URL or token can be fixed.
+pub async fn restore_trash(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let trash = match state.trash_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let entry = match trash.restore(&id).await {
+        Ok(entry) => entry,
+        Err(e @ harness_persist::RestoreError::Taken(_)) => {
+            return err(StatusCode::CONFLICT, e.to_string())
+        }
+        Err(e @ harness_persist::RestoreError::NotInBin) => {
+            return err(StatusCode::NOT_FOUND, e.to_string())
+        }
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let mut warning = None;
+    if entry.kind == harness_persist::TrashKind::Project.as_str() {
+        let project = match state.project_store().await {
+            Ok(store) => store.get(&entry.project).await.ok().flatten(),
+            Err(_) => None,
+        };
+        if let Some(p) = project {
+            let dest = state.projects_dir.join(&p.name);
+            let token = state.github_token().await;
+            warning = match sync_checkout(dest, p.git_url, token, false).await {
+                Ok(Ok(_)) => None,
+                Ok(Err(e)) => Some(format!("restored, but cloning the repo failed: {e}")),
+                Err(e) => Some(format!("restored, but cloning the repo failed: {e}")),
+            };
+        }
+    }
+    Json(serde_json::json!({ "restored": true, "entry": entry, "warning": warning }))
+        .into_response()
 }
 
 /// `Err(Response)` (409) when a run is active for `project`, else `Ok(())`.

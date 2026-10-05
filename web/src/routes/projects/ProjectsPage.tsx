@@ -36,6 +36,7 @@ import {
 } from "@/lib/projects";
 import { ProjectLinearDialog } from "@/components/projects/ProjectLinearDialog";
 import { ProjectEnvDialog } from "@/components/projects/ProjectEnvDialog";
+import { RecentlyDeletedSettings } from "@/components/projects/RecentlyDeletedSettings";
 import type { Project, ProjectRepo } from "@/types/project";
 
 /** Display metadata for each per-project credential provider. */
@@ -101,6 +102,8 @@ export function ProjectsPage() {
             ))}
           </div>
         </section>
+
+        <RecentlyDeletedSettings />
       </div>
     </SettingsShell>
   );
@@ -175,7 +178,9 @@ function ProjectRow({ project }: { project: Project }) {
             size="icon-sm"
             onClick={() => {
               if (
-                confirm(`Deregister "${project.name}" and remove its checkout?`)
+                confirm(
+                  `Deregister "${project.name}"? It stays under Recently deleted for 14 days, where restoring it clones the repo again.`,
+                )
               ) {
                 del.mutate(project.name);
               }

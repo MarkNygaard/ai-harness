@@ -2,25 +2,9 @@ import { IconRestore } from "@tabler/icons-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useRestoreWorkflow, useWorkflowTrash } from "@/lib/authoring";
+import { clearedIn, daysAgo } from "@/lib/bin-age";
 import { titleFromSlug } from "@/lib/workflow-name";
 import type { TrashedWorkflow } from "@/types/authoring";
-
-const DAY = 86_400;
-
-/** "today", "yesterday", "3 days ago" — a bin entry's age, in days. */
-export function daysAgo(then: number, now: number): string {
-  const days = Math.floor((now - then) / DAY);
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  return `${days} days ago`;
-}
-
-/** "in 1 day", "in 12 days", "today" — until a bin entry is cleared out. */
-export function clearedIn(expires: number, now: number): string {
-  const days = Math.ceil((expires - now) / DAY);
-  if (days <= 0) return "today";
-  return days === 1 ? "in 1 day" : `in ${days} days`;
-}
 
 /**
  * Deleted workflows that can still be restored.

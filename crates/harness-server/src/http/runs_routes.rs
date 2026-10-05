@@ -106,6 +106,7 @@ pub struct RunsState {
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     finding_store: OnceCell<harness_persist::FindingStateStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
+    trash_store: OnceCell<harness_persist::TrashStore>,
     installed_workflow_store: OnceCell<harness_persist::InstalledWorkflowStore>,
     /// Where the workflow library lives; `None` when it is switched off.
     registry_url: Option<String>,
@@ -212,6 +213,7 @@ impl RunsState {
             linear_claim_store: OnceCell::new(),
             finding_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
+            trash_store: OnceCell::new(),
             installed_workflow_store: OnceCell::new(),
             registry_url: None,
             user_store: OnceCell::new(),
@@ -439,6 +441,21 @@ impl RunsState {
         self.installed_workflow_store
             .get_or_try_init(|| async {
                 harness_persist::InstalledWorkflowStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// The bin for deleted projects and Linear bindings.
+    pub(crate) async fn trash_store(&self) -> Result<&harness_persist::TrashStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.trash_store
+            .get_or_try_init(|| async {
+                harness_persist::TrashStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })

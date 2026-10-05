@@ -450,6 +450,12 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/projects/{name}",
             get(super::projects_routes::get_project).delete(super::projects_routes::delete_project),
         )
+        // ── The bin for deleted projects and Linear bindings ───────────────
+        .route("/api/trash", get(super::projects_routes::list_trash))
+        .route(
+            "/api/trash/{id}/restore",
+            post(super::projects_routes::restore_trash),
+        )
         .route(
             "/api/projects/{name}/cache-size",
             get(super::projects_routes::get_cache_size),

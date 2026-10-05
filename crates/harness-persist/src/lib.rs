@@ -54,6 +54,9 @@ pub use installed_workflows::{InstallRecord, InstalledWorkflow, InstalledWorkflo
 mod workflow_authors;
 pub use workflow_authors::{Editor, WorkflowAuthorStore, WorkflowAuthorship};
 
+mod trash;
+pub use trash::{RestoreError, TrashEntry, TrashKind, TrashStore, TRASH_RETENTION_DAYS};
+
 /// A run row (matches `harness_workflow_runs`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct RunSummary {
