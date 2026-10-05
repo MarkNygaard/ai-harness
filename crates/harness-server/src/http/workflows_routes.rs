@@ -214,6 +214,48 @@ pub async fn delete_workflow(
     }
 }
 
+/// `GET /api/authoring/workflows/{name}/versions` — earlier versions, newest
+/// first.
+pub async fn list_versions(
+    State(state): State<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Response {
+    match authoring::list_versions(&state.core.project_root, &name) {
+        Ok(versions) => Json(versions).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}
+
+/// `GET /api/authoring/workflows/{name}/versions/{id}` — one version's YAML.
+pub async fn get_version(
+    State(state): State<Arc<AppState>>,
+    Path((name, id)): Path<(String, String)>,
+) -> Response {
+    match authoring::get_version(&state.core.project_root, &name, &id) {
+        Ok(yaml) => {
+            Json(serde_json::json!({ "name": name, "id": id, "yaml": yaml })).into_response()
+        }
+        Err(e) => err(StatusCode::NOT_FOUND, e),
+    }
+}
+
+/// `POST /api/authoring/workflows/{name}/versions/{id}/restore` — make an
+/// earlier version current. What it replaces becomes a version itself.
+pub async fn restore_version(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<super::runs_routes::RunsState>>,
+    headers: axum::http::HeaderMap,
+    Path((name, id)): Path<(String, String)>,
+) -> Response {
+    match authoring::restore_version(&state.core.project_root, &name, &id) {
+        Ok(()) => {
+            record_edit(&runs, &headers, &name, EDIT_SOURCE_UI).await;
+            Json(serde_json::json!({ "restored": true, "name": name, "id": id })).into_response()
+        }
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
+    }
+}
+
 /// `GET /api/authoring/trash` — deleted workflows that can still be restored,
 /// newest first.
 pub async fn list_trash(State(state): State<Arc<AppState>>) -> Response {

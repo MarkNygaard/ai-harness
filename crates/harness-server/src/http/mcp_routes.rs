@@ -546,6 +546,27 @@ async fn call_tool(
                 &json!({ "trash": bin }),
             )
         }
+        "workflow_versions" => match authoring::list_versions(&state.project_root, &s("name")) {
+            Ok(versions) => to_result(
+                format!("{} earlier version(s) of `{}`", versions.len(), s("name")),
+                &json!({ "versions": versions }),
+            ),
+            Err(e) => tool_error(e),
+        },
+        "workflow_restore_version" => {
+            match authoring::restore_version(&state.project_root, &s("name"), &s("id")) {
+                Ok(()) => {
+                    state_after(
+                        state,
+                        actor,
+                        &s("name"),
+                        format!("restored version `{}` of `{}`", s("id"), s("name")),
+                    )
+                    .await
+                }
+                Err(e) => tool_error(e),
+            }
+        }
         "workflow_restore" => match authoring::restore_workflow(&state.project_root, &s("id")) {
             Ok(name) => {
                 super::workflows_routes::record_edit_as(
@@ -863,6 +884,26 @@ fn mcp_tools() -> Vec<Value> {
             "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} }
         }),
         json!({
+            "name": "workflow_versions",
+            "description": "List a workflow's earlier versions, newest first: each has `id` and `saved_at` (unix seconds). A save keeps what it replaces; edits less than 5 minutes apart count as one version, and the newest 20 are kept.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"],
+            }
+        }),
+        json!({
+            "name": "workflow_restore_version",
+            "description": "Make an earlier version of a workflow current, by `name` and the version `id` from workflow_versions. The version it replaces is kept, so a restore can be undone the same way.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "name": { "type": "string" }, "id": { "type": "string" } },
+                "required": ["name", "id"],
+            }
+        }),
+        json!({
             "name": "workflow_restore",
             "description": "Restore a deleted workflow from the bin by its `id` from workflow_trash, under its original name. Refuses when a workflow of that name exists again rather than overwriting it.",
             "inputSchema": {
@@ -1171,6 +1212,8 @@ const AUTHORING_TOOLS: &[&str] = &[
     "workflow_delete",
     "workflow_trash",
     "workflow_restore",
+    "workflow_versions",
+    "workflow_restore_version",
     "workflow_catalog",
     "workflow_models",
     // The library is part of authoring: reaching for an existing workflow is

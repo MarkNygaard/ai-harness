@@ -7,6 +7,7 @@ import { apiJson } from "./api";
 import type {
   Catalog,
   TrashedWorkflow,
+  WorkflowVersion,
   ValidationResult,
   WorkflowSource,
   WorkflowSummary,
@@ -114,6 +115,50 @@ export function useRestoreWorkflow() {
       qc.invalidateQueries({ queryKey: ["authoring", "trash"] });
       qc.invalidateQueries({ queryKey: ["authoring", "workflows"] });
       qc.invalidateQueries({ queryKey: ["authoring", "workflow", data.name] });
+    },
+  });
+}
+
+/** A workflow's earlier versions, newest first. */
+export function useWorkflowVersions(name: string | null, enabled = true) {
+  return useQuery<WorkflowVersion[], Error>({
+    queryKey: ["authoring", "versions", name],
+    enabled: !!name && enabled,
+    queryFn: ({ signal }) =>
+      apiJson<WorkflowVersion[]>(
+        `/api/authoring/workflows/${encodeURIComponent(name!)}/versions`,
+        { signal },
+      ),
+  });
+}
+
+/** One earlier version's YAML, fetched only when asked for. */
+export function useWorkflowVersion(name: string, id: string | null) {
+  return useQuery<{ name: string; id: string; yaml: string }, Error>({
+    queryKey: ["authoring", "version", name, id],
+    enabled: !!id,
+    queryFn: ({ signal }) =>
+      apiJson<{ name: string; id: string; yaml: string }>(
+        `/api/authoring/workflows/${encodeURIComponent(name)}/versions/${encodeURIComponent(id!)}`,
+        { signal },
+      ),
+    staleTime: Infinity,
+  });
+}
+
+/** Make an earlier version current; what it replaces becomes a version. */
+export function useRestoreVersion(name: string) {
+  const qc = useQueryClient();
+  return useMutation<{ restored: boolean }, Error, string>({
+    mutationFn: (id) =>
+      apiJson<{ restored: boolean }>(
+        `/api/authoring/workflows/${encodeURIComponent(name)}/versions/${encodeURIComponent(id)}/restore`,
+        { method: "POST" },
+      ),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["authoring", "versions", name] });
+      qc.invalidateQueries({ queryKey: ["authoring", "workflow", name] });
+      qc.invalidateQueries({ queryKey: ["authoring", "workflows"] });
     },
   });
 }
