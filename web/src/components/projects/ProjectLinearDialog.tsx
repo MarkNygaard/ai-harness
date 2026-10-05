@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
-import { IconBolt, IconPlus, IconTrash } from "@tabler/icons-react";
+import {
+  IconBolt,
+  IconHierarchy2,
+  IconPlus,
+  IconTrash,
+} from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -27,6 +32,8 @@ import type {
   LinearTeam,
 } from "@/types/linear";
 import type { WorkflowSummary } from "@/types/authoring";
+import { MERGE_WORKFLOW, SUPERVISOR_WORKFLOW } from "@/lib/epic-setup";
+import { EpicSetupForm, WiringCheck } from "./EpicSetup";
 
 // `w-full min-w-0` is load-bearing: a bare `<select>` sizes itself to its
 // widest option, so three status dropdowns in one grid row refuse to shrink and
@@ -198,6 +205,7 @@ function DialogBody({
 
   // `null` = closed, "" = new binding, otherwise the workflow being edited.
   const [editing, setEditing] = useState<string | null>(null);
+  const [settingUpEpics, setSettingUpEpics] = useState(false);
 
   const teams = discovery.data?.teams ?? [];
   const bound = new Set((sources.data ?? []).map((s) => s.workflow));
@@ -225,6 +233,22 @@ function DialogBody({
       </div>
     );
   }
+
+  if (settingUpEpics) {
+    return (
+      <EpicSetupForm
+        project={project}
+        sources={sources.data ?? []}
+        teams={teams}
+        onDone={() => setSettingUpEpics(false)}
+      />
+    );
+  }
+
+  const epicsWired =
+    bound.has(MERGE_WORKFLOW) &&
+    bound.has(SUPERVISOR_WORKFLOW) &&
+    (sources.data ?? []).some((s) => s.piece_ready_state_id);
 
   if (editing !== null) {
     const source =
@@ -320,19 +344,34 @@ function DialogBody({
           {del.error.message}
         </span>
       )}
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => setEditing("")}
-        disabled={availableWorkflows.length === 0}
-        title={
-          availableWorkflows.length === 0
-            ? "All workflows already have a binding"
-            : "Add a Linear trigger binding"
-        }
-      >
-        <IconPlus className="size-4" /> Add binding
-      </Button>
+      {sources.data && sources.data.length > 0 && (
+        <WiringCheck project={project} />
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setEditing("")}
+          disabled={availableWorkflows.length === 0}
+          title={
+            availableWorkflows.length === 0
+              ? "All workflows already have a binding"
+              : "Add a Linear trigger binding"
+          }
+        >
+          <IconPlus className="size-4" /> Add binding
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => setSettingUpEpics(true)}
+          disabled={!discovery.data || !sources.data}
+          title="Write the bindings that build an epic piece by piece"
+        >
+          <IconHierarchy2 className="size-4" />
+          {epicsWired ? "Epic columns" : "Set up epics"}
+        </Button>
+      </div>
     </div>
   );
 }
@@ -395,6 +434,11 @@ function BindingForm({
     save.reset();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workflow]);
+
+  // The supervisor's state moves are its own business: the poller never moves
+  // an issue a supervise run finished, so the status map is not read for it,
+  // and "Ready (finished epic)" is read for nothing else.
+  const isSupervisor = workflowName === SUPERVISOR_WORKFLOW;
 
   const selectedTeam = teams.find((t) => t.id === teamId);
   const teamName = selectedTeam?.name ?? "";
@@ -474,6 +518,8 @@ function BindingForm({
             setInProgressStateId("");
             setReviewStateId("");
             setReadyStateId("");
+            setPieceReadyStateId("");
+            setEpicReviewStateId("");
           }}
         >
           <option value="">Select a team…</option>
@@ -518,63 +564,68 @@ function BindingForm({
       </Field>
 
       {/* Status map */}
-      <div className="grid grid-cols-3 gap-2">
-        <StateSelect
-          label="In-progress"
-          value={inProgressStateId}
-          onChange={setInProgressStateId}
-          options={sortedStates}
-          disabled={!teamId}
-        />
-        <StateSelect
-          label="Review"
-          value={reviewStateId}
-          onChange={setReviewStateId}
-          options={sortedStates}
-          disabled={!teamId}
-        />
-        <StateSelect
-          label="Ready"
-          value={readyStateId}
-          onChange={setReadyStateId}
-          options={sortedStates}
-          disabled={!teamId}
-        />
-      </div>
+      {!isSupervisor && (
+        <div className="grid grid-cols-3 gap-2">
+          <StateSelect
+            label="In-progress"
+            value={inProgressStateId}
+            onChange={setInProgressStateId}
+            options={sortedStates}
+            disabled={!teamId}
+          />
+          <StateSelect
+            label="Review"
+            value={reviewStateId}
+            onChange={setReviewStateId}
+            options={sortedStates}
+            disabled={!teamId}
+          />
+          <StateSelect
+            label="Ready"
+            value={readyStateId}
+            onChange={setReadyStateId}
+            options={sortedStates}
+            disabled={!teamId}
+          />
+        </div>
+      )}
 
+      {isSupervisor && (
+        <StateSelect
+          label="Ready (finished epic)"
+          value={epicReviewStateId}
+          onChange={setEpicReviewStateId}
+          options={sortedStates}
+          disabled={!teamId}
+          help={
+            <>
+              Where the <em>epic itself</em> goes once every piece is in and its
+              pull request is open — the point a person picks it up. Leave empty
+              to leave the epic where it is.
+            </>
+          }
+        />
+      )}
       {/* The exception, on its own row: it overrides one cell of the map above
           and only for a sub-issue of an epic. */}
-      <StateSelect
-        label="Ready (finished epic)"
-        value={epicReviewStateId}
-        onChange={setEpicReviewStateId}
-        options={sortedStates}
-        disabled={!teamId}
-        help={
-          <>
-            Where the <em>epic itself</em> goes once every piece is in and its
-            pull request is open — the point a person picks it up. Set this on
-            the <code>linear-epic-supervise</code> binding. Leave empty to leave
-            the epic where it is.
-          </>
-        }
-      />
-      <StateSelect
-        label="Ready (epic piece)"
-        value={pieceReadyStateId}
-        onChange={setPieceReadyStateId}
-        options={sortedStates}
-        disabled={!teamId}
-        help={
-          <>
-            Where a sub-issue of an epic goes instead of <em>Ready</em>, so
-            pieces merge straight into the epic branch while standalone issues
-            stop at a human gate. The feature is still reviewed once, when the
-            finished epic becomes a single pull request. Leave empty to treat
-            both the same.
-          </>
-        }
-      />
+      {!isSupervisor && (
+        <StateSelect
+          label="Ready (epic piece)"
+          value={pieceReadyStateId}
+          onChange={setPieceReadyStateId}
+          options={sortedStates}
+          disabled={!teamId}
+          help={
+            <>
+              Where a sub-issue of an epic goes instead of <em>Ready</em>, so
+              pieces merge straight into the epic branch while standalone issues
+              stop at a human gate. The feature is still reviewed once, when the
+              finished epic becomes a single pull request. Leave empty to treat
+              both the same.
+            </>
+          }
+        />
+      )}
 
       {/* Base branch, poll interval & concurrency cap */}
       <div className="grid grid-cols-3 gap-2">

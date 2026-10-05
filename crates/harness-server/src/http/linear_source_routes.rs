@@ -137,6 +137,23 @@ pub async fn list_sources(
     }
 }
 
+/// `GET /api/projects/{project}/linear-check` — whether the bindings' columns
+/// hand work on to one another, as findings. The same report as the MCP
+/// `linear_check` tool, so the dialog shows a broken relay before an epic
+/// stalls on it.
+pub async fn check_sources(
+    Extension(state): Extension<Arc<RunsState>>,
+    axum::extract::Path(project): axum::extract::Path<String>,
+) -> Response {
+    if let Err(r) = ensure_project(&state, &project).await {
+        return r;
+    }
+    match super::linear_diagnose::check_project(&state, &project).await {
+        Ok(findings) => Json(findings).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e),
+    }
+}
+
 fn trimmed_non_empty(s: String) -> Option<String> {
     let trimmed = s.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())

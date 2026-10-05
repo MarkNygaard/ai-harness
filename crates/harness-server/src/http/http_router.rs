@@ -345,6 +345,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(linear_source_routes::list_sources),
         )
         .route(
+            "/api/projects/{project}/linear-check",
+            get(linear_source_routes::check_sources),
+        )
+        .route(
             "/api/projects/{project}/linear-issues",
             post(linear_source_routes::create_issue),
         )
