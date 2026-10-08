@@ -71,7 +71,7 @@ impl LibraryError {
     pub(crate) fn message(&self) -> String {
         match self {
             Self::Off => "the workflow library is switched off on this harness".into(),
-            Self::NoToken => "no publisher token is connected on this harness — add one under Settings, Integrations to publish".into(),
+            Self::NoToken => "publishing needs your GitHub account — sign in with GitHub (or connect it from the Publish dialog), then publish again".into(),
             Self::Unreachable(e) | Self::NotFound(e) | Self::Failed(e) => e.clone(),
             Self::Conflict { name, suggestion } => match suggestion {
                 Some(s) => format!(
@@ -450,36 +450,167 @@ fn destination(
 // and making the caller choose invites choosing wrong, which is either a
 // duplicate slug or a version pushed at somebody else's workflow.
 
-/// Read the publisher token, or say what is missing in a way that names the fix.
-async fn publisher_token(runs: &Arc<RunsState>) -> Result<String, LibraryError> {
-    let store = runs.cred_store().await.map_err(LibraryError::Failed)?;
-    store
-        .get("registry")
-        .await
-        .map_err(|e| LibraryError::Failed(e.to_string()))?
-        .and_then(|c| c.get("token").filter(|t| !t.is_empty()).map(String::from))
-        .ok_or(LibraryError::NoToken)
+/// Per-user credential holding the GitHub access token from the person's own
+/// sign-in. Written by `github_sso`, read here.
+pub(crate) const USER_GITHUB: &str = "github";
+/// Per-user credential holding the publisher token issued for that person.
+const USER_REGISTRY: &str = "registry";
+/// The server-wide publisher token: pasted under Settings, or from the device
+/// flow. The fallback for anyone without one of their own.
+const SERVER_REGISTRY: &str = "registry";
+
+/// Whose publisher token a call is using.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum TokenSource {
+    /// The caller's own, issued for their GitHub account.
+    Own,
+    /// The harness-wide one, shared by everybody without their own.
+    Server,
 }
 
-/// Who this harness publishes as, or `None` when no token is configured.
+struct PublisherToken {
+    token: String,
+    source: TokenSource,
+}
+
+fn field_of(
+    fields: Option<std::collections::BTreeMap<String, String>>,
+    key: &str,
+) -> Option<String> {
+    fields?.get(key).filter(|v| !v.is_empty()).cloned()
+}
+
+/// The publisher token to use for `caller`, in this order:
+///
+/// 1. their own;
+/// 2. else, when they signed in with GitHub, one issued now from that
+///    sign-in, and kept as theirs;
+/// 3. else the server-wide one;
+/// 4. else nothing, said in a way that names the fix.
+///
+/// Step 2 is the point of the whole arrangement. The harness hands the
+/// registry the person's GitHub token, the registry asks GitHub whose it is,
+/// and the publisher is whoever GitHub says. The harness is never believed
+/// about who somebody is.
+async fn publisher_token(
+    runs: &Arc<RunsState>,
+    caller: Option<&str>,
+) -> Result<PublisherToken, LibraryError> {
+    let store = runs.cred_store().await.map_err(LibraryError::Failed)?;
+    let mut enroll_error = None;
+
+    if let Some(user) = caller {
+        if let Some(token) = field_of(
+            store.get_user(user, USER_REGISTRY).await.ok().flatten(),
+            "token",
+        ) {
+            return Ok(PublisherToken {
+                token,
+                source: TokenSource::Own,
+            });
+        }
+        let github = field_of(
+            store.get_user(user, USER_GITHUB).await.ok().flatten(),
+            "token",
+        );
+        if let (Some(github), Some(client)) = (github, runs.registry()) {
+            match client.enroll_with_github(&github).await {
+                Ok(issued) => {
+                    if let Some(token) = issued.token.filter(|t| !t.is_empty()) {
+                        let mut fields = std::collections::BTreeMap::new();
+                        fields.insert("token".to_string(), token.clone());
+                        if let Some(login) = issued.github_login {
+                            fields.insert("login".to_string(), login);
+                        }
+                        store
+                            .set_user(user, USER_REGISTRY, &fields)
+                            .await
+                            .map_err(|e| LibraryError::Failed(e.to_string()))?;
+                        return Ok(PublisherToken {
+                            token,
+                            source: TokenSource::Own,
+                        });
+                    }
+                }
+                // GitHub no longer accepts the token: revoked, or the app was
+                // removed. Forget it, so signing in again is what fixes it.
+                Err(e) if e.is_unauthorized() => {
+                    tracing::info!("library: the GitHub token for {user} was refused; dropping it");
+                    let _ = store.delete_user(user, USER_GITHUB).await;
+                    enroll_error = Some(
+                        "GitHub no longer accepts your sign-in — sign out and sign in with GitHub again to publish".to_string(),
+                    );
+                }
+                // An older registry without the route: carry on as before.
+                Err(e) if e.is_not_found() => {}
+                Err(e) => {
+                    tracing::warn!("library: could not exchange {user}'s GitHub sign-in: {e}");
+                    enroll_error = Some(e.to_string());
+                }
+            }
+        }
+    }
+
+    if let Some(token) = field_of(store.get(SERVER_REGISTRY).await.ok().flatten(), "token") {
+        return Ok(PublisherToken {
+            token,
+            source: TokenSource::Server,
+        });
+    }
+    Err(match enroll_error {
+        Some(e) => LibraryError::Unreachable(e),
+        None => LibraryError::NoToken,
+    })
+}
+
+/// [`publisher_token`], checked against the registry, with who it is.
+///
+/// A person's own token can be revoked on the registry. When it is, it is
+/// dropped and replaced once from their GitHub sign-in, so the fix for a
+/// revoked token is nothing at all rather than a support question.
+async fn live_publisher(
+    runs: &Arc<RunsState>,
+    caller: Option<&str>,
+) -> Result<(PublisherToken, crate::registry::Publisher), LibraryError> {
+    let client = runs.registry().ok_or(LibraryError::Off)?;
+    let first = publisher_token(runs, caller).await?;
+    match client.me(&first.token).await {
+        Ok(who) => return Ok((first, who)),
+        Err(e) if e.is_unauthorized() && first.source == TokenSource::Own => {
+            if let (Some(user), Ok(store)) = (caller, runs.cred_store().await) {
+                let _ = store.delete_user(user, USER_REGISTRY).await;
+            }
+        }
+        Err(e) => return Err(LibraryError::Unreachable(e.to_string())),
+    }
+    let again = publisher_token(runs, caller).await?;
+    let who = client
+        .me(&again.token)
+        .await
+        .map_err(|e| LibraryError::Unreachable(e.to_string()))?;
+    Ok((again, who))
+}
+
+/// Who `caller` publishes as, or `None` when there is no token to publish with.
 ///
 /// Not an error without one: "you have not connected a publisher token" is the
 /// normal state of most installs, and the UI shows a different thing for it
 /// rather than an error.
 pub(crate) async fn publisher(
     runs: &Arc<RunsState>,
-) -> Result<Option<crate::registry::Publisher>, LibraryError> {
-    let client = runs.registry().ok_or(LibraryError::Off)?;
-    let token = match publisher_token(runs).await {
-        Ok(t) => t,
-        Err(LibraryError::NoToken) => return Ok(None),
-        Err(e) => return Err(e),
-    };
-    client
-        .me(&token)
-        .await
-        .map(Some)
-        .map_err(|e| LibraryError::Unreachable(e.to_string()))
+    caller: Option<&str>,
+) -> Result<Option<(crate::registry::Publisher, TokenSource)>, LibraryError> {
+    match live_publisher(runs, caller).await {
+        Ok((token, who)) => Ok(Some((who, token.source))),
+        Err(LibraryError::NoToken) => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// The harness account behind a request, if any.
+async fn caller_id(runs: &Arc<RunsState>, headers: &axum::http::HeaderMap) -> Option<String> {
+    super::accounts::caller_trigger(runs, headers).await.0
 }
 
 /// What a publish sends.
@@ -520,10 +651,11 @@ pub(crate) struct PublishResult {
 /// Shared by the HTTP route and the MCP tool, like the install path.
 pub(crate) async fn publish_workflow(
     runs: &Arc<RunsState>,
+    caller: Option<&str>,
     req: &PublishRequest,
 ) -> Result<PublishResult, LibraryError> {
     let client = runs.registry().ok_or(LibraryError::Off)?;
-    let token = publisher_token(runs).await?;
+    let token = live_publisher(runs, caller).await?.0.token;
 
     // The YAML is read from disk rather than taken from the request: what gets
     // published must be what this harness actually runs, not what a caller says
@@ -626,26 +758,49 @@ pub(crate) async fn publish_workflow(
 
 pub async fn publish(
     axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<PublishRequest>,
 ) -> Response {
-    match publish_workflow(&runs, &req).await {
+    let caller = caller_id(&runs, &headers).await;
+    match publish_workflow(&runs, caller.as_deref(), &req).await {
         Ok(done) => Json(done).into_response(),
         Err(e) => e.into_response(),
     }
 }
 
+/// `GET /api/library/publisher` — who *the caller* publishes as.
+///
+/// Per caller since publishing became per person: on a shared harness two
+/// people signed in with GitHub publish as two publishers.
 pub async fn who_publishes(
     axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
+    let caller = caller_id(&runs, &headers).await;
     let offered = match runs.registry() {
         Some(client) => client.enrollment_offered().await,
         None => false,
     };
-    match publisher(&runs).await {
+    // Whether this person could publish as themselves by connecting GitHub,
+    // which is what the dialog offers when there is no token yet.
+    let github_connected = match (caller.as_deref(), runs.cred_store().await) {
+        (Some(user), Ok(store)) => store
+            .get_user(user, USER_GITHUB)
+            .await
+            .ok()
+            .flatten()
+            .is_some(),
+        _ => false,
+    };
+    match publisher(&runs, caller.as_deref()).await {
         Ok(p) => Json(serde_json::json!({
             "configured": p.is_some(),
-            "name": p.as_ref().map(|p| p.name()),
-            "login": p.as_ref().map(|p| p.github_login.clone()),
+            "name": p.as_ref().map(|(p, _)| p.name()),
+            "login": p.as_ref().map(|(p, _)| p.github_login.clone()),
+            // `own` = this person's GitHub account; `server` = the harness's
+            // shared token, which publishes as whoever it was issued to.
+            "source": p.as_ref().map(|(_, s)| *s),
+            "github_connected": github_connected,
             // Whether this registry can issue a token without an operator. The
             // page shows Connect when it can and the paste field when it
             // cannot, rather than offering a button that could only fail.
@@ -700,11 +855,12 @@ pub struct AmendRequest {
 /// Change what a published entry says about itself, without cutting a version.
 pub(crate) async fn amend_published(
     runs: &Arc<RunsState>,
+    caller: Option<&str>,
     name: &str,
     req: &AmendRequest,
 ) -> Result<(), LibraryError> {
     let client = runs.registry().ok_or(LibraryError::Off)?;
-    let token = publisher_token(runs).await?;
+    let token = live_publisher(runs, caller).await?.0.token;
     let slug = published_slug(runs, name).await?;
 
     client
@@ -755,10 +911,11 @@ pub(crate) async fn amend_published(
 /// rather than colliding with a slug that is still taken by the withdrawn one.
 pub(crate) async fn unpublish_workflow(
     runs: &Arc<RunsState>,
+    caller: Option<&str>,
     name: &str,
 ) -> Result<String, LibraryError> {
     let client = runs.registry().ok_or(LibraryError::Off)?;
-    let token = publisher_token(runs).await?;
+    let token = live_publisher(runs, caller).await?.0.token;
     let slug = published_slug(runs, name).await?;
 
     client
@@ -771,10 +928,12 @@ pub(crate) async fn unpublish_workflow(
 
 pub async fn amend(
     axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     Path(name): Path<String>,
     Json(req): Json<AmendRequest>,
 ) -> Response {
-    match amend_published(&runs, &name, &req).await {
+    let caller = caller_id(&runs, &headers).await;
+    match amend_published(&runs, caller.as_deref(), &name, &req).await {
         Ok(()) => Json(serde_json::json!({ "amended": name })).into_response(),
         Err(e) => e.into_response(),
     }
@@ -782,9 +941,11 @@ pub async fn amend(
 
 pub async fn unpublish(
     axum::extract::Extension(runs): axum::extract::Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     Path(name): Path<String>,
 ) -> Response {
-    match unpublish_workflow(&runs, &name).await {
+    let caller = caller_id(&runs, &headers).await;
+    match unpublish_workflow(&runs, caller.as_deref(), &name).await {
         Ok(slug) => Json(serde_json::json!({ "unpublished": slug })).into_response(),
         Err(e) => e.into_response(),
     }
@@ -878,7 +1039,197 @@ pub async fn enroll_poll(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::TempDir;
+
+    /// A stand-in library: `/v1/enroll/github` and `/v1/me`, with a counter of
+    /// how many times somebody enrolled.
+    ///
+    /// `gho_ok` belongs to @ann and `gho_revoked` is refused, as GitHub would.
+    /// `pub_revoked` is a publisher token the library has since revoked, and
+    /// `server_tok` is the harness-wide one, issued to @ops.
+    async fn fake_library() -> (String, Arc<AtomicUsize>) {
+        use axum::routing::{get, post};
+        let enrolled = Arc::new(AtomicUsize::new(0));
+        let count = enrolled.clone();
+        let app = axum::Router::new()
+            .route(
+                "/v1/enroll/github",
+                post(move |Json(body): Json<serde_json::Value>| {
+                    let count = count.clone();
+                    async move {
+                        if body["access_token"] != "gho_ok" {
+                            return (
+                                StatusCode::UNAUTHORIZED,
+                                Json(serde_json::json!({ "error": "authentication required" })),
+                            );
+                        }
+                        let n = count.fetch_add(1, Ordering::SeqCst);
+                        (
+                            StatusCode::OK,
+                            Json(serde_json::json!({
+                                "status": "complete",
+                                "token": format!("pub_ann_{n}"),
+                                "github_login": "ann",
+                            })),
+                        )
+                    }
+                }),
+            )
+            .route(
+                "/v1/me",
+                get(|headers: axum::http::HeaderMap| async move {
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+                    let login = if auth.starts_with("Bearer pub_ann_") {
+                        "ann"
+                    } else if auth == "Bearer server_tok" {
+                        "ops"
+                    } else {
+                        return (StatusCode::UNAUTHORIZED, Json(serde_json::json!({})));
+                    };
+                    (
+                        StatusCode::OK,
+                        Json(serde_json::json!({ "github_login": login })),
+                    )
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (format!("http://{addr}"), enrolled)
+    }
+
+    /// Only ever touch an obvious test database, never production.
+    fn test_db() -> Option<String> {
+        let url = std::env::var("HARNESS_DATABASE_URL").ok()?;
+        let db = url.rsplit('/').next().unwrap_or(&url);
+        let db = db.split(['?', '#']).next().unwrap_or(db);
+        db.to_ascii_lowercase().contains("test").then_some(url)
+    }
+
+    /// Who a caller publishes as, in the order `publisher_token` promises:
+    /// their own token, else one issued from their GitHub sign-in and kept,
+    /// else the harness-wide one. And a revoked token of either kind is dropped
+    /// rather than left to fail every publish after it.
+    #[tokio::test]
+    async fn a_signed_in_person_publishes_as_their_own_github_account() {
+        let Some(db) = test_db() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL is not a test database");
+            return;
+        };
+        let (library, enrolled) = fake_library().await;
+        let runs = Arc::new(
+            RunsState::new(
+                Some(db),
+                Arc::new(harness_agents::registry::AgentRegistry::new("codex")),
+                std::path::PathBuf::from("/tmp"),
+                Some([5u8; 32]),
+                None,
+            )
+            .with_registry_url(Some(library)),
+        );
+        let store = runs.cred_store().await.expect("credential store");
+        let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let (ann, bob) = (format!("ann-{ts}"), format!("bob-{ts}"));
+        let token =
+            |t: &str| std::collections::BTreeMap::from([("token".to_string(), t.to_string())]);
+        let _ = store.delete(SERVER_REGISTRY).await;
+
+        // Nobody, and no harness-wide token: nothing to publish with, which is
+        // a state rather than an error.
+        assert!(publisher(&runs, None).await.ok().flatten().is_none());
+
+        // Ann signed in with GitHub: her first publish exchanges that sign-in
+        // for a publisher token of her own, and the next one reuses it.
+        store
+            .set_user(&ann, USER_GITHUB, &token("gho_ok"))
+            .await
+            .unwrap();
+        let (who, source) = publisher(&runs, Some(&ann))
+            .await
+            .ok()
+            .flatten()
+            .expect("ann");
+        assert_eq!(
+            (who.github_login.as_str(), source),
+            ("ann", TokenSource::Own)
+        );
+        let _ = publisher(&runs, Some(&ann)).await;
+        assert_eq!(
+            enrolled.load(Ordering::SeqCst),
+            1,
+            "kept, not re-issued each time"
+        );
+
+        // Her publisher token is revoked on the library: dropped, and a fresh
+        // one issued from her sign-in, without her doing anything.
+        store
+            .set_user(&ann, USER_REGISTRY, &token("pub_revoked"))
+            .await
+            .unwrap();
+        let (who, source) = publisher(&runs, Some(&ann))
+            .await
+            .ok()
+            .flatten()
+            .expect("re-issued");
+        assert_eq!(
+            (who.github_login.as_str(), source),
+            ("ann", TokenSource::Own)
+        );
+        assert_eq!(enrolled.load(Ordering::SeqCst), 2);
+
+        // Bob has no GitHub sign-in: he falls back to the harness-wide token.
+        store
+            .set(SERVER_REGISTRY, &token("server_tok"))
+            .await
+            .unwrap();
+        let (who, source) = publisher(&runs, Some(&bob))
+            .await
+            .ok()
+            .flatten()
+            .expect("bob");
+        assert_eq!(
+            (who.github_login.as_str(), source),
+            ("ops", TokenSource::Server)
+        );
+
+        // Bob's GitHub sign-in that GitHub no longer accepts is forgotten, so
+        // signing in again is what fixes it. He still has the shared token.
+        store
+            .set_user(&bob, USER_GITHUB, &token("gho_revoked"))
+            .await
+            .unwrap();
+        let (_, source) = publisher(&runs, Some(&bob))
+            .await
+            .ok()
+            .flatten()
+            .expect("bob");
+        assert_eq!(source, TokenSource::Server);
+        assert!(store.get_user(&bob, USER_GITHUB).await.unwrap().is_none());
+
+        // Without the shared token, the refusal is reported in words that say
+        // what to do, rather than as "no token".
+        store.delete(SERVER_REGISTRY).await.unwrap();
+        store
+            .set_user(&bob, USER_GITHUB, &token("gho_revoked"))
+            .await
+            .unwrap();
+        match publisher(&runs, Some(&bob)).await {
+            Err(LibraryError::Unreachable(m)) => {
+                assert!(m.contains("sign in with GitHub again"), "{m}")
+            }
+            other => panic!("expected a sign-in-again error, got {:?}", other.ok()),
+        }
+
+        store.delete_all_for_user(&ann).await.unwrap();
+        store.delete_all_for_user(&bob).await.unwrap();
+    }
 
     fn free(d: Destination) -> Option<String> {
         match d {

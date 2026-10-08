@@ -201,6 +201,21 @@ export function useTestGithubSso() {
   });
 }
 
+/**
+ * Connect GitHub to the account already signed in, without changing who is
+ * signed in. Used to publish to the workflow library as yourself.
+ */
+export function useConnectGithub() {
+  return useMutation<{ url: string }, Error, { next?: string } | void>({
+    mutationFn: (vars) => {
+      const next = vars && "next" in vars ? vars.next : undefined;
+      const query = next ? `?next=${encodeURIComponent(next)}` : "";
+      return apiJson<{ url: string }>(`/api/auth/github/connect${query}`);
+    },
+    onSuccess: ({ url }) => window.location.assign(url),
+  });
+}
+
 export function useGithubSsoPublicStatus() {
   return useQuery<{ enabled: boolean }, Error>({
     queryKey: ["sso", "github", "public"],

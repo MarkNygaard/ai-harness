@@ -289,6 +289,7 @@ async fn authorize_url(
         nonce: None,
         next,
         test,
+        link_user: None,
         binding_hash: hash(&binding),
     });
     let cookie = binding_cookie(&binding, accounts::secure_cookies(state));
@@ -357,6 +358,23 @@ pub async fn callback(
             .into_response();
     }
 
+    // Connecting GitHub to an account already signed in: keep the token, go
+    // back where the person was, and leave the session alone.
+    if let Some(user_id) = pending.link_user.as_deref() {
+        let outcome = match complete_connect(&state, code, user_id).await {
+            Ok(login) => back(&pending.next, "connected", Some(&login)),
+            Err(e) => {
+                tracing::warn!("github: connect failed: {e}");
+                back(&pending.next, "error", Some(&e))
+            }
+        };
+        return (
+            [(header::SET_COOKIE, clear_binding_cookie(secure))],
+            outcome,
+        )
+            .into_response();
+    }
+
     match complete(&state, code, pending.test).await {
         Ok(Some(user)) => match accounts::open_session(
             &state,
@@ -406,6 +424,53 @@ async fn complete(
     let cfg = config(store)
         .await
         .ok_or("GitHub sign-in is not configured")?;
+    let token = exchange(state, &cfg, code).await?;
+
+    let profile: GhUser = get_json(&format!("{API}/user"), &token).await?;
+    permitted(&token, &profile.login, &cfg).await?;
+    let email = verified_email(&token).await?;
+
+    // A test in organisation mode stops here: `permitted` above was the check,
+    // and going further would create an account as a side effect of testing.
+    //
+    // Existing-accounts mode has to keep going. Its allowlist lives entirely in
+    // `link`, which never creates -- so a test that returned here would prove
+    // only that OAuth works, then arm a provider that cannot actually sign
+    // anybody in. That is the opposite of what testing before arming is for.
+    if test && matches!(cfg.audience, Audience::Org { .. }) {
+        return Ok(None);
+    }
+    let user = link(state, &profile, &email, &cfg.audience).await?;
+    if !test {
+        remember(state, &user.id, &token, &profile.login).await;
+    }
+    Ok((!test).then_some(user))
+}
+
+/// Keep the GitHub token from a sign-in against the account it signed into.
+///
+/// What it is for: publishing to the workflow library as yourself. The library
+/// is handed this token and asks GitHub whose it is, so the harness is never
+/// trusted to say who somebody is. Stored encrypted, per user, and overwritten
+/// by each sign-in. Best-effort: failing to keep it must not fail the sign-in,
+/// it only means the library asks for GitHub again later.
+async fn remember(state: &Arc<RunsState>, user_id: &str, token: &str, login: &str) {
+    let Ok(store) = state.cred_store().await else {
+        return;
+    };
+    let mut fields = BTreeMap::new();
+    fields.insert("token".to_string(), token.to_string());
+    fields.insert("login".to_string(), login.to_string());
+    if let Err(e) = store
+        .set_user(user_id, super::library_routes::USER_GITHUB, &fields)
+        .await
+    {
+        tracing::warn!("github: could not keep the sign-in token for {login}: {e}");
+    }
+}
+
+/// Exchange an authorization code for an access token.
+async fn exchange(state: &Arc<RunsState>, cfg: &Config, code: &str) -> Result<String, String> {
     let redirect = redirect_uri(state)?;
 
     let resp = reqwest::Client::new()
@@ -434,23 +499,86 @@ async fn complete(
             .or(tokens.error)
             .unwrap_or_else(|| "GitHub refused the code".to_string())
     })?;
+    Ok(token)
+}
 
+/// Finish a Connect GitHub: keep the token against the account that started
+/// it, and sign nobody in.
+///
+/// No organisation check. Connecting proves which GitHub account a person
+/// holds so the library can credit them; it grants nothing on this harness,
+/// where they are already signed in.
+async fn complete_connect(
+    state: &Arc<RunsState>,
+    code: &str,
+    user_id: &str,
+) -> Result<String, String> {
+    let store = state.cred_store().await?;
+    let cfg = config(store)
+        .await
+        .ok_or("GitHub sign-in is not configured")?;
+    let token = exchange(state, &cfg, code).await?;
     let profile: GhUser = get_json(&format!("{API}/user"), &token).await?;
-    permitted(&token, &profile.login, &cfg).await?;
-    let email = verified_email(&token).await?;
+    remember(state, user_id, &token, &profile.login).await;
+    Ok(profile.login)
+}
 
-    // A test in organisation mode stops here: `permitted` above was the check,
-    // and going further would create an account as a side effect of testing.
-    //
-    // Existing-accounts mode has to keep going. Its allowlist lives entirely in
-    // `link`, which never creates -- so a test that returned here would prove
-    // only that OAuth works, then arm a provider that cannot actually sign
-    // anybody in. That is the opposite of what testing before arming is for.
-    if test && matches!(cfg.audience, Audience::Org { .. }) {
-        return Ok(None);
+/// `GET /api/auth/github/connect` — the URL to send the browser to, for an
+/// account signed in some other way that wants to publish as its GitHub
+/// account.
+///
+/// Requires a session: whose account the token lands on comes from here, and
+/// is carried through the flow's state rather than read at the callback.
+pub async fn connect(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Query(q): Query<StartQuery>,
+) -> Response {
+    let Some(user_id) = accounts::caller_trigger(&state, &headers).await.0 else {
+        return err(
+            StatusCode::UNAUTHORIZED,
+            "sign in first, then connect GitHub",
+        );
+    };
+    let next = safe_next(q.next.as_deref());
+    match connect_url(&state, next, user_id).await {
+        Ok((url, cookie)) => {
+            ([(header::SET_COOKIE, cookie)], Json(json!({ "url": url }))).into_response()
+        }
+        Err(e) => err(StatusCode::PRECONDITION_FAILED, e),
     }
-    let user = link(state, &profile, &email, &cfg.audience).await?;
-    Ok((!test).then_some(user))
+}
+
+async fn connect_url(
+    state: &Arc<RunsState>,
+    next: String,
+    user_id: String,
+) -> Result<(String, String), String> {
+    let store = state.cred_store().await?;
+    let cfg = config(store)
+        .await
+        .ok_or("GitHub sign-in is not configured on this harness, so it cannot connect GitHub")?;
+    let redirect = redirect_uri(state)?;
+    let binding = random_token();
+    let state_nonce = issue_state(Attempt {
+        provider: Provider::GitHub,
+        verifier: None,
+        nonce: None,
+        next,
+        test: false,
+        link_user: Some(user_id),
+        binding_hash: hash(&binding),
+    });
+    let cookie = binding_cookie(&binding, accounts::secure_cookies(state));
+    // Only the profile: connecting needs to know the account, nothing more.
+    let url = format!(
+        "{AUTHORIZE_URL}?client_id={}&redirect_uri={}&scope={}&state={}",
+        enc(&cfg.client_id),
+        enc(&redirect),
+        enc("read:user"),
+        enc(&state_nonce),
+    );
+    Ok((url, cookie))
 }
 
 /// Find or create the account this identity belongs to.

@@ -258,6 +258,7 @@ async fn authorize_url(
         nonce: Some(nonce.clone()),
         next,
         test,
+        link_user: None,
         binding_hash: hash(&binding),
     });
     let cookie = binding_cookie(&binding, accounts::secure_cookies(state));
