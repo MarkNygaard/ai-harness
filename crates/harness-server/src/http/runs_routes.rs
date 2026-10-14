@@ -2584,6 +2584,10 @@ async fn execute_run_task(
 
     // Renew this run's lease while it executes, so the reaper (which only
     // cancels runs whose lease has gone stale) never reaps it mid-flight.
+    // A failed renewal is retried on the next tick rather than ending the
+    // loop: giving up on one transient DB error let the reaper mark a healthy
+    // run cancelled while it carried on to completion. The loop ends only when
+    // the run does (`heartbeat.abort()` below).
     let hb_state = state.clone();
     let hb_run_id = run_id.clone();
     let heartbeat = tokio::spawn(async move {
@@ -2591,13 +2595,15 @@ async fn execute_run_task(
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tick.tick().await;
-            match hb_state.store().await {
-                Ok(store) => {
-                    if store.heartbeat_run(&hb_run_id).await.is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
+            let renewed = match hb_state.store().await {
+                Ok(store) => store
+                    .heartbeat_run(&hb_run_id)
+                    .await
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            };
+            if let Err(e) = renewed {
+                tracing::warn!("run {hb_run_id}: lease renewal failed, retrying next tick: {e}");
             }
         }
     });
