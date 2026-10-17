@@ -155,6 +155,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/users/{id}/role", put(users_routes::set_role))
         .route("/api/users/{id}/disabled", put(users_routes::set_disabled))
         .route(
+            "/api/users/{id}/projects",
+            get(users_routes::get_project_scope).put(users_routes::set_project_scope),
+        )
+        .route(
             "/api/users/{id}",
             put(users_routes::set_profile).delete(users_routes::delete_user),
         )

@@ -40,6 +40,27 @@ CREATE TABLE IF NOT EXISTS harness_users (
 const CREATE_USERS_EMAIL_IDX: &str =
     "CREATE UNIQUE INDEX IF NOT EXISTS harness_users_email_key ON harness_users (lower(email))";
 
+/// Which projects an account may see. **An account with no rows here sees every
+/// project** — that is the default, so nothing needs backfilling and an install
+/// that never uses this feature behaves exactly as it did.
+///
+/// `project_name` deliberately carries **no foreign key** into
+/// `harness_projects`. Deleting a project moves its row to the bin for
+/// [`TRASH_RETENTION_DAYS`](crate::trash::TRASH_RETENTION_DAYS), and a cascade
+/// here would be unsafe in both directions: restoring the project would not
+/// restore anyone's access to it, and — worse — a member scoped to that one
+/// project would drop from one row to zero, which means *all projects*. Deleting
+/// a project would quietly widen somebody's access. Left as plain text, the row
+/// survives the round trip, and a project that is gone for good leaves a grant
+/// to nothing.
+const CREATE_USER_PROJECTS: &str = "
+CREATE TABLE IF NOT EXISTS harness_user_projects (
+    user_id      text NOT NULL REFERENCES harness_users(id) ON DELETE CASCADE,
+    project_name text NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, project_name)
+)";
+
 const CREATE_SESSIONS: &str = "
 CREATE TABLE IF NOT EXISTS harness_sessions (
     -- SHA-256 of the id in the cookie, never the id itself.
@@ -118,6 +139,7 @@ pub struct UserStore {
 pub(crate) async fn ensure_schema(pool: &PgPool) -> Result<(), PersistError> {
     sqlx::query(CREATE_USERS).execute(pool).await?;
     sqlx::query(CREATE_USERS_EMAIL_IDX).execute(pool).await?;
+    sqlx::query(CREATE_USER_PROJECTS).execute(pool).await?;
     Ok(())
 }
 
@@ -279,6 +301,79 @@ impl UserStore {
             .bind(role)
             .fetch_optional(&self.pool)
             .await?)
+    }
+
+    /// The projects this account is restricted to, sorted. **Empty means
+    /// unrestricted** — see [`CREATE_USER_PROJECTS`] — so a caller must not read
+    /// an empty vec as "no access".
+    pub async fn project_scope(&self, user_id: &str) -> Result<Vec<String>, PersistError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT project_name FROM harness_user_projects
+             WHERE user_id = $1 ORDER BY project_name",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Restrict an account to `projects`, replacing whatever it had. An empty
+    /// slice clears the restriction and returns the account to seeing every
+    /// project.
+    ///
+    /// One transaction, because the delete and the insert are halves of the
+    /// same edit: a failure between them would otherwise leave the account
+    /// unrestricted, which is the widest possible state and the one nobody
+    /// would have chosen on purpose.
+    pub async fn set_project_scope(
+        &self,
+        user_id: &str,
+        projects: &[String],
+    ) -> Result<(), PersistError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM harness_user_projects WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        for project in projects {
+            let project = project.trim();
+            if project.is_empty() {
+                continue;
+            }
+            // Repeats in the input are the caller's slip, not a conflict.
+            sqlx::query(
+                "INSERT INTO harness_user_projects (user_id, project_name) VALUES ($1, $2)
+                 ON CONFLICT (user_id, project_name) DO NOTHING",
+            )
+            .bind(user_id)
+            .bind(project)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Every account that is restricted, as `user_id → projects`. Accounts with
+    /// no restriction are absent rather than present-and-empty, so the map says
+    /// the same thing the table does.
+    ///
+    /// One query for the whole admin list; the per-user call would be an N+1.
+    pub async fn project_scopes(
+        &self,
+    ) -> Result<std::collections::HashMap<String, Vec<String>>, PersistError> {
+        let rows: Vec<(String, String)> = sqlx::query_as(
+            "SELECT user_id, project_name FROM harness_user_projects
+             ORDER BY user_id, project_name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        let mut out: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for (user_id, project) in rows {
+            out.entry(user_id).or_default().push(project);
+        }
+        Ok(out)
     }
 
     /// Disable or re-enable an account. A disabled account keeps its rows, so
@@ -522,6 +617,130 @@ mod tests {
             "{tag}-{}@example.test",
             chrono::Utc::now().timestamp_nanos_opt().unwrap()
         )
+    }
+
+    /// Create a throwaway member and return its id.
+    async fn a_member(store: &UserStore, tag: &str) -> String {
+        store
+            .create(&NewUser {
+                email: unique_email(tag),
+                name: tag.into(),
+                role: "member".into(),
+                password_hash: None,
+            })
+            .await
+            .expect("create")
+            .id
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn project_scope_defaults_to_unrestricted_and_round_trips() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let id = a_member(&store, "scope-round-trip").await;
+
+        // The default is no rows, which every caller reads as "all projects".
+        assert!(store.project_scope(&id).await.unwrap().is_empty());
+
+        store
+            .set_project_scope(&id, &["shop".into(), "niles".into()])
+            .await
+            .expect("set");
+        assert_eq!(
+            store.project_scope(&id).await.unwrap(),
+            vec!["niles".to_string(), "shop".to_string()],
+            "sorted, so the UI order never depends on insert order"
+        );
+
+        // Replaces rather than adds — the set is the whole answer.
+        store
+            .set_project_scope(&id, &["shop".into()])
+            .await
+            .expect("narrow");
+        assert_eq!(store.project_scope(&id).await.unwrap(), vec!["shop"]);
+
+        // And an empty list returns the account to seeing everything.
+        store.set_project_scope(&id, &[]).await.expect("clear");
+        assert!(store.project_scope(&id).await.unwrap().is_empty());
+
+        store.delete(&id).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn project_scope_ignores_blanks_and_repeats() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let id = a_member(&store, "scope-messy").await;
+
+        // A repeat is the caller's slip, not a conflict, and a blank names
+        // no project — neither should fail the whole edit.
+        store
+            .set_project_scope(
+                &id,
+                &["niles".into(), "niles".into(), "  ".into(), " shop ".into()],
+            )
+            .await
+            .expect("set");
+        assert_eq!(
+            store.project_scope(&id).await.unwrap(),
+            vec!["niles".to_string(), "shop".to_string()]
+        );
+
+        store.delete(&id).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn deleting_an_account_takes_its_project_scope_with_it() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let id = a_member(&store, "scope-cascade").await;
+        store
+            .set_project_scope(&id, &["niles".into()])
+            .await
+            .expect("set");
+
+        store.delete(&id).await.expect("delete");
+        // The cascade is on `user_id`, so no row is left pointing at a ghost.
+        assert!(store.project_scope(&id).await.unwrap().is_empty());
+        assert!(!store.project_scopes().await.unwrap().contains_key(&id));
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn project_scopes_lists_only_restricted_accounts() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let restricted = a_member(&store, "scope-listed").await;
+        let open = a_member(&store, "scope-unlisted").await;
+        store
+            .set_project_scope(&restricted, &["niles".into()])
+            .await
+            .expect("set");
+
+        let all = store.project_scopes().await.unwrap();
+        assert_eq!(all.get(&restricted), Some(&vec!["niles".to_string()]));
+        assert!(
+            !all.contains_key(&open),
+            "an unrestricted account is absent, not present-and-empty"
+        );
+
+        store.delete(&restricted).await.unwrap();
+        store.delete(&open).await.unwrap();
     }
 
     #[tokio::test]

@@ -21,6 +21,7 @@ use harness_sources::linear::LinearClient;
 use serde::Deserialize;
 
 use super::linear_connections::{resolve_for_project, ConnectionId};
+use super::project_scope::{not_in_scope, CallerScope};
 use super::runs_routes::RunsState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -50,8 +51,12 @@ async fn client(state: &Arc<RunsState>, conn: &ConnectionId) -> Result<LinearCli
 /// `GET /api/projects/{project}/linear/discovery` — teams + states + labels.
 pub async fn discovery(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(project): AxumPath<String>,
 ) -> Response {
+    if !scope.allows(Some(&project)) {
+        return not_in_scope();
+    }
     let conn = match connection(&state, &project).await {
         Ok(c) => c,
         Err(resp) => return resp,
@@ -77,9 +82,13 @@ pub struct PreviewQuery {
 /// Read-only; nothing is claimed.
 pub async fn preview(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(project): AxumPath<String>,
     Query(q): Query<PreviewQuery>,
 ) -> Response {
+    if !scope.allows(Some(&project)) {
+        return not_in_scope();
+    }
     if q.team.trim().is_empty() || q.state.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "`team` and `state` are required");
     }

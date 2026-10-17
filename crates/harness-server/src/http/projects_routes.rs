@@ -21,6 +21,7 @@ use axum::Json;
 use harness_persist::{ProjectInput, ProjectRepo};
 use serde::Deserialize;
 
+use super::project_scope::{not_in_scope, CallerScope};
 use super::runs_routes::{self as cache, RunsState};
 use tokio::task::spawn_blocking;
 
@@ -37,14 +38,24 @@ fn valid_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// `GET /api/projects` — list registered projects.
-pub async fn list_projects(Extension(state): Extension<Arc<RunsState>>) -> Response {
+/// `GET /api/projects` — the projects this caller may see.
+///
+/// The list drives the UI's project switcher, so filtering it here is what
+/// makes a restricted member's harness look like one with fewer projects rather
+/// than one that refuses them.
+pub async fn list_projects(
+    Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
+) -> Response {
     let store = match state.project_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
     match store.list().await {
-        Ok(projects) => Json(projects).into_response(),
+        Ok(mut projects) => {
+            projects.retain(|p| scope.allows(Some(&p.name)));
+            Json(projects).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -52,8 +63,12 @@ pub async fn list_projects(Extension(state): Extension<Arc<RunsState>>) -> Respo
 /// `GET /api/projects/{name}` — one project.
 pub async fn get_project(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
+    if !scope.allows(Some(&name)) {
+        return not_in_scope();
+    }
     let store = match state.project_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -272,11 +287,15 @@ pub async fn register_project(
 /// removed anyway: it is a clone, and a restore clones it again.
 pub async fn delete_project(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     headers: axum::http::HeaderMap,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
     if !valid_name(&name) {
         return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    if !scope.allows(Some(&name)) {
+        return not_in_scope();
     }
     let trash = match state.trash_store().await {
         Ok(s) => s,
@@ -302,13 +321,19 @@ pub async fn delete_project(
 
 /// `GET /api/trash` — deleted projects and Linear bindings that can still be
 /// restored, newest first.
-pub async fn list_trash(Extension(state): Extension<Arc<RunsState>>) -> Response {
+pub async fn list_trash(
+    Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
+) -> Response {
     let trash = match state.trash_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
     match trash.list().await {
-        Ok(entries) => Json(entries).into_response(),
+        Ok(mut entries) => {
+            entries.retain(|e| scope.allows(Some(&e.project)));
+            Json(entries).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -320,12 +345,23 @@ pub async fn list_trash(Extension(state): Extension<Arc<RunsState>>) -> Response
 /// restored, with the reason as a warning, so the URL or token can be fixed.
 pub async fn restore_trash(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
     let trash = match state.trash_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
+    // Read the entry before restoring it: `restore` is the destructive step,
+    // and a caller who may not have this project must not be able to move it
+    // out of the bin and then be told no.
+    if scope.is_restricted() {
+        match trash.get(&id).await {
+            Ok(Some(entry)) if !scope.allows(Some(&entry.project)) => return not_in_scope(),
+            Ok(_) => {}
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        }
+    }
     let entry = match trash.restore(&id).await {
         Ok(entry) => entry,
         Err(e @ harness_persist::RestoreError::Taken(_)) => {
@@ -385,10 +421,14 @@ async fn ensure_idle(state: &RunsState, project: &str) -> Result<(), Response> {
 /// `GET /api/projects/{name}/cache-size` — current cache bytes + effective cap.
 pub async fn get_cache_size(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
     if !valid_name(&name) {
         return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    if !scope.allows(Some(&name)) {
+        return not_in_scope();
     }
     let store = match state.project_store().await {
         Ok(s) => s,
@@ -446,11 +486,15 @@ pub struct SetCapRequest {
 /// `PUT /api/projects/{name}/cache-cap` — set or clear the per-project cap.
 pub async fn set_cache_cap(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(name): AxumPath<String>,
     Json(req): Json<SetCapRequest>,
 ) -> Response {
     if !valid_name(&name) {
         return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    if !scope.allows(Some(&name)) {
+        return not_in_scope();
     }
     let cap = req.cap_gb.filter(|&v| v > 0);
     let store = match state.project_store().await {
@@ -467,10 +511,14 @@ pub async fn set_cache_cap(
 /// `POST /api/projects/{name}/cache/clear` — delete the project's cache dir.
 pub async fn clear_cache(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
     if !valid_name(&name) {
         return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    if !scope.allows(Some(&name)) {
+        return not_in_scope();
     }
     let store = match state.project_store().await {
         Ok(s) => s,
@@ -512,10 +560,14 @@ pub async fn clear_cache(
 /// `POST /api/projects/{name}/cache/sweep` — run the sweeper on demand.
 pub async fn sweep_cache(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(name): AxumPath<String>,
 ) -> Response {
     if !valid_name(&name) {
         return err(StatusCode::BAD_REQUEST, "invalid project name");
+    }
+    if !scope.allows(Some(&name)) {
+        return not_in_scope();
     }
     if let Err(r) = ensure_idle(&state, &name).await {
         return r;

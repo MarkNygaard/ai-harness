@@ -40,10 +40,28 @@ pub async fn list_users(_: AdminOnly, Extension(state): Extension<Arc<RunsState>
     // With activity, not just the account: `last_login_at` alone says when
     // somebody last typed a password, which on a members page is the wrong
     // question. See `list_with_activity`.
-    match users.list_with_activity().await {
-        Ok(list) => Json(list).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
+    let list = match users.list_with_activity().await {
+        Ok(list) => list,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    // Project restrictions alongside, in one query rather than one per row, so
+    // the members page can show who is limited without asking again per person.
+    let scopes = match users.project_scopes().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let out: Vec<serde_json::Value> = list
+        .into_iter()
+        .map(|entry| {
+            let projects = scopes.get(&entry.user.id).cloned().unwrap_or_default();
+            let mut value = serde_json::to_value(&entry).unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("projects".into(), serde_json::json!(projects));
+            }
+            value
+        })
+        .collect();
+    Json(out).into_response()
 }
 
 /// Whether `id` is the only administrator left who can still sign in.
@@ -103,6 +121,74 @@ pub async fn set_role(
     match users.set_role(&id, &req.role).await {
         Ok(Some(user)) => Json(user).into_response(),
         Ok(None) => err(StatusCode::NOT_FOUND, "no such account"),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ProjectScopeRequest {
+    /// The projects this account may see. **Empty clears the restriction** and
+    /// returns the account to seeing every project.
+    pub projects: Vec<String>,
+}
+
+/// `GET /api/users/{id}/projects` — which projects an account is restricted to.
+///
+/// An empty list means unrestricted, which is also the default; the caller is
+/// expected to read it that way, as the UI does.
+pub async fn get_project_scope(
+    _: AdminOnly,
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(id): AxumPath<String>,
+) -> Response {
+    let users = match state.user_store().await {
+        Ok(u) => u,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match users.project_scope(&id).await {
+        Ok(projects) => Json(serde_json::json!({ "projects": projects })).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `PUT /api/users/{id}/projects` — restrict an account to a set of projects,
+/// or clear the restriction with an empty list.
+///
+/// Refuses on an administrator rather than storing a setting that would do
+/// nothing: administrators are never restricted (they manage projects and this
+/// setting both), and a scope that silently fails to apply is worse than one
+/// you cannot set.
+///
+/// Project names are **not** checked against the registry. A scope naming a
+/// project that does not exist yet grants nothing until it does, which is the
+/// safe direction and lets an administrator set someone up before the project
+/// is registered.
+pub async fn set_project_scope(
+    _: AdminOnly,
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath(id): AxumPath<String>,
+    Json(req): Json<ProjectScopeRequest>,
+) -> Response {
+    let users = match state.user_store().await {
+        Ok(u) => u,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match users.get(&id).await {
+        Ok(Some(user)) if user.role == ROLE_ADMIN && !req.projects.is_empty() => {
+            return err(
+                StatusCode::CONFLICT,
+                "administrators always see every project — demote this account first",
+            )
+        }
+        Ok(Some(_)) => {}
+        Ok(None) => return err(StatusCode::NOT_FOUND, "no such account"),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+    if let Err(e) = users.set_project_scope(&id, &req.projects).await {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    }
+    match users.project_scope(&id).await {
+        Ok(projects) => Json(serde_json::json!({ "projects": projects })).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }

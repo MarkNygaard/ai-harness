@@ -1,4 +1,5 @@
 import { MemberProfileDialog } from "@/components/settings/MemberProfileDialog";
+import { MemberProjectsDialog } from "@/components/settings/MemberProjectsDialog";
 import { InvitePeople } from "@/components/settings/InvitePeople";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Badge } from "@/components/ui/badge";
@@ -63,6 +64,20 @@ function Row({
               suspended
             </Badge>
           )}
+          {/* Only shown when the account is limited. An unlimited member is
+              the default, and badging the default would put a label on
+              everybody and tell the reader nothing. */}
+          {user.projects.length > 0 && (
+            <Badge
+              variant="outline"
+              className="text-[10px]"
+              title={`Can only see: ${user.projects.join(", ")}`}
+            >
+              {user.projects.length === 1
+                ? user.projects[0]
+                : `${user.projects.length} projects`}
+            </Badge>
+          )}
           {isMe && (
             <span className="text-[10px] text-muted-foreground">you</span>
           )}
@@ -88,6 +103,7 @@ function Row({
           isMe={isMe}
           onSaved={onSaved}
         />
+        <MemberProjectsDialog user={user} busy={busy} />
         <Button
           variant="ghost"
           size="sm"

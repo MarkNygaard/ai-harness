@@ -90,6 +90,29 @@ team and a column to a workflow, and they are per project because that is where
 the workflow and the base branch come from. See
 [trigger bindings](/docs/setup/bindings).
 
+## Who can see a project
+
+By default everyone with an account sees every project. That is usually what a
+team wants, and nothing needs configuring for it.
+
+A member can be limited to a subset instead. On **Settings → Members**, the
+**Projects** action on a member's row offers two choices: every project, or only
+the ones you pick. A limited member sees only those projects — in the project
+switcher, in the run list, in the reports and the bin — and can only start runs
+on them. The rest are not hidden behind a refusal; they simply are not there.
+
+Three things are worth knowing before you use it:
+
+- **Administrators are never limited.** They manage projects, credentials and
+  this setting, so restricting one would be a lock with its key beside it. The
+  action is unavailable on an administrator's row.
+- **Runs triggered from Linear are not affected.** The project comes from the
+  [binding](/docs/setup/bindings), not from whoever moved the issue, and the
+  person who moved it may have no account here at all. Scoping governs what
+  people do through the dashboard and the API.
+- **A project added later stays hidden** from a limited member until you add it
+  to their list. Members on "every project" pick it up automatically.
+
 ## What lives in the repository instead
 
 Not everything about a project is configured in the dashboard. Two things belong

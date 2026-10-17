@@ -33,6 +33,8 @@ use harness_runner::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Mutex, OnceCell};
+
+use super::project_scope::{not_in_scope, run_in_scope, CallerScope};
 use tokio_stream::wrappers::BroadcastStream;
 
 /// How often a running executor renews its run lease (`heartbeat_at`).
@@ -1344,6 +1346,7 @@ pub(crate) fn sweep_cargo_cache(
 /// `GET /runs` — list recent runs, optionally filtered by project.
 pub async fn list_runs(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     Query(q): Query<ListRunsQuery>,
 ) -> Response {
     let store = match state.store().await {
@@ -1355,10 +1358,23 @@ pub async fn list_runs(
         .as_deref()
         .map(str::trim)
         .filter(|p| !p.is_empty());
+    // `?project=` may narrow the list, never widen it.
+    if scope.narrow(project).is_err() {
+        return not_in_scope();
+    }
+    let allowed: Option<Vec<String>> = scope
+        .allowed()
+        .map(|a| a.iter().cloned().collect::<Vec<_>>());
     let result = if q.unassigned {
-        store.list_unassigned_runs(100).await
+        match &allowed {
+            // A run on no project is on nobody's list — see `ProjectScope`.
+            Some(_) => Ok(Vec::new()),
+            None => store.list_unassigned_runs(100).await,
+        }
     } else if let Some(project) = project {
         store.list_runs_for_project(project, 100).await
+    } else if let Some(allowed) = &allowed {
+        store.list_runs_for_projects(allowed, 100).await
     } else {
         store.list_runs(100).await
     };
@@ -1371,6 +1387,7 @@ pub async fn list_runs(
 /// `GET /runs/summary?days=N` — per-project, per-day finished-run counts.
 pub async fn runs_daily_summary(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     Query(q): Query<SummaryQuery>,
 ) -> Response {
     let days = q.days.unwrap_or(14).clamp(1, 90);
@@ -1380,7 +1397,12 @@ pub async fn runs_daily_summary(
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
     match store.runs_daily_summary(since).await {
-        Ok(rows) => Json(rows).into_response(),
+        // Rows are per project, so the counts a restricted member sees are of
+        // their own work — not a total with their share picked out of it.
+        Ok(mut rows) => {
+            rows.retain(|r| scope.allows(r.project.as_deref()));
+            Json(rows).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -1388,8 +1410,12 @@ pub async fn runs_daily_summary(
 /// `GET /runs/{id}` — run detail + node rows.
 pub async fn get_run(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+        return deny;
+    }
     let store = match state.store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -1417,9 +1443,13 @@ pub struct ActivityQuery {
 /// owns the run — it reads from Postgres, not an in-memory broadcast.
 pub async fn get_run_activity(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
     Query(q): Query<ActivityQuery>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+        return deny;
+    }
     // Bound the page so a long-running step's backlog can't return unbounded
     // rows in a single poll; the cursor lets the client page through the rest.
     const ACTIVITY_PAGE: i64 = 1000;
@@ -1442,6 +1472,7 @@ pub async fn get_run_activity(
 /// detail, for the side-by-side comparison view. Arms come back ordered a → b.
 pub async fn get_run_pair(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(pair_id): AxumPath<String>,
 ) -> Response {
     let store = match state.store().await {
@@ -1453,6 +1484,15 @@ pub async fn get_run_pair(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
     if summaries.is_empty() {
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("no runs for pair `{pair_id}`"),
+        );
+    }
+    // Both arms of a pair run on the same project, but check every one rather
+    // than the first: an arm on a project this caller may not see would
+    // otherwise ride along in the comparison.
+    if !summaries.iter().all(|s| scope.allows(s.project.as_deref())) {
         return err(
             StatusCode::NOT_FOUND,
             format!("no runs for pair `{pair_id}`"),
@@ -1597,6 +1637,7 @@ pub struct JudgePairResponse {
 
 pub async fn judge_run_pair(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     headers: axum::http::HeaderMap,
     AxumPath(pair_id): AxumPath<String>,
     Json(req): Json<JudgePairRequest>,
@@ -1614,6 +1655,14 @@ pub async fn judge_run_pair(
         return err(
             StatusCode::BAD_REQUEST,
             format!("pair `{pair_id}` needs two arms to judge"),
+        );
+    }
+    // Judging starts a run of its own, on the pair's project — so this is a
+    // check on initiating work, not only on reading it.
+    if !summaries.iter().all(|s| scope.allows(s.project.as_deref())) {
+        return err(
+            StatusCode::NOT_FOUND,
+            format!("no runs for pair `{pair_id}`"),
         );
     }
     let mut runs = Vec::with_capacity(summaries.len());
@@ -1671,9 +1720,15 @@ pub async fn judge_run_pair(
 /// `POST /runs` — submit a workflow; execute it in a background task.
 pub async fn create_run(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     headers: axum::http::HeaderMap,
     Json(mut req): Json<CreateRunRequest>,
 ) -> Response {
+    // Starting work on a project is the other half of seeing it: a member
+    // restricted to one project cannot set a run going on another.
+    if !scope.allows(req.project.as_deref()) {
+        return not_in_scope();
+    }
     let trigger = TriggerInfo::from_caller(&state, &headers, SOURCE_UI).await;
     req.triggered_by = trigger.user_id;
     req.trigger_source = trigger.source;
@@ -1692,9 +1747,13 @@ pub async fn create_run(
 /// Always a real run.
 pub async fn rerun_run(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     headers: axum::http::HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+        return deny;
+    }
     // A rerun belongs to whoever asked for it, not to whoever started the
     // original — they are different decisions, often by different people.
     let trigger = TriggerInfo::from_caller(&state, &headers, SOURCE_UI).await;
@@ -1799,9 +1858,14 @@ pub struct CreateRunPairResponse {
 /// `POST /runs/pair` — start both arms of an A/B comparison.
 pub async fn create_run_pair(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     headers: axum::http::HeaderMap,
     Json(mut req): Json<CreateRunPairRequest>,
 ) -> Response {
+    // Both arms run on the one project, so one check covers the pair.
+    if !scope.allows(req.project.as_deref()) {
+        return not_in_scope();
+    }
     let trigger = TriggerInfo::from_caller(&state, &headers, SOURCE_UI).await;
     req.triggered_by = trigger.user_id;
     req.trigger_source = trigger.source;
@@ -1865,8 +1929,14 @@ pub struct WorkflowModelsQuery {
 
 pub async fn list_workflow_models(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     Query(q): Query<WorkflowModelsQuery>,
 ) -> Response {
+    // Resolution reads the project's own settings, so the project named here
+    // has to be one the caller may see.
+    if q.project.is_some() && !scope.allows(q.project.as_deref()) {
+        return not_in_scope();
+    }
     match resolve_workflow_models(&state, &q.workflow, q.project.as_deref()) {
         Ok(pairs) => Json(pairs).into_response(),
         Err((status, msg)) => err(status, msg),
@@ -2872,8 +2942,12 @@ async fn resolve_workspace(
 /// `GET /runs/{id}/stream` — SSE of live events for a currently-executing run.
 pub async fn stream_run(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+        return deny;
+    }
     let rx = {
         let live = state.live.lock().await;
         match live.get(&id) {
@@ -2924,8 +2998,12 @@ pub async fn stream_run(
 /// misses and the row flips straight to cancelled.
 pub async fn cancel_run(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+        return deny;
+    }
     // Abort the live task and drop its broadcast channel, if we own it. Aborting
     // unwinds the task — its worktree guard is dropped and cleaned up.
     if let Some(run) = state.live.lock().await.remove(&id) {
@@ -2949,8 +3027,12 @@ pub async fn cancel_run(
 /// live task first so deleting a still-running run leaves nothing orphaned.
 pub async fn delete_run(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+        return deny;
+    }
     if let Some(run) = state.live.lock().await.remove(&id) {
         run.abort.abort();
     }

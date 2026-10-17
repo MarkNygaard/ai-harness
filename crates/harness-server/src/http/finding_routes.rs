@@ -17,6 +17,7 @@ use axum::Json;
 use harness_persist::FindingStateInput;
 use serde::Deserialize;
 
+use super::project_scope::{run_in_scope, CallerScope};
 use super::runs_routes::RunsState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -35,8 +36,12 @@ fn valid_action(action: &str) -> bool {
 /// `GET /api/runs/{run_id}/findings` — all remembered finding states.
 pub async fn list_findings(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     Path(run_id): Path<String>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &run_id).await {
+        return deny;
+    }
     let store = match state.finding_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -59,9 +64,13 @@ pub struct SetFindingBody {
 /// `PUT /api/runs/{run_id}/findings` — record one finding's state.
 pub async fn set_finding(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     Path(run_id): Path<String>,
     Json(body): Json<SetFindingBody>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &run_id).await {
+        return deny;
+    }
     if body.finding_key.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "`finding_key` is required");
     }
@@ -95,9 +104,13 @@ pub struct ClearFindingQuery {
 /// `DELETE /api/runs/{run_id}/findings?key=` — forget a finding's state.
 pub async fn clear_finding(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     Path(run_id): Path<String>,
     Query(q): Query<ClearFindingQuery>,
 ) -> Response {
+    if let Err(deny) = run_in_scope(&state, &scope, &run_id).await {
+        return deny;
+    }
     if q.key.trim().is_empty() {
         return err(StatusCode::BAD_REQUEST, "`key` is required");
     }

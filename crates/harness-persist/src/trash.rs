@@ -230,6 +230,18 @@ impl TrashStore {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
+    /// One entry, without restoring it — so a caller can find out which project
+    /// it belongs to before deciding whether they may put it back. Does not
+    /// purge: this answers a question about a specific id, and expiring it as a
+    /// side effect would turn a permission check into a deletion.
+    pub async fn get(&self, id: &str) -> Result<Option<TrashEntry>, PersistError> {
+        let row = sqlx::query_as::<_, TrashRow>(&format!("{SELECT_ENTRY} WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(Into::into))
+    }
+
     /// Put a row back where it came from, and return what was restored.
     /// Refuses, leaving the entry in the bin, when its key is in use again.
     pub async fn restore(&self, id: &str) -> Result<TrashEntry, RestoreError> {

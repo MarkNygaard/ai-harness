@@ -15,6 +15,7 @@ use serde::Deserialize;
 
 use super::linear_connections::resolve_for_project;
 use super::linear_oauth::linear_client;
+use super::project_scope::{not_in_scope, CallerScope};
 use super::runs_routes::RunsState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -100,9 +101,13 @@ fn default_max_attempts() -> i32 {
 /// `GET /api/projects/{project}/linear-source?workflow=` — return the binding or `null`.
 pub async fn get_source(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     axum::extract::Path(project): axum::extract::Path<String>,
     Query(q): Query<WorkflowQuery>,
 ) -> Response {
+    if !scope.allows(Some(&project)) {
+        return not_in_scope();
+    }
     let Some(workflow) = trimmed_non_empty(q.workflow) else {
         return err(StatusCode::BAD_REQUEST, "`workflow` is required");
     };
@@ -122,8 +127,12 @@ pub async fn get_source(
 /// `GET /api/projects/{project}/linear-sources` — list all bindings for a project.
 pub async fn list_sources(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     axum::extract::Path(project): axum::extract::Path<String>,
 ) -> Response {
+    if !scope.allows(Some(&project)) {
+        return not_in_scope();
+    }
     if let Err(r) = ensure_project(&state, &project).await {
         return r;
     }
@@ -143,8 +152,12 @@ pub async fn list_sources(
 /// stalls on it.
 pub async fn check_sources(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     axum::extract::Path(project): axum::extract::Path<String>,
 ) -> Response {
+    if !scope.allows(Some(&project)) {
+        return not_in_scope();
+    }
     if let Err(r) = ensure_project(&state, &project).await {
         return r;
     }
@@ -182,9 +195,13 @@ fn default_issue_workflow() -> String {
 /// created issue.
 pub async fn create_issue(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     axum::extract::Path(project): axum::extract::Path<String>,
     Json(body): Json<CreateIssueBody>,
 ) -> Response {
+    if !scope.allows(Some(&project)) {
+        return not_in_scope();
+    }
     let Some(title) = trimmed_non_empty(body.title) else {
         return err(StatusCode::BAD_REQUEST, "`title` is required");
     };
@@ -254,9 +271,13 @@ fn optional_trimmed_non_empty(s: Option<String>) -> Option<String> {
 /// `PUT /api/projects/{project}/linear-source` — create or update a binding.
 pub async fn put_source(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     axum::extract::Path(project): axum::extract::Path<String>,
     Json(body): Json<PutSourceBody>,
 ) -> Response {
+    if !scope.allows(Some(&project)) {
+        return not_in_scope();
+    }
     // Validation.
     let Some(workflow) = trimmed_non_empty(body.workflow) else {
         return err(StatusCode::BAD_REQUEST, "`workflow` is required");
@@ -345,10 +366,14 @@ pub async fn put_source(
 /// `DELETE /api/projects/{project}/linear-source?workflow=` — remove a binding.
 pub async fn delete_source(
     Extension(state): Extension<Arc<RunsState>>,
+    CallerScope(scope): CallerScope,
     headers: axum::http::HeaderMap,
     axum::extract::Path(project): axum::extract::Path<String>,
     Query(q): Query<WorkflowQuery>,
 ) -> Response {
+    if !scope.allows(Some(&project)) {
+        return not_in_scope();
+    }
     let Some(workflow) = trimmed_non_empty(q.workflow) else {
         return err(StatusCode::BAD_REQUEST, "`workflow` is required");
     };
