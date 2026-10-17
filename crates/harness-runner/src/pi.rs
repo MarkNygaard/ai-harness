@@ -20,6 +20,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -51,6 +52,17 @@ const KIMI_PREFIX: &str = "kimi-code/";
 /// wall-clock cap by default; set `OMP_TIMEOUT_SECS` to add a hard ceiling.
 const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 900;
 
+/// Grace period for the stderr reader to reach EOF once we're done with the
+/// child. Bounded, and the collected bytes are read from the shared buffer
+/// rather than from the reader's result: `omp` spawns tools (`cargo`, `gh`, …)
+/// that inherit its stderr, so a surviving grandchild can hold the pipe open
+/// indefinitely after `omp` itself is gone. Waiting for EOF would then either
+/// hang or throw away the very output we killed it to read.
+const STDERR_DRAIN_SECS: u64 = 2;
+
+/// How much of a killed child's stderr to carry into a log line / error.
+const STDERR_TAIL_BYTES: usize = 2000;
+
 /// Outcome of one `omp` invocation that didn't error outright.
 enum Attempt {
     /// The process closed stdout and exited; carries streamed stdout + stderr.
@@ -68,7 +80,49 @@ enum Attempt {
         last_update: Option<String>,
     },
     /// No output for the idle window — killed as stalled (retryable once).
-    Stalled,
+    Stalled {
+        /// Whatever the killed process wrote to stderr. A stall produces no
+        /// stdout by definition, so this is the *only* evidence of why it went
+        /// quiet (an auth refusal, a network error, a lock it was waiting on).
+        /// Dropping it is how a 30-minute hang ends up with no explanation.
+        stderr: String,
+    },
+}
+
+/// Everything the child has written to stderr so far, without risking a hang.
+///
+/// Gives the reader [`STDERR_DRAIN_SECS`] to reach EOF, then stops it and
+/// returns what landed in `buf` regardless. Decoding happens here, over the
+/// whole buffer, so a read that split a multi-byte char can't mangle it.
+async fn take_stderr(
+    mut task: tokio::task::JoinHandle<()>,
+    buf: &Mutex<Vec<u8>>,
+    grace: Duration,
+) -> String {
+    let _ = tokio::time::timeout(grace, &mut task).await;
+    task.abort();
+    let bytes = buf.lock().unwrap_or_else(|e| e.into_inner());
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// The last [`STDERR_TAIL_BYTES`] of `stderr`, or `None` when it's blank.
+///
+/// Tailed rather than dumped: a stalled `omp` may have written a great deal
+/// before going quiet, and the explanation is almost always the last thing it
+/// said. Truncation is marked and respects char boundaries.
+fn stderr_tail(stderr: &str) -> Option<String> {
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.len() <= STDERR_TAIL_BYTES {
+        return Some(trimmed.to_string());
+    }
+    let mut start = trimmed.len() - STDERR_TAIL_BYTES;
+    while !trimmed.is_char_boundary(start) {
+        start += 1;
+    }
+    Some(format!("…{}", &trimmed[start..]))
 }
 
 /// A [`PromptAgent`] backed by the `omp` CLI. Selected for `provider: pi`.
@@ -205,18 +259,30 @@ impl PromptAgent for PiAgent {
                     event_types,
                     last_update,
                 } => break (stdout, stderr, status, event_types, last_update),
-                Attempt::Stalled => {
+                Attempt::Stalled { stderr } => {
+                    let secs = self.idle_timeout.as_secs();
+                    let why = stderr_tail(&stderr)
+                        .map(|s| format!("; stderr: {s}"))
+                        .unwrap_or_default();
                     if attempt == 0 {
                         attempt += 1;
                         tracing::warn!(
-                            "omp produced no output for {}s — stalled; retrying once",
-                            self.idle_timeout.as_secs()
+                            "omp produced no output for {secs}s — stalled; retrying once{why}"
                         );
+                        // Also say so in the live feed. A stalled node is
+                        // otherwise indistinguishable from a working one, and
+                        // an operator watching a node sit silent for 15 minutes
+                        // reasonably concludes the run is wedged and cancels it
+                        // — losing the diagnosis along with the run.
+                        if let Some(sink) = req.progress.as_ref() {
+                            sink.report(Activity::text(format!(
+                                "omp produced no output for {secs}s — restarting it (attempt 2 of 2)"
+                            )));
+                        }
                         continue;
                     }
                     return Err(AgentError(format!(
-                        "omp stalled (no output for {}s) and again after one retry",
-                        self.idle_timeout.as_secs()
+                        "omp stalled (no output for {secs}s) and again after one retry{why}"
                     )));
                 }
             }
@@ -339,14 +405,25 @@ impl PiAgent {
             ))
         })?;
 
-        // Drain stderr concurrently so a full stderr pipe can't deadlock stdout.
+        // Drain stderr concurrently so a full stderr pipe can't deadlock stdout,
+        // accumulating into a buffer the other paths can read *without* waiting
+        // for EOF (see [`take_stderr`]). Raw bytes: decoding is deferred so a
+        // read landing mid-character can't corrupt it.
         let stderr_pipe = child.stderr.take();
+        let stderr_buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let stderr_sink = Arc::clone(&stderr_buf);
         let stderr_task = tokio::spawn(async move {
-            let mut buf = String::new();
-            if let Some(pipe) = stderr_pipe {
-                let _ = BufReader::new(pipe).read_to_string(&mut buf).await;
+            let Some(mut pipe) = stderr_pipe else { return };
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = pipe.read(&mut chunk).await {
+                if n == 0 {
+                    break; // EOF: every writer has closed the pipe
+                }
+                stderr_sink
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .extend_from_slice(&chunk[..n]);
             }
-            buf
         });
 
         let stdout = child.stdout.take().expect("stdout piped");
@@ -422,14 +499,32 @@ impl PiAgent {
                     let _ = child.start_kill();
                     let _ = child.wait().await;
                     let secs = self.timeout.map(|d| d.as_secs()).unwrap_or(0);
+                    let tail = take_stderr(
+                        stderr_task,
+                        &stderr_buf,
+                        Duration::from_secs(STDERR_DRAIN_SECS),
+                    )
+                    .await;
+                    let why = stderr_tail(&tail)
+                        .map(|s| format!("; stderr: {s}"))
+                        .unwrap_or_default();
                     return Err(AgentError(format!(
-                        "omp exceeded the wall-clock cap ({secs}s, OMP_TIMEOUT_SECS)"
+                        "omp exceeded the wall-clock cap ({secs}s, OMP_TIMEOUT_SECS){why}"
                     )));
                 }
                 _ = idle => {
                     let _ = child.start_kill();
                     let _ = child.wait().await;
-                    return Ok(Attempt::Stalled);
+                    // Keep stderr: the process wrote no stdout (that's what a
+                    // stall *is*), so this is the only account of what it was
+                    // stuck on.
+                    let stderr = take_stderr(
+                        stderr_task,
+                        &stderr_buf,
+                        Duration::from_secs(STDERR_DRAIN_SECS),
+                    )
+                    .await;
+                    return Ok(Attempt::Stalled { stderr });
                 }
             }
         }
@@ -438,7 +533,12 @@ impl PiAgent {
             .wait()
             .await
             .map_err(|e| AgentError(format!("omp wait failed: {e}")))?;
-        let stderr = stderr_task.await.unwrap_or_default();
+        let stderr = take_stderr(
+            stderr_task,
+            &stderr_buf,
+            Duration::from_secs(STDERR_DRAIN_SECS),
+        )
+        .await;
         Ok(Attempt::Done {
             stdout: acc,
             stderr,
@@ -1225,11 +1325,99 @@ mod tests {
             .run_attempt(&args, Path::new("."), &Default::default(), None)
             .await
             .unwrap();
-        assert!(matches!(out, Attempt::Stalled));
+        assert!(matches!(out, Attempt::Stalled { .. }));
         assert!(
             started.elapsed() < Duration::from_secs(5),
             "killed promptly"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_stall_keeps_what_the_process_said_on_stderr() {
+        // The whole point of the stall path: no stdout, so stderr is the only
+        // evidence of why it went quiet. It must survive the kill.
+        let agent = agent_with("sh", Duration::from_millis(300));
+        let args = vec![
+            "-c".to_string(),
+            "printf 'not logged in\\n' >&2; sleep 30".to_string(),
+        ];
+        let out = agent
+            .run_attempt(&args, Path::new("."), &Default::default(), None)
+            .await
+            .unwrap();
+        match out {
+            Attempt::Stalled { stderr } => {
+                assert!(stderr.contains("not logged in"), "kept stderr: {stderr:?}")
+            }
+            Attempt::Done { .. } => panic!("silent process should have stalled"),
+        }
+    }
+
+    /// Grace period for the drain tests — short, so they don't idle for the
+    /// production [`STDERR_DRAIN_SECS`]. Mirrors how the idle watchdog is
+    /// exercised with a 300ms window rather than its real 15 minutes.
+    const TEST_GRACE: Duration = Duration::from_millis(200);
+
+    #[tokio::test]
+    async fn take_stderr_keeps_the_bytes_when_the_pipe_never_closes() {
+        // The grandchild case: `omp` is dead but a tool it spawned still holds
+        // the stderr pipe, so the reader never reaches EOF. Waiting on the
+        // reader would hang (or yield nothing) — we must still get the bytes,
+        // because they are the only account of why `omp` went quiet.
+        let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(b"not logged in\n".to_vec()));
+        let never = tokio::spawn(std::future::pending::<()>());
+        let started = std::time::Instant::now();
+        assert_eq!(
+            take_stderr(never, &buf, TEST_GRACE).await,
+            "not logged in\n"
+        );
+        assert!(
+            started.elapsed() >= TEST_GRACE,
+            "gave the reader its grace period first"
+        );
+    }
+
+    #[tokio::test]
+    async fn take_stderr_returns_as_soon_as_the_reader_hits_eof() {
+        // The ordinary case must not pay the grace period.
+        let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(b"done".to_vec()));
+        let finished = tokio::spawn(async {});
+        let started = std::time::Instant::now();
+        assert_eq!(take_stderr(finished, &buf, TEST_GRACE).await, "done");
+        assert!(started.elapsed() < TEST_GRACE);
+    }
+
+    #[tokio::test]
+    async fn take_stderr_decodes_over_the_whole_buffer() {
+        // Bytes are accumulated raw precisely so a read that landed mid-char
+        // doesn't corrupt it; decoding the assembled buffer recovers the char.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&"é".as_bytes()[..1]); // first half of a read
+        bytes.extend_from_slice(&"é".as_bytes()[1..]); // second half
+        let buf = Arc::new(Mutex::new(bytes));
+        let finished = tokio::spawn(async {});
+        assert_eq!(take_stderr(finished, &buf, TEST_GRACE).await, "é");
+    }
+
+    #[test]
+    fn stderr_tail_trims_blank_and_marks_truncation() {
+        assert_eq!(stderr_tail("   \n "), None);
+        assert_eq!(stderr_tail(" boom \n"), Some("boom".to_string()));
+        let long = "x".repeat(STDERR_TAIL_BYTES + 50);
+        let tail = stderr_tail(&long).unwrap();
+        assert!(tail.starts_with('…'), "truncation is marked: {tail:.20}");
+        // The mark is 3 bytes on top of the retained tail.
+        assert_eq!(tail.len(), STDERR_TAIL_BYTES + '…'.len_utf8());
+    }
+
+    #[test]
+    fn stderr_tail_truncates_on_a_char_boundary() {
+        // A multi-byte char straddling the cut must not panic or split.
+        let long = "é".repeat(STDERR_TAIL_BYTES);
+        let tail = stderr_tail(&long).expect("non-empty");
+        assert!(tail.starts_with('…'));
+        assert!(tail.trim_start_matches('…').chars().all(|c| c == 'é'));
     }
 
     #[cfg(unix)]
@@ -1252,7 +1440,7 @@ mod tests {
                 assert!(status.success());
                 assert!(stdout.contains("line 10"), "ran to completion: {stdout:?}");
             }
-            Attempt::Stalled => panic!("active process was wrongly killed as stalled"),
+            Attempt::Stalled { .. } => panic!("active process was wrongly killed as stalled"),
         }
     }
 }
