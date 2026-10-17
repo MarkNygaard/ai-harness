@@ -173,10 +173,14 @@ where
 
 /// Guard a handler that works on one run: may this caller touch it?
 ///
-/// Returns the refusal to hand straight back, or `Ok(())` to carry on. A run
-/// that does not exist and one the caller may not see get the same answer, for
-/// the reason in [`not_in_scope`] — otherwise run ids could be probed one at a
-/// time for which projects exist.
+/// `Some(refusal)` to hand straight back, or `None` to carry on. A run that
+/// does not exist and one the caller may not see get the same answer, for the
+/// reason in [`not_in_scope`] — otherwise run ids could be probed one at a time
+/// for which projects exist.
+///
+/// `Option` rather than `Result<(), Response>`: the only `Err` would be a
+/// `Response`, which is large enough to trip `clippy::result_large_err`, and
+/// "no objection" reads better as `None` than as `Ok(())` anyway.
 ///
 /// Skips the lookup entirely for an unrestricted caller, which is every caller
 /// on an install that does not use this feature.
@@ -184,31 +188,40 @@ pub(crate) async fn run_in_scope(
     state: &Arc<RunsState>,
     scope: &ProjectScope,
     run_id: &str,
-) -> Result<(), Response> {
+) -> Option<Response> {
     if !scope.is_restricted() {
-        return Ok(());
+        return None;
     }
-    let store = state.store().await.map_err(|e| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            axum::Json(serde_json::json!({ "error": e })),
-        )
-            .into_response()
-    })?;
+    let store = match state.store().await {
+        Ok(store) => store,
+        Err(e) => {
+            return Some(
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    axum::Json(serde_json::json!({ "error": e })),
+                )
+                    .into_response(),
+            )
+        }
+    };
     match store.project_for_run(run_id).await {
-        Ok(Some(project)) if scope.allows(project.as_deref()) => Ok(()),
+        Ok(Some(project)) if scope.allows(project.as_deref()) => None,
         // No such run, or not theirs — indistinguishable on purpose, and the
         // same wording a genuinely missing run gets from its own handler.
-        Ok(_) => Err((
-            StatusCode::NOT_FOUND,
-            axum::Json(serde_json::json!({ "error": format!("run `{run_id}` not found") })),
-        )
-            .into_response()),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response()),
+        Ok(_) => Some(
+            (
+                StatusCode::NOT_FOUND,
+                axum::Json(serde_json::json!({ "error": format!("run `{run_id}` not found") })),
+            )
+                .into_response(),
+        ),
+        Err(e) => Some(
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response(),
+        ),
     }
 }
 

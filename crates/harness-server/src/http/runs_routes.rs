@@ -1413,7 +1413,7 @@ pub async fn get_run(
     CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &id).await {
         return deny;
     }
     let store = match state.store().await {
@@ -1447,7 +1447,7 @@ pub async fn get_run_activity(
     AxumPath(id): AxumPath<String>,
     Query(q): Query<ActivityQuery>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &id).await {
         return deny;
     }
     // Bound the page so a long-running step's backlog can't return unbounded
@@ -1751,7 +1751,7 @@ pub async fn rerun_run(
     headers: axum::http::HeaderMap,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &id).await {
         return deny;
     }
     // A rerun belongs to whoever asked for it, not to whoever started the
@@ -2945,7 +2945,7 @@ pub async fn stream_run(
     CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &id).await {
         return deny;
     }
     let rx = {
@@ -3001,7 +3001,7 @@ pub async fn cancel_run(
     CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &id).await {
         return deny;
     }
     // Abort the live task and drop its broadcast channel, if we own it. Aborting
@@ -3030,7 +3030,7 @@ pub async fn delete_run(
     CallerScope(scope): CallerScope,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &id).await {
         return deny;
     }
     if let Some(run) = state.live.lock().await.remove(&id) {

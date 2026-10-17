@@ -39,7 +39,7 @@ pub async fn list_findings(
     CallerScope(scope): CallerScope,
     Path(run_id): Path<String>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &run_id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &run_id).await {
         return deny;
     }
     let store = match state.finding_store().await {
@@ -68,7 +68,7 @@ pub async fn set_finding(
     Path(run_id): Path<String>,
     Json(body): Json<SetFindingBody>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &run_id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &run_id).await {
         return deny;
     }
     if body.finding_key.trim().is_empty() {
@@ -108,7 +108,7 @@ pub async fn clear_finding(
     Path(run_id): Path<String>,
     Query(q): Query<ClearFindingQuery>,
 ) -> Response {
-    if let Err(deny) = run_in_scope(&state, &scope, &run_id).await {
+    if let Some(deny) = run_in_scope(&state, &scope, &run_id).await {
         return deny;
     }
     if q.key.trim().is_empty() {
