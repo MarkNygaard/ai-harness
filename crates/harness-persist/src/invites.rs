@@ -215,9 +215,12 @@ mod tests {
             .connect(&url)
             .await
             .expect("connect");
+        // Includes `harness_user_projects`: `CASCADE` drops its foreign key
+        // without dropping the table, and the `CREATE TABLE IF NOT EXISTS`
+        // that follows is then a no-op that leaves the constraint missing.
         sqlx::query(
             "DROP TABLE IF EXISTS harness_invites, harness_tokens, harness_sessions,
-             harness_users CASCADE",
+             harness_user_projects, harness_users CASCADE",
         )
         .execute(&pool)
         .await

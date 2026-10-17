@@ -1292,6 +1292,56 @@ impl RunStore {
         Ok(rows)
     }
 
+    /// Which project a run belongs to, without loading the run.
+    ///
+    /// `Ok(None)` means there is no such run; `Ok(Some(None))` means the run
+    /// exists but is on no project. The two are different answers to a
+    /// permission question, so they are not collapsed here.
+    pub async fn project_for_run(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<Option<String>>, PersistError> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT project FROM harness_workflow_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    /// The most recent runs across a set of projects (newest first).
+    ///
+    /// For a caller restricted to several projects: one query over the lot,
+    /// rather than a query per project whose results would then have to be
+    /// merged and re-truncated — which would also make `limit` mean something
+    /// different depending on how many projects somebody happened to be given.
+    /// An empty slice matches nothing, which is what a caller allowed nothing
+    /// should see.
+    pub async fn list_runs_for_projects(
+        &self,
+        projects: &[String],
+        limit: i64,
+    ) -> Result<Vec<RunSummary>, PersistError> {
+        let rows = sqlx::query_as::<_, RunSummary>(
+            "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
+                    r.node_count, r.recorded_at,
+                    MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by,
+                    r.trigger_source, r.trigger_actor
+             FROM harness_workflow_runs r
+             LEFT JOIN harness_run_nodes n ON n.run_id = r.id
+             WHERE r.project = ANY($1)
+             GROUP BY r.id
+             ORDER BY r.recorded_at DESC
+             LIMIT $2",
+        )
+        .bind(projects)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// The runs of one A/B pair, ordered by arm (`a` then `b`). Usually two.
     pub async fn list_runs_for_pair(&self, pair_id: &str) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(

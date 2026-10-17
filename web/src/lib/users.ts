@@ -15,6 +15,12 @@ import type { AuthUser } from "./auth";
 export interface UserActivity extends AuthUser {
   /** Null for an account that has never done any of those things. */
   last_active_at: string | null;
+  /**
+   * Which projects this account is limited to. **Empty means every project** —
+   * the default, and not "none". Always empty for an administrator, who is
+   * never restricted.
+   */
+  projects: string[];
 }
 
 export function useUsers(enabled: boolean) {
@@ -83,6 +89,20 @@ export function useSetUserDisabled() {
 export function useSetUserProfile() {
   return useUserMutation<{ name: string; email: string }, ProfileUpdate>(
     (id) => `/api/users/${encodeURIComponent(id)}`,
+    "PUT",
+  );
+}
+
+/**
+ * Limit a member to a set of projects. **An empty array clears the limit** and
+ * returns them to seeing every project, which is also the default.
+ *
+ * The server refuses this on an administrator rather than storing something
+ * that would not apply.
+ */
+export function useSetUserProjects() {
+  return useUserMutation<{ projects: string[] }, { projects: string[] }>(
+    (id) => `/api/users/${encodeURIComponent(id)}/projects`,
     "PUT",
   );
 }

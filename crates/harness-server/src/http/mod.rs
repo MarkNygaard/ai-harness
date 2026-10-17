@@ -31,6 +31,7 @@ pub(crate) mod mcp_key;
 pub(crate) mod mcp_routes;
 pub(crate) mod misc_routes;
 pub(crate) mod oidc;
+pub(crate) mod project_scope;
 pub(crate) mod projects_routes;
 pub(crate) mod rate_limit;
 pub(crate) mod run_grants;
