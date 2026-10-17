@@ -713,8 +713,29 @@ mod tests {
 
         assert!(store.delete(&id).await.expect("delete"), "account removed");
         // The cascade is on `user_id`, so no row is left pointing at a ghost.
-        assert!(store.project_scope(&id).await.unwrap().is_empty());
+        // Report the live constraints on failure: nextest stops at the first
+        // failing test, so a separate schema test would never get to run and
+        // say which half is wrong.
+        let remaining = store.project_scope(&id).await.unwrap();
+        assert!(
+            remaining.is_empty(),
+            "scope outlived the account ({remaining:?}); foreign keys now on \
+             harness_user_projects: {:?}",
+            fks_on_user_projects(&store).await
+        );
         assert!(!store.project_scopes().await.unwrap().contains_key(&id));
+    }
+
+    /// Every foreign key on `harness_user_projects` as `(name, on-delete)`,
+    /// where `c` is cascade and `a` the no-action default.
+    async fn fks_on_user_projects(store: &UserStore) -> Vec<(String, String)> {
+        sqlx::query_as(
+            "SELECT conname, confdeltype::text FROM pg_constraint
+             WHERE conrelid = 'harness_user_projects'::regclass AND contype = 'f'",
+        )
+        .fetch_all(&store.pool)
+        .await
+        .unwrap_or_default()
     }
 
     /// The cascade in [`CREATE_USER_PROJECTS`] is load-bearing, so assert the
@@ -729,13 +750,7 @@ mod tests {
             return;
         };
         let store = UserStore::connect(&url).await.expect("connect");
-        let fks: Vec<(String, String)> = sqlx::query_as(
-            "SELECT conname, confdeltype::text FROM pg_constraint
-             WHERE conrelid = 'harness_user_projects'::regclass AND contype = 'f'",
-        )
-        .fetch_all(&store.pool)
-        .await
-        .expect("read constraints");
+        let fks = fks_on_user_projects(&store).await;
         // `c` is ON DELETE CASCADE; `a` (no action) is the default and would
         // leave the rows behind.
         assert_eq!(

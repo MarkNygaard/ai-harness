@@ -186,10 +186,17 @@ mod tests {
             .connect(&url)
             .await
             .expect("connect");
-        sqlx::query("DROP TABLE IF EXISTS harness_tokens, harness_sessions, harness_users CASCADE")
-            .execute(&pool)
-            .await
-            .expect("drop");
+        // Every table in the accounts family, not just the ones this store
+        // touches: `CASCADE` would drop a *constraint* into
+        // `harness_user_projects` while leaving the table standing, and the
+        // `CREATE TABLE IF NOT EXISTS` that follows would not put it back.
+        sqlx::query(
+            "DROP TABLE IF EXISTS harness_tokens, harness_sessions, harness_user_projects,
+             harness_users CASCADE",
+        )
+        .execute(&pool)
+        .await
+        .expect("drop");
 
         // Would fail with `relation "harness_users" does not exist` if the token
         // schema did not ensure its dependency first.
