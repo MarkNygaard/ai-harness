@@ -39,6 +39,23 @@ CREATE TABLE IF NOT EXISTS harness_project_credentials (
     PRIMARY KEY (project, provider)
 )";
 
+/// One person's own credentials: the GitHub token from their sign-in, and the
+/// library publisher token issued for them.
+///
+/// A separate table, not rows in [`harness_credentials`] under a per-user
+/// provider name: that table is listed whole on the Credentials page and by the
+/// Linear connection picker, and one person's tokens are nobody else's
+/// business. No foreign key to `harness_users`: the stores are created in no
+/// fixed order, so deleting a user clears these explicitly instead.
+const CREATE_USER_CREDENTIALS: &str = "
+CREATE TABLE IF NOT EXISTS harness_user_credentials (
+    user_id     text NOT NULL,
+    provider    text NOT NULL,
+    data        bytea NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, provider)
+)";
+
 /// A provider's stored credential, as returned to the API (never the secrets).
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,7 +93,78 @@ impl CredentialStore {
         sqlx::query(CREATE_PROJECT_CREDENTIALS)
             .execute(&store.pool)
             .await?;
+        sqlx::query(CREATE_USER_CREDENTIALS)
+            .execute(&store.pool)
+            .await?;
         Ok(store)
+    }
+
+    // ── One person's own credentials ─────────────────────────────────────────
+
+    /// Store a user's credential for `provider`, **replacing** what was there.
+    /// Unlike [`Self::set`] there is no form sending some fields at a time:
+    /// these are written whole, by the harness, from a sign-in or an issue.
+    pub async fn set_user(
+        &self,
+        user_id: &str,
+        provider: &str,
+        fields: &BTreeMap<String, String>,
+    ) -> Result<(), PersistError> {
+        let json = serde_json::to_vec(fields).map_err(|e| PersistError::Crypto(e.to_string()))?;
+        let blob = encrypt(&self.key, &json)?;
+        sqlx::query(
+            "INSERT INTO harness_user_credentials (user_id, provider, data, updated_at)
+             VALUES ($1, $2, $3, now())
+             ON CONFLICT (user_id, provider) DO UPDATE SET data = excluded.data, updated_at = now()",
+        )
+        .bind(user_id)
+        .bind(provider)
+        .bind(blob)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Fetch + decrypt a user's credential for `provider`, if present.
+    pub async fn get_user(
+        &self,
+        user_id: &str,
+        provider: &str,
+    ) -> Result<Option<BTreeMap<String, String>>, PersistError> {
+        let row: Option<(Vec<u8>,)> = sqlx::query_as(
+            "SELECT data FROM harness_user_credentials WHERE user_id = $1 AND provider = $2",
+        )
+        .bind(user_id)
+        .bind(provider)
+        .fetch_optional(&self.pool)
+        .await?;
+        let Some((blob,)) = row else {
+            return Ok(None);
+        };
+        let plaintext = decrypt(&self.key, &blob)?;
+        let fields: BTreeMap<String, String> =
+            serde_json::from_slice(&plaintext).map_err(|e| PersistError::Crypto(e.to_string()))?;
+        Ok(Some(fields))
+    }
+
+    /// Remove one of a user's credentials, e.g. a token the other side has
+    /// revoked.
+    pub async fn delete_user(&self, user_id: &str, provider: &str) -> Result<(), PersistError> {
+        sqlx::query("DELETE FROM harness_user_credentials WHERE user_id = $1 AND provider = $2")
+            .bind(user_id)
+            .bind(provider)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Remove every credential a user holds; for when the account goes.
+    pub async fn delete_all_for_user(&self, user_id: &str) -> Result<u64, PersistError> {
+        let done = sqlx::query("DELETE FROM harness_user_credentials WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected())
     }
 
     /// Connect to `database_url` with `key` and ensure the schema exists.
@@ -295,6 +383,76 @@ mod tests {
         assert!(decrypt(&[8u8; 32], &a).is_err());
         // Truncated blob fails cleanly.
         assert!(decrypt(&key, &[0u8; 4]).is_err());
+    }
+
+    /// Postgres-dependent: runs only when HARNESS_DATABASE_URL is set (CI).
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_users_credentials_are_theirs_alone() {
+        let Ok(url) = std::env::var("HARNESS_DATABASE_URL") else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        if !crate::is_test_db(&url) {
+            eprintln!("skipping: HARNESS_DATABASE_URL is not a test database");
+            return;
+        }
+        let store = CredentialStore::connect(&url, [3u8; 32])
+            .await
+            .expect("connect");
+        let ts = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let (ann, bob) = (format!("ann-{ts}"), format!("bob-{ts}"));
+        let token = |t: &str| BTreeMap::from([("token".to_string(), t.to_string())]);
+
+        store
+            .set_user(&ann, "github", &token("gho_ann"))
+            .await
+            .unwrap();
+        store
+            .set_user(&bob, "github", &token("gho_bob"))
+            .await
+            .unwrap();
+        let got = |u: &str| {
+            let store = &store;
+            let u = u.to_string();
+            async move {
+                store
+                    .get_user(&u, "github")
+                    .await
+                    .unwrap()
+                    .map(|f| f["token"].clone())
+            }
+        };
+        assert_eq!(got(&ann).await.as_deref(), Some("gho_ann"));
+        assert_eq!(got(&bob).await.as_deref(), Some("gho_bob"));
+
+        // A write replaces rather than merges: a re-issued token stands alone.
+        store
+            .set_user(
+                &ann,
+                "github",
+                &BTreeMap::from([("login".to_string(), "ann".to_string())]),
+            )
+            .await
+            .unwrap();
+        let fields = store.get_user(&ann, "github").await.unwrap().unwrap();
+        assert!(!fields.contains_key("token"));
+
+        // Never listed with the shared credentials.
+        let shared = store.list_configured().await.unwrap();
+        assert!(!shared.iter().any(|p| p.contains(&ann)));
+
+        store.delete_user(&bob, "github").await.unwrap();
+        assert_eq!(got(&bob).await, None);
+        store
+            .set_user(&ann, "registry", &token("pub_ann"))
+            .await
+            .unwrap();
+        assert_eq!(store.delete_all_for_user(&ann).await.unwrap(), 2);
+        assert!(store.get_user(&ann, "registry").await.unwrap().is_none());
     }
 
     /// Postgres-dependent: runs only when HARNESS_DATABASE_URL is set (CI).

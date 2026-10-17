@@ -63,11 +63,36 @@ pub struct LibraryVersion {
 /// A failure talking to the library. Carries a sentence a person can act on;
 /// the callers surface it rather than a status code.
 #[derive(Debug)]
-pub struct RegistryError(pub String);
+pub struct RegistryError {
+    pub message: String,
+    /// The library's HTTP status, when it answered at all. Kept for the few
+    /// callers that act on it: a `401` on a person's own publisher token means
+    /// it was revoked, and the harness drops it and gets a fresh one.
+    pub status: Option<u16>,
+}
+
+impl RegistryError {
+    fn msg(message: String) -> Self {
+        Self {
+            message,
+            status: None,
+        }
+    }
+
+    /// The library refused the credential that was sent.
+    pub fn is_unauthorized(&self) -> bool {
+        self.status == Some(401)
+    }
+
+    /// The library has no such route: an older registry.
+    pub fn is_not_found(&self) -> bool {
+        self.status == Some(404)
+    }
+}
 
 impl std::fmt::Display for RegistryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.message)
     }
 }
 
@@ -107,15 +132,17 @@ impl RegistryClient {
             .get(self.url("/v1/workflows"))
             .send()
             .await
-            .map_err(|e| RegistryError(format!("could not reach the workflow library: {e}")))?;
+            .map_err(|e| {
+                RegistryError::msg(format!("could not reach the workflow library: {e}"))
+            })?;
         if !resp.status().is_success() {
-            return Err(RegistryError(format!(
+            return Err(RegistryError::msg(format!(
                 "the workflow library answered {}",
                 resp.status()
             )));
         }
         resp.json().await.map_err(|e| {
-            RegistryError(format!(
+            RegistryError::msg(format!(
                 "the workflow library sent something unreadable: {e}"
             ))
         })
@@ -124,25 +151,22 @@ impl RegistryClient {
     /// One version's YAML. `version` is the registry's per-workflow counter.
     pub async fn version(&self, slug: &str, version: i32) -> Result<LibraryVersion> {
         let path = format!("/v1/workflows/{}/versions/{version}", urlencode(slug));
-        let resp = self
-            .http
-            .get(self.url(&path))
-            .send()
-            .await
-            .map_err(|e| RegistryError(format!("could not reach the workflow library: {e}")))?;
+        let resp = self.http.get(self.url(&path)).send().await.map_err(|e| {
+            RegistryError::msg(format!("could not reach the workflow library: {e}"))
+        })?;
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(RegistryError(format!(
+            return Err(RegistryError::msg(format!(
                 "the library has no version {version} of `{slug}`"
             )));
         }
         if !resp.status().is_success() {
-            return Err(RegistryError(format!(
+            return Err(RegistryError::msg(format!(
                 "the workflow library answered {}",
                 resp.status()
             )));
         }
         resp.json().await.map_err(|e| {
-            RegistryError(format!(
+            RegistryError::msg(format!(
                 "the workflow library sent something unreadable: {e}"
             ))
         })
@@ -168,9 +192,11 @@ impl RegistryClient {
             }))
             .send()
             .await
-            .map_err(|e| RegistryError(format!("could not reach the workflow library: {e}")))?;
+            .map_err(|e| {
+                RegistryError::msg(format!("could not reach the workflow library: {e}"))
+            })?;
         if !resp.status().is_success() {
-            return Err(RegistryError(format!(
+            return Err(RegistryError::msg(format!(
                 "the workflow library answered {}",
                 resp.status()
             )));
@@ -194,11 +220,13 @@ impl RegistryClient {
             .delete(self.url(&path))
             .send()
             .await
-            .map_err(|e| RegistryError(format!("could not reach the workflow library: {e}")))?;
+            .map_err(|e| {
+                RegistryError::msg(format!("could not reach the workflow library: {e}"))
+            })?;
         if resp.status().is_success() || resp.status() == reqwest::StatusCode::NOT_FOUND {
             return Ok(());
         }
-        Err(RegistryError(format!(
+        Err(RegistryError::msg(format!(
             "the workflow library answered {}",
             resp.status()
         )))
@@ -366,6 +394,24 @@ impl RegistryClient {
         json_or_error(resp, "sign-in").await
     }
 
+    /// A publisher token for whoever a GitHub access token belongs to.
+    ///
+    /// The harness holds a person's GitHub token from their sign-in and hands
+    /// it over; the registry asks GitHub whose it is, so the harness is never
+    /// believed about who somebody is. An older registry has no such route and
+    /// answers `404` (see [`RegistryError::is_not_found`]); a token GitHub no
+    /// longer accepts answers `401`.
+    pub async fn enroll_with_github(&self, github_token: &str) -> Result<EnrollPoll> {
+        let resp = self
+            .http
+            .post(self.url("/v1/enroll/github"))
+            .json(&serde_json::json!({ "access_token": github_token }))
+            .send()
+            .await
+            .map_err(unreachable)?;
+        json_or_error(resp, "sign-in").await
+    }
+
     /// Ask whether the person has finished authorizing yet.
     pub async fn enroll_poll(&self, device_code: &str) -> Result<EnrollPoll> {
         let resp = self
@@ -459,7 +505,7 @@ pub struct Published {
 }
 
 fn unreachable(e: reqwest::Error) -> RegistryError {
-    RegistryError(format!("could not reach the workflow library: {e}"))
+    RegistryError::msg(format!("could not reach the workflow library: {e}"))
 }
 
 /// Read a JSON body, turning the statuses a publisher actually hits into
@@ -479,7 +525,7 @@ async fn json_or_error<T: serde::de::DeserializeOwned>(
     let status = resp.status();
     if status.is_success() {
         return resp.json().await.map_err(|e| {
-            RegistryError(format!(
+            RegistryError::msg(format!(
                 "the workflow library sent something unreadable: {e}"
             ))
         });
@@ -492,7 +538,7 @@ async fn json_or_error<T: serde::de::DeserializeOwned>(
         .and_then(|v| v.get("error")?.as_str().map(str::to_string))
         .filter(|d| !d.is_empty());
 
-    Err(RegistryError(match (status, detail) {
+    let message = match (status, detail) {
         (reqwest::StatusCode::UNAUTHORIZED, _) => {
             "the library did not accept this publisher token — it may have been revoked".into()
         }
@@ -502,7 +548,11 @@ async fn json_or_error<T: serde::de::DeserializeOwned>(
         (reqwest::StatusCode::NOT_FOUND, _) => format!("the library has no such {subject}"),
         (_, Some(d)) => d,
         (s, None) => format!("the workflow library answered {s}"),
-    }))
+    };
+    Err(RegistryError {
+        message,
+        status: Some(status.as_u16()),
+    })
 }
 
 /// Percent-encode one path segment.

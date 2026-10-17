@@ -138,6 +138,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             post(github_sso::test_github),
         )
         .route("/api/auth/github/start", get(github_sso::start))
+        // Connect GitHub to an account signed in some other way, for
+        // publishing to the library as yourself. Not auth-exempt, unlike
+        // `start`: whose account it is comes from the session.
+        .route("/api/auth/github/connect", get(github_sso::connect))
         .route("/api/auth/github/status", get(github_sso::public_status))
         .route(github_sso::CALLBACK_PATH, get(github_sso::callback))
         // ── Invitations, and the links that redeem them ────────────────────

@@ -92,6 +92,10 @@ pub(crate) struct Pending {
     pub(crate) next: String,
     /// A test proves the configuration works without signing anybody in.
     pub(crate) test: bool,
+    /// Set when an account that is already signed in is connecting GitHub
+    /// rather than signing in: whose account the token is stored against.
+    /// Taken from the session that started the flow, never from the callback.
+    pub(crate) link_user: Option<String>,
     /// Hash of the value in the browser's binding cookie.
     ///
     /// **This is what ties the flow to a user agent.** Without it, a `state`
@@ -113,6 +117,7 @@ pub(crate) struct Attempt {
     pub nonce: Option<String>,
     pub next: String,
     pub test: bool,
+    pub link_user: Option<String>,
     pub binding_hash: String,
 }
 
@@ -131,6 +136,7 @@ pub(crate) fn issue_state(attempt: Attempt) -> String {
                 nonce: attempt.nonce,
                 next: attempt.next,
                 test: attempt.test,
+                link_user: attempt.link_user,
                 binding_hash: attempt.binding_hash,
             },
         );
@@ -307,6 +313,7 @@ mod tests {
             nonce: Some("n".into()),
             next: next.into(),
             test,
+            link_user: None,
             binding_hash: hash(binding),
         }
     }
