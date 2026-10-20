@@ -6,4 +6,5 @@
 //! the issues a given team+state+label filter would match. It performs **no**
 //! mutations — no claiming, no status transitions, no run triggering.
 
+pub mod github;
 pub mod linear;

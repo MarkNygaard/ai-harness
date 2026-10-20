@@ -364,6 +364,43 @@ async fn call_tool(
                 Err(e) => tool_error(e.to_string()),
             }
         }
+        // ── Pull requests ───────────────────────────────────────────────────
+        "issue_prs" => {
+            let issue = s("issue").trim().to_string();
+            if !is_issue_identifier(&issue) {
+                return tool_error("`issue` must be a Linear identifier such as `ECOM-44`");
+            }
+            match issue_prs(state, &issue).await {
+                Ok(body) => to_result(
+                    format!(
+                        "{issue}: {} run(s), {} PR(s)",
+                        body["runs"].as_array().map_or(0, Vec::len),
+                        body["prs"].as_array().map_or(0, Vec::len)
+                    ),
+                    &body,
+                ),
+                Err(e) => tool_error(e),
+            }
+        }
+        "pr_status" => {
+            let url = s("url");
+            let Some(pr) = harness_sources::github::parse_pr_url(&url) else {
+                return tool_error("`url` must be a GitHub pull request URL");
+            };
+            let project = s("project");
+            let token = if project.is_empty() {
+                state.github_token().await
+            } else {
+                state.github_token_for_project(&project).await
+            };
+            match harness_sources::github::GithubClient::new(token)
+                .pr_snapshot(&pr)
+                .await
+            {
+                Ok(snap) => to_result(format!("{url}: {}", snap.state), &snap),
+                Err(e) => tool_error(e.0),
+            }
+        }
         "workflow_models" => {
             match resolve_workflow_models(state, &s("workflow"), Some(&s("project"))) {
                 Ok(pairs) => to_result(
@@ -769,6 +806,29 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "issue_prs",
+            "description": "Every run fired for a Linear issue (by identifier, e.g. ECOM-44), newest first, and the pull request each one opened, with each PR's live state from GitHub: `state` (open / closed / merged), `draft`, head commit, CI `checks` (passed / failed / pending counts, plus the names of failing checks) and `preview_url` (the preview deployment of the head commit, e.g. from Vercel). Each run carries its `status` and, when it failed, the `failed_node`. Read-only. Use it to answer 'this issue has two PRs, which one do I test?' — typically a run that failed after opening its PR and a rerun that opened another. Recommend the newest open PR whose run completed and whose checks are green, say why the other is worse in plain terms, and give its preview link. Reruns are found because they keep the issue identifier in the run title.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "issue": { "type": "string", "description": "Linear issue identifier, e.g. ECOM-44." } },
+                "required": ["issue"],
+            }
+        }),
+        json!({
+            "name": "pr_status",
+            "description": "One GitHub pull request's live state: open / closed / merged, draft, head commit, CI checks (with failing check names) and the preview deployment URL. Read-only. Pass `project` to read it with that project's GitHub credential (needed for a private repo when the global one has no access).",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "url": { "type": "string", "description": "https://github.com/<owner>/<repo>/pull/<n>" },
+                    "project": { "type": "string", "description": "Project whose GitHub credential to use; empty = the global one." }
+                },
+                "required": ["url"],
+            }
+        }),
+        json!({
             "name": "workflow_models",
             "description": "List the distinct provider+model pairs a workflow uses (default, nodes, loop bodies) — the candidate swap targets for an A/B test.",
             "inputSchema": {
@@ -1044,9 +1104,120 @@ fn tool_error(message: impl Into<String>) -> Value {
     })
 }
 
+/// `TEAM-123`: letters and digits, a hyphen, digits. Strict on purpose — the
+/// identifier is matched against run titles, so anything looser would turn a
+/// typo into a broad search.
+fn is_issue_identifier(s: &str) -> bool {
+    let Some((team, number)) = s.split_once('-') else {
+        return false;
+    };
+    team.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
+        && team.chars().all(|c| c.is_ascii_alphanumeric())
+        && !number.is_empty()
+        && number.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Runs fired for an issue, the PR each one opened, and each PR's live state.
+///
+/// Answers "this issue has two PRs, which do I test?" — usually a run that
+/// failed after opening its PR, then a rerun that opened another. A PR is
+/// fetched once however many runs mention it (a `revise-pr` run names the PR
+/// it revised).
+async fn issue_prs(state: &Arc<RunsState>, issue: &str) -> Result<Value, String> {
+    /// Enough for an issue's whole history; a cap so a malformed title
+    /// convention can't turn this into a scan of every run.
+    const MAX_RUNS: i64 = 20;
+    let store = state.store().await?;
+    let summaries = store
+        .list_runs_for_issue(issue, MAX_RUNS)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let mut runs = Vec::new();
+    // PR url → (project whose token reads it, run ids that mention it), in
+    // first-seen order so the newest run's PR comes first.
+    let mut prs: Vec<(String, Option<String>, Vec<String>)> = Vec::new();
+    for summary in summaries {
+        let detail = store
+            .get_run(&summary.id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let pr_url = detail.as_ref().and_then(super::runs_routes::extract_pr_url);
+        let failed_node = detail.as_ref().and_then(|d| {
+            d.nodes
+                .iter()
+                .find(|n| n.status == "failed")
+                .map(|n| n.node_id.clone())
+        });
+        if let Some(url) = &pr_url {
+            match prs.iter_mut().find(|(u, _, _)| u == url) {
+                Some((_, _, ids)) => ids.push(summary.id.clone()),
+                None => prs.push((
+                    url.clone(),
+                    summary.project.clone(),
+                    vec![summary.id.clone()],
+                )),
+            }
+        }
+        runs.push(json!({
+            "run_id": summary.id,
+            "workflow": summary.workflow_name,
+            "status": summary.status,
+            "failed_node": failed_node,
+            "started_at": summary.started_at,
+            "ended_at": summary.ended_at,
+            "project": summary.project,
+            "pr_url": pr_url,
+        }));
+    }
+
+    let mut out = Vec::new();
+    for (url, project, run_ids) in prs {
+        let token = match project.as_deref() {
+            Some(p) => state.github_token_for_project(p).await,
+            None => state.github_token().await,
+        };
+        let entry = match harness_sources::github::parse_pr_url(&url) {
+            Some(pr) => match harness_sources::github::GithubClient::new(token)
+                .pr_snapshot(&pr)
+                .await
+            {
+                Ok(snap) => {
+                    let mut v = serde_json::to_value(&snap).unwrap_or_default();
+                    v["run_ids"] = json!(run_ids);
+                    v
+                }
+                Err(e) => json!({ "url": url, "error": e.0, "run_ids": run_ids }),
+            },
+            None => json!({ "url": url, "error": "not a pull request URL", "run_ids": run_ids }),
+        };
+        out.push(entry);
+    }
+    Ok(json!({ "issue": issue, "runs": runs, "prs": out }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn issue_identifiers_are_team_hyphen_number() {
+        for ok in ["ECOM-44", "ecom-44", "A1-2"] {
+            assert!(is_issue_identifier(ok), "{ok}");
+        }
+        for bad in [
+            "",
+            "ECOM",
+            "ECOM-",
+            "-44",
+            "1A-2",
+            "ECOM-4x",
+            "EC%-4",
+            "ECOM-44 x",
+        ] {
+            assert!(!is_issue_identifier(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn catalog_exposes_run_and_authoring_tools() {
@@ -1076,6 +1247,9 @@ mod tests {
             "library_list",
             "library_install",
             "library_uninstall",
+            // Which of an issue's PRs to test.
+            "issue_prs",
+            "pr_status",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
@@ -1196,6 +1370,8 @@ const RUN_TOOLS: &[&str] = &[
     "run_list",
     "run_status",
     "run_findings",
+    "issue_prs",
+    "pr_status",
 ];
 /// Reading and diagnosing what triggers a run, as opposed to starting one.
 const LINEAR_TOOLS: &[&str] = &["linear_states", "linear_bindings", "linear_check"];
