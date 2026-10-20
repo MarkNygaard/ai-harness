@@ -1292,6 +1292,44 @@ impl RunStore {
         Ok(rows)
     }
 
+    /// Runs fired for a Linear issue, newest first, found by its identifier
+    /// (e.g. `ECOM-44`) at the start of the run title.
+    ///
+    /// The title, not the claim table: both Linear entry points title a run
+    /// `"<identifier> <issue title>"`, a Rerun copies the title, and the Rerun
+    /// button *deletes* the earlier claims — so the run whose PR is being asked
+    /// about is often the one with no claim left. Matching is case-insensitive;
+    /// `identifier` is used literally (LIKE wildcards in it are escaped).
+    pub async fn list_runs_for_issue(
+        &self,
+        identifier: &str,
+        limit: i64,
+    ) -> Result<Vec<RunSummary>, PersistError> {
+        let escaped = identifier
+            .replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_");
+        let rows = sqlx::query_as::<_, RunSummary>(
+            "SELECT r.id, r.workflow_name, r.title, NULL::text AS description, r.status, r.project,
+                    r.node_count, r.recorded_at,
+                    MIN(n.started_at) AS started_at, MAX(n.ended_at) AS ended_at,
+                    r.ab_pair_id, r.ab_arm, r.ab_label, r.triggered_by,
+                    r.trigger_source, r.trigger_actor
+             FROM harness_workflow_runs r
+             LEFT JOIN harness_run_nodes n ON n.run_id = r.id
+             WHERE lower(r.title) = lower($1) OR r.title ILIKE $2 || ' %'
+             GROUP BY r.id
+             ORDER BY r.recorded_at DESC
+             LIMIT $3",
+        )
+        .bind(identifier)
+        .bind(escaped)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
     /// The runs of one A/B pair, ordered by arm (`a` then `b`). Usually two.
     pub async fn list_runs_for_pair(&self, pair_id: &str) -> Result<Vec<RunSummary>, PersistError> {
         let rows = sqlx::query_as::<_, RunSummary>(
@@ -1608,6 +1646,52 @@ mod tests {
                 },
             ],
         }
+    }
+
+    /// A rerun copies the title, so the issue's runs are every title that starts
+    /// with its identifier as a whole word: `ECOM-4` must not pick up `ECOM-44`.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn lists_runs_for_an_issue_by_title_prefix() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = RunStore::connect(&url).await.expect("connect");
+        let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let ident = format!("ZQ{ts}-4");
+        let report = sample_report();
+        let runs = [
+            (format!("iss-a-{ts}"), format!("{ident} Add wishlist")),
+            (format!("iss-b-{ts}"), format!("{ident} Add wishlist")),
+            (format!("iss-c-{ts}"), ident.clone()),
+            (format!("iss-d-{ts}"), format!("{ident}4 Something else")),
+            (format!("iss-e-{ts}"), format!("Fix {ident} later")),
+        ];
+        for (id, title) in &runs {
+            store
+                .record_run(id, Some(title), None, Some("proj-a"), &report)
+                .await
+                .expect("record");
+        }
+
+        let found: Vec<String> = store
+            .list_runs_for_issue(&ident.to_lowercase(), 50)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|r| r.id)
+            .collect();
+        assert_eq!(found.len(), 3, "{found:?}");
+        for id in [&runs[0].0, &runs[1].0, &runs[2].0] {
+            assert!(found.contains(id), "{id} missing from {found:?}");
+        }
+        // A LIKE wildcard in the argument is literal, not a match-anything.
+        assert!(store
+            .list_runs_for_issue(&format!("ZQ{ts}-%"), 50)
+            .await
+            .unwrap()
+            .is_empty());
     }
 
     #[tokio::test]

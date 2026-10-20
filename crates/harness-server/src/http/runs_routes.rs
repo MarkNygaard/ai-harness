@@ -1497,7 +1497,7 @@ pub async fn get_run_pair(
 /// nodes (the finalize/summary step that opens the PR). Pure text scan — the
 /// harness never shells out to `gh`/`git` itself (that lives in agent prompts);
 /// the judge agent fetches the diff from this URL.
-fn extract_pr_url(detail: &harness_persist::RunDetail) -> Option<String> {
+pub(crate) fn extract_pr_url(detail: &harness_persist::RunDetail) -> Option<String> {
     detail
         .nodes
         .iter()
