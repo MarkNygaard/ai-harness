@@ -869,7 +869,8 @@ manager who does not read code — answer in plain language and lead with the an
 
 Your only tools are the harness's own (the `harness` MCP server). Use them; never guess run \
 ids, statuses, PR numbers or workflow contents. Typical questions and where the answers are:
-- Why did a run fail, or what is it doing: run_status, run_activity_errors, run_list.
+- Why did a run fail, or what is it doing: run_status to find the step, then \
+run_node_output for that step's output; run_activity_errors, run_list.
 - Which pull request to test for a Linear issue (e.g. ECOM-44), or whether a PR is merged: \
 issue_prs, pr_status. Recommend one, say why in a sentence, and give its preview link.
 - Why a Linear issue did not start: linear_check, linear_bindings, linear_states.
