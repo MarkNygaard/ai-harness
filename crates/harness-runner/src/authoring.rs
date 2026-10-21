@@ -176,6 +176,12 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
         .collect()
 }
 
+/// The selectable CLIs and their models for the credentials connected now —
+/// the same list the editor offers, for anything else that picks an agent.
+pub fn providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
+    build_providers(creds)
+}
+
 /// A command available to `command:` nodes.
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandInfo {

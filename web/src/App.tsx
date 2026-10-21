@@ -27,6 +27,9 @@ import { AgentUpdateToast } from "./components/AgentUpdateToast";
 import { TokenPrompt } from "./components/TokenPrompt";
 import { LoginPage, SetupPage } from "./routes/auth/SignInPage";
 import { RequireSignIn } from "./components/RequireSignIn";
+import { ChatPanel } from "./components/chat/ChatPanel";
+import { ChatProvider } from "./components/chat/ChatProvider";
+import { ChatSettingsPage } from "./routes/settings/ChatSettingsPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -42,83 +45,94 @@ const queryClient = new QueryClient({
 export function App() {
   return (
     <QueryClientProvider client={queryClient}>
-      <TooltipProvider>
-        <Routes>
-          {/* Outside the gate: they are how you get through it. */}
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/setup" element={<SetupPage />} />
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/runs" element={<RunsPage />} />
-          <Route path="/ab" element={<AbTestsPage />} />
-          <Route path="/reports/:workflow" element={<WorkflowReportsPage />} />
-          {/* Static segment before `:id` so it isn't captured as a run id. */}
-          <Route
-            path="/runs/pair/:pairId"
-            element={<RunPairComparisonPage />}
-          />
-          <Route path="/runs/:id" element={<RunDetailPage />} />
-          {/* The workflow editor keeps the app frame and its own URL: it is a
+      <ChatProvider>
+        <TooltipProvider>
+          <Routes>
+            {/* Outside the gate: they are how you get through it. */}
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/setup" element={<SetupPage />} />
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/runs" element={<RunsPage />} />
+            <Route path="/ab" element={<AbTestsPage />} />
+            <Route
+              path="/reports/:workflow"
+              element={<WorkflowReportsPage />}
+            />
+            {/* Static segment before `:id` so it isn't captured as a run id. */}
+            <Route
+              path="/runs/pair/:pairId"
+              element={<RunPairComparisonPage />}
+            />
+            <Route path="/runs/:id" element={<RunDetailPage />} />
+            {/* The workflow editor keeps the app frame and its own URL: it is a
               full-canvas view, not a settings form, and run pages link into it. */}
-          <Route path="/editor/new" element={<WorkflowEditor />} />
-          <Route path="/editor/:name" element={<WorkflowEditor />} />
+            <Route path="/editor/new" element={<WorkflowEditor />} />
+            <Route path="/editor/:name" element={<WorkflowEditor />} />
 
-          {/* ── Settings ─────────────────────────────────────────────────── */}
-          <Route
-            path="/settings"
-            element={<Navigate to="/settings/preferences" replace />}
-          />
-          <Route path="/settings/preferences" element={<PreferencesPage />} />
-          <Route path="/settings/mcp" element={<EditorConnectionPage />} />
-          {/* Public: whoever holds one of these links has not signed in yet. */}
-          <Route path="/invite/:token" element={<AcceptInvitePage />} />
-          <Route path="/forgot" element={<ForgotPasswordPage />} />
-          <Route path="/settings/general" element={<GeneralPage />} />
-          <Route path="/settings/members" element={<MembersPage />} />
-          <Route path="/settings/email" element={<EmailPage />} />
-          <Route path="/settings/sso" element={<SsoSettingsPage />} />
-          <Route path="/settings/agents" element={<AgentsPage />} />
-          <Route
-            path="/settings/subscriptions"
-            element={<SubscriptionsPage />}
-          />
-          <Route path="/settings/integrations" element={<IntegrationsPage />} />
-          {/* The one page these three replaced. Bookmarks and the docs still
+            {/* ── Settings ─────────────────────────────────────────────────── */}
+            <Route
+              path="/settings"
+              element={<Navigate to="/settings/preferences" replace />}
+            />
+            <Route path="/settings/preferences" element={<PreferencesPage />} />
+            <Route path="/settings/mcp" element={<EditorConnectionPage />} />
+            {/* Public: whoever holds one of these links has not signed in yet. */}
+            <Route path="/invite/:token" element={<AcceptInvitePage />} />
+            <Route path="/forgot" element={<ForgotPasswordPage />} />
+            <Route path="/settings/general" element={<GeneralPage />} />
+            <Route path="/settings/chat" element={<ChatSettingsPage />} />
+            <Route path="/settings/members" element={<MembersPage />} />
+            <Route path="/settings/email" element={<EmailPage />} />
+            <Route path="/settings/sso" element={<SsoSettingsPage />} />
+            <Route path="/settings/agents" element={<AgentsPage />} />
+            <Route
+              path="/settings/subscriptions"
+              element={<SubscriptionsPage />}
+            />
+            <Route
+              path="/settings/integrations"
+              element={<IntegrationsPage />}
+            />
+            {/* The one page these three replaced. Bookmarks and the docs still
               point at it. */}
-          <Route
-            path="/settings/credentials"
-            element={<Navigate to="/settings/subscriptions" replace />}
-          />
-          <Route path="/settings/projects" element={<ProjectsPage />} />
-          <Route path="/settings/workflows" element={<WorkflowsList />} />
-          <Route path="/settings/categories" element={<CategoriesPage />} />
+            <Route
+              path="/settings/credentials"
+              element={<Navigate to="/settings/subscriptions" replace />}
+            />
+            <Route path="/settings/projects" element={<ProjectsPage />} />
+            <Route path="/settings/workflows" element={<WorkflowsList />} />
+            <Route path="/settings/categories" element={<CategoriesPage />} />
 
-          {/* These were live URLs before Settings existed, and `/editor` is
+            {/* These were live URLs before Settings existed, and `/editor` is
               linked from run pages — redirect rather than 404. */}
-          <Route
-            path="/projects"
-            element={<Navigate to="/settings/projects" replace />}
-          />
-          <Route
-            path="/editor"
-            element={<Navigate to="/settings/workflows" replace />}
-          />
-          <Route
-            path="/credentials"
-            element={<Navigate to="/settings/subscriptions" replace />}
-          />
-          <Route
-            path="/categories"
-            element={<Navigate to="/settings/categories" replace />}
-          />
-        </Routes>
-        <RequireSignIn />
-        <TokenPrompt />
-        {/* Outside the routes on purpose: both are about the installation
+            <Route
+              path="/projects"
+              element={<Navigate to="/settings/projects" replace />}
+            />
+            <Route
+              path="/editor"
+              element={<Navigate to="/settings/workflows" replace />}
+            />
+            <Route
+              path="/credentials"
+              element={<Navigate to="/settings/subscriptions" replace />}
+            />
+            <Route
+              path="/categories"
+              element={<Navigate to="/settings/categories" replace />}
+            />
+          </Routes>
+          <RequireSignIn />
+          <TokenPrompt />
+          {/* Outside the routes on purpose: both are about the installation
             rather than the page, and the notice fires once per load however you
             arrived. */}
-        <AgentUpdateToast />
-        <Toaster />
-      </TooltipProvider>
+          <AgentUpdateToast />
+          <Toaster />
+          {/* One panel for the whole app, opened from any page's header. */}
+          <ChatPanel />
+        </TooltipProvider>
+      </ChatProvider>
     </QueryClientProvider>
   );
 }

@@ -9,6 +9,7 @@ pub(crate) mod auth_routes;
 pub(crate) mod billing_routes;
 pub(crate) mod caches;
 pub(crate) mod categories_routes;
+pub(crate) mod chat_routes;
 pub(crate) mod codex_routes;
 pub(crate) mod credentials_routes;
 pub(crate) mod finding_routes;
@@ -80,6 +81,9 @@ pub async fn serve(server: Arc<HarnessServer>, addr: SocketAddr) -> anyhow::Resu
     let app = http_router::build_router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    // The built-in chat's agent reaches `/mcp` here, over loopback. The bound
+    // address rather than `addr`, so a `:0` bind still names a real port.
+    chat_routes::set_listen_addr(listener.local_addr().unwrap_or(addr));
     let ws_shutdown_tx = state.notifications.ws_shutdown_tx.clone();
     let shutdown_cfg = state.core.server.config.server.shutdown.clone();
 

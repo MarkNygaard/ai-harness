@@ -7,6 +7,7 @@ import {
   IconFolderCog,
   IconKey,
   IconMail,
+  IconMessageCircle,
   IconPlugConnected,
   IconSettings2,
   IconShieldLock,
@@ -74,6 +75,13 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
         label: "General",
         icon: IconWorld,
         keywords: "domain public url address hostname",
+        adminOnly: true,
+      },
+      {
+        href: "/settings/chat",
+        label: "Chat",
+        icon: IconMessageCircle,
+        keywords: "assistant ask question agent model claude pi kimi",
         adminOnly: true,
       },
       {

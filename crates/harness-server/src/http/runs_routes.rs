@@ -105,6 +105,7 @@ pub struct RunsState {
     linear_source_store: OnceCell<harness_persist::LinearSourceStore>,
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     finding_store: OnceCell<harness_persist::FindingStateStore>,
+    chat_store: OnceCell<harness_persist::ChatStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     trash_store: OnceCell<harness_persist::TrashStore>,
     installed_workflow_store: OnceCell<harness_persist::InstalledWorkflowStore>,
@@ -212,6 +213,7 @@ impl RunsState {
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             finding_store: OnceCell::new(),
+            chat_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
             trash_store: OnceCell::new(),
             installed_workflow_store: OnceCell::new(),
@@ -478,6 +480,21 @@ impl RunsState {
             .await
     }
 
+    /// Lazily connect the built-in chat store.
+    pub(crate) async fn chat_store(&self) -> Result<&harness_persist::ChatStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.chat_store
+            .get_or_try_init(|| async {
+                harness_persist::ChatStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
     pub(crate) async fn finding_store(
         &self,
     ) -> Result<&harness_persist::FindingStateStore, String> {
@@ -716,6 +733,7 @@ impl ModelRef {
 /// nobody sees until a filter silently returns nothing.
 pub(crate) const SOURCE_UI: &str = "ui";
 pub(crate) const SOURCE_MCP: &str = "mcp";
+pub(crate) const SOURCE_CHAT: &str = "chat";
 pub(crate) const SOURCE_LINEAR_WEBHOOK: &str = "linear-webhook";
 pub(crate) const SOURCE_LINEAR_POLLER: &str = "linear-poller";
 
