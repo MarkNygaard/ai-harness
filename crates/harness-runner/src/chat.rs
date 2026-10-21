@@ -586,7 +586,8 @@ mod tests {
     }
 
     /// The guard's own tests (path confinement, the tool allowlist) are
-    /// TypeScript; run them with bun when it is installed, as it is in CI.
+    /// TypeScript; run them with bun. Skipped locally without bun, but **never
+    /// in CI**: a silent skip there would pass while the guard went untested.
     #[test]
     fn the_guard_extensions_own_tests_pass() {
         let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions/harness-chat-guard");
@@ -596,11 +597,21 @@ mod tests {
             .output()
         {
             Ok(out) => out,
-            Err(_) => {
+            Err(e) => {
+                assert!(
+                    std::env::var_os("CI").is_none(),
+                    "bun is required in CI to test the chat guard: {e}"
+                );
                 eprintln!("skipping: bun is not installed");
                 return;
             }
         };
+        // bun's summary ("N pass", "0 fail") goes to stderr; insist some ran.
+        let summary = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            summary.contains(" 0 fail") && !summary.contains(" 0 pass"),
+            "unexpected bun test summary:\n{summary}"
+        );
         assert!(
             out.status.success(),
             "bun test failed:\n{}\n{}",
