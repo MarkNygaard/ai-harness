@@ -310,6 +310,10 @@ pub async fn put_settings(
 /// The conversation, if it exists and belongs to the caller. Someone else's is
 /// reported as not found rather than forbidden: its existence is not theirs to
 /// learn either.
+// The `Err` is the finished HTTP response, handed straight back to axum —
+// boxing it would add an allocation to avoid a move axum makes anyway (as in
+// `linear_routes::connection`).
+#[allow(clippy::result_large_err)]
 async fn owned(
     state: &Arc<RunsState>,
     headers: &HeaderMap,
