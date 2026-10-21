@@ -16,11 +16,14 @@ applies the failed label when it gives up.
 
 Connect the workspace once and the attribution problem goes away.
 
-**One workspace, one install.** The Linear credential is global — it lives on the
-**Integrations page**, not per project. The identity being
-connected is the *app*, which is the same for every project; only the trigger
-*bindings* (team, status map, eligibility label) are per project, and those stay
-on the Projects page.
+**Accounts are connected on the Integrations page; projects choose between
+them.** One workspace is the common case and needs no choosing — connect it and
+every project uses it. If you work across more than one Linear workspace, add
+each as its own account and assign projects to them individually. See
+[more than one Linear workspace](#more-than-one-linear-workspace).
+
+The trigger *bindings* (team, status map, eligibility label) are per project
+either way, and those live on the Projects page.
 
 ## How work reaches the harness
 
@@ -279,14 +282,51 @@ A **global** personal `api_key` keeps working untouched: the panel reports
 takes precedence as soon as it exists — then clear the `api_key` field once
 you've confirmed a run comments as the app.
 
-A **per-project** Linear credential from an earlier version is **inert**: Linear
-is now resolved from the global credential only, so a leftover project-scoped
-`api_key` is neither read nor editable. If Linear was configured per project
-before, connect the workspace once on the Integrations page. (Per-project *GitHub*
-overrides are unaffected.)
+A **per-project** Linear credential from an earlier version is **inert**: a
+project picks a connected *account*, not its own key, so a leftover
+project-scoped `api_key` is neither read nor editable. If Linear was configured
+per project before, connect the account on the Integrations page and assign the
+project to it. (Per-project *GitHub* overrides are unaffected.)
 
-Resolution, in full: the global `linear` credential's `access_token` if present,
-else its `api_key`, else Linear is reported as not connected.
+Resolution within an account: its `access_token` if present, else its `api_key`,
+else Linear is reported as not connected.
+
+## More than one Linear workspace
+
+A project is not tied to a global credential. Each Linear workspace is connected
+as its own **account** — its own OAuth app, token, app user id and webhook
+secret — and each project says which account its issues come from.
+
+To add one, open **Settings → Integrations → Linear** and use **Add account** at
+the bottom of the panel. Then register a separate OAuth application in the new
+workspace, pointing at the *same* callback and webhook URLs as the first, and
+connect it. Each workspace needs its own application: you are installing the
+harness into that workspace, and an app belongs to the workspace that owns it.
+
+Assign a project to an account from the ⚡ dialog on its row on the **Projects**
+page.
+
+How a project's account is resolved:
+
+1. **Assigned to an account that exists** → that one.
+2. **Otherwise, exactly one account configured** → that one. This is what keeps
+   the single-workspace case zero-configuration: nothing is ever assigned, and
+   everything routes to the only workspace there is.
+3. **Otherwise** → ambiguous, and refused with a message naming the accounts.
+
+Two consequences worth knowing:
+
+- **Adding a second account does not disturb the first.** When you go from one
+  account to two, every existing project is assigned to the account it was
+  already using, because rule 2 stops applying the moment there are two. Only
+  the projects that belong to the new workspace need moving.
+- **Deleting an account does not strand its projects.** A project assigned to an
+  account that no longer exists falls back to rule 2, so it behaves like an
+  unassigned project rather than failing outright.
+
+Incoming webhooks are attributed to the account that sent them, using the
+payload's `organizationId` and the signature, so two workspaces posting to the
+same URL do not get confused for one another.
 
 ## The webhook has to be reachable
 
