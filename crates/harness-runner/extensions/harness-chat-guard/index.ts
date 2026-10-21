@@ -33,12 +33,16 @@ const MAX_GREP_FILE_BYTES = 1024 * 1024;
 const MAX_GLOB_RESULTS = 500;
 const MAX_LINE_CHARS = 500;
 
-/** Tools a chat turn may call besides the harness MCP tools. */
+/** Tools a chat turn may call besides the MCP servers below. */
 const ALLOWED_TOOLS = new Set(["code_read", "code_grep", "code_glob", "think", "yield"]);
-const MCP_PREFIX = "mcp__harness_";
+/**
+ * MCP servers a chat turn may use: the harness's own, and Sentry's — which the
+ * harness runs read-only (a read-only token, and only its `inspect` skill).
+ */
+const MCP_PREFIXES = ["mcp__harness_", "mcp__sentry_"];
 
 export function isAllowedTool(name: string): boolean {
-  return name.startsWith(MCP_PREFIX) || ALLOWED_TOOLS.has(name);
+  return MCP_PREFIXES.some((p) => name.startsWith(p)) || ALLOWED_TOOLS.has(name);
 }
 
 /** The deepest existing ancestor of `p`, resolved through symlinks, plus the rest. */

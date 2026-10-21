@@ -130,6 +130,27 @@ impl PromptAgent for CodeAgentRunner {
             None
         };
 
+        // External MCP servers the step asked for (Claude only — the other
+        // CodeAgents here take none). In a temp dir, not the worktree, so the
+        // agent can never commit it; kept alive across execute() like hooks.
+        let _mcp_dir = match req.mcp_config.take() {
+            Some(cfg) if req.provider.as_deref().is_none_or(|p| p == "claude") => {
+                let dir = tempfile::Builder::new()
+                    .prefix("harness-claude-mcp-")
+                    .tempdir()
+                    .map_err(|e| AgentError(e.to_string()))?;
+                let path = dir.path().join("mcp.json");
+                std::fs::write(&path, serde_json::to_vec_pretty(&cfg).unwrap_or_default())
+                    .map_err(|e| AgentError(e.to_string()))?;
+                req.env_vars.insert(
+                    "HARNESS_CLAUDE_MCP_CONFIG".into(),
+                    path.to_string_lossy().into_owned(),
+                );
+                Some(dir)
+            }
+            _ => None,
+        };
+
         // Take the progress sink before req fields are moved into the request.
         let progress = req.progress.take();
 
@@ -279,6 +300,7 @@ mod tests {
             iteration: 1,
             env_vars: Default::default(),
             hooks: None,
+            mcp_config: None,
             progress: None,
         }
     }

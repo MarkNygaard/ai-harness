@@ -219,6 +219,27 @@ impl PromptAgent for PiAgent {
         let model = self.resolve_model(req.model.as_deref());
         let mut args = self.build_args(&req.prompt, &model, req.session.as_deref());
 
+        // External MCP servers the step asked for: omp reads them from
+        // `<cwd>/.omp/mcp.json`, kept out of git and removed after the step.
+        let _mcp_file = match req.mcp_config.as_ref() {
+            Some(cfg) => match crate::mcp_servers::place_omp_config(&req.cwd, cfg) {
+                Ok(Some(file)) => Some(file),
+                Ok(None) => {
+                    tracing::warn!(
+                        "pi: {} already has .omp/mcp.json; running this step without its \
+                         requested MCP servers rather than rewriting the project's file",
+                        req.cwd.display()
+                    );
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("pi: could not attach MCP servers: {e}");
+                    None
+                }
+            },
+            None => None,
+        };
+
         let _hooks_dir = if let Some(_hooks) = req.hooks.as_ref() {
             let dir = tempfile::Builder::new()
                 .prefix("harness-omp-hooks-")

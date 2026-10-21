@@ -115,6 +115,33 @@ nodes:
     expect(validate.output_format).toMatchObject({ type: "object" });
     expect(abort.artifact).toBeUndefined();
   });
+
+  it("keeps mcp, retries and hooks, which the canvas has no controls for", () => {
+    const src = `name: wf
+nodes:
+  - id: explore
+    prompt: look
+    mcp: [sentry]
+    retries: 2
+    hooks:
+      pre_tool_use:
+        - matcher: Bash
+          decision: deny
+  - id: plain
+    prompt: x
+`;
+    const wf = fromYaml(src);
+    expect(wf.nodes[0].mcp).toEqual(["sentry"]);
+    const back = fromYaml(toYaml(wf));
+    expect(back.nodes[0].mcp).toEqual(["sentry"]);
+    expect(back.nodes[0].retries).toBe(2);
+    expect(back.nodes[0].hooks).toEqual({
+      pre_tool_use: [{ matcher: "Bash", decision: "deny" }],
+    });
+    // Nothing is invented for a node that had none.
+    expect(toYaml(back)).not.toMatch(/plain[\s\S]*mcp/);
+    expect(back.nodes[1].mcp).toBeUndefined();
+  });
 });
 
 describe("prebuiltNode", () => {

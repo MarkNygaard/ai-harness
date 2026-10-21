@@ -144,7 +144,13 @@ describe("the extension", () => {
 
   test("blocks every tool but the chat's own", () => {
     const { gate } = load(false);
-    for (const t of ["mcp__harness_run_list", "code_read", "think", "yield"]) {
+    for (const t of [
+      "mcp__harness_run_list",
+      "mcp__sentry_search_issues",
+      "code_read",
+      "think",
+      "yield",
+    ]) {
       expect(gate({ toolName: t })).toBeUndefined();
       expect(isAllowedTool(t)).toBe(true);
     }

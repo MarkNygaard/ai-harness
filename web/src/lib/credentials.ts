@@ -61,6 +61,8 @@ export function useSetCredential() {
 export const PROJECT_CREDENTIALS: { provider: string; field: string }[] = [
   { provider: "github", field: "token" },
   { provider: "github", field: "git_author_email" },
+  // Only the slug is per project; the token and org are global.
+  { provider: "sentry", field: "sentry_project" },
 ];
 
 export function useProjectCredentials(project: string | null) {

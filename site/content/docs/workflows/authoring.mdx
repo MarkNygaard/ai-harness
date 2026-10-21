@@ -148,6 +148,7 @@ Every node has an `id` and exactly **one body** (`prompt` / `bash` / `command` /
 | `timeout` | Milliseconds, for `bash`/`script` bodies. |
 | `retries` | Re-run **this node only** on failure, up to N times, before the run fails (default `0` = run once). Same worktree/session — for transient failures (tests, builds, flaky network). Do **not** set on side-effecting steps (e.g. a push/PR step), where a retry could double-act. Capped at 10. |
 | `output_format` | JSON schema the AI body's output should match (see [output_format](#output_format)). |
+| `mcp` | External tools for this step's agent, e.g. `[sentry]` (see [External tools](#external-tools-mcp)). |
 
 ### Node bodies
 
@@ -406,6 +407,32 @@ per provider at dispatch.
 - **`codex` nodes** — codex has no hook mechanism; hooks are silently ignored.
 - **`bash`/`script`/`approval`/`cancel` nodes** — parsed and stored but never
   delivered (no agent to intercept).
+
+## External tools: `mcp:`
+
+A step can give its agent extra tools from an outside service with `mcp:`. The
+only one today is `sentry`, so a step that investigates or fixes a bug can read
+the production error it is about:
+
+```yaml
+- id: explore
+  command: explore-codebase
+  mcp: [sentry]
+```
+
+- **Only when the project has it.** The tools are attached when Sentry is
+  connected ([setup](/docs/setup/sentry)). On a project without it the step
+  still runs, and its prompt says Sentry isn't available. That way a shared
+  workflow can ask for Sentry without breaking projects that don't use it.
+- **Read-only.** The agent can read issues, events, traces and releases. It
+  can't resolve, assign or change anything in Sentry.
+- **Claude and Pi steps.** `codex` and `cursor` steps run without it, and are
+  told so.
+- An unknown name is a validation error, not a silent no-op.
+
+Ask for it only on the steps that need it. Every step that has it starts
+Sentry's server, and an agent with tools it has no use for may spend turns on
+them anyway.
 
 ## Good practices
 

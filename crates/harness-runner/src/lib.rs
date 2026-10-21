@@ -25,6 +25,7 @@ pub mod defaults;
 mod dispatch;
 mod hooks;
 mod local;
+pub mod mcp_servers;
 pub mod models;
 mod pi;
 mod registry;
@@ -62,6 +63,10 @@ pub struct PromptRequest {
     pub env_vars: HashMap<String, String>,
     /// Provider-agnostic tool hooks translated per provider at dispatch.
     pub hooks: Option<harness_dag::NodeHooks>,
+    /// External MCP servers for this step (`{ "mcpServers": … }`), already
+    /// resolved against the run environment by [`crate::mcp_servers`]. Each
+    /// agent attaches it its own way; `None` = none.
+    pub mcp_config: Option<serde_json::Value>,
     /// Optional sink for live activity updates — a streaming agent reports the
     /// node's latest line here (rendered on the running node). `None` = none.
     pub progress: Option<harness_dag::ProgressSink>,
@@ -134,6 +139,7 @@ mod tests {
                 iteration: 1,
                 env_vars: Default::default(),
                 hooks: None,
+                mcp_config: None,
                 progress: None,
             })
             .await

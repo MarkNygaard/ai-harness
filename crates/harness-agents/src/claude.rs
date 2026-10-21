@@ -133,6 +133,14 @@ impl ClaudeCodeAgent {
             base_args.push(OsString::from(path));
         }
 
+        // External MCP servers a workflow step asked for (e.g. Sentry), written
+        // to a file by the runner. Added to whatever else is configured, not
+        // in place of it — a step keeps its project's own `.mcp.json`.
+        if let Some(path) = req.env_vars.get("HARNESS_CLAUDE_MCP_CONFIG") {
+            base_args.push(OsString::from("--mcp-config"));
+            base_args.push(OsString::from(path));
+        }
+
         base_args
     }
 }
