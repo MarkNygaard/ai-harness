@@ -59,11 +59,12 @@ export function ChatSettingsPage() {
                   What answers in the chat
                 </div>
                 <div className="text-[11px] text-muted-foreground">
-                  The chat's only tools are the harness's own — runs, pull
-                  requests, Linear wiring and workflow authoring. It cannot run
-                  commands or read files, whichever agent you pick. Changing
-                  this applies to new conversations; an open one stays on the
-                  agent it started with.
+                  The chat works through the harness's own tools — runs, pull
+                  requests, Linear wiring and workflow authoring — and can read
+                  a project's code when a conversation picks one, from a
+                  read-only copy. It cannot run commands or change files,
+                  whichever agent you pick. Changing this applies to new
+                  conversations; an open one stays on the agent it started with.
                 </div>
               </div>
 

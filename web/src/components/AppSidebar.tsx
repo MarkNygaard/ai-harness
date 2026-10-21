@@ -4,6 +4,7 @@ import {
   IconGitCompare,
   IconHexagonalPrism,
   IconLayoutDashboard,
+  IconMessageCircle,
   IconReportSearch,
   IconRocket,
   IconSearch,
@@ -86,6 +87,9 @@ export function useOperationsNav(): NavItem[] {
     { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
     { href: "/runs", label: "Runs", icon: IconRocket, match: "/runs" },
     { href: "/ab", label: "A/B Tests", icon: IconGitCompare, match: "/ab" },
+    // Hideable like the rest (sidebar edit mode, Settings → Preferences); the
+    // header's Ask button opens the same conversations in a side panel.
+    { href: "/chat", label: "Chat", icon: IconMessageCircle },
     ...declaredNav,
   ];
 }

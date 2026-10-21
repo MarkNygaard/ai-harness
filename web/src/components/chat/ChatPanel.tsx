@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { cn } from "@/lib/utils";
 import {
+  IconArrowsMaximize,
   IconCheck,
   IconHistory,
   IconLoader2,
@@ -90,14 +92,21 @@ export function ChatPanel() {
         side="right"
         className="w-full gap-0 p-0 sm:max-w-lg data-[side=right]:sm:w-[28rem]"
       >
-        <ChatBody />
+        <ChatView variant="panel" />
       </SheetContent>
     </Sheet>
   );
 }
 
-function ChatBody() {
+/**
+ * The conversation view: in the side panel, or full-size on the Chat page.
+ * Both read and write the same remembered conversation, so moving from one to
+ * the other keeps your place.
+ */
+export function ChatView({ variant }: { variant: "panel" | "page" }) {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { setOpen } = useChatOpen();
   const context = contextFromPath(location.pathname);
   const [currentId, setCurrentIdState] = useState<string | null>(readCurrent);
   const setCurrentId = (id: string | null) => {
@@ -147,24 +156,53 @@ function ChatBody() {
   }
 
   const error = create.error ?? send.error ?? null;
+  const title = conv?.title || "Ask the harness";
+  const subtitle = provider
+    ? `${agentLabel(provider)}${model ? ` · ${model}` : ""}${
+        conv?.context.project ? ` · reading ${conv.context.project}` : ""
+      }`
+    : "Runs, pull requests, Linear and workflows";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex items-center gap-2 border-b py-2.5 pr-12 pl-4">
+      <div
+        className={cn(
+          "flex items-center gap-2 border-b py-2.5 pl-4",
+          // The panel's own close button sits in the top-right corner.
+          variant === "panel" ? "pr-12" : "pr-4",
+        )}
+      >
         <div className="min-w-0 flex-1">
-          <SheetTitle className="truncate text-sm">
-            {conv?.title || "Ask the harness"}
-          </SheetTitle>
-          <SheetDescription className="truncate text-[11px]">
-            {provider
-              ? `${agentLabel(provider)}${model ? ` · ${model}` : ""}${
-                  conv?.context.project
-                    ? ` · reading ${conv.context.project}`
-                    : ""
-                }`
-              : "Runs, pull requests, Linear and workflows"}
-          </SheetDescription>
+          {variant === "panel" ? (
+            <>
+              <SheetTitle className="truncate text-sm">{title}</SheetTitle>
+              <SheetDescription className="truncate text-[11px]">
+                {subtitle}
+              </SheetDescription>
+            </>
+          ) : (
+            <>
+              <h2 className="truncate text-sm font-medium">{title}</h2>
+              <p className="truncate text-[11px] text-muted-foreground">
+                {subtitle}
+              </p>
+            </>
+          )}
         </div>
+        {variant === "panel" && (
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Open the chat page"
+            title="Open the chat page"
+            onClick={() => {
+              setOpen(false);
+              navigate("/chat");
+            }}
+          >
+            <IconArrowsMaximize />
+          </Button>
+        )}
         <DropdownMenu>
           <DropdownMenuTrigger
             render={
