@@ -251,6 +251,16 @@ impl ChatStore {
         Ok(())
     }
 
+    /// Replace a conversation's context (e.g. to pin the commits it reads code at).
+    pub async fn set_context(&self, id: &str, context: &Value) -> Result<(), PersistError> {
+        sqlx::query("UPDATE harness_chat_conversations SET context = $2 WHERE id = $1")
+            .bind(id)
+            .bind(Json(context))
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Name a conversation after its first message, once.
     pub async fn set_title_if_empty(&self, id: &str, title: &str) -> Result<(), PersistError> {
         sqlx::query(

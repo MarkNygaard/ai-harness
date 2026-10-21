@@ -609,6 +609,14 @@ async fn answer(
         Err(e) => tracing::info!("chat: credentials not materialized: {e}"),
     }
     let store = state.chat_store().await?;
+    // Code questions: Claude only, and only when the conversation names a
+    // project. omp's file tools can't be confined to a directory.
+    let code = match conv.context.0.get("project").and_then(Value::as_str) {
+        Some(project) if conv.provider == "claude" => {
+            Some(code_checkout(state, conv, project).await?)
+        }
+        _ => None,
+    };
     let messages = store.messages(&conv.id).await.map_err(|e| e.to_string())?;
     let outcomes = take_action_outcomes(store, &messages).await;
     // Everything before the message being answered, which is the last one.
@@ -631,6 +639,7 @@ async fn answer(
         effort: None,
         prompt,
         cwd: chat_dir(&conv.id),
+        code_dir: code.as_ref().map(|c| c.dir.clone()),
         session,
         mcp: ChatMcp {
             url: mcp_url(),
@@ -642,7 +651,7 @@ async fn answer(
     let effort = load_settings(state).await.1.effort;
 
     if let Some(session) = conv.session_id.clone() {
-        let prompt = build_prompt(None, context, &outcomes, text);
+        let prompt = build_prompt(None, None, context, &outcomes, text);
         let mut t = turn(Some(session), prompt);
         t.effort = effort.clone();
         match chat::run_turn(t).await {
@@ -657,10 +666,197 @@ async fn answer(
             ),
         }
     }
-    let prompt = build_prompt(Some(earlier), context, &outcomes, text);
+    let note = code.as_ref().map(|c| c.note.as_str());
+    let prompt = build_prompt(Some(earlier), note, context, &outcomes, text);
     let mut t = turn(None, prompt);
     t.effort = effort;
     chat::run_turn(t).await.map_err(|e| e.0)
+}
+
+// ── Code checkouts ─────────────────────────────────────────────────────────
+
+/// Where conversations' read-only checkouts live: `<root>/<project>/<key>`.
+fn checkouts_root(state: &RunsState) -> PathBuf {
+    state.projects_dir.join(".chat-checkouts")
+}
+
+/// A checkout is removed after a day nobody has read it.
+const CHECKOUT_IDLE: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+
+/// One checkout at a time: two conversations starting together must not both
+/// build the same one.
+static CHECKOUT_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+struct CodeCheckout {
+    dir: PathBuf,
+    /// For the prompt: which project, at which commits.
+    note: String,
+}
+
+/// The commits a conversation is pinned to, from its context.
+fn pinned_commits(context: &Value) -> Option<Vec<harness_runner::SnapshotRepo>> {
+    let list = context.get("checkout")?.as_array()?;
+    let repos: Vec<_> = list
+        .iter()
+        .filter_map(|r| {
+            Some(harness_runner::SnapshotRepo {
+                folder: r.get("folder").and_then(Value::as_str).map(str::to_string),
+                sha: r.get("sha")?.as_str()?.to_string(),
+            })
+        })
+        .collect();
+    (!repos.is_empty()).then_some(repos)
+}
+
+/// The read-only checkout a conversation reads `project`'s code from.
+///
+/// The first turn checks out the tip of each repo's base branch and **pins**
+/// those commits in the conversation's context, so later turns read the same
+/// code (and run in the same directory, which Claude's resume needs) however
+/// far the branch has moved. A pin that no longer resolves — a force-push that
+/// dropped the commit — is replaced by a fresh one.
+async fn code_checkout(
+    state: &Arc<RunsState>,
+    conv: &harness_persist::Conversation,
+    project: &str,
+) -> Result<CodeCheckout, String> {
+    let p = state
+        .project_store()
+        .await?
+        .get(project)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("project `{project}` is not registered"))?;
+    // (folder, url, base branch). One repo sits at the root of the checkout.
+    let layout: Vec<(Option<String>, String, String)> = if p.repos.is_empty() {
+        vec![(None, p.git_url.clone(), p.base_branch.clone())]
+    } else {
+        super::runs_routes::plan_layout(&p.git_url, &p.base_branch, &p.repos)
+            .into_iter()
+            .map(|r| (Some(r.folder), r.url, r.base_branch))
+            .collect()
+    };
+    if let Some(bad) = layout
+        .iter()
+        .filter_map(|(f, _, _)| f.as_deref())
+        .find(|f| !super::runs_routes::valid_folder(f))
+    {
+        return Err(format!(
+            "invalid repo folder `{bad}` in project `{project}`"
+        ));
+    }
+    let token = state.github_token_for_project(project).await;
+    let pinned = pinned_commits(&conv.context.0);
+
+    let _one_at_a_time = CHECKOUT_LOCK.lock().await;
+    let make = |pin: Option<Vec<harness_runner::SnapshotRepo>>| {
+        let layout = layout.clone();
+        let token = token.clone();
+        let projects_dir = state.projects_dir.clone();
+        let root = checkouts_root(state).join(project);
+        let project = project.to_string();
+        tokio::task::spawn_blocking(move || {
+            let mut sources = Vec::new();
+            for (folder, url, base) in layout {
+                let (repo, tip) = match &folder {
+                    // A single-repo project already has a clone the runs use.
+                    None => {
+                        let clone = projects_dir.join(&project);
+                        if pin.is_none() {
+                            let _ = harness_runner::fetch_repo(&clone, token.as_deref());
+                        }
+                        (clone, format!("origin/{base}"))
+                    }
+                    // Linked repos come from the persistent bare mirrors.
+                    Some(_) => {
+                        let mirrors = super::caches::git_mirror_root(&projects_dir);
+                        let mirror =
+                            harness_runner::ensure_mirror(&url, &mirrors, token.as_deref())
+                                .map_err(|e| e.0)?;
+                        (mirror, format!("refs/heads/{base}"))
+                    }
+                };
+                let rev = pin
+                    .as_ref()
+                    .and_then(|p| p.iter().find(|r| r.folder == folder))
+                    .map(|r| r.sha.clone())
+                    .unwrap_or(tip);
+                sources.push(harness_runner::SnapshotSource { repo, rev, folder });
+            }
+            harness_runner::chat_snapshot(&sources, &root).map_err(|e| e.0)
+        })
+    };
+    let made = match make(pinned.clone()).await {
+        Ok(Ok(made)) => made,
+        Ok(Err(e)) if pinned.is_some() => {
+            tracing::warn!(
+                "chat {}: pinned checkout unavailable ({e}); re-pinning",
+                conv.id
+            );
+            make(None)
+                .await
+                .map_err(|e| format!("checkout task failed: {e}"))??
+        }
+        Ok(Err(e)) => return Err(format!("could not check out `{project}`: {e}")),
+        Err(e) => return Err(format!("checkout task failed: {e}")),
+    };
+    let (dir, repos) = made;
+
+    if pinned.as_deref() != Some(repos.as_slice()) {
+        let mut ctx = conv.context.0.clone();
+        ctx["checkout"] = json!(repos
+            .iter()
+            .map(|r| json!({ "folder": r.folder, "sha": r.sha }))
+            .collect::<Vec<_>>());
+        if let Ok(store) = state.chat_store().await {
+            let _ = store.set_context(&conv.id, &ctx).await;
+        }
+    }
+    let at = repos
+        .iter()
+        .map(|r| {
+            let sha = &r.sha[..r.sha.len().min(8)];
+            match &r.folder {
+                Some(f) => format!("`{f}/` at {sha}"),
+                None => format!("{} at {sha}", p.base_branch),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(CodeCheckout {
+        dir,
+        note: format!(
+            "You can also read the code of project `{project}` ({at}): your working directory \
+             is a read-only checkout of it, and you have Read, Grep and Glob. Cite file paths. \
+             You cannot change files or run anything; to have code changed, the person starts a \
+             run."
+        ),
+    })
+}
+
+/// Remove checkouts nobody has read for a day, hourly. No-op outside a Tokio
+/// runtime (a synchronous router-build test), like the worktree sweeper.
+pub(crate) fn spawn_checkout_sweeper(state: Arc<RunsState>) {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return;
+    }
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            tick.tick().await;
+            let root = checkouts_root(&state);
+            let _guard = CHECKOUT_LOCK.lock().await;
+            let removed = tokio::task::spawn_blocking(move || {
+                harness_runner::sweep_chat_snapshots(&root, CHECKOUT_IDLE)
+            })
+            .await
+            .unwrap_or(0);
+            if removed > 0 {
+                tracing::info!("chat: removed {removed} idle code checkout(s)");
+            }
+        }
+    });
 }
 
 // ── Prompts ────────────────────────────────────────────────────────────────
@@ -692,6 +888,7 @@ Keep answers short. Use Markdown for lists and links.";
 /// so far; a resumed session already has it.
 fn build_prompt(
     transcript: Option<&[ChatMessage]>,
+    code_note: Option<&str>,
     context: &Value,
     outcomes: &[String],
     text: &str,
@@ -700,6 +897,10 @@ fn build_prompt(
     if let Some(earlier) = transcript {
         out.push_str(PREAMBLE);
         out.push_str("\n\n");
+        if let Some(note) = code_note {
+            out.push_str(note);
+            out.push_str("\n\n");
+        }
         let said: Vec<&ChatMessage> = earlier
             .iter()
             .filter(|m| m.role == "user" || m.role == "assistant")
@@ -965,6 +1166,7 @@ mod tests {
         ];
         let p = build_prompt(
             Some(&earlier),
+            Some("You can also read the code of project `shop`."),
             &json!({ "run_id": "r-9" }),
             &[],
             "and is it merged?",
@@ -977,10 +1179,12 @@ mod tests {
             "errors are not part of the conversation"
         );
         assert!(p.contains("(They have run `r-9` open.)"));
+        assert!(p.contains("read the code of project `shop`"));
         assert!(p.ends_with("and is it merged?"));
 
         // A resumed session gets only what is new.
         let resumed = build_prompt(
+            None,
             None,
             &json!({}),
             &["(They cancelled `run_trigger`; it was not run.)".into()],
@@ -989,6 +1193,20 @@ mod tests {
         assert!(!resumed.contains("You are the assistant"));
         assert!(resumed.starts_with("(They cancelled"));
         assert!(resumed.ends_with("ok"));
+    }
+
+    #[test]
+    fn a_pin_is_read_back_from_the_context() {
+        let ctx = json!({ "project": "shop", "checkout": [
+            { "folder": null, "sha": "abc" },
+            { "folder": "api", "sha": "def" }
+        ]});
+        let pins = pinned_commits(&ctx).unwrap();
+        assert_eq!(pins.len(), 2);
+        assert_eq!(pins[0].folder, None);
+        assert_eq!(pins[1].folder.as_deref(), Some("api"));
+        assert!(pinned_commits(&json!({ "project": "shop" })).is_none());
+        assert!(pinned_commits(&json!({ "checkout": [] })).is_none());
     }
 
     #[test]

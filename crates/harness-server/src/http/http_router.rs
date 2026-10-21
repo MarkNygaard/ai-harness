@@ -53,6 +53,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // Reclaim worktrees left behind by hard kills (normal completion cleans up via
     // RAII); keeps `.worktrees/` from accumulating junk on the server.
     runs_routes::spawn_worktree_sweeper(runs_state.clone());
+    // And the chat's read-only code checkouts, once nobody has read one in a day.
+    chat_routes::spawn_checkout_sweeper(runs_state.clone());
     // Bound the shared cargo build cache (size-gated) so it can't fill the disk.
     runs_routes::spawn_cache_sweeper(runs_state.clone());
     // Launch runs that are waiting for a concurrency slot. A finishing run
