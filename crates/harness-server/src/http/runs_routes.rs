@@ -2699,10 +2699,10 @@ impl Drop for WorkspaceGuard {
 /// One repo's checkout in a multi-repo run, surfaced to the workflow as
 /// `HARNESS_REPOS` (JSON). Empty list = single-repo run.
 #[derive(Debug, Clone, Serialize)]
-struct RunRepo {
-    folder: String,
-    url: String,
-    base_branch: String,
+pub(crate) struct RunRepo {
+    pub(crate) folder: String,
+    pub(crate) url: String,
+    pub(crate) base_branch: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     role: Option<String>,
 }
@@ -2721,7 +2721,7 @@ fn repo_basename(git_url: &str) -> String {
 }
 
 /// A folder must be a single, safe path segment (no separators, no traversal).
-fn valid_folder(folder: &str) -> bool {
+pub(crate) fn valid_folder(folder: &str) -> bool {
     !folder.is_empty()
         && folder != "."
         && folder != ".."
@@ -2749,7 +2749,7 @@ fn valid_folder(folder: &str) -> bool {
 /// a detail: an epic run is triggered with `epic/<ID>` as its base, and taking
 /// the row's configured branch instead would build every piece off `main` and
 /// quietly unpick the whole epic.
-fn plan_layout(
+pub(crate) fn plan_layout(
     git_url: &str,
     base_branch: &str,
     repos: &[harness_persist::ProjectRepo],

@@ -90,6 +90,136 @@ pub fn prune_worktrees(repo: &Path) -> Result<(), WorktreeError> {
     Ok(())
 }
 
+/// One repo to include in a [`chat_snapshot`].
+#[derive(Debug, Clone)]
+pub struct SnapshotSource {
+    /// A clone or bare mirror holding the commit.
+    pub repo: PathBuf,
+    /// What to check out: a branch ref, or a sha to recreate a pinned one.
+    pub rev: String,
+    /// Subfolder in the snapshot; `None` puts the repo at its root (one repo).
+    pub folder: Option<String>,
+}
+
+/// One repo of a made snapshot, with the commit it is at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SnapshotRepo {
+    pub folder: Option<String>,
+    pub sha: String,
+}
+
+/// Marks a finished snapshot; its mtime is when one was last used.
+const SNAPSHOT_READY: &str = ".harness-chat-ready";
+
+/// A read-only checkout of one or more repos for the chat to read code from,
+/// under `root/<key>`, shared by every conversation at the same commits.
+///
+/// Detached worktrees (no branch to clean up), and **symlinks checked out as
+/// plain files**: the agent reading it is confined to this directory, and a
+/// symlink committed to the repo would otherwise be a door out of it. Reused
+/// when it already exists; the caller serialises creation.
+pub fn chat_snapshot(
+    sources: &[SnapshotSource],
+    root: &Path,
+) -> Result<(PathBuf, Vec<SnapshotRepo>), WorktreeError> {
+    let mut repos = Vec::with_capacity(sources.len());
+    for s in sources {
+        let sha = run_git(
+            &s.repo,
+            &["rev-parse", "--verify", &format!("{}^{{commit}}", s.rev)],
+        )?
+        .trim()
+        .to_string();
+        repos.push(SnapshotRepo {
+            folder: s.folder.clone(),
+            sha,
+        });
+    }
+    let key = match repos.as_slice() {
+        [only] if only.folder.is_none() => only.sha.clone(),
+        many => many
+            .iter()
+            .map(|r| &r.sha[..r.sha.len().min(12)])
+            .collect::<Vec<_>>()
+            .join("-"),
+    };
+    let dest = root.join(&key);
+    let ready = dest.join(SNAPSHOT_READY);
+    if ready.is_file() {
+        // Touch, so the sweeper sees it as in use.
+        let _ = std::fs::write(&ready, b"");
+        return Ok((dest, repos));
+    }
+    // A leftover from an interrupted attempt is not a snapshot.
+    let _ = std::fs::remove_dir_all(&dest);
+    std::fs::create_dir_all(&dest)
+        .map_err(|e| WorktreeError(format!("create {}: {e}", dest.display())))?;
+    for (s, r) in sources.iter().zip(&repos) {
+        let into = match &r.folder {
+            Some(f) => dest.join(f),
+            None => dest.clone(),
+        };
+        // `worktree add` wants an empty or absent target; the root exists.
+        if r.folder.is_none() {
+            let _ = std::fs::remove_dir(&into);
+        }
+        let made = run_git(
+            &s.repo,
+            &[
+                "-c",
+                "core.symlinks=false",
+                "worktree",
+                "add",
+                "--detach",
+                &into.to_string_lossy(),
+                &r.sha,
+            ],
+        );
+        if let Err(e) = made {
+            let _ = std::fs::remove_dir_all(&dest);
+            return Err(e);
+        }
+    }
+    std::fs::write(&ready, b"")
+        .map_err(|e| WorktreeError(format!("mark {}: {e}", ready.display())))?;
+    Ok((dest, repos))
+}
+
+/// Remove snapshots under `root` (`root/<project>/<key>`) not used for
+/// `max_idle`. Returns how many were removed. The source repos keep a stale
+/// worktree entry until their next [`prune_worktrees`]; that is harmless.
+pub fn sweep_chat_snapshots(root: &Path, max_idle: std::time::Duration) -> usize {
+    let mut removed = 0;
+    let Ok(projects) = std::fs::read_dir(root) else {
+        return 0;
+    };
+    for project in projects.flatten() {
+        let Ok(snaps) = std::fs::read_dir(project.path()) else {
+            continue;
+        };
+        for snap in snaps.flatten() {
+            let ready = snap.path().join(SNAPSHOT_READY);
+            let idle = std::fs::metadata(&ready)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok());
+            // No marker means a half-made one; old enough to be abandoned.
+            let stale = match idle {
+                Some(d) => d > max_idle,
+                None => std::fs::metadata(snap.path())
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| t.elapsed().ok())
+                    .is_some_and(|d| d > max_idle),
+            };
+            if stale && std::fs::remove_dir_all(snap.path()).is_ok() {
+                removed += 1;
+            }
+        }
+    }
+    removed
+}
+
 /// Clone `git_url` into `dest` (which must not already exist). When `token` is
 /// set, authenticates over HTTPS via a transient credential helper — the token
 /// is passed through the child environment and **never** written to the cloned
@@ -427,6 +557,85 @@ mod tests {
         std::fs::write(dir.join("file.txt"), "hello").unwrap();
         run(&["add", "."]);
         run(&["commit", "-q", "-m", "init"]);
+    }
+
+    #[test]
+    fn a_chat_snapshot_is_shared_per_commit_and_swept_when_idle() {
+        let repo = TempDir::new().unwrap();
+        init_repo(repo.path());
+        let root = TempDir::new().unwrap();
+        let src = |folder: Option<&str>| SnapshotSource {
+            repo: repo.path().to_path_buf(),
+            rev: "HEAD".into(),
+            folder: folder.map(str::to_string),
+        };
+
+        let (a, repos) = chat_snapshot(&[src(None)], &root.path().join("proj")).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(a.join("file.txt")).unwrap(),
+            "hello"
+        );
+        assert_eq!(repos.len(), 1);
+        assert!(a.ends_with(&repos[0].sha), "keyed by the commit");
+        // A second conversation at the same commit gets the same checkout.
+        let (b, _) = chat_snapshot(&[src(None)], &root.path().join("proj")).unwrap();
+        assert_eq!(a, b);
+
+        // Several repos sit in their folders under one root.
+        let (multi, _) = chat_snapshot(
+            &[src(Some("front")), src(Some("api"))],
+            &root.path().join("proj2"),
+        )
+        .unwrap();
+        assert!(multi.join("front").join("file.txt").is_file());
+        assert!(multi.join("api").join("file.txt").is_file());
+
+        // Nothing idle yet; everything idle once the bar is zero.
+        assert_eq!(
+            sweep_chat_snapshots(root.path(), std::time::Duration::from_secs(3600)),
+            0
+        );
+        assert_eq!(
+            sweep_chat_snapshots(root.path(), std::time::Duration::ZERO),
+            2
+        );
+        assert!(!a.exists());
+    }
+
+    /// A committed symlink must not become a way out of the snapshot.
+    #[cfg(unix)]
+    #[test]
+    fn a_chat_snapshot_checks_symlinks_out_as_plain_files() {
+        let repo = TempDir::new().unwrap();
+        init_repo(repo.path());
+        std::os::unix::fs::symlink("/etc/hostname", repo.path().join("link")).unwrap();
+        let git = |args: &[&str]| {
+            assert!(Command::new("git")
+                .arg("-C")
+                .arg(repo.path())
+                .args(args)
+                .status()
+                .unwrap()
+                .success());
+        };
+        git(&["add", "link"]);
+        git(&["commit", "-q", "-m", "link"]);
+        let root = TempDir::new().unwrap();
+        let (snap, _) = chat_snapshot(
+            &[SnapshotSource {
+                repo: repo.path().to_path_buf(),
+                rev: "HEAD".into(),
+                folder: None,
+            }],
+            root.path(),
+        )
+        .unwrap();
+        let meta = std::fs::symlink_metadata(snap.join("link")).unwrap();
+        assert!(!meta.file_type().is_symlink());
+        assert_eq!(
+            std::fs::read_to_string(snap.join("link")).unwrap(),
+            "/etc/hostname"
+        );
     }
 
     #[test]

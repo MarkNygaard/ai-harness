@@ -26,7 +26,15 @@ import {
   SheetDescription,
   SheetTitle,
 } from "@/components/ui/sheet";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { useProjects } from "@/lib/projects";
 import { agentLabel } from "@/lib/agents";
 import { ApiError } from "@/lib/api";
 import {
@@ -45,6 +53,9 @@ import {
   useSendMessage,
 } from "@/lib/chat";
 import { useChatOpen } from "./ChatProvider";
+
+/** Base UI's Select needs a concrete value for "none". */
+const NO_PROJECT = "__none__";
 
 /** Which conversation the panel shows, remembered per browser. */
 const CURRENT_KEY = "harness.chat.current";
@@ -95,6 +106,11 @@ function ChatBody() {
   };
 
   const settings = useChatSettings();
+  // The project whose code a *new* conversation may read. Claude only: Pi's
+  // file tools can't be kept inside the checkout, so it isn't offered there.
+  const [project, setProject] = useState<string | null>(null);
+  const canReadCode = settings.data?.provider === "claude";
+  const projects = useProjects();
   const conversations = useConversations(true);
   const detail = useConversation(currentId);
   const create = useCreateConversation();
@@ -121,7 +137,9 @@ function ChatBody() {
     if (!trimmed || busy) return;
     let id = currentId;
     if (!id) {
-      const created = await create.mutateAsync(context);
+      const created = await create.mutateAsync(
+        canReadCode && project ? { ...context, project } : context,
+      );
       id = created.id;
       setCurrentId(id);
     }
@@ -139,7 +157,11 @@ function ChatBody() {
           </SheetTitle>
           <SheetDescription className="truncate text-[11px]">
             {provider
-              ? `${agentLabel(provider)}${model ? ` · ${model}` : ""}`
+              ? `${agentLabel(provider)}${model ? ` · ${model}` : ""}${
+                  conv?.context.project
+                    ? ` · reading ${conv.context.project}`
+                    : ""
+                }`
               : "Runs, pull requests, Linear and workflows"}
           </SheetDescription>
         </div>
@@ -208,6 +230,31 @@ function ChatBody() {
       />
 
       <div className="border-t p-3">
+        {!currentId && canReadCode && (projects.data ?? []).length > 0 && (
+          <div className="mb-2 flex items-center gap-2">
+            <span className="text-[11px] text-muted-foreground">
+              Read code from
+            </span>
+            <Select
+              value={project ?? NO_PROJECT}
+              onValueChange={(v) =>
+                v != null && setProject(v === NO_PROJECT ? null : v)
+              }
+            >
+              <SelectTrigger size="sm" className="min-w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_PROJECT}>No project</SelectItem>
+                {(projects.data ?? []).map((p) => (
+                  <SelectItem key={p.name} value={p.name}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         {unavailable ? (
           <p className="text-[12px] text-muted-foreground">
             No agent can run the chat yet. Connect Claude Code or Pi under{" "}

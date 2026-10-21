@@ -88,6 +88,11 @@ pub struct ChatTurn {
     /// keys its stored sessions by working directory, so a resume from anywhere
     /// else finds nothing.
     pub cwd: PathBuf,
+    /// A read-only checkout of a project to answer code questions from
+    /// (Claude only). When set, Claude runs *in* it with `Read`/`Grep`/`Glob`,
+    /// confined to it; the MCP config and the conversation's own state stay in
+    /// `cwd`. Must also be the same every turn, for the same reason.
+    pub code_dir: Option<PathBuf>,
     /// The session to resume; `None` on the first turn.
     pub session: Option<String>,
     pub mcp: ChatMcp,
@@ -118,6 +123,13 @@ pub async fn run_turn(turn: ChatTurn) -> Result<ChatReply, AgentError> {
             let reply = parse_claude_stream(&out.stdout);
             finish(reply, out, turn.session)
         }
+        // omp's file tools take any path and cannot be confined, so a Pi chat
+        // never gets a checkout: it would be a way to read the whole host.
+        "pi" if turn.code_dir.is_some() => Err(AgentError(
+            "Pi cannot answer questions about code: its file tools cannot be kept inside \
+             the checkout"
+                .into(),
+        )),
         "pi" => {
             write_config(&turn.cwd.join(OMP_MCP_FILE), &config)?;
             let args = omp_args(&turn);
@@ -193,14 +205,30 @@ pub fn claude_args(turn: &ChatTurn, mcp_file: &Path) -> Vec<String> {
         "--mcp-config".into(),
         mcp_file.to_string_lossy().into_owned(),
         "--strict-mcp-config".into(),
-        // No built-in tools at all: no shell, no file access, no web.
+        // No shell, no writes, no web. Reading files only in code mode.
         "--tools".into(),
-        String::new(),
+        if turn.code_dir.is_some() {
+            "Read,Grep,Glob".into()
+        } else {
+            String::new()
+        },
         "--allowedTools".into(),
         format!("mcp__{SERVER_NAME}__*"),
         "--permission-mode".into(),
         "dontAsk".into(),
+        // Only the harness's own user settings. A project's
+        // `.claude/settings.json` can define hooks — shell commands — and the
+        // checkout is the team's repo; Claude loads those from its working
+        // directory unless told not to.
+        "--setting-sources".into(),
+        "user".into(),
     ];
+    if turn.code_dir.is_some() {
+        // `dontAsk` already refuses a read outside the working directory; this
+        // makes the file tools refuse it themselves, Grep and Glob included.
+        args.push("--settings".into());
+        args.push(r#"{"permissions":{"blockReadsOutsideWorkingDirectories":true}}"#.into());
+    }
     if let Some(model) = turn.model.as_deref().filter(|m| !m.is_empty()) {
         args.push("--model".into());
         args.push(model.into());
@@ -278,7 +306,7 @@ struct Output {
 async fn spawn(program: &Path, args: &[String], turn: &ChatTurn) -> Result<Output, AgentError> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args)
-        .current_dir(&turn.cwd)
+        .current_dir(turn.code_dir.as_ref().unwrap_or(&turn.cwd))
         .env(TOKEN_ENV, &turn.mcp.token)
         // Spawned from inside a Claude Code session (a developer running the
         // server locally), these make the child think it is nested and trap.
@@ -464,6 +492,7 @@ mod tests {
             effort: None,
             prompt: "which PR do I test?".into(),
             cwd: PathBuf::from("/data/chat/c1"),
+            code_dir: None,
             session: session.map(str::to_string),
             mcp: ChatMcp {
                 url: "http://127.0.0.1:9800/mcp".into(),
@@ -487,6 +516,36 @@ mod tests {
     }
 
     #[test]
+    fn code_mode_adds_read_only_file_tools_confined_to_the_checkout() {
+        let mut t = turn("claude", None);
+        t.code_dir = Some(PathBuf::from("/data/chat-checkouts/shop/abc"));
+        let args = claude_args(&t, Path::new("/data/chat/c1/mcp.json"));
+        let after = |flag: &str| args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone());
+        assert_eq!(after("--tools").as_deref(), Some("Read,Grep,Glob"));
+        assert_eq!(
+            after("--settings").as_deref(),
+            Some(r#"{"permissions":{"blockReadsOutsideWorkingDirectories":true}}"#)
+        );
+        // A repo's own .claude/settings.json (hooks!) is never loaded.
+        assert_eq!(after("--setting-sources").as_deref(), Some("user"));
+        assert!(!args.iter().any(|a| a == "--add-dir"));
+    }
+
+    #[tokio::test]
+    async fn pi_is_refused_a_checkout() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut t = turn("pi", None);
+        t.cwd = dir.path().to_path_buf();
+        t.code_dir = Some(dir.path().join("checkout"));
+        let err = run_turn(t).await.unwrap_err();
+        assert!(
+            err.0.contains("cannot answer questions about code"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
     fn claude_gets_no_built_in_tools_and_only_the_harness_server() {
         let args = claude_args(&turn("claude", Some("s-1")), Path::new("/x/mcp.json"));
         // The prompt is the value of -p.
@@ -497,6 +556,7 @@ mod tests {
         assert_eq!(after("--allowedTools").as_deref(), Some("mcp__harness__*"));
         assert_eq!(after("--permission-mode").as_deref(), Some("dontAsk"));
         assert_eq!(after("--resume").as_deref(), Some("s-1"));
+        assert_eq!(after("--setting-sources").as_deref(), Some("user"));
         assert!(args.iter().any(|a| a == "--strict-mcp-config"));
         // Never the full profile, and the token is not on the command line.
         assert!(!args.iter().any(|a| a.contains("dangerously")));
