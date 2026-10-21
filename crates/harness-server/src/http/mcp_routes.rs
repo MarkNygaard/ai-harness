@@ -312,6 +312,34 @@ pub(crate) async fn call_tool(
                 Err(e) => tool_error(e.to_string()),
             }
         }
+        "run_node_output" => {
+            let id = s("run_id");
+            let node = s("node");
+            if id.is_empty() || node.is_empty() {
+                return tool_error("`run_id` and `node` are required");
+            }
+            let store = match state.store().await {
+                Ok(s) => s,
+                Err(e) => return tool_error(e),
+            };
+            let tail = args
+                .get("tail_lines")
+                .and_then(Value::as_u64)
+                .map(|n| n as usize)
+                .unwrap_or(DEFAULT_TAIL_LINES);
+            let artifact = args
+                .get("include_artifact")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            match store.get_run(&id).await {
+                Ok(Some(detail)) => match node_output(&detail, &node, tail, artifact) {
+                    Ok(body) => to_result(format!("run {id} / {node}"), &body),
+                    Err(e) => tool_error(e),
+                },
+                Ok(None) => tool_error(format!("run `{id}` not found")),
+                Err(e) => tool_error(e.to_string()),
+            }
+        }
         "run_findings" => {
             let id = s("run_id");
             if id.is_empty() {
@@ -794,6 +822,21 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "run_node_output",
+            "description": "One step's output from a run, instead of every step's at once (run_status returns them all, which is a lot to read for one question). Returns the node's status, provider/model, note, and the last `tail_lines` lines of its output (default 200; 0 for all), with `total_lines` so you can tell when there is more. `include_artifact` adds the artifact the step wrote (e.g. the plan). Read-only. Use it for 'what went wrong in step X' after run_status has told you which step failed.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "run_id": { "type": "string" },
+                    "node": { "type": "string", "description": "The step's node id, as run_status lists it." },
+                    "tail_lines": { "type": "integer", "description": "How many lines from the end (default 200; 0 for all)." },
+                    "include_artifact": { "type": "boolean", "description": "Also return the artifact the step wrote." }
+                },
+                "required": ["run_id", "node"],
+            }
+        }),
+        json!({
             "name": "run_findings",
             "description": "Read the per-finding state a human set in a run's report: each finding's `finding_key` (category::title) + `action` — built | issued | ignored | checked | passed | failed — plus any `ref_run_id` / Linear `issue_identifier`+`issue_url`. Use to see which report items a person marked, e.g. which manual test scenarios passed vs failed. Findings with no recorded state are absent from the list.",
             "inputSchema": {
@@ -1126,6 +1169,53 @@ pub(crate) fn tool_error(message: impl Into<String>) -> Value {
     })
 }
 
+/// Lines of a node's output `run_node_output` returns unless asked for more.
+const DEFAULT_TAIL_LINES: usize = 200;
+
+/// The last `tail` lines of `text` (all of it when `tail` is 0), and how many
+/// lines it has in total.
+fn tail_lines(text: &str, tail: usize) -> (String, usize) {
+    let lines: Vec<&str> = text.lines().collect();
+    let total = lines.len();
+    if tail == 0 || tail >= total {
+        return (text.to_string(), total);
+    }
+    (lines[total - tail..].join("\n"), total)
+}
+
+/// One node of a run, for `run_node_output`. An unknown node names the ones
+/// there are, so a wrong guess costs one call rather than a run_status.
+fn node_output(
+    detail: &harness_persist::RunDetail,
+    node: &str,
+    tail: usize,
+    include_artifact: bool,
+) -> Result<Value, String> {
+    let Some(n) = detail.nodes.iter().find(|n| n.node_id == node) else {
+        let ids: Vec<&str> = detail.nodes.iter().map(|n| n.node_id.as_str()).collect();
+        return Err(format!(
+            "no step `{node}` in this run (steps: {})",
+            ids.join(", ")
+        ));
+    };
+    let (output, total) = tail_lines(&n.output, tail);
+    let mut out = json!({
+        "node": n.node_id,
+        "status": n.status,
+        "provider": n.provider,
+        "model": n.model,
+        "note": n.note,
+        "error_count": n.error_count,
+        "output": output,
+        "total_lines": total,
+        "truncated": tail != 0 && total > tail,
+    });
+    if include_artifact {
+        out["artifact"] = json!(n.artifact_content);
+    }
+    Ok(out)
+}
+
 /// Tools a chat agent may ask for but not run: each starts work or removes
 /// something, so the person confirms it in the chat panel first. Everything
 /// else is a read, or an authoring edit that keeps the version it replaced.
@@ -1240,6 +1330,76 @@ async fn issue_prs(state: &Arc<RunsState>, issue: &str) -> Result<Value, String>
 mod tests {
     use super::*;
 
+    fn detail_with(nodes: &[(&str, &str, &str)]) -> harness_persist::RunDetail {
+        harness_persist::RunDetail {
+            run: harness_persist::RunSummary {
+                id: "r1".into(),
+                workflow_name: "idea-to-pr".into(),
+                title: None,
+                description: None,
+                status: "failed".into(),
+                project: None,
+                node_count: nodes.len() as i32,
+                recorded_at: chrono::Utc::now(),
+                started_at: None,
+                ended_at: None,
+                ab_pair_id: None,
+                ab_arm: None,
+                ab_label: None,
+                triggered_by: None,
+                trigger_source: None,
+                trigger_actor: None,
+            },
+            nodes: nodes
+                .iter()
+                .enumerate()
+                .map(|(i, (id, status, output))| harness_persist::PersistedNode {
+                    node_id: (*id).into(),
+                    ordinal: i as i32,
+                    status: (*status).into(),
+                    provider: Some("claude".into()),
+                    model: None,
+                    output: (*output).into(),
+                    iterations: 1,
+                    converged: None,
+                    note: None,
+                    input_tokens: None,
+                    output_tokens: None,
+                    cache_read: None,
+                    cache_write: None,
+                    started_at: None,
+                    ended_at: None,
+                    artifact_content: Some("# plan".into()),
+                    error_count: 0,
+                })
+                .collect(),
+            graph: vec![],
+        }
+    }
+
+    #[test]
+    fn node_output_is_one_step_tailed() {
+        let long: String = (1..=500).map(|i| format!("line {i}\n")).collect();
+        let d = detail_with(&[("plan", "success", "ok"), ("implement", "failed", &long)]);
+
+        let out = node_output(&d, "implement", 3, false).unwrap();
+        assert_eq!(out["status"], "failed");
+        assert_eq!(out["output"], "line 498\nline 499\nline 500");
+        assert_eq!(out["total_lines"], 500);
+        assert_eq!(out["truncated"], true);
+        assert!(out.get("artifact").is_none());
+
+        // 0 means all of it; the artifact only when asked.
+        let all = node_output(&d, "plan", 0, true).unwrap();
+        assert_eq!(all["output"], "ok");
+        assert_eq!(all["truncated"], false);
+        assert_eq!(all["artifact"], "# plan");
+
+        // A wrong guess says what the steps are.
+        let err = node_output(&d, "review", 10, false).unwrap_err();
+        assert!(err.contains("plan, implement"), "{err}");
+    }
+
     #[test]
     fn issue_identifiers_are_team_hyphen_number() {
         for ok in ["ECOM-44", "ecom-44", "A1-2"] {
@@ -1270,6 +1430,7 @@ mod tests {
             "workflow_models",
             "run_list",
             "run_status",
+            "run_node_output",
             "run_findings",
             "run_linear_claim",
             "run_activity_errors",
@@ -1409,6 +1570,7 @@ const RUN_TOOLS: &[&str] = &[
     "run_trigger_pair",
     "run_list",
     "run_status",
+    "run_node_output",
     "run_findings",
     "issue_prs",
     "pr_status",
