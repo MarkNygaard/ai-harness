@@ -38,6 +38,12 @@ export function ChatSettingsPage() {
   // of whichever agent the default resolves to.
   const shownProvider = provider === DEFAULT ? data?.provider : provider;
   const models = options.find((o) => o.id === shownProvider)?.models ?? [];
+  // What "Default" resolves to, said in the list and in the closed select.
+  const defaultAgent =
+    data?.provider && !data.stored.provider
+      ? `Default (${options.find((o) => o.id === data.provider)?.label ?? data.provider})`
+      : "Default";
+  const defaultModel = `Default${models[0] ? ` (${models[0]})` : ""}`;
 
   return (
     <SettingsShell title="Chat">
@@ -95,15 +101,17 @@ export function ChatSettingsPage() {
                       }}
                     >
                       <SelectTrigger className="w-full">
-                        <SelectValue />
+                        {/* Base UI shows the raw value unless told its label. */}
+                        <SelectValue>
+                          {(v: string | null) =>
+                            !v || v === DEFAULT
+                              ? defaultAgent
+                              : (options.find((o) => o.id === v)?.label ?? v)
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={DEFAULT}>
-                          Default
-                          {data?.provider && !data.stored.provider
-                            ? ` (${options.find((o) => o.id === data.provider)?.label ?? data.provider})`
-                            : ""}
-                        </SelectItem>
+                        <SelectItem value={DEFAULT}>{defaultAgent}</SelectItem>
                         {options.map((o) => (
                           <SelectItem key={o.id} value={o.id}>
                             {o.label}
@@ -119,12 +127,14 @@ export function ChatSettingsPage() {
                       onValueChange={(v) => v != null && setModel(v)}
                     >
                       <SelectTrigger className="w-full">
-                        <SelectValue />
+                        <SelectValue>
+                          {(v: string | null) =>
+                            !v || v === DEFAULT ? defaultModel : v
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value={DEFAULT}>
-                          Default{models[0] ? ` (${models[0]})` : ""}
-                        </SelectItem>
+                        <SelectItem value={DEFAULT}>{defaultModel}</SelectItem>
                         {models.map((m) => (
                           <SelectItem key={m} value={m}>
                             {m}
@@ -140,7 +150,11 @@ export function ChatSettingsPage() {
                       onValueChange={(v) => v != null && setEffort(v)}
                     >
                       <SelectTrigger className="w-full">
-                        <SelectValue />
+                        <SelectValue>
+                          {(v: string | null) =>
+                            !v || v === DEFAULT ? "Default" : v
+                          }
+                        </SelectValue>
                       </SelectTrigger>
                       <SelectContent>
                         <SelectItem value={DEFAULT}>Default</SelectItem>
