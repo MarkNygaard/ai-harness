@@ -23,8 +23,8 @@ chat with an agent that can use the harness's own tools, the same ones the
 
 ## Questions about code
 
-When Claude Code answers the chat, a new conversation can read one project's
-code: choose it under **Read code from** before your first message. The chat
+A new conversation can read one project's code: choose it under **Read code
+from** before your first message. The chat
 gets a read-only copy of the project's base branch (every repo, for a
 multi-repo project) and can search and read files in it, but not change them.
 To have code changed, start a run.
@@ -34,16 +34,19 @@ reading that same commit even after the branch moves on. Start a new
 conversation to read newer code. Conversations at the same commit share one
 copy, and copies nobody has read for a day are removed.
 
-Pi isn't offered this. Its file tools can't be limited to one directory, so
-giving it a checkout would let it read anything on the server.
+With Claude Code, the agent reads with its own tools, which refuse anything
+outside the copy. Pi's own file tools can't be limited that way, so Pi chats
+never get them. Instead, the harness loads its own Pi extension, which gives Pi
+file tools that check every path and refuse anything outside the copy.
 
 ## What it can't do
 
 The chat cannot run commands, change files, or browse the web, and it can only
 read files in a code conversation's own checkout. This is enforced by the
-agent's command line, not just requested in its instructions. Settings from
-the project's own repository (`.claude/settings.json`) are never loaded, since
-they can define commands to run.
+agent's command line and, for Pi, by the harness's extension, not just
+requested in the agent's instructions. Settings from the project's own
+repository (`.claude/settings.json`) are never loaded, since they can define
+commands to run, and a Pi chat loads no extension but the harness's own.
 
 **Starting a run or deleting something waits for you.** When the agent asks
 to start a run, start an A/B pair, delete a workflow or uninstall one from the

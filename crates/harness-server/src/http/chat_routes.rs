@@ -609,13 +609,12 @@ async fn answer(
         Err(e) => tracing::info!("chat: credentials not materialized: {e}"),
     }
     let store = state.chat_store().await?;
-    // Code questions: Claude only, and only when the conversation names a
-    // project. omp's file tools can't be confined to a directory.
+    // Code questions, when the conversation names a project. Claude reads the
+    // checkout with its own tools, confined by permission rules; Pi through
+    // the chat guard's `code_*` tools (see `harness_runner::chat`).
     let code = match conv.context.0.get("project").and_then(Value::as_str) {
-        Some(project) if conv.provider == "claude" => {
-            Some(code_checkout(state, conv, project).await?)
-        }
-        _ => None,
+        Some(project) => Some(code_checkout(state, conv, project).await?),
+        None => None,
     };
     let messages = store.messages(&conv.id).await.map_err(|e| e.to_string())?;
     let outcomes = take_action_outcomes(store, &messages).await;
@@ -826,13 +825,23 @@ async fn code_checkout(
         .join(", ");
     Ok(CodeCheckout {
         dir,
-        note: format!(
-            "You can also read the code of project `{project}` ({at}): your working directory \
-             is a read-only checkout of it, and you have Read, Grep and Glob. Cite file paths. \
-             You cannot change files or run anything; to have code changed, the person starts a \
-             run."
-        ),
+        note: code_note(&conv.provider, project, &at),
     })
+}
+
+/// What the agent is told about the checkout. The tools differ by agent:
+/// Claude reads its working directory with its own tools; Pi has the guard's.
+fn code_note(provider: &str, project: &str, at: &str) -> String {
+    let how = if provider == "pi" {
+        "you have code_read, code_grep and code_glob over a read-only checkout of it \
+         (paths are relative to the checkout root)"
+    } else {
+        "your working directory is a read-only checkout of it, and you have Read, Grep and Glob"
+    };
+    format!(
+        "You can also read the code of project `{project}` ({at}): {how}. Cite file paths. \
+         You cannot change files or run anything; to have code changed, the person starts a run."
+    )
 }
 
 /// Remove checkouts nobody has read for a day, hourly. No-op outside a Tokio
@@ -1194,6 +1203,15 @@ mod tests {
         assert!(!resumed.contains("You are the assistant"));
         assert!(resumed.starts_with("(They cancelled"));
         assert!(resumed.ends_with("ok"));
+    }
+
+    #[test]
+    fn the_code_note_names_each_agents_own_tools() {
+        let pi = code_note("pi", "shop", "main at abc");
+        assert!(pi.contains("code_read, code_grep and code_glob"), "{pi}");
+        let claude = code_note("claude", "shop", "main at abc");
+        assert!(claude.contains("Read, Grep and Glob"), "{claude}");
+        assert!(!claude.contains("code_read"));
     }
 
     #[test]
