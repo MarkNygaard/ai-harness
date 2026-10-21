@@ -51,6 +51,14 @@ const CLAUDE_MCP_FILE: &str = ".harness-chat-mcp.json";
 /// omp discovers `mcp.json` / `.mcp.json` in its working directory.
 const OMP_MCP_FILE: &str = ".mcp.json";
 
+/// The omp extension every Pi chat turn runs with: a tool allowlist, and the
+/// confined `code_*` tools. See its header for why it exists.
+const OMP_GUARD_TS: &str = include_str!("../extensions/harness-chat-guard/index.ts");
+/// Where the guard is written in the conversation directory.
+const OMP_GUARD_FILE: &str = ".harness-chat-guard.ts";
+/// Tells the guard which checkout its code tools may read.
+const OMP_CODE_ROOT_ENV: &str = "HARNESS_CHAT_CODE_ROOT";
+
 /// A turn that takes longer than this is killed. Generous — a turn that reads a
 /// dozen runs is several tool calls — but finite, so a wedged CLI cannot hold a
 /// conversation "thinking" forever.
@@ -88,10 +96,11 @@ pub struct ChatTurn {
     /// keys its stored sessions by working directory, so a resume from anywhere
     /// else finds nothing.
     pub cwd: PathBuf,
-    /// A read-only checkout of a project to answer code questions from
-    /// (Claude only). When set, Claude runs *in* it with `Read`/`Grep`/`Glob`,
-    /// confined to it; the MCP config and the conversation's own state stay in
-    /// `cwd`. Must also be the same every turn, for the same reason.
+    /// A read-only checkout of a project to answer code questions from. Claude
+    /// runs *in* it with `Read`/`Grep`/`Glob`, confined by its permission
+    /// rules; omp gets the chat guard's `code_*` tools over it. The MCP config
+    /// and the conversation's own state stay in `cwd`. Must also be the same
+    /// every turn, for the same reason.
     pub code_dir: Option<PathBuf>,
     /// The session to resume; `None` on the first turn.
     pub session: Option<String>,
@@ -123,16 +132,14 @@ pub async fn run_turn(turn: ChatTurn) -> Result<ChatReply, AgentError> {
             let reply = parse_claude_stream(&out.stdout);
             finish(reply, out, turn.session)
         }
-        // omp's file tools take any path and cannot be confined, so a Pi chat
-        // never gets a checkout: it would be a way to read the whole host.
-        "pi" if turn.code_dir.is_some() => Err(AgentError(
-            "Pi cannot answer questions about code: its file tools cannot be kept inside \
-             the checkout"
-                .into(),
-        )),
         "pi" => {
             write_config(&turn.cwd.join(OMP_MCP_FILE), &config)?;
-            let args = omp_args(&turn);
+            // Absolute: `--trusted-extension` refuses a relative path.
+            let guard = std::path::absolute(turn.cwd.join(OMP_GUARD_FILE))
+                .map_err(|e| AgentError(format!("chat guard path: {e}")))?;
+            std::fs::write(&guard, OMP_GUARD_TS)
+                .map_err(|e| AgentError(format!("write {}: {e}", guard.display())))?;
+            let args = omp_args(&turn, &guard);
             let out = spawn(&cli("OMP_CLI", "omp"), &args, &turn).await?;
             let parsed = crate::pi::parse_omp_stream(&out.stdout);
             let reply = ChatReply {
@@ -266,15 +273,25 @@ pub fn omp_tool_name(tool: &str) -> String {
     format!("mcp__{SERVER_NAME}_{tool}")
 }
 
+/// The guard's own code tools, which stand in for omp's unconfinable
+/// read/grep/glob when a turn has a checkout.
+const OMP_CODE_TOOLS: &[&str] = &["code_read", "code_grep", "code_glob"];
+
 /// omp's flags. `--tools` is the *whole* active set, so naming only harness
-/// tools leaves bash/edit/read/write switched off.
-pub fn omp_args(turn: &ChatTurn) -> Vec<String> {
+/// tools (and, with a checkout, the guard's `code_*` tools) leaves omp's own
+/// bash/edit/read/write switched off. `--trusted-extension` loads the guard,
+/// disables every other extension, and fails the turn if the guard won't load
+/// — so the `code_*` tools never exist without their confinement.
+pub fn omp_args(turn: &ChatTurn, guard: &Path) -> Vec<String> {
     let model = match turn.model.as_deref().filter(|m| !m.is_empty()) {
         Some(m) if m.contains('/') => m.to_string(),
         Some(m) => format!("kimi-code/{m}"),
         None => OMP_DEFAULT_MODEL.to_string(),
     };
-    let tools: Vec<String> = turn.mcp.tools.iter().map(|t| omp_tool_name(t)).collect();
+    let mut tools: Vec<String> = turn.mcp.tools.iter().map(|t| omp_tool_name(t)).collect();
+    if turn.code_dir.is_some() {
+        tools.extend(OMP_CODE_TOOLS.iter().map(|t| t.to_string()));
+    }
     let mut args = vec![
         "-p".into(),
         turn.prompt.clone(),
@@ -284,6 +301,8 @@ pub fn omp_args(turn: &ChatTurn) -> Vec<String> {
         model,
         "--tools".into(),
         tools.join(","),
+        "--trusted-extension".into(),
+        guard.to_string_lossy().into_owned(),
     ];
     if let Some(effort) = turn.effort.as_deref().filter(|e| !e.is_empty()) {
         args.push("--thinking".into());
@@ -305,8 +324,19 @@ struct Output {
 /// Spawn the CLI, forward live activity, and collect its output.
 async fn spawn(program: &Path, args: &[String], turn: &ChatTurn) -> Result<Output, AgentError> {
     let mut cmd = tokio::process::Command::new(program);
+    let claude = turn.provider == "claude";
+    // Claude runs *in* the checkout, confined by its own permission rules. omp
+    // stays in the conversation directory (where its `.mcp.json` is found)
+    // and is told the checkout by environment, for the guard's code tools.
+    let cwd = match (&turn.code_dir, claude) {
+        (Some(code), true) => code,
+        _ => &turn.cwd,
+    };
+    if let (Some(code), false) = (&turn.code_dir, claude) {
+        cmd.env(OMP_CODE_ROOT_ENV, code);
+    }
     cmd.args(args)
-        .current_dir(turn.code_dir.as_ref().unwrap_or(&turn.cwd))
+        .current_dir(cwd)
         .env(TOKEN_ENV, &turn.mcp.token)
         // Spawned from inside a Claude Code session (a developer running the
         // server locally), these make the child think it is nested and trap.
@@ -531,17 +561,62 @@ mod tests {
         assert!(!args.iter().any(|a| a == "--add-dir"));
     }
 
-    #[tokio::test]
-    async fn pi_is_refused_a_checkout() {
-        let dir = tempfile::tempdir().unwrap();
+    #[test]
+    fn omp_always_loads_the_guard_and_reads_code_only_through_it() {
+        let guard = Path::new("/data/chat/c1/.harness-chat-guard.ts");
+        let after = |args: &[String], flag: &str| {
+            args.windows(2).find(|w| w[0] == flag).map(|w| w[1].clone())
+        };
+        let plain = omp_args(&turn("pi", None), guard);
+        assert_eq!(
+            after(&plain, "--trusted-extension").as_deref(),
+            Some("/data/chat/c1/.harness-chat-guard.ts")
+        );
+        assert!(!after(&plain, "--tools").unwrap().contains("code_"));
+
         let mut t = turn("pi", None);
-        t.cwd = dir.path().to_path_buf();
-        t.code_dir = Some(dir.path().join("checkout"));
-        let err = run_turn(t).await.unwrap_err();
+        t.code_dir = Some(PathBuf::from("/data/chat-checkouts/shop/abc"));
+        let code = omp_args(&t, guard);
+        let tools = after(&code, "--tools").unwrap();
+        assert!(tools.ends_with(",code_read,code_grep,code_glob"), "{tools}");
+        // omp's own file tools never appear, whatever the mode.
+        for builtin in ["read", "grep", "glob", "bash"] {
+            assert!(!tools.split(',').any(|t| t == builtin), "{tools}");
+        }
+    }
+
+    /// The guard's own tests (path confinement, the tool allowlist) are
+    /// TypeScript; run them with bun. Skipped locally without bun, but **never
+    /// in CI**: a silent skip there would pass while the guard went untested.
+    #[test]
+    fn the_guard_extensions_own_tests_pass() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("extensions/harness-chat-guard");
+        let out = match std::process::Command::new("bun")
+            .arg("test")
+            .current_dir(&dir)
+            .output()
+        {
+            Ok(out) => out,
+            Err(e) => {
+                assert!(
+                    std::env::var_os("CI").is_none(),
+                    "bun is required in CI to test the chat guard: {e}"
+                );
+                eprintln!("skipping: bun is not installed");
+                return;
+            }
+        };
+        // bun's summary ("N pass", "0 fail") goes to stderr; insist some ran.
+        let summary = String::from_utf8_lossy(&out.stderr);
         assert!(
-            err.0.contains("cannot answer questions about code"),
-            "{}",
-            err.0
+            summary.contains(" 0 fail") && !summary.contains(" 0 pass"),
+            "unexpected bun test summary:\n{summary}"
+        );
+        assert!(
+            out.status.success(),
+            "bun test failed:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
         );
     }
 
@@ -568,7 +643,7 @@ mod tests {
 
     #[test]
     fn omp_gets_an_exact_allowlist_of_harness_tools() {
-        let args = omp_args(&turn("pi", None));
+        let args = omp_args(&turn("pi", None), Path::new("/g.ts"));
         let tools = args
             .windows(2)
             .find(|w| w[0] == "--tools")

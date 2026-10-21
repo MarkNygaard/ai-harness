@@ -106,10 +106,10 @@ function ChatBody() {
   };
 
   const settings = useChatSettings();
-  // The project whose code a *new* conversation may read. Claude only: Pi's
-  // file tools can't be kept inside the checkout, so it isn't offered there.
+  // The project whose code a *new* conversation may read. Both chat agents
+  // can: Claude with its own confined tools, Pi through the harness's guard.
   const [project, setProject] = useState<string | null>(null);
-  const canReadCode = settings.data?.provider === "claude";
+  const canReadCode = !!settings.data?.provider;
   const projects = useProjects();
   const conversations = useConversations(true);
   const detail = useConversation(currentId);
