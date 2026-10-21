@@ -6,11 +6,11 @@ use axum::{
 use std::sync::Arc;
 
 use super::{
-    auth, auth_routes, billing_routes, categories_routes, credentials_routes, finding_routes,
-    github_sso, health_check, invites_routes, library_routes, linear_agent, linear_connections,
-    linear_oauth, linear_routes, linear_source_routes, mcp_routes, oidc, password_reset,
-    run_linear_routes, runs_routes, settings_routes, state::AppState, system_routes, tokens_routes,
-    users_routes, workflows_routes,
+    auth, auth_routes, billing_routes, categories_routes, chat_routes, credentials_routes,
+    finding_routes, github_sso, health_check, invites_routes, library_routes, linear_agent,
+    linear_connections, linear_oauth, linear_routes, linear_source_routes, mcp_routes, oidc,
+    password_reset, run_linear_routes, runs_routes, settings_routes, state::AppState,
+    system_routes, tokens_routes, users_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -107,6 +107,25 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(tokens_routes::list_tokens).post(tokens_routes::create_token),
         )
         .route("/api/tokens/{id}", delete(tokens_routes::revoke_token))
+        // ── The built-in chat. Each route scopes itself to the caller; only
+        // choosing its agent is administrator-only (in the handler). ──────────
+        .route(
+            "/api/chat/settings",
+            get(chat_routes::get_settings).put(chat_routes::put_settings),
+        )
+        .route(
+            "/api/chat/conversations",
+            get(chat_routes::list_conversations).post(chat_routes::create_conversation),
+        )
+        .route(
+            "/api/chat/conversations/{id}",
+            get(chat_routes::get_conversation).delete(chat_routes::delete_conversation),
+        )
+        .route(
+            "/api/chat/conversations/{id}/messages",
+            post(chat_routes::post_message),
+        )
+        .route("/api/chat/actions/{id}", post(chat_routes::resolve_action))
         // ── How the harness itself is configured. Administrator-only. ──────
         .route(
             "/api/settings/general",

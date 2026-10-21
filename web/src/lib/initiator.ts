@@ -11,6 +11,7 @@
 const SOURCE_LABELS: Record<string, string> = {
   ui: "from the dashboard",
   mcp: "over MCP",
+  chat: "from chat",
   "linear-webhook": "delegated in Linear",
   "linear-poller": "moved into a Linear column",
   // Rows written before the source was split out of `triggered_by`.

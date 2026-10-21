@@ -45,6 +45,9 @@ pub use tokens::{AccessToken, TokenStore};
 mod invites;
 pub use invites::{Invite, InviteStore, KIND_INVITE, KIND_RESET};
 
+mod chat;
+pub use chat::{ChatMessage, ChatStore, Conversation};
+
 mod finding_state;
 pub use finding_state::{FindingState, FindingStateInput, FindingStateStore};
 

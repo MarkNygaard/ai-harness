@@ -1,5 +1,24 @@
+import { IconMessageCircle } from "@tabler/icons-react";
+import { useChatOpen } from "@/components/chat/ChatProvider";
+import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
+
+/** Opens the chat panel. In the header so it is on every page. */
+function ChatButton() {
+  const { setOpen } = useChatOpen();
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      onClick={() => setOpen(true)}
+      aria-label="Open chat"
+    >
+      <IconMessageCircle />
+      Ask
+    </Button>
+  );
+}
 
 /** Top bar inside the sidebar inset: trigger + page title + optional actions. */
 export function SiteHeader({
@@ -23,6 +42,7 @@ export function SiteHeader({
       />
       <div className="min-w-0 flex-1 truncate text-sm font-medium">{title}</div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
+      <ChatButton />
     </header>
   );
 }

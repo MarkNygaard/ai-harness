@@ -42,15 +42,25 @@ pub async fn handle_mcp(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> Response {
+    // A built-in chat turn calls in with a token minted for that turn. It
+    // authenticates the call and names the person whose chat it is, so what the
+    // agent does is attributed to them — and held for their confirmation where
+    // it should be — rather than to the shared key.
+    let chat = super::chat_routes::caller_for(&headers);
     // Whose token this is, if it is a personal one. The shared MCP key belongs
     // to nobody in particular, so a run it starts is attributed to nobody.
-    let actor = super::runs_routes::TriggerInfo::from_caller(
-        &state,
-        &headers,
-        super::runs_routes::SOURCE_MCP,
-    )
-    .await;
-    if !mcp_key::authorized(&state, &headers).await {
+    let actor = match &chat {
+        Some(c) => c.trigger(),
+        None => {
+            super::runs_routes::TriggerInfo::from_caller(
+                &state,
+                &headers,
+                super::runs_routes::SOURCE_MCP,
+            )
+            .await
+        }
+    };
+    if chat.is_none() && !mcp_key::authorized(&state, &headers).await {
         // A plain 401 rather than a JSON-RPC error: the caller never got as far
         // as a session, and MCP clients surface the HTTP status.
         return (
@@ -65,7 +75,7 @@ pub async fn handle_mcp(
     if let Some(batch) = body.as_array() {
         let mut out = Vec::new();
         for req in batch {
-            if let Some(resp) = handle_one(&state, &actor, req).await {
+            if let Some(resp) = handle_one(&state, &actor, chat.as_ref(), req).await {
                 out.push(resp);
             }
         }
@@ -74,7 +84,7 @@ pub async fn handle_mcp(
         }
         return Json(Value::Array(out)).into_response();
     }
-    match handle_one(&state, &actor, &body).await {
+    match handle_one(&state, &actor, chat.as_ref(), &body).await {
         Some(resp) => Json(resp).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
@@ -83,6 +93,7 @@ pub async fn handle_mcp(
 async fn handle_one(
     state: &Arc<RunsState>,
     actor: &super::runs_routes::TriggerInfo,
+    chat: Option<&super::chat_routes::ChatCaller>,
     req: &Value,
 ) -> Option<Value> {
     let id = req.get("id").cloned();
@@ -118,7 +129,14 @@ async fn handle_one(
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            let result = call_tool(state, actor, &name, &args).await;
+            let result = match chat {
+                // Starting a run or deleting something must not happen on the
+                // model's say-so: park it for the person to confirm.
+                Some(c) if NEEDS_CONFIRMATION.contains(&name.as_str()) => {
+                    super::chat_routes::hold_for_confirmation(state, c, &name, &args).await
+                }
+                _ => call_tool(state, actor, &name, &args).await,
+            };
             success(id, result)
         }
         // Any notification (initialized, cancelled, …) — no reply.
@@ -148,7 +166,11 @@ async fn state_after(
         name,
         actor.user_id.as_deref(),
         actor.actor.as_deref(),
-        super::workflows_routes::EDIT_SOURCE_MCP,
+        if actor.source.as_deref() == Some(super::runs_routes::SOURCE_CHAT) {
+            super::workflows_routes::EDIT_SOURCE_CHAT
+        } else {
+            super::workflows_routes::EDIT_SOURCE_MCP
+        },
     )
     .await;
     match authoring::get_workflow(&state.project_root, name) {
@@ -157,7 +179,7 @@ async fn state_after(
     }
 }
 
-async fn call_tool(
+pub(crate) async fn call_tool(
     state: &Arc<RunsState>,
     actor: &super::runs_routes::TriggerInfo,
     name: &str,
@@ -1088,7 +1110,7 @@ fn error(id: Option<Value>, code: i32, message: impl Into<String>) -> Option<Val
 }
 
 /// A successful tool result: human text + structured content.
-fn to_result(text: impl Into<String>, structured: &impl serde::Serialize) -> Value {
+pub(crate) fn to_result(text: impl Into<String>, structured: &impl serde::Serialize) -> Value {
     let structured = serde_json::to_value(structured).unwrap_or(Value::Null);
     json!({
         "content": [ { "type": "text", "text": text.into() } ],
@@ -1097,11 +1119,29 @@ fn to_result(text: impl Into<String>, structured: &impl serde::Serialize) -> Val
     })
 }
 
-fn tool_error(message: impl Into<String>) -> Value {
+pub(crate) fn tool_error(message: impl Into<String>) -> Value {
     json!({
         "content": [ { "type": "text", "text": message.into() } ],
         "isError": true,
     })
+}
+
+/// Tools a chat agent may ask for but not run: each starts work or removes
+/// something, so the person confirms it in the chat panel first. Everything
+/// else is a read, or an authoring edit that keeps the version it replaced.
+pub(crate) const NEEDS_CONFIRMATION: &[&str] = &[
+    "run_trigger",
+    "run_trigger_pair",
+    "workflow_delete",
+    "library_uninstall",
+];
+
+/// Every tool this endpoint exposes, by name.
+pub(crate) fn tool_names() -> Vec<String> {
+    mcp_tools()
+        .iter()
+        .filter_map(|t| t["name"].as_str().map(str::to_string))
+        .collect()
 }
 
 /// `TEAM-123`: letters and digits, a hyphen, digits. Strict on purpose — the

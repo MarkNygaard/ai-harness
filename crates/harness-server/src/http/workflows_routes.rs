@@ -77,6 +77,9 @@ pub(crate) async fn record_edit_as(
 /// only two ways in, and telling them apart is half of what the record is for.
 pub(crate) const EDIT_SOURCE_UI: &str = "ui";
 pub(crate) const EDIT_SOURCE_MCP: &str = "mcp";
+/// The built-in chat — MCP underneath, but a person in the harness's own UI
+/// asking for it, which is a different story to tell about a change.
+pub(crate) const EDIT_SOURCE_CHAT: &str = "chat";
 /// Not authored here at all — brought in from the library by whoever pressed
 /// Install. Worth its own value: "created by" on a library workflow means
 /// "installed by", and conflating it with hand-authoring would misattribute

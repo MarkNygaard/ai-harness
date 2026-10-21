@@ -50,7 +50,7 @@ export interface WorkflowAuthorship {
   created_by: string | null;
   /** The creator as a reader sees them (`Name <email>`). */
   created_actor: string | null;
-  /** Which door it came through: "ui" or "mcp". */
+  /** Which door it came through: "ui", "mcp", "chat" or "library". */
   created_source: string | null;
   created_at: string;
   updated_by: string | null;

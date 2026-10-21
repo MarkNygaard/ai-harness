@@ -18,6 +18,7 @@ use async_trait::async_trait;
 use harness_dag::Usage;
 
 pub mod authoring;
+pub mod chat;
 mod code_agent;
 mod cursor;
 pub mod defaults;

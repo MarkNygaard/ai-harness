@@ -729,7 +729,7 @@ fn assistant_text(msg: Option<&serde_json::Value>) -> Option<String> {
 /// completed message contributes its assistant text (or a `📋 n/N` task marker).
 /// Returns an empty vec for events with nothing to show (thinking deltas,
 /// non-JSON, telemetry, empty messages).
-fn activities_from_line(line: &str) -> Vec<Activity> {
+pub(crate) fn activities_from_line(line: &str) -> Vec<Activity> {
     use serde_json::Value;
     let Ok(v) = serde_json::from_str::<Value>(line.trim()) else {
         return Vec::new();

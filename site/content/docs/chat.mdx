@@ -1,0 +1,53 @@
+---
+title: "Chat"
+description: "Ask the harness about runs, pull requests and Linear from inside the dashboard, or build a workflow with it."
+---
+
+Every page of the dashboard has an **Ask** button in its header. It opens a
+chat with an agent that can use the harness's own tools, the same ones the
+[MCP endpoint](/docs/mcp) offers. You don't need an editor or an MCP setup.
+
+## What to ask
+
+- **Why a run failed**, or what a running one is doing. Open the run first and
+  the chat knows which one you mean.
+- **Which pull request to test.** When a run fails after opening its PR and a
+  rerun opens another, ask "which PR should I test for ECOM-44?" The chat looks
+  up every run for the issue, checks each PR on GitHub, recommends one, and
+  links its preview deployment.
+- **Why a Linear issue didn't start.** It checks how your columns and bindings
+  connect.
+- **Build or change a workflow.** It reads the node catalog, validates before
+  saving, and saving keeps the previous version. If you have the workflow open
+  in the editor, the chat knows which one you mean.
+
+## What it can't do
+
+The chat's only tools are the harness's own. It cannot run commands, read or
+change files, or browse the web. This is enforced by the agent's command line,
+not just requested in its instructions.
+
+**Starting a run or deleting something waits for you.** When the agent asks
+to start a run, start an A/B pair, delete a workflow or uninstall one from the
+library, a card appears in the chat with **Confirm** and **Cancel**. Nothing
+runs until you press Confirm. The server enforces this, whichever model is
+answering.
+
+What the chat does is recorded as yours. A run it starts and a workflow it
+edits show you as the person behind them, marked "from chat".
+
+## Choosing the agent
+
+An administrator picks the agent under **Settings → Chat**. The options are
+Claude Code, and Pi with a Kimi or ChatGPT login. Only agents that can be
+limited to the harness's tools are offered, and only once they're connected
+under **Settings → Agents**. With nothing chosen, the chat uses Claude Code if
+it's connected, then Pi.
+
+A change applies to new conversations. A conversation stays on the agent it
+started with, because one agent can't resume another's session.
+
+## Privacy
+
+Conversations belong to whoever started them, and nobody else sees them in
+their list. Delete one from the history menu in the panel.
