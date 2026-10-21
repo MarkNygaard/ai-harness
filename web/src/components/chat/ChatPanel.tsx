@@ -242,7 +242,12 @@ function ChatBody() {
               }
             >
               <SelectTrigger size="sm" className="min-w-36">
-                <SelectValue />
+                {/* Base UI shows the raw value unless told its label. */}
+                <SelectValue>
+                  {(v: string | null) =>
+                    !v || v === NO_PROJECT ? "No project" : v
+                  }
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={NO_PROJECT}>No project</SelectItem>
