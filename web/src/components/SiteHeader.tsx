@@ -1,12 +1,18 @@
 import { IconMessageCircle } from "@tabler/icons-react";
+import { useLocation } from "react-router-dom";
 import { useChatOpen } from "@/components/chat/ChatProvider";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 
-/** Opens the chat panel. In the header so it is on every page. */
+/**
+ * Opens the chat panel. In the header so it is on every page — except the
+ * Chat page itself, where the panel would be a second copy of what is open.
+ */
 function ChatButton() {
   const { setOpen } = useChatOpen();
+  const { pathname } = useLocation();
+  if (pathname === "/chat") return null;
   return (
     <Button
       variant="ghost"
