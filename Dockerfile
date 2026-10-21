@@ -120,6 +120,18 @@ RUN BUN_INSTALL=/opt/bun /opt/bun/bin/bun install -g "@oh-my-pi/pi-coding-agent@
     && chmod -R a+rX /opt/bun \
     && ln -sf /opt/bun/bin/omp /usr/local/bin/omp
 
+# Sentry's MCP server (`sentry-mcp`), started by Claude and omp for workflow
+# steps that ask for `mcp: [sentry]`. Pinned for the reason omp is — an
+# unpinned install is whatever was current when the layer was first built —
+# and because a step runs it with the project's Sentry token. Needs Node
+# >= 22.13 (the layer above installs 22.x). The harness runs it read-only
+# (`--skills=inspect`, see harness-runner/src/mcp_servers.rs).
+ARG SENTRY_MCP_VERSION=0.42.0
+RUN npm install -g --prefix /opt/sentry-mcp "@sentry/mcp-server@${SENTRY_MCP_VERSION}" \
+    && npm cache clean --force \
+    && chmod -R a+rX /opt/sentry-mcp \
+    && ln -sf /opt/sentry-mcp/bin/sentry-mcp /usr/local/bin/sentry-mcp
+
 # pi-web-access: adds web SEARCH + rich fetch (Exa MCP) to the omp agent on top
 # of omp's built-in URL `fetch`. Installed into a fixed, world-readable dir —
 # NOT the PV-backed $HOME, which a runtime volume mount would shadow — and loaded

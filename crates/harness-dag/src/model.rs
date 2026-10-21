@@ -99,6 +99,10 @@ pub struct ApprovalConfig {
     pub on_reject: Option<String>,
 }
 
+/// The MCP servers a node may ask for with `mcp:`. The runner knows how to
+/// start each; an unknown name is a parse error rather than a silent no-op.
+pub const KNOWN_MCP_SERVERS: &[&str] = &["sentry"];
+
 /// Provider-agnostic per-node tool hooks. Translated by the runner into Claude
 /// Code settings.json hooks, the omp hook extension, or Cursor project hooks.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -229,6 +233,11 @@ pub struct Node {
     /// Provider-agnostic tool hooks translated per provider at dispatch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<NodeHooks>,
+    /// External MCP servers this step's agent gets, by name — one of
+    /// [`KNOWN_MCP_SERVERS`]. Attached only when the project has that service
+    /// configured; otherwise the step runs without it. AI bodies only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp: Vec<String>,
     /// The executable body.
     pub kind: NodeKind,
 }

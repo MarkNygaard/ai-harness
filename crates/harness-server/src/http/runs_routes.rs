@@ -528,6 +528,44 @@ impl RunsState {
         fields.get("token").filter(|v| !v.is_empty()).cloned()
     }
 
+    /// The Sentry environment for `project`'s runs and chats: the global token
+    /// and org, plus the project's own Sentry project slug when it names one.
+    /// Empty when Sentry isn't connected — which is how a step that asks for
+    /// Sentry learns the project has none.
+    ///
+    /// Per run rather than materialized into the process environment like the
+    /// agent logins: the project slug differs per project, and two runs of
+    /// different projects run at once.
+    pub(crate) async fn sentry_env(&self, project: Option<&str>) -> Vec<(String, String)> {
+        use harness_runner::mcp_servers::{SENTRY_ORG_ENV, SENTRY_PROJECT_ENV, SENTRY_TOKEN_ENV};
+        let Ok(store) = self.cred_store().await else {
+            return Vec::new();
+        };
+        let Some(global) = store.get("sentry").await.ok().flatten() else {
+            return Vec::new();
+        };
+        let field = |m: &std::collections::BTreeMap<String, String>, k: &str| {
+            m.get(k)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        let (Some(token), Some(org)) = (field(&global, "token"), field(&global, "org")) else {
+            return Vec::new();
+        };
+        let mut env = vec![
+            (SENTRY_TOKEN_ENV.to_string(), token),
+            (SENTRY_ORG_ENV.to_string(), org),
+        ];
+        if let Some(project) = project {
+            if let Ok(Some(own)) = store.get_project(project, "sentry").await {
+                if let Some(slug) = field(&own, "sentry_project") {
+                    env.push((SENTRY_PROJECT_ENV.to_string(), slug));
+                }
+            }
+        }
+        env
+    }
+
     /// The configured commit-author email for `project` (project github
     /// credential overrides global). Authors PR commits with a
     /// GitHub-recognized address so platforms that validate the commit author
@@ -2455,6 +2493,9 @@ async fn execute_run_task(
         if let Some(email) = state.github_author_email_for_project(&project).await {
             run_env.insert("HARNESS_GIT_AUTHOR_EMAIL".to_string(), email);
         }
+        // Sentry, for steps that ask for it with `mcp: [sentry]`. The agent's
+        // MCP config refers to the token by name; nothing is written to disk.
+        run_env.extend(state.sentry_env(Some(&project)).await);
         // Inject the project's build env vars into the agent's process env
         // (skipping reserved keys that would break the toolchain/control plane).
         // Process env is the universal delivery — .NET, Node servers, and

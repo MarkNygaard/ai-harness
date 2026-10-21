@@ -39,6 +39,14 @@ pub enum DagError {
         found: Vec<&'static str>,
     },
 
+    /// A node's `mcp:` names a server the harness doesn't know how to start.
+    #[error("node `{node}` asks for MCP server `{name}`; known: {known}")]
+    UnknownMcpServer {
+        node: String,
+        name: String,
+        known: String,
+    },
+
     /// A `script` node is missing its required `runtime`.
     #[error("script node `{0}` is missing `runtime` (expected `bun` or `uv`)")]
     ScriptMissingRuntime(String),

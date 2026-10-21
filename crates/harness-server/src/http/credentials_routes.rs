@@ -33,7 +33,7 @@ use super::runs_routes::RunsState;
 /// OAuth application under `linear:<id>` and are surfaced by the connections
 /// API rather than as provider cards — see [`is_known_provider`].
 const PROVIDERS: &[&str] = &[
-    "claude", "codex", "pi", "github", "cursor", "linear", "registry",
+    "claude", "codex", "pi", "github", "cursor", "linear", "registry", "sentry",
 ];
 
 /// Whether `provider` is one the UI may write to.
@@ -260,7 +260,11 @@ pub async fn delete_credential(
 /// account, and the identity connected is the app, not the project. See
 /// [`super::linear_connections`]. Any per-project `linear` row left over from an
 /// earlier version is inert: nothing reads it.
-const PROJECT_PROVIDERS: &[&str] = &["github"];
+///
+/// `sentry` per project holds only `sentry_project`, the Sentry project slug
+/// that project's errors live under. The token and org stay global (see
+/// [`super::runs_routes::RunsState::sentry_env`]).
+const PROJECT_PROVIDERS: &[&str] = &["github", "sentry"];
 
 /// `GET /api/projects/{project}/credentials` — which per-project providers are
 /// configured for this project (no secrets).
@@ -300,7 +304,10 @@ pub async fn set_project_credential(
     if !PROJECT_PROVIDERS.contains(&provider.as_str()) {
         return err(
             StatusCode::BAD_REQUEST,
-            format!("provider `{provider}` is not configurable per project (allowed: github)"),
+            format!(
+                "provider `{provider}` is not configurable per project (allowed: {})",
+                PROJECT_PROVIDERS.join(", ")
+            ),
         );
     }
     if req.fields.is_empty() {

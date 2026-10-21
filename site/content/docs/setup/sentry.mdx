@@ -1,0 +1,49 @@
+---
+title: "Sentry"
+description: "Let agents read production errors in Sentry: a read-only token, the organization, and each project's Sentry project."
+---
+
+With Sentry connected, an agent working on a bug can read the error itself:
+the stack trace, how often it happens, which release introduced it. That
+saves it guessing from the issue text. Agents use Sentry's own MCP server.
+
+Connect it on **Settings → Integrations → Sentry**.
+
+## The token
+
+Create a **User Auth Token** in Sentry (User Settings → Auth Tokens) with only
+these scopes:
+
+- `org:read`
+- `project:read`
+- `team:read`
+- `event:read`
+
+Give it nothing else. The harness also runs Sentry's server with only its
+read-only tools, so agents can't resolve, assign or change anything. A
+read-only token makes that hold even if something upstream changes.
+
+Also enter the **organization slug**, the part after
+`sentry.io/organizations/` in the URL. Agents are limited to that organization.
+
+## Each project's Sentry project
+
+Under **Settings → Projects**, a project can name the **Sentry project** its
+errors are reported under. Agents looking at Sentry for that project are then
+limited to it, which keeps searches relevant and quick. Without one they can
+look across the organization.
+
+## Where agents use it
+
+- **Workflow steps that ask for it** with `mcp: [sentry]`. See
+  [External tools](/docs/workflows/authoring#external-tools-mcp).
+- **The chat**, for questions like "what started erroring after yesterday's
+  deploy?"
+
+The token is never written to a file. It's handed to Sentry's server through
+the environment of the step or chat that uses it.
+
+Sentry's server can also run Seer, Sentry's AI debugger, but that's off here,
+because it uses your Sentry quota. Its natural-language search is off too:
+otherwise it would call OpenAI or Anthropic with keys the harness holds.
+Searches use Sentry's query syntax instead, which agents handle well.

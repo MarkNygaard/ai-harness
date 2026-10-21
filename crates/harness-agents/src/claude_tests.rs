@@ -290,6 +290,32 @@ fn base_args_includes_settings_when_harness_claude_settings_present() {
 }
 
 #[test]
+fn base_args_attaches_a_steps_mcp_config() {
+    let agent = ClaudeCodeAgent::new(
+        PathBuf::from("claude"),
+        "test-model".to_string(),
+        SandboxMode::DangerFullAccess,
+    );
+    let mut req = AgentRequest::default();
+    assert!(!args_to_strings(&agent.base_args(&req)).contains(&"--mcp-config".to_string()));
+    req.env_vars.insert(
+        "HARNESS_CLAUDE_MCP_CONFIG".into(),
+        "/tmp/harness-mcp-xyz/mcp.json".into(),
+    );
+    let args = args_to_strings(&agent.base_args(&req));
+    let pos = args
+        .iter()
+        .position(|a| a == "--mcp-config")
+        .expect("--mcp-config flag missing");
+    assert_eq!(
+        args.get(pos + 1),
+        Some(&"/tmp/harness-mcp-xyz/mcp.json".to_string())
+    );
+    // The prompt is still the value of -p.
+    assert_eq!(args[0], "-p");
+}
+
+#[test]
 fn base_args_omits_settings_when_harness_claude_settings_absent() {
     let agent = ClaudeCodeAgent::new(
         PathBuf::from("claude"),

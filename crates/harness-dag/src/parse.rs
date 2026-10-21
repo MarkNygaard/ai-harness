@@ -59,6 +59,8 @@ struct RawNode {
     output_format: Option<serde_json::Value>,
     #[serde(default)]
     hooks: Option<NodeHooks>,
+    #[serde(default)]
+    mcp: Vec<String>,
 
     // Mutually exclusive body discriminators.
     #[serde(default)]
@@ -109,6 +111,7 @@ impl RawNode {
             retries,
             output_format,
             hooks,
+            mcp,
         } = self;
 
         let mut found: Vec<&'static str> = Vec::new();
@@ -181,6 +184,7 @@ impl RawNode {
                 retries,
                 output_format,
                 hooks,
+                mcp,
             },
         ))
     }
@@ -203,6 +207,7 @@ struct NodeKindParts {
     retries: u32,
     output_format: Option<serde_json::Value>,
     hooks: Option<NodeHooks>,
+    mcp: Vec<String>,
 }
 
 /// Parse a workflow from YAML, validating node uniqueness, body exclusivity,
@@ -219,6 +224,17 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
         if !ids.insert(id.clone()) {
             return Err(DagError::DuplicateNodeId(id));
         }
+        if let Some(name) = parts
+            .mcp
+            .iter()
+            .find(|n| !crate::model::KNOWN_MCP_SERVERS.contains(&n.as_str()))
+        {
+            return Err(DagError::UnknownMcpServer {
+                node: id,
+                name: name.clone(),
+                known: crate::model::KNOWN_MCP_SERVERS.join(", "),
+            });
+        }
         nodes.push(Node {
             id,
             depends_on: parts.depends_on,
@@ -234,6 +250,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             retries: parts.retries,
             output_format: parts.output_format,
             hooks: parts.hooks,
+            mcp: parts.mcp,
             kind: parts.kind,
         });
     }

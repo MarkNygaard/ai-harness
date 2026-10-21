@@ -243,6 +243,21 @@ impl LocalRunner {
         } else {
             format!("{layout}\n\n{prompt}")
         };
+        // MCP servers the step asked for: attached when this run's project has
+        // them and the step's agent can take them, otherwise said in the
+        // prompt so the agent doesn't hunt for tools that aren't there.
+        let mcp_supported = crate::mcp_servers::provider_supports_mcp(req.provider);
+        let (mcp_config, mut mcp_missing) = crate::mcp_servers::resolve(req.mcp, &self.env_vars);
+        let mcp_config = if mcp_supported {
+            mcp_config
+        } else {
+            mcp_missing = req.mcp.to_vec();
+            None
+        };
+        let prompt = match crate::mcp_servers::unavailable_note(&mcp_missing, mcp_supported) {
+            Some(note) => format!("{note}\n\n{prompt}"),
+            None => prompt,
+        };
         // Stays last: a schema directive the agent reads before the task it
         // applies to is one it can forget by the time it answers.
         let prompt = match req.output_format {
@@ -268,6 +283,7 @@ impl LocalRunner {
                 iteration: req.iteration,
                 env_vars,
                 hooks: req.hooks.cloned(),
+                mcp_config,
                 progress: req.progress.clone(),
             })
             .await
@@ -539,6 +555,7 @@ mod tests {
             vars,
             output_format: None,
             hooks: None,
+            mcp: &[],
             progress: None,
         }
     }

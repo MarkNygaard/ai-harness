@@ -346,6 +346,37 @@ nodes:
     ));
 }
 
+#[test]
+fn a_step_can_ask_for_a_known_mcp_server() {
+    let yaml = r#"
+name: m
+nodes:
+  - id: explore
+    prompt: "look at the error"
+    mcp: [sentry]
+  - id: plain
+    prompt: "no tools"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    assert_eq!(wf.nodes[0].mcp, vec!["sentry".to_string()]);
+    assert!(wf.nodes[1].mcp.is_empty());
+}
+
+#[test]
+fn rejects_an_unknown_mcp_server() {
+    let yaml = r#"
+name: m
+nodes:
+  - id: explore
+    prompt: "x"
+    mcp: [datadog]
+"#;
+    assert!(matches!(
+        parse_workflow(yaml),
+        Err(DagError::UnknownMcpServer { node, name, .. }) if node == "explore" && name == "datadog"
+    ));
+}
+
 // ── scheduling ─────────────────────────────────────────────────────────────
 
 fn ids<'a>(wf: &'a crate::model::Workflow, layer: &[usize]) -> Vec<&'a str> {

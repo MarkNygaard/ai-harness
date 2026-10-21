@@ -632,6 +632,19 @@ async fn answer(
             list.push(act);
         }
     }));
+    // Sentry, when connected: read-only, scoped to the conversation's project
+    // when it names one with a Sentry project, else to the organization.
+    let project = conv.context.0.get("project").and_then(Value::as_str);
+    let sentry_env = state.sentry_env(project).await;
+    let env_map: HashMap<String, String> = sentry_env.iter().cloned().collect();
+    let (extra_mcp, _) = harness_runner::mcp_servers::resolve(&["sentry".into()], &env_map);
+    let sentry_note = extra_mcp.as_ref().map(|_| {
+        sentry_note(
+            env_map
+                .get(harness_runner::mcp_servers::SENTRY_PROJECT_ENV)
+                .map(String::as_str),
+        )
+    });
     let turn = |session: Option<String>, prompt: String| ChatTurn {
         provider: conv.provider.clone(),
         model: conv.model.clone(),
@@ -645,6 +658,8 @@ async fn answer(
             token: token.0.clone(),
             tools: super::mcp_routes::tool_names(),
         },
+        extra_mcp: extra_mcp.clone(),
+        env: sentry_env.clone(),
         progress: Some(progress.clone()),
     };
     let effort = load_settings(state).await.1.effort;
@@ -665,11 +680,33 @@ async fn answer(
             ),
         }
     }
-    let note = code.as_ref().map(|c| c.note.as_str());
+    let notes: Vec<&str> = [
+        code.as_ref().map(|c| c.note.as_str()),
+        sentry_note.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    let notes = notes.join("\n\n");
+    let note = (!notes.is_empty()).then_some(notes.as_str());
     let prompt = build_prompt(Some(earlier), note, context, &outcomes, text);
     let mut t = turn(None, prompt);
     t.effort = effort;
     chat::run_turn(t).await.map_err(|e| e.0)
+}
+
+/// What the agent is told when Sentry is attached.
+fn sentry_note(project: Option<&str>) -> String {
+    let scope = match project {
+        Some(p) => format!("limited to the Sentry project `{p}`"),
+        None => "across the organization".to_string(),
+    };
+    format!(
+        "You also have Sentry (the `sentry` tools), read-only and {scope}. Use it when the \
+         question is about an error, a crash, a spike, or what broke after a release: look up \
+         the issue, its events and stack trace, and link to it. Search with Sentry query syntax \
+         (e.g. `is:unresolved level:error`)."
+    )
 }
 
 // ── Code checkouts ─────────────────────────────────────────────────────────
@@ -1203,6 +1240,13 @@ mod tests {
         assert!(!resumed.contains("You are the assistant"));
         assert!(resumed.starts_with("(They cancelled"));
         assert!(resumed.ends_with("ok"));
+    }
+
+    #[test]
+    fn the_sentry_note_says_how_far_it_reaches() {
+        assert!(sentry_note(Some("webshop")).contains("limited to the Sentry project `webshop`"));
+        assert!(sentry_note(None).contains("across the organization"));
+        assert!(sentry_note(None).contains("read-only"));
     }
 
     #[test]

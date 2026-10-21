@@ -6,6 +6,7 @@
     "projects",
     "subscriptions",
     "github",
+    "sentry",
     "linear",
     "bindings",
     "linear-epics"

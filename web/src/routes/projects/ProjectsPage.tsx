@@ -56,6 +56,12 @@ const PROJECT_CRED_META: Record<
     secret: false,
     help: "Authors this project's PR commits with this email so platforms that validate the commit author against a GitHub account (e.g. Vercel) accept them. Overrides the global value; unset → a per-step synthetic address.",
   },
+  sentry_project: {
+    label: "Sentry project",
+    placeholder: "webshop",
+    secret: false,
+    help: "The Sentry project slug this project's errors are reported under. Agents looking at Sentry for this project are limited to it. Needs Sentry connected under Settings → Integrations.",
+  },
 };
 
 /** Browse + register projects. A project scopes runs to a git repo. */

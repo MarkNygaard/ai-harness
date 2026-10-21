@@ -66,6 +66,17 @@ export function IntegrationsPage() {
             <RegistryConnectCard configured={is("registry")} />
           </ProviderSummary>
           <ProviderSummary
+            provider="sentry"
+            label={providerDef("sentry").label}
+            help={providerDef("sentry").help}
+            configured={is("sentry")}
+          >
+            <ProviderCard
+              provider={providerDef("sentry")}
+              configured={is("sentry")}
+            />
+          </ProviderSummary>
+          <ProviderSummary
             provider="linear"
             label="Linear"
             help="Connect each Linear account as an app so the harness's comments and status changes are authored by the app, not by a person. Projects pick which account their issues come from."

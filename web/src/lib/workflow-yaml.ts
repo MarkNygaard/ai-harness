@@ -155,6 +155,11 @@ export function toYaml(wf: EditorWorkflow): string {
         trigger_rule: n.trigger_rule,
         timeout: n.timeout,
         output_format: n.output_format,
+        // Fields the editor has no controls for yet: carried through so a
+        // save from the canvas doesn't delete what was written in YAML.
+        retries: n.retries,
+        hooks: n.hooks,
+        mcp: n.mcp,
         prompt: n.prompt,
         bash: n.bash,
         command: n.command,
@@ -190,6 +195,9 @@ export function fromYaml(text: string): EditorWorkflow {
     category: n.category as string | undefined,
     artifact: n.artifact as string | undefined,
     output_format: n.output_format,
+    retries: typeof n.retries === "number" ? n.retries : undefined,
+    hooks: n.hooks ?? undefined,
+    mcp: Array.isArray(n.mcp) ? (n.mcp as string[]) : undefined,
     prompt: n.prompt as string | undefined,
     bash: n.bash as string | undefined,
     command: n.command as string | undefined,

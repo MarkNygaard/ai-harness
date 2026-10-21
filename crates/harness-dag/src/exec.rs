@@ -93,6 +93,8 @@ pub struct NodeRequest<'a> {
     pub output_format: Option<&'a serde_json::Value>,
     /// Provider-agnostic tool hooks translated per provider at dispatch.
     pub hooks: Option<&'a crate::model::NodeHooks>,
+    /// External MCP servers the step asked for by name (e.g. `sentry`).
+    pub mcp: &'a [String],
     /// Optional sink for live activity updates (AI bodies only; a streaming
     /// runner reports the node's latest line here). `None` = no live progress.
     pub progress: Option<ProgressSink>,
@@ -898,6 +900,7 @@ async fn execute_body<R: NodeRunner>(
         vars,
         output_format: node.output_format.as_ref(),
         hooks: node.hooks.as_ref(),
+        mcp: &node.mcp,
         progress,
     };
     match runner.execute(req).await {
@@ -1009,6 +1012,7 @@ async fn run_loop<R: NodeRunner>(
             vars: &iter_vars,
             output_format: node.output_format.as_ref(),
             hooks: node.hooks.as_ref(),
+            mcp: &node.mcp,
             progress: progress.clone(),
         };
 
@@ -1068,6 +1072,7 @@ async fn run_loop<R: NodeRunner>(
                         vars: &iter_vars,
                         output_format: None,
                         hooks: None,
+                        mcp: &[],
                         progress: None,
                     };
                     match runner.execute(bash_req).await {

@@ -134,6 +134,26 @@ const PROVIDERS: ProviderDef[] = [
     ],
   },
   {
+    id: "sentry",
+    label: "Sentry",
+    help: "Lets agents look up production errors in Sentry: workflow steps that ask for it (`mcp: [sentry]`) and the chat. Read-only: create a User Auth Token in Sentry → User Settings → Auth Tokens with only org:read, project:read, team:read and event:read. Agents can then read issues, events and traces, but never resolve, assign or change anything.",
+    fields: [
+      {
+        key: "token",
+        label: "Sentry auth token (read-only)",
+        placeholder: "sntryu_…",
+        help: "Given to Sentry's MCP server when a step or chat uses it. Never written to a file.",
+      },
+      {
+        key: "org",
+        label: "Organization slug",
+        secret: false,
+        placeholder: "your-org",
+        help: "From sentry.io/organizations/<slug>/. Agents are limited to this organization. A project can name its own Sentry project under Settings → Projects.",
+      },
+    ],
+  },
+  {
     id: "linear",
     label: "Linear",
     help: "The OAuth application backing the workspace connection above. Create it in Linear → Settings → API → OAuth applications, registering the callback URL shown above.",

@@ -223,6 +223,12 @@ export interface EditorNode {
   when?: string;
   /** JSON schema the AI body's output should match (prompt/command nodes). */
   output_format?: unknown;
+  /** Re-runs of this node alone on failure. */
+  retries?: number;
+  /** Per-node tool hooks, kept as written (no editor UI yet). */
+  hooks?: unknown;
+  /** External MCP servers for this step's agent, e.g. `["sentry"]`. */
+  mcp?: string[];
   // Mutually exclusive bodies:
   prompt?: string;
   bash?: string;
