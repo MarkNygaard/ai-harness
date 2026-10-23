@@ -136,12 +136,12 @@ const PROVIDERS: ProviderDef[] = [
   {
     id: "sentry",
     label: "Sentry",
-    help: "Lets agents look up production errors in Sentry: workflow steps that ask for it (`mcp: [sentry]`) and the chat. Read-only: create a User Auth Token in Sentry → User Settings → Auth Tokens with only org:read, project:read, team:read and event:read. Agents can then read issues, events and traces, but never resolve, assign or change anything.",
+    help: "Lets agents look up production errors in Sentry: workflow steps that ask for it (`mcp: [sentry]`) and the chat. Create a token with read access only. Best: Settings → Custom Integrations → Create New Integration → Internal Integration, with Read on Project, Team, Organization and Issue & Event; it belongs to the organization, so it keeps working when someone leaves. Or: Settings → Personal Tokens with the same four set to Read. Organization Tokens do not work: they are for CI only. Agents can then read issues, events and traces, but never resolve, assign or change anything.",
     fields: [
       {
         key: "token",
-        label: "Sentry auth token (read-only)",
-        placeholder: "sntryu_…",
+        label: "Sentry token (read-only)",
+        placeholder: "Custom integration or personal token",
         help: "Given to Sentry's MCP server when a step or chat uses it. Never written to a file.",
       },
       {

@@ -11,17 +11,23 @@ Connect it on **Settings → Integrations → Sentry**.
 
 ## The token
 
-Create a **User Auth Token** in Sentry (User Settings → Auth Tokens) with only
-these scopes:
+Create a token with **read access only**. There are two ways, and one way that
+won't work:
 
-- `org:read`
-- `project:read`
-- `team:read`
-- `event:read`
+- **A custom integration (recommended).** In Sentry, go to Settings → Custom
+  Integrations → Create New Integration → **Internal Integration**. Give it
+  **Read** on Project, Team, Organization and Issue & Event, and nothing else.
+  Then copy its token. It belongs to the organization, so it keeps working when
+  the person who made it leaves, and its permissions can be changed later.
+- **A personal token.** Settings → **Personal Tokens**, with the same four set
+  to Read. It's tied to your account: it stops working if you leave the
+  organization, and its scopes can't be changed afterwards.
+- **Organization Tokens won't work.** They're for CI and source-map uploads,
+  and can't read issues or events.
 
-Give it nothing else. The harness also runs Sentry's server with only its
-read-only tools, so agents can't resolve, assign or change anything. A
-read-only token makes that hold even if something upstream changes.
+The harness also runs Sentry's server with only its read-only tools, so agents
+can't resolve, assign or change anything. A read-only token makes that hold even
+if something upstream changes.
 
 Also enter the **organization slug**, the part after
 `sentry.io/organizations/` in the URL. Agents are limited to that organization.
@@ -42,6 +48,13 @@ look across the organization.
 
 The token is never written to a file. It's handed to Sentry's server through
 the environment of the step or chat that uses it.
+
+A `bash` step that calls Sentry's API itself can read the same values as
+`$HARNESS_SENTRY_TOKEN`, `$HARNESS_SENTRY_ORG` and `$HARNESS_SENTRY_PROJECT`.
+They're deliberately not called `SENTRY_AUTH_TOKEN` and so on: those are what
+Sentry's build tooling reads to upload source maps, and a project's build would
+try an upload with this read-only token. Where you can, prefer `mcp: [sentry]`
+on an agent step over hand-written `curl`.
 
 Sentry's server can also run Seer, Sentry's AI debugger, but that's off here,
 because it uses your Sentry quota. Its natural-language search is off too:

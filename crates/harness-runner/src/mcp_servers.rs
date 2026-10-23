@@ -6,7 +6,7 @@
 //! credentials — so a shared workflow that asks for Sentry still runs, without
 //! it, on a project that has none.
 //!
-//! Secrets stay out of config files: a config names `${SENTRY_ACCESS_TOKEN}`,
+//! Secrets stay out of config files: a config names `${HARNESS_SENTRY_TOKEN}`,
 //! and the agent CLI expands it from its own environment when it starts the
 //! server.
 
@@ -15,9 +15,18 @@ use std::collections::HashMap;
 use serde_json::{json, Map, Value};
 
 /// Run-environment keys the harness sets for a project with Sentry.
-pub const SENTRY_TOKEN_ENV: &str = "SENTRY_ACCESS_TOKEN";
-pub const SENTRY_ORG_ENV: &str = "SENTRY_ORG";
-pub const SENTRY_PROJECT_ENV: &str = "SENTRY_PROJECT";
+///
+/// Namespaced on purpose. `SENTRY_AUTH_TOKEN`, `SENTRY_ORG` and
+/// `SENTRY_PROJECT` are what Sentry's build tooling (`sentry-cli`, the
+/// Next.js plugin) reads to upload source maps; a run's build would pick them
+/// up and try an upload with a read-only token. Only the MCP server sees the
+/// name it wants (`SENTRY_ACCESS_TOKEN`), inside its own process.
+pub const SENTRY_TOKEN_ENV: &str = "HARNESS_SENTRY_TOKEN";
+pub const SENTRY_ORG_ENV: &str = "HARNESS_SENTRY_ORG";
+pub const SENTRY_PROJECT_ENV: &str = "HARNESS_SENTRY_PROJECT";
+
+/// The variable `sentry-mcp` reads its token from.
+const SENTRY_MCP_TOKEN_VAR: &str = "SENTRY_ACCESS_TOKEN";
 
 /// The tools `sentry-mcp` 0.42.0 offers with `--skills=inspect`, as its
 /// `tools/list` reports them. Needed where tools are listed by name (omp's
@@ -80,7 +89,7 @@ fn sentry(env: &HashMap<String, String>) -> Option<Value> {
         "command": command,
         "args": args,
         "env": {
-            SENTRY_TOKEN_ENV: format!("${{{SENTRY_TOKEN_ENV}}}"),
+            SENTRY_MCP_TOKEN_VAR: format!("${{{SENTRY_TOKEN_ENV}}}"),
             // Its search tools then take Sentry query syntax directly (checked
             // against 0.42.0: "AI-powered search tools will be unavailable").
             "OPENAI_API_KEY": "",
@@ -315,7 +324,12 @@ mod tests {
                 "--project-slug=webshop"
             ]
         );
-        assert_eq!(s["env"][SENTRY_TOKEN_ENV], "${SENTRY_ACCESS_TOKEN}");
+        // The server gets the name it reads, from the harness's own name.
+        assert_eq!(s["env"]["SENTRY_ACCESS_TOKEN"], "${HARNESS_SENTRY_TOKEN}");
+        // And no name Sentry's build tooling reads is ever in the run env.
+        for name in [SENTRY_TOKEN_ENV, SENTRY_ORG_ENV, SENTRY_PROJECT_ENV] {
+            assert!(name.starts_with("HARNESS_SENTRY_"), "{name}");
+        }
         assert_eq!(s["env"]["OPENAI_API_KEY"], "");
         assert_eq!(s["env"]["ANTHROPIC_API_KEY"], "");
         assert_eq!(s["env"]["OPENROUTER_API_KEY"], "");
