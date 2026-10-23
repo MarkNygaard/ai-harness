@@ -13,7 +13,9 @@ image runs under Kubernetes *or* plain Docker.
 `ghcr.io/marknygaard/ai-harness`
 
 It carries the agent runtimes, `bun`, `mise`, and Pi with its `pi-web-access`
-plugin, and listens on `:8080`.
+plugin, and listens on `:8080`. It also carries a C toolchain
+(`build-essential`, `pkg-config`), which Rust needs at link time and which
+`mise` cannot provision.
 
 | Tag | Points at | Immutable |
 | --- | --- | --- |
