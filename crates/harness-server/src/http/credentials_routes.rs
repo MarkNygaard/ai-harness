@@ -33,7 +33,7 @@ use super::runs_routes::RunsState;
 /// OAuth application under `linear:<id>` and are surfaced by the connections
 /// API rather than as provider cards — see [`is_known_provider`].
 const PROVIDERS: &[&str] = &[
-    "claude", "codex", "pi", "github", "cursor", "linear", "registry", "sentry", "grafana",
+    "claude", "codex", "pi", "github", "cursor", "linear", "registry", "sentry", "grafana", "s3",
 ];
 
 /// Whether `provider` is one the UI may write to.
@@ -264,7 +264,10 @@ pub async fn delete_credential(
 /// `sentry` per project holds only `sentry_project`, the Sentry project slug
 /// that project's errors live under. The token and org stay global (see
 /// [`super::runs_routes::RunsState::sentry_env`]).
-const PROJECT_PROVIDERS: &[&str] = &["github", "sentry"];
+///
+/// `s3` per project holds only `s3_bucket` and `s3_folder`; the access key
+/// stays global (see [`super::runs_routes::RunsState::s3_target`]).
+const PROJECT_PROVIDERS: &[&str] = &["github", "sentry", "s3"];
 
 /// `GET /api/projects/{project}/credentials` — which per-project providers are
 /// configured for this project (no secrets).

@@ -62,6 +62,18 @@ const PROJECT_CRED_META: Record<
     secret: false,
     help: "The Sentry project slug this project's errors are reported under. Agents looking at Sentry for this project are limited to it. Needs Sentry connected under Settings → Integrations.",
   },
+  s3_bucket: {
+    label: "S3 bucket",
+    placeholder: "my-company-backups",
+    secret: false,
+    help: "Where this project's `harness s3 upload` steps put files, instead of the global bucket. The access key is the global one under Settings → Integrations, so it must be allowed to write here.",
+  },
+  s3_folder: {
+    label: "S3 folder",
+    placeholder: "sanity/production",
+    secret: false,
+    help: "This project's uploads go under this folder. Unset: the global folder followed by the project's name.",
+  },
 };
 
 /** Browse + register projects. A project scopes runs to a git repo. */

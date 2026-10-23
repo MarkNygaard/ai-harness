@@ -109,6 +109,20 @@ Bodies with newlines go through `--description-file` / `--body-file` rather than
 `--description` / `--body`, which is the usual case since acceptance criteria
 are written to an artifact by a planning step.
 
+## `harness s3`
+
+Upload a file a workflow step produced to the project's S3 folder. Needs
+[S3 connected](/docs/setup/s3).
+
+```bash
+harness s3 upload "$ARTIFACTS_DIR/production.tar.gz"
+harness s3 upload report.pdf --name reports/weekly.pdf
+```
+
+The run never holds the access key. The server signs a short-lived upload link
+for that one object under the project's folder, and the file goes straight to
+S3. Prints the object as JSON.
+
 ## `harness admin`
 
 Break-glass account recovery.

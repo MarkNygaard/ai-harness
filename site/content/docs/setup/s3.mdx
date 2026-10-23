@@ -1,0 +1,110 @@
+---
+title: "Amazon S3"
+description: "Let workflow steps upload files, such as a nightly export, to an S3 bucket, without the run ever holding the key."
+---
+
+With S3 connected, a workflow step can put a file it produced into a bucket:
+a dataset export, a build artifact, a report. It runs
+`harness s3 upload <file>`, the same way steps use `harness linear` for
+Linear.
+
+Connect it on **Settings → Integrations → Amazon S3**.
+
+## The access key
+
+The key never reaches a run. When a step uploads, the harness signs an upload
+link for that one object, valid for 15 minutes, and the step sends the file
+straight to S3. So a run can only add files under its project's folder. It
+can't read, list or delete anything, or write anywhere else.
+
+Even so, give the key no more than that. In AWS IAM, create a user for the
+harness with only this policy, then create an access key for it:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::my-company-backups/harness/*"
+    }
+  ]
+}
+```
+
+Use your bucket and folder in `Resource`. If a project uses its own bucket,
+add that bucket too.
+
+Then enter the **access key ID**, **secret access key**, the bucket's
+**region** and the **bucket**.
+
+**Cloudflare R2, MinIO and other S3-compatible stores** work too. Set the
+**endpoint** to the store's address, such as
+`https://<account>.r2.cloudflarestorage.com`, and the region to what it
+expects (`auto` for R2).
+
+## Where files go
+
+Every upload goes under a folder:
+
+- **By default**, the global **folder** followed by the project's name, e.g.
+  `harness/webshop/`. Projects sharing a bucket never overwrite each other.
+- **A project can set its own** bucket and folder under **Settings →
+  Projects**. Then its uploads go under exactly that folder.
+
+Within the folder, a file is named after the date and its own name, e.g.
+`2026-10-24/production.tar.gz`. A step can pick the name with `--name`.
+
+To delete old uploads automatically, add a lifecycle rule to the bucket in
+S3, e.g. expire objects under the folder after 90 days. The harness never
+deletes anything.
+
+## In a workflow
+
+```yaml
+- id: upload
+  depends_on: [export]
+  bash: harness s3 upload "$ARTIFACTS_DIR/production.tar.gz"
+```
+
+The step prints the object as JSON (`bucket`, `key`, `uri`, `bytes`), so a
+later step can use `$upload.output.uri`. If S3 refuses the upload, the step
+fails with S3's own reason, such as `AccessDenied`.
+
+## Example: a nightly Sanity backup
+
+Export a Sanity dataset from the project's code and store it in S3, with no
+agent involved:
+
+```yaml
+name: sanity-backup
+description: Export the production dataset (documents, no assets) to S3.
+nodes:
+  - id: install
+    bash: npm ci
+    timeout: 600000
+
+  - id: export
+    depends_on: [install]
+    bash: |
+      npx sanity dataset export production "$ARTIFACTS_DIR/production.tar.gz" \
+        --no-assets --overwrite
+    timeout: 1800000
+
+  - id: upload
+    depends_on: [export]
+    bash: harness s3 upload "$ARTIFACTS_DIR/production.tar.gz"
+```
+
+- **Sanity needs a token.** Create a read token in Sanity (**API → Tokens**,
+  Viewer) and add it to the project's environment variables under
+  **Settings → Projects** as `SANITY_AUTH_TOKEN`. Runs get it in their
+  environment.
+- **Run it in the Studio's folder.** `sanity dataset export` reads the Sanity
+  project ID from `sanity.cli.ts`. If the Studio lives in a subfolder,
+  `cd` into it first in `install` and `export`.
+- **`--no-assets`** exports documents only, leaving out images and files.
+  That keeps the export small.
+
+Then put it on a [schedule](/docs/schedules), e.g. every day at 03:00.

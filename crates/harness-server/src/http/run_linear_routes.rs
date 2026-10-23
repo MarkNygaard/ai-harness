@@ -33,13 +33,13 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 /// The helpers below return this rather than a built `Response`: an axum
 /// response is 128 bytes, and carrying one in an `Err` costs that on every
 /// call, including the overwhelming majority that succeed.
-type Refusal = (StatusCode, String);
+pub(super) type Refusal = (StatusCode, String);
 
 /// The grant behind this request, or a refusal.
 ///
 /// Not an extractor: every handler needs the grant's *project*, so returning it
 /// is the point rather than a side effect of admission.
-fn grant(headers: &HeaderMap) -> Result<Grant, Refusal> {
+pub(super) fn grant(headers: &HeaderMap) -> Result<Grant, Refusal> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|v| v.to_str().ok())

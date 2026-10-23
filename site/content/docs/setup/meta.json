@@ -8,6 +8,7 @@
     "github",
     "sentry",
     "grafana",
+    "s3",
     "linear",
     "bindings",
     "linear-epics"
