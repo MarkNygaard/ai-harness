@@ -7,9 +7,11 @@
 //! Every handler takes its project from the grant rather than the request body.
 //! A run is never asked which project it is, so it cannot answer wrongly.
 //!
-//! Deliberately five operations, matching what the epic workflows need: read an
-//! issue, read its children, file a sub-issue, move one, comment on one. No
-//! delete, no way to name a team, no way out of the project's own workspace.
+//! Deliberately few operations, matching what workflows need: read an issue,
+//! read its children, file a sub-issue, move one, comment on one, and file a
+//! standalone issue for a workflow's result. No delete, and no way out of the
+//! project's own workspace: the one operation that names a team can only name
+//! a team that workspace has.
 
 use std::sync::Arc;
 
@@ -166,6 +168,169 @@ pub async fn sub_issue(
     {
         Ok(created) => Json(created).into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateIssueRequest {
+    /// The team's key (`ECOM`), name or id.
+    pub team: String,
+    pub title: String,
+    pub description: String,
+    /// A state name or id; omitted = the team's default.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// Label names or ids, from the team's labels.
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+/// Where an issue lands, resolved from names a workflow author can write.
+#[derive(Debug, PartialEq, Eq)]
+struct Placement {
+    team: String,
+    state: Option<String>,
+    labels: Vec<String>,
+}
+
+/// Match `wanted` against an id exactly, or a key/name ignoring case.
+fn matches(wanted: &str, id: &str, names: &[&str]) -> bool {
+    let w = wanted.trim();
+    w == id || names.iter().any(|n| n.eq_ignore_ascii_case(w))
+}
+
+/// Resolve a team, state and labels by name within the project's workspace.
+///
+/// A miss names what *is* there: the message is read in a failed run's log by
+/// whoever wrote the workflow, and the fix is nearly always a typo.
+fn resolve_placement(
+    discovery: &harness_sources::linear::Discovery,
+    req: &CreateIssueRequest,
+) -> Result<Placement, String> {
+    let team = discovery
+        .teams
+        .iter()
+        .find(|t| matches(&req.team, &t.id, &[&t.key, &t.name]))
+        .ok_or_else(|| {
+            let known: Vec<String> = discovery
+                .teams
+                .iter()
+                .map(|t| format!("{} ({})", t.key, t.name))
+                .collect();
+            format!(
+                "no team `{}` in this project's Linear workspace; teams: {}",
+                req.team.trim(),
+                known.join(", ")
+            )
+        })?;
+    let state = match req
+        .state
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        None => None,
+        Some(wanted) => Some(
+            team.states
+                .iter()
+                .find(|s| matches(wanted, &s.id, &[&s.name]))
+                .map(|s| s.id.clone())
+                .ok_or_else(|| {
+                    let known: Vec<&str> = team.states.iter().map(|s| s.name.as_str()).collect();
+                    format!(
+                        "team {} has no status `{wanted}`; statuses: {}",
+                        team.key,
+                        known.join(", ")
+                    )
+                })?,
+        ),
+    };
+    let labels = req
+        .labels
+        .iter()
+        .map(|wanted| {
+            team.labels
+                .iter()
+                .find(|l| matches(wanted, &l.id, &[&l.name]))
+                .map(|l| l.id.clone())
+                .ok_or_else(|| {
+                    let known: Vec<&str> = team.labels.iter().map(|l| l.name.as_str()).collect();
+                    format!(
+                        "team {} has no label `{}`; labels: {}",
+                        team.key,
+                        wanted.trim(),
+                        known.join(", ")
+                    )
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Placement {
+        team: team.id.clone(),
+        state,
+        labels,
+    })
+}
+
+/// `POST /api/run/linear/create-issue` — file a standalone issue in a team of
+/// the project's own workspace: how a workflow hands its result to people, for
+/// instance a scheduled report.
+///
+/// Unlike a sub-issue, the run names the team — there is no parent to read it
+/// from. It can only name one the project's connection can see, so the
+/// workspace boundary holds. The issue links back to the run that filed it.
+pub async fn create_issue(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Json(req): Json<CreateIssueRequest>,
+) -> Response {
+    let g = match grant(&headers) {
+        Ok(g) => g,
+        Err((s, m)) => return err(s, m),
+    };
+    if req.title.trim().is_empty() {
+        return err(StatusCode::BAD_REQUEST, "the issue needs a title");
+    }
+    let c = match client(&state, &g).await {
+        Ok(c) => c,
+        Err((s, m)) => return err(s, m),
+    };
+    let discovery = match c.discover().await {
+        Ok(d) => d,
+        Err(e) => return err(StatusCode::BAD_GATEWAY, e.0),
+    };
+    let place = match resolve_placement(&discovery, &req) {
+        Ok(p) => p,
+        Err(m) => return err(StatusCode::BAD_REQUEST, m),
+    };
+    let description = with_run_link(&req.description, &g.run_id, state.public_url());
+    match c
+        .create_issue(
+            &place.team,
+            req.title.trim(),
+            &description,
+            place.state.as_deref(),
+            &place.labels,
+            None,
+        )
+        .await
+    {
+        Ok(created) => Json(created).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+    }
+}
+
+/// `description` with a closing line naming the run that filed it, so a reader
+/// can get from the issue to the full report.
+fn with_run_link(description: &str, run_id: &str, base: Option<String>) -> String {
+    let run = match base {
+        Some(base) => format!("[run `{run_id}`]({base}/runs/{run_id})"),
+        None => format!("run `{run_id}`"),
+    };
+    let body = description.trim_end();
+    if body.is_empty() {
+        format!("Filed by ai-harness {run}.")
+    } else {
+        format!("{body}\n\n---\nFiled by ai-harness {run}.")
     }
 }
 
@@ -345,5 +510,92 @@ pub async fn comment(
     match c.add_comment(&req.issue, &req.body).await {
         Ok(()) => Json(serde_json::json!({ "commented": req.issue })).into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use harness_sources::linear::{Discovery, Label, Team, WorkflowState};
+
+    fn workspace() -> Discovery {
+        Discovery {
+            teams: vec![Team {
+                id: "t-ecom".into(),
+                name: "E-commerce".into(),
+                key: "ECOM".into(),
+                states: vec![
+                    WorkflowState {
+                        id: "s-triage".into(),
+                        name: "Triage".into(),
+                        kind: "triage".into(),
+                        position: 0.0,
+                    },
+                    WorkflowState {
+                        id: "s-todo".into(),
+                        name: "Todo".into(),
+                        kind: "unstarted".into(),
+                        position: 1.0,
+                    },
+                ],
+                labels: vec![Label {
+                    id: "l-perf".into(),
+                    name: "Performance".into(),
+                }],
+            }],
+        }
+    }
+
+    fn req(team: &str, state: Option<&str>, labels: &[&str]) -> CreateIssueRequest {
+        CreateIssueRequest {
+            team: team.into(),
+            title: "Weekly INP report".into(),
+            description: String::new(),
+            state: state.map(str::to_string),
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn names_resolve_to_ids_ignoring_case() {
+        let place = resolve_placement(&workspace(), &req("ecom", Some("triage"), &["performance"]))
+            .unwrap();
+        assert_eq!(
+            place,
+            Placement {
+                team: "t-ecom".into(),
+                state: Some("s-triage".into()),
+                labels: vec!["l-perf".into()],
+            }
+        );
+        // By full name, and by id, too; no state means the team's default.
+        let by_name = resolve_placement(&workspace(), &req("E-commerce", None, &[])).unwrap();
+        assert_eq!(by_name.team, "t-ecom");
+        assert_eq!(by_name.state, None);
+        let by_id =
+            resolve_placement(&workspace(), &req("t-ecom", Some("s-todo"), &["l-perf"])).unwrap();
+        assert_eq!(by_id.state.as_deref(), Some("s-todo"));
+    }
+
+    #[test]
+    fn a_miss_lists_what_is_there() {
+        let team = resolve_placement(&workspace(), &req("SHOP", None, &[])).unwrap_err();
+        assert!(team.contains("ECOM (E-commerce)"), "{team}");
+        let state = resolve_placement(&workspace(), &req("ECOM", Some("Done"), &[])).unwrap_err();
+        assert!(state.contains("Triage, Todo"), "{state}");
+        let label = resolve_placement(&workspace(), &req("ECOM", None, &["perf"])).unwrap_err();
+        assert!(label.contains("Performance"), "{label}");
+    }
+
+    #[test]
+    fn the_issue_links_back_to_its_run() {
+        assert_eq!(
+            with_run_link("Report\n", "r1", Some("https://h.example".into())),
+            "Report\n\n---\nFiled by ai-harness [run `r1`](https://h.example/runs/r1)."
+        );
+        assert_eq!(
+            with_run_link("", "r1", None),
+            "Filed by ai-harness run `r1`."
+        );
     }
 }

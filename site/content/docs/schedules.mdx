@@ -38,9 +38,12 @@ It is an ordinary run. It appears under **Runs**, its report is on its run
 page, and it costs what the workflow costs. The run is credited to the schedule
 ("Schedule “Weekly INP report”"), not to whoever created it.
 
-With no issue there is nothing to post to. Choose a workflow that writes a
-report rather than one that opens a pull request. A workflow that reads from
-[Sentry](/docs/setup/sentry) or Grafana needs that integration set up first.
+There is no issue behind it, so choose a workflow that writes a report rather
+than one that opens a pull request. To get the report in front of people, end
+the workflow with a step that
+[files it as a Linear issue](/docs/workflows/authoring#filing-a-new-issue). A
+workflow that reads from [Sentry](/docs/setup/sentry) or Grafana needs that
+integration set up first.
 
 ## When the server was down
 
