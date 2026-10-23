@@ -154,6 +154,26 @@ const PROVIDERS: ProviderDef[] = [
     ],
   },
   {
+    id: "grafana",
+    label: "Grafana",
+    help: "Lets agents read your metrics and logs in Grafana — Prometheus, Loki and dashboards — for reports, investigations and questions in the chat (workflow steps opt in with `mcp: [grafana]`). Read-only: in Grafana, go to Administration → Users and access → Service accounts, add one with the Viewer role, and create a token for it. Agents can query and read dashboards, but never create or change anything.",
+    fields: [
+      {
+        key: "url",
+        label: "Grafana URL",
+        secret: false,
+        placeholder: "https://grafana.example.com",
+        help: "The address the harness reaches Grafana at.",
+      },
+      {
+        key: "token",
+        label: "Service account token (Viewer)",
+        placeholder: "glsa_…",
+        help: "Given to Grafana's MCP server when a step or chat uses it. Never written to a file.",
+      },
+    ],
+  },
+  {
     id: "linear",
     label: "Linear",
     help: "The OAuth application backing the workspace connection above. Create it in Linear → Settings → API → OAuth applications, registering the callback URL shown above.",

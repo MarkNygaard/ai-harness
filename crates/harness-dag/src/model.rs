@@ -101,7 +101,7 @@ pub struct ApprovalConfig {
 
 /// The MCP servers a node may ask for with `mcp:`. The runner knows how to
 /// start each; an unknown name is a parse error rather than a silent no-op.
-pub const KNOWN_MCP_SERVERS: &[&str] = &["sentry"];
+pub const KNOWN_MCP_SERVERS: &[&str] = &["sentry", "grafana"];
 
 /// Provider-agnostic per-node tool hooks. Translated by the runner into Claude
 /// Code settings.json hooks, the omp hook extension, or Cursor project hooks.

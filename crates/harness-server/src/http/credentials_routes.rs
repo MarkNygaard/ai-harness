@@ -33,7 +33,7 @@ use super::runs_routes::RunsState;
 /// OAuth application under `linear:<id>` and are surfaced by the connections
 /// API rather than as provider cards — see [`is_known_provider`].
 const PROVIDERS: &[&str] = &[
-    "claude", "codex", "pi", "github", "cursor", "linear", "registry", "sentry",
+    "claude", "codex", "pi", "github", "cursor", "linear", "registry", "sentry", "grafana",
 ];
 
 /// Whether `provider` is one the UI may write to.

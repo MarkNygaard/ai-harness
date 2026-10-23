@@ -132,6 +132,31 @@ RUN npm install -g --prefix /opt/sentry-mcp "@sentry/mcp-server@${SENTRY_MCP_VER
     && chmod -R a+rX /opt/sentry-mcp \
     && ln -sf /opt/sentry-mcp/bin/sentry-mcp /usr/local/bin/sentry-mcp
 
+# Grafana's MCP server (`mcp-grafana`), for `mcp: [grafana]` steps and the
+# chat. A single Go binary from the GitHub release, pinned by version AND
+# checksum (the release's own checksums file) — it runs with the install's
+# Grafana service-account token. The harness runs it read-only
+# (`--disable-write`, Prometheus/Loki/dashboard tools only, usage statistics
+# off; see harness-runner/src/mcp_servers.rs). Bump the version and both sums
+# together, from `mcp-grafana_<v>_checksums.txt`.
+ARG GRAFANA_MCP_VERSION=2.0.2
+ARG GRAFANA_MCP_SHA256_AMD64=624e997b78bcadf236f82f8086827890ba77b6dfdc6fd6446f7c48dfd9e586f0
+ARG GRAFANA_MCP_SHA256_ARM64=96559ba56803c253ee4bfc2be971a5132bdd60a09b4a20375b6456564216ec48
+RUN set -eux; \
+    case "$(dpkg --print-architecture)" in \
+      amd64) asset=Linux_x86_64; sum="${GRAFANA_MCP_SHA256_AMD64}" ;; \
+      arm64) asset=Linux_arm64;  sum="${GRAFANA_MCP_SHA256_ARM64}" ;; \
+      *) echo "no mcp-grafana build for $(dpkg --print-architecture)"; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/mcp-grafana.tgz \
+      "https://github.com/grafana/mcp-grafana/releases/download/v${GRAFANA_MCP_VERSION}/mcp-grafana_${asset}.tar.gz"; \
+    echo "${sum}  /tmp/mcp-grafana.tgz" | sha256sum -c -; \
+    mkdir -p /opt/mcp-grafana; \
+    tar -xzf /tmp/mcp-grafana.tgz -C /opt/mcp-grafana mcp-grafana; \
+    rm /tmp/mcp-grafana.tgz; \
+    chmod -R a+rX /opt/mcp-grafana; \
+    ln -sf /opt/mcp-grafana/mcp-grafana /usr/local/bin/mcp-grafana
+
 # pi-web-access: adds web SEARCH + rich fetch (Exa MCP) to the omp agent on top
 # of omp's built-in URL `fetch`. Installed into a fixed, world-readable dir —
 # NOT the PV-backed $HOME, which a runtime volume mount would shadow — and loaded

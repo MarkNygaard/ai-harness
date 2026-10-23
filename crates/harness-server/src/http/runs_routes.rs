@@ -528,6 +528,31 @@ impl RunsState {
         fields.get("token").filter(|v| !v.is_empty()).cloned()
     }
 
+    /// The Grafana environment for runs and chats: its URL and service-account
+    /// token. Install-wide (one Grafana); empty when it isn't connected.
+    pub(crate) async fn grafana_env(&self) -> Vec<(String, String)> {
+        use harness_runner::mcp_servers::{GRAFANA_TOKEN_ENV, GRAFANA_URL_ENV};
+        let Ok(store) = self.cred_store().await else {
+            return Vec::new();
+        };
+        let Some(fields) = store.get("grafana").await.ok().flatten() else {
+            return Vec::new();
+        };
+        let field = |k: &str| {
+            fields
+                .get(k)
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|v| !v.is_empty())
+        };
+        match (field("url"), field("token")) {
+            (Some(url), Some(token)) => vec![
+                (GRAFANA_URL_ENV.to_string(), url),
+                (GRAFANA_TOKEN_ENV.to_string(), token),
+            ],
+            _ => Vec::new(),
+        }
+    }
+
     /// The Sentry environment for `project`'s runs and chats: the global token
     /// and org, plus the project's own Sentry project slug when it names one.
     /// Empty when Sentry isn't connected — which is how a step that asks for
@@ -2496,6 +2521,8 @@ async fn execute_run_task(
         // Sentry, for steps that ask for it with `mcp: [sentry]`. The agent's
         // MCP config refers to the token by name; nothing is written to disk.
         run_env.extend(state.sentry_env(Some(&project)).await);
+        // And Grafana, for `mcp: [grafana]`.
+        run_env.extend(state.grafana_env().await);
         // Inject the project's build env vars into the agent's process env
         // (skipping reserved keys that would break the toolchain/control plane).
         // Process env is the universal delivery — .NET, Node servers, and

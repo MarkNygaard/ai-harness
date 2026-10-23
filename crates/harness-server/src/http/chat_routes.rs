@@ -632,19 +632,28 @@ async fn answer(
             list.push(act);
         }
     }));
-    // Sentry, when connected: read-only, scoped to the conversation's project
-    // when it names one with a Sentry project, else to the organization.
+    // Outside read-only services, when connected. Sentry is scoped to the
+    // conversation's project when it names one with a Sentry project, else to
+    // the organization; Grafana is install-wide.
     let project = conv.context.0.get("project").and_then(Value::as_str);
-    let sentry_env = state.sentry_env(project).await;
-    let env_map: HashMap<String, String> = sentry_env.iter().cloned().collect();
-    let (extra_mcp, _) = harness_runner::mcp_servers::resolve(&["sentry".into()], &env_map);
-    let sentry_note = extra_mcp.as_ref().map(|_| {
+    let mut service_env = state.sentry_env(project).await;
+    service_env.extend(state.grafana_env().await);
+    let env_map: HashMap<String, String> = service_env.iter().cloned().collect();
+    let (extra_mcp, _) =
+        harness_runner::mcp_servers::resolve(&["sentry".into(), "grafana".into()], &env_map);
+    let attached = |name: &str| {
+        extra_mcp
+            .as_ref()
+            .is_some_and(|d| d["mcpServers"].get(name).is_some())
+    };
+    let sentry_note = attached("sentry").then(|| {
         sentry_note(
             env_map
                 .get(harness_runner::mcp_servers::SENTRY_PROJECT_ENV)
                 .map(String::as_str),
         )
     });
+    let grafana_note = attached("grafana").then(grafana_note);
     let turn = |session: Option<String>, prompt: String| ChatTurn {
         provider: conv.provider.clone(),
         model: conv.model.clone(),
@@ -659,7 +668,7 @@ async fn answer(
             tools: super::mcp_routes::tool_names(),
         },
         extra_mcp: extra_mcp.clone(),
-        env: sentry_env.clone(),
+        env: service_env.clone(),
         progress: Some(progress.clone()),
     };
     let effort = load_settings(state).await.1.effort;
@@ -683,6 +692,7 @@ async fn answer(
     let notes: Vec<&str> = [
         code.as_ref().map(|c| c.note.as_str()),
         sentry_note.as_deref(),
+        grafana_note.as_deref(),
     ]
     .into_iter()
     .flatten()
@@ -696,6 +706,17 @@ async fn answer(
 }
 
 /// What the agent is told when Sentry is attached.
+/// What the agent is told when Grafana is attached.
+fn grafana_note() -> String {
+    "You also have Grafana (the `grafana` tools), read-only: Prometheus metrics, Loki logs, \
+     dashboards and alert rules. Use it for questions about traffic, latency, error rates, \
+     logs, or what a dashboard shows. Find the data source and metric or label names first \
+     (list_datasources, list_prometheus_metric_names, list_loki_label_names) rather than \
+     guessing, keep time ranges tight, and give the PromQL/LogQL you ran and a deeplink so a \
+     person can check it."
+        .to_string()
+}
+
 fn sentry_note(project: Option<&str>) -> String {
     let scope = match project {
         Some(p) => format!("limited to the Sentry project `{p}`"),
@@ -1240,6 +1261,13 @@ mod tests {
         assert!(!resumed.contains("You are the assistant"));
         assert!(resumed.starts_with("(They cancelled"));
         assert!(resumed.ends_with("ok"));
+    }
+
+    #[test]
+    fn the_grafana_note_asks_for_checkable_queries() {
+        let n = grafana_note();
+        assert!(n.contains("read-only"));
+        assert!(n.contains("PromQL/LogQL"));
     }
 
     #[test]
