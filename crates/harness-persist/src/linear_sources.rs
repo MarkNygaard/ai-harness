@@ -89,6 +89,12 @@ const ALTER_LINEAR_SOURCES_PIECE_READY_STATE: &str =
 const ALTER_LINEAR_SOURCES_EPIC_REVIEW_STATE: &str =
     "ALTER TABLE harness_linear_sources ADD COLUMN IF NOT EXISTS epic_review_state_id text";
 
+/// Which Linear project inside the team a binding takes issues from, when
+/// several harness projects share one team. `NULL` (default) is the whole team.
+const ALTER_LINEAR_SOURCES_LINEAR_PROJECT: &str = "ALTER TABLE harness_linear_sources \
+    ADD COLUMN IF NOT EXISTS linear_project_id text, \
+    ADD COLUMN IF NOT EXISTS linear_project_name text";
+
 /// A persisted Linear trigger binding (matches `harness_linear_sources`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LinearSource {
@@ -121,6 +127,13 @@ pub struct LinearSource {
     /// When false (default), the poller only *dry-runs* this binding (logs what
     /// it would do). Flip to true to actually claim issues + fire runs.
     pub live: bool,
+    /// Narrow the binding to issues in one Linear project of its team. `None`
+    /// (default) takes the whole team, as before. Lets two harness projects
+    /// share a team, which a workspace on Linear's free plan (two teams) needs.
+    pub linear_project_id: Option<String>,
+    /// That project's name, for display. Like `team_name`, kept from when the
+    /// binding was saved.
+    pub linear_project_name: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -143,6 +156,8 @@ pub struct LinearSourceInput {
     pub max_attempts: i32,
     pub enabled: bool,
     pub live: bool,
+    pub linear_project_id: Option<String>,
+    pub linear_project_name: Option<String>,
 }
 
 /// Postgres-backed store for Linear trigger bindings.
@@ -181,6 +196,9 @@ impl LinearSourceStore {
         sqlx::query(ALTER_LINEAR_SOURCES_EPIC_REVIEW_STATE)
             .execute(&pool)
             .await?;
+        sqlx::query(ALTER_LINEAR_SOURCES_LINEAR_PROJECT)
+            .execute(&pool)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -193,7 +211,7 @@ impl LinearSourceStore {
         let row = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at
              FROM harness_linear_sources
              WHERE project = $1 AND workflow = $2",
         )
@@ -209,7 +227,7 @@ impl LinearSourceStore {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at
              FROM harness_linear_sources
              WHERE project = $1
              ORDER BY workflow",
@@ -225,7 +243,7 @@ impl LinearSourceStore {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at
              FROM harness_linear_sources
              WHERE enabled = true
              ORDER BY project, workflow",
@@ -245,7 +263,7 @@ impl LinearSourceStore {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at
              FROM harness_linear_sources
              ORDER BY project, workflow",
         )
@@ -267,8 +285,8 @@ impl LinearSourceStore {
                 project, workflow, team_id, team_name, source_state_id,
                 failed_label, in_progress_state_id, review_state_id, ready_state_id,
                 piece_ready_state_id, epic_review_state_id, base_branch, poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live,
-                created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, now(), now())
+                linear_project_id, linear_project_name, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now(), now())
             ON CONFLICT (project, workflow) DO UPDATE SET
                 team_id              = excluded.team_id,
                 team_name            = excluded.team_name,
@@ -285,10 +303,12 @@ impl LinearSourceStore {
                 max_attempts         = excluded.max_attempts,
                 enabled              = excluded.enabled,
                 live                 = excluded.live,
+                linear_project_id    = excluded.linear_project_id,
+                linear_project_name  = excluded.linear_project_name,
                 updated_at           = now()
             RETURNING project, workflow, team_id, team_name, source_state_id, failed_label,
                       in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                      poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, created_at, updated_at",
+                      poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at",
         )
         .bind(project)
         .bind(workflow)
@@ -307,6 +327,8 @@ impl LinearSourceStore {
         .bind(input.max_attempts)
         .bind(input.enabled)
         .bind(input.live)
+        .bind(input.linear_project_id.as_deref())
+        .bind(input.linear_project_name.as_deref())
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -362,6 +384,8 @@ mod tests {
             max_attempts: 1,
             enabled: true,
             live: false,
+            linear_project_id: None,
+            linear_project_name: None,
         };
         let created = store.upsert(project, &workflow, &input).await.unwrap();
         assert_eq!(created.team_id, "team-1");
@@ -400,6 +424,8 @@ mod tests {
             max_attempts: 3,
             enabled: false,
             live: true,
+            linear_project_id: None,
+            linear_project_name: None,
         };
         let updated = store.upsert(project, &workflow, &input2).await.unwrap();
         assert_eq!(updated.team_id, "team-2");

@@ -24,6 +24,13 @@ use super::runs_routes::{RunsState, SETTING_MAX_CONCURRENT_RUNS};
 /// Where the public URL is stored, once an administrator sets one.
 const PUBLIC_URL_KEY: &str = "public_url";
 
+/// Whether the Linear binding form offers narrowing a binding to one Linear
+/// project. Off by default: most workspaces give each project its own team,
+/// and the extra field is noise for them. A workspace on Linear's free plan,
+/// with two teams, needs it to bind more than two projects. Only the form
+/// reads this — a binding saved with a project keeps it when this is off.
+pub(crate) const SETTING_LINEAR_PROJECT_BINDINGS: &str = "linear_project_bindings";
+
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "error": msg.into() }))).into_response()
 }
@@ -31,14 +38,16 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
 /// `GET /api/settings/general` — the public URL and the concurrency limit,
 /// each with where it came from.
 pub async fn general(_: AdminOnly, Extension(state): Extension<Arc<RunsState>>) -> Response {
-    let (stored_url, stored_runs) = match state.settings_store().await {
+    let (stored_url, stored_runs, linear_projects) = match state.settings_store().await {
         Ok(s) => (
             s.get(PUBLIC_URL_KEY).await.ok().flatten(),
             s.get(SETTING_MAX_CONCURRENT_RUNS).await.ok().flatten(),
+            s.get(SETTING_LINEAR_PROJECT_BINDINGS).await.ok().flatten(),
         ),
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
     Json(json!({
+        "linear_project_bindings": linear_projects.as_deref() == Some("true"),
         // What everything actually uses right now.
         "public_url": state.public_url(),
         // Set here, as opposed to inherited from the environment — so the page
@@ -76,6 +85,9 @@ pub struct GeneralRequest {
     /// built-in default.
     #[serde(default)]
     pub max_concurrent_runs: Option<Option<u32>>,
+    /// Absent leaves it alone.
+    #[serde(default)]
+    pub linear_project_bindings: Option<bool>,
 }
 
 /// `PUT /api/settings/general` — set or clear the public URL.
@@ -106,6 +118,20 @@ pub async fn set_general(
         let result = match runs {
             Some(n) => store.set(SETTING_MAX_CONCURRENT_RUNS, &n.to_string()).await,
             None => store.delete(SETTING_MAX_CONCURRENT_RUNS).await.map(|_| ()),
+        };
+        if let Err(e) = result {
+            return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+        }
+    }
+
+    if let Some(on) = req.linear_project_bindings {
+        let result = if on {
+            store.set(SETTING_LINEAR_PROJECT_BINDINGS, "true").await
+        } else {
+            store
+                .delete(SETTING_LINEAR_PROJECT_BINDINGS)
+                .await
+                .map(|_| ())
         };
         if let Err(e) = result {
             return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());

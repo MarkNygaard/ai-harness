@@ -113,6 +113,27 @@ With exactly one enabled binding overall, it is used regardless of team (the sta
 gate still applies). With none that match, the harness replies in the session saying
 so rather than guessing.
 
+### Sharing a team: bind to a Linear project
+
+Linear's free plan has two teams, so with more projects than teams, several
+projects have to share a team. Turn on **Bind projects to Linear projects**
+under **Settings → Integrations → Linear**. The binding form then has a
+**Linear project** field under the team. It is off by default, because a
+workspace with a team per project doesn't need it.
+
+- **A binding with a Linear project** takes only that project's issues in the
+  team, by delegation and by the poller. An issue in another Linear project,
+  or in none, isn't picked up by it.
+- **A binding without one** takes the whole team, as before. If both fit an
+  issue, the binding for its Linear project wins.
+- **Moving an issue to another Linear project** moves it to that project's
+  binding.
+- **Epics:** the merge and supervisor bindings that epic setup creates watch
+  the same Linear project as the build binding.
+
+Turning the switch off only hides the field. Bindings that already name a
+Linear project keep it, and their form still shows it so you can clear it.
+
 ### Max simultaneous tasks
 
 The binding's **Max simultaneous tasks** caps how many of its issues run at once,

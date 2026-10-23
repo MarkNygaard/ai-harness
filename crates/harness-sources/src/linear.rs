@@ -50,6 +50,14 @@ pub struct Label {
     pub name: String,
 }
 
+/// A Linear project inside a team — what a binding can be narrowed to, so two
+/// harness projects can share one Linear team.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LinearProject {
+    pub id: String,
+    pub name: String,
+}
+
 /// The Linear workspace a credential belongs to — recorded at connect time so
 /// the UI can name what it's talking to.
 #[derive(Debug, Clone, Serialize)]
@@ -388,10 +396,22 @@ query IssueContext($id: String!) {
     identifier
     title
     team { id }
+    project { id }
     state { id name }
     delegate { id }
     parent { id identifier }
     labels { nodes { name } }
+  }
+}"#;
+
+// A team's Linear projects, for binding a harness project to one. Its own
+// query rather than part of discovery: nesting projects under every team there
+// would take discovery past Linear's complexity cap, and only the binding form
+// needs them, for one team at a time.
+const TEAM_PROJECTS_QUERY: &str = r#"
+query TeamProjects($id: String!) {
+  team(id: $id) {
+    projects(first: 100) { nodes { id name } }
   }
 }"#;
 
@@ -436,6 +456,21 @@ query Preview($teamId: ID!, $stateId: ID!, $delegateId: ID!) {
     team: { id: { eq: $teamId } },
     state: { id: { eq: $stateId } },
     delegate: { id: { eq: $delegateId } }
+  }) {
+    nodes { id identifier title url description labels { nodes { name } } }
+  }
+}"#;
+// The same, narrowed to one Linear project — for a binding that shares its
+// team with others and is told apart by project. A separate document rather
+// than a nullable variable: `project: { id: { eq: null } }` would ask for
+// issues with *no* project, not for no filter.
+const ISSUES_IN_PROJECT_QUERY: &str = r#"
+query PreviewInProject($teamId: ID!, $stateId: ID!, $delegateId: ID!, $projectId: ID!) {
+  issues(first: 50, filter: {
+    team: { id: { eq: $teamId } },
+    state: { id: { eq: $stateId } },
+    delegate: { id: { eq: $delegateId } },
+    project: { id: { eq: $projectId } }
   }) {
     nodes { id identifier title url description labels { nodes { name } } }
   }
@@ -949,6 +984,9 @@ pub struct IssueContext {
     /// The issue's title, which becomes the epic's pull request title.
     pub title: Option<String>,
     pub team_id: Option<String>,
+    /// The Linear project the issue belongs to, if any — what a binding
+    /// narrowed to one project matches on.
+    pub project_id: Option<String>,
     pub state_id: Option<String>,
     /// Human-readable status name, for messages ("… is in Backlog").
     pub state_name: Option<String>,
@@ -1097,6 +1135,8 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
         #[serde(default)]
         team: Option<IdRef>,
         #[serde(default)]
+        project: Option<IdRef>,
+        #[serde(default)]
         state: Option<StateRef>,
         #[serde(default)]
         delegate: Option<IdRef>,
@@ -1130,6 +1170,7 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
         identifier: issue.identifier,
         title: issue.title,
         team_id: issue.team.map(|t| t.id),
+        project_id: issue.project.map(|p| p.id),
         state_id: issue.state.as_ref().map(|s| s.id.clone()),
         state_name: issue.state.and_then(|s| s.name),
         delegate_id: issue.delegate.map(|d| d.id),
@@ -1140,6 +1181,40 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
             .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
             .unwrap_or_default(),
     })
+}
+
+/// Parse a team's projects. An unknown team reads as none.
+pub fn parse_team_projects(json: &[u8]) -> Result<Vec<LinearProject>, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        team: Option<TeamNode>,
+    }
+    #[derive(Deserialize)]
+    struct TeamNode {
+        projects: Conn<ProjectNode>,
+    }
+    #[derive(Deserialize)]
+    struct ProjectNode {
+        id: String,
+        name: String,
+    }
+    let data: Data = gql_data(json)?;
+    let mut projects: Vec<LinearProject> = data
+        .team
+        .map(|t| {
+            t.projects
+                .nodes
+                .into_iter()
+                .map(|p| LinearProject {
+                    id: p.id,
+                    name: p.name,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    projects.sort_by_key(|p| p.name.to_lowercase());
+    Ok(projects)
 }
 
 /// Parse `query Me { viewer { id } }` — the app's user id in this workspace.
@@ -1473,14 +1548,33 @@ impl LinearClient {
         team_id: &str,
         state_id: &str,
         delegate_id: &str,
+        project_id: Option<&str>,
     ) -> Result<Vec<Issue>, LinearError> {
-        let body = serde_json::json!({
-            "query": ISSUES_QUERY,
-            "variables": {
-                "teamId": team_id, "stateId": state_id, "delegateId": delegate_id,
-            },
-        });
+        let body = match project_id {
+            Some(project) => serde_json::json!({
+                "query": ISSUES_IN_PROJECT_QUERY,
+                "variables": {
+                    "teamId": team_id, "stateId": state_id, "delegateId": delegate_id,
+                    "projectId": project,
+                },
+            }),
+            None => serde_json::json!({
+                "query": ISSUES_QUERY,
+                "variables": {
+                    "teamId": team_id, "stateId": state_id, "delegateId": delegate_id,
+                },
+            }),
+        };
         parse_issues(&self.post(body).await?)
+    }
+
+    /// A team's Linear projects (id and name), for the binding form.
+    pub async fn team_projects(&self, team_id: &str) -> Result<Vec<LinearProject>, LinearError> {
+        let body = serde_json::json!({
+            "query": TEAM_PROJECTS_QUERY,
+            "variables": { "id": team_id },
+        });
+        parse_team_projects(&self.post(body).await?)
     }
     /// List an issue's comments (read-only). `issue_id` is the Linear internal
     /// id (the `id` field of a previewed [`Issue`]), not the `COR-12` identifier.
@@ -2002,13 +2096,29 @@ mod tests {
     }
 
     #[test]
+    fn a_teams_projects_are_listed_by_name() {
+        let json = br#"{"data":{"team":{"projects":{"nodes":[
+            {"id":"p2","name":"webshop"},{"id":"p1","name":"Backoffice"}]}}}}"#;
+        let projects = parse_team_projects(json).unwrap();
+        assert_eq!(
+            projects.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            ["Backoffice", "webshop"]
+        );
+        assert!(parse_team_projects(br#"{"data":{"team":null}}"#)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
     fn parse_issue_context_reads_team_state_and_delegate() {
         let json = br#"{"data":{"issue":{
             "team":{"id":"team-1"},
+            "project":{"id":"proj-1"},
             "state":{"id":"state-1","name":"To Do"},
             "delegate":{"id":"app-user-1"}}}}"#;
         let ctx = parse_issue_context(json).unwrap();
         assert_eq!(ctx.team_id.as_deref(), Some("team-1"));
+        assert_eq!(ctx.project_id.as_deref(), Some("proj-1"));
         assert_eq!(ctx.state_id.as_deref(), Some("state-1"));
         assert_eq!(ctx.state_name.as_deref(), Some("To Do"));
         assert_eq!(ctx.delegate_id.as_deref(), Some("app-user-1"));

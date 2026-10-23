@@ -314,6 +314,8 @@ mod tests {
             max_attempts: 1,
             enabled: true,
             live: true,
+            linear_project_id: None,
+            linear_project_name: None,
         }
     }
 

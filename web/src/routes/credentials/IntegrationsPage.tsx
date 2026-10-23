@@ -1,6 +1,8 @@
 import { Plug } from "lucide-react";
 import { SettingsShell } from "@/components/SettingsShell";
+import { Switch } from "@/components/ui/switch";
 import { useCredentials } from "@/lib/credentials";
+import { useGeneralSettings, useSetGeneralSettings } from "@/lib/settings";
 import { LinearCallbackBanner } from "@/components/credentials/LinearConnect";
 import {
   LinearAccounts,
@@ -10,6 +12,39 @@ import {
   Section,
   providerDef,
 } from "./parts";
+
+/**
+ * Off by default: most workspaces give each project its own Linear team. On
+ * Linear's free plan there are only two, so bindings need to be told apart by
+ * Linear project inside a team.
+ */
+function LinearProjectBindingsToggle() {
+  const settings = useGeneralSettings(true);
+  const save = useSetGeneralSettings();
+  const on = !!settings.data?.linear_project_bindings;
+  return (
+    <div className="mt-3 flex flex-col gap-1 rounded-md border border-border p-3">
+      <label className="flex items-center gap-2 text-sm font-medium">
+        <Switch
+          checked={on}
+          disabled={!settings.data || save.isPending}
+          onCheckedChange={(v) => save.mutate({ linear_project_bindings: v })}
+        />
+        Bind projects to Linear projects
+      </label>
+      <p className="text-[12px] text-muted-foreground">
+        Lets a project's Linear binding take only the issues in one Linear
+        project of its team, so several projects can share a team. Useful on
+        Linear's free plan, which has two teams. Adds a Linear project field to
+        the binding form under Settings → Projects. Turning it off hides the
+        field; bindings that already name a project keep it.
+      </p>
+      {save.isError && (
+        <p className="text-[12px] text-destructive">{save.error.message}</p>
+      )}
+    </div>
+  );
+}
 
 /** Where work comes from and where it goes. No usage card, no billing lane. */
 export function IntegrationsPage() {
@@ -102,6 +137,7 @@ export function IntegrationsPage() {
             configured={is("linear")}
           >
             <LinearAccounts />
+            <LinearProjectBindingsToggle />
           </ProviderSummary>
         </Section>
       </div>

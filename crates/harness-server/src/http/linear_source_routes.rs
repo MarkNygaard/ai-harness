@@ -83,6 +83,12 @@ pub struct PutSourceBody {
     /// When false (default) the poller dry-runs this binding; true = claim + fire.
     #[serde(default)]
     pub live: bool,
+    /// Only issues in this Linear project of the team; absent = the whole
+    /// team. How two harness projects share one team.
+    #[serde(default)]
+    pub linear_project_id: Option<String>,
+    #[serde(default)]
+    pub linear_project_name: Option<String>,
 }
 
 fn default_poll() -> i32 {
@@ -318,6 +324,7 @@ pub async fn put_source(
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
 
+    let linear_project_id = optional_trimmed_non_empty(body.linear_project_id);
     let input = LinearSourceInput {
         team_id,
         team_name,
@@ -334,6 +341,11 @@ pub async fn put_source(
         max_attempts: body.max_attempts,
         enabled: body.enabled,
         live: body.live,
+        // The name only means something beside an id.
+        linear_project_name: linear_project_id
+            .as_ref()
+            .and(optional_trimmed_non_empty(body.linear_project_name)),
+        linear_project_id,
     };
 
     match store.upsert(&project, &workflow, &input).await {

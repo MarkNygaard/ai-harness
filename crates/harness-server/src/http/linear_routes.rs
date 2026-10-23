@@ -70,6 +70,9 @@ pub async fn discovery(
 pub struct PreviewQuery {
     pub team: String,
     pub state: String,
+    /// Narrow to one Linear project, as a binding that names one does.
+    #[serde(default)]
+    pub linear_project: Option<String>,
 }
 
 /// `GET /api/projects/{project}/linear/preview?team=&state=` — the issues a
@@ -100,10 +103,38 @@ pub async fn preview(
              Credentials page so delegated issues can be identified",
         );
     };
-    match client.preview_issues(&q.team, &q.state, &delegate_id).await {
+    let linear_project = q
+        .linear_project
+        .as_deref()
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    match client
+        .preview_issues(&q.team, &q.state, &delegate_id, linear_project)
+        .await
+    {
         Ok(issues) => {
             Json(serde_json::json!({ "count": issues.len(), "issues": issues })).into_response()
         }
+        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+    }
+}
+
+/// `GET /api/projects/{project}/linear/teams/{team}/projects` — that team's
+/// Linear projects, for narrowing a binding to one.
+pub async fn team_projects(
+    Extension(state): Extension<Arc<RunsState>>,
+    AxumPath((project, team)): AxumPath<(String, String)>,
+) -> Response {
+    let conn = match connection(&state, &project).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let client = match client(&state, &conn).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    match client.team_projects(&team).await {
+        Ok(projects) => Json(serde_json::json!({ "projects": projects })).into_response(),
         Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
     }
 }

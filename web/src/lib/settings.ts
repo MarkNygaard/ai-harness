@@ -25,6 +25,8 @@ export interface GeneralSettings {
   stored: string | null;
   from_environment: string | null;
   concurrency: ConcurrencySettings;
+  /** Whether Linear bindings may be narrowed to one Linear project (off by default). */
+  linear_project_bindings: boolean;
 }
 
 /**
@@ -35,6 +37,7 @@ export interface GeneralSettings {
 export type GeneralInput = Partial<{
   public_url: string | null;
   max_concurrent_runs: number | null;
+  linear_project_bindings: boolean;
 }>;
 
 export interface MailSettings {

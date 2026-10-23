@@ -15,13 +15,22 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useWorkflowList } from "@/lib/authoring";
 import { useRestoreTrash } from "@/lib/projects";
+import { useGeneralSettings } from "@/lib/settings";
 import {
   useDeleteLinearSource,
   useLinearConnections,
   useLinearDiscovery,
   useLinearSources,
+  useLinearTeamProjects,
   useSaveLinearSource,
   useSetProjectLinearConnection,
 } from "@/lib/linear";
@@ -56,6 +65,67 @@ function Field({
       </span>
       {children}
     </label>
+  );
+}
+
+/** Base UI's Select needs a concrete value for "the whole team". */
+const WHOLE_TEAM = "__whole_team__";
+
+/**
+ * Narrow a binding to one Linear project of its team, so two harness projects
+ * can share a team — which Linear's free plan (two teams) makes necessary.
+ */
+function LinearProjectField({
+  project,
+  teamId,
+  value,
+  onChange,
+}: {
+  project: string;
+  teamId: string;
+  value: { id: string; name: string } | null;
+  onChange: (next: { id: string; name: string } | null) => void;
+}) {
+  const projects = useLinearTeamProjects(project, teamId);
+  const list = projects.data?.projects ?? [];
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-[11px] font-medium text-muted-foreground">
+        Linear project
+      </span>
+      <Select
+        value={value?.id ?? WHOLE_TEAM}
+        disabled={!teamId}
+        onValueChange={(v) => {
+          if (v == null || v === WHOLE_TEAM) return onChange(null);
+          const p = list.find((x) => x.id === v);
+          onChange({ id: v, name: p?.name ?? value?.name ?? v });
+        }}
+      >
+        <SelectTrigger className="w-full">
+          <SelectValue>
+            {(v: string | null) =>
+              !v || v === WHOLE_TEAM
+                ? "The whole team"
+                : (list.find((p) => p.id === v)?.name ?? value?.name ?? v)
+            }
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={WHOLE_TEAM}>The whole team</SelectItem>
+          {list.map((p) => (
+            <SelectItem key={p.id} value={p.id}>
+              {p.name}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <span className="text-[11px] text-muted-foreground">
+        {projects.isError
+          ? `Couldn't list the team's projects: ${projects.error.message}`
+          : "Only issues in this Linear project start runs here. Use it to share one team between harness projects."}
+      </span>
+    </div>
   );
 }
 
@@ -326,6 +396,8 @@ function DialogBody({
                     triggers from — the other thing that identifies a binding. */}
                 <span className="truncate text-[11px] text-muted-foreground">
                   starts from {resolveStateName(s.team_id, s.source_state_id)}
+                  {s.linear_project_id &&
+                    ` · only ${s.linear_project_name ?? "one Linear project"}`}
                 </span>
               </div>
               <Button
@@ -471,6 +543,22 @@ function BindingForm({
   const [maxAttempts, setMaxAttempts] = useState(source?.max_attempts ?? 1);
   const [enabled, setEnabled] = useState(source?.enabled ?? false);
   const [live, setLive] = useState(source?.live ?? false);
+  const [linearProject, setLinearProject] = useState<{
+    id: string;
+    name: string;
+  } | null>(
+    source?.linear_project_id
+      ? {
+          id: source.linear_project_id,
+          name: source.linear_project_name ?? source.linear_project_id,
+        }
+      : null,
+  );
+  // Off by default (Settings → Integrations → Linear). A binding that already
+  // names a project shows the field regardless, so it can be seen and cleared.
+  const settings = useGeneralSettings(true);
+  const showLinearProject =
+    !!settings.data?.linear_project_bindings || !!source?.linear_project_id;
 
   // Clear stale mutation state when the form context changes.
   useEffect(() => {
@@ -517,6 +605,8 @@ function BindingForm({
         max_attempts: maxAttempts,
         enabled,
         live,
+        linear_project_id: linearProject?.id,
+        linear_project_name: linearProject?.name,
       },
       { onSuccess: () => onDone() },
     );
@@ -563,6 +653,7 @@ function BindingForm({
             setReadyStateId("");
             setPieceReadyStateId("");
             setEpicReviewStateId("");
+            setLinearProject(null);
           }}
         >
           <option value="">Select a team…</option>
@@ -573,6 +664,15 @@ function BindingForm({
           ))}
         </select>
       </Field>
+
+      {showLinearProject && (
+        <LinearProjectField
+          project={project}
+          teamId={teamId}
+          value={linearProject}
+          onChange={setLinearProject}
+        />
+      )}
 
       {/* Source state */}
       <StateSelect

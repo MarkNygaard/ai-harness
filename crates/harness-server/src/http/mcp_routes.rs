@@ -1568,6 +1568,8 @@ async fn linear_bindings(state: &Arc<RunsState>, project: &str) -> Result<Vec<Va
             json!({
                 "workflow": b.workflow,
                 "team": b.team_name,
+                // Only issues in this Linear project of the team; null = all.
+                "linear_project": b.linear_project_name.as_deref().or(b.linear_project_id.as_deref()),
                 "claims_from": show(Some(&b.source_state_id)),
                 "in_progress": show(b.in_progress_state_id.as_deref()),
                 "review": show(b.review_state_id.as_deref()),
