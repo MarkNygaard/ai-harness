@@ -49,9 +49,25 @@ ENV DEBIAN_FRONTEND=noninteractive
 # nodes), against roughly a megabyte for the package and its libmagic
 # dependency. Instructing agents not to use a standard utility is the losing
 # side of that trade.
+#
+# `build-essential` is the C toolchain, and it is Rust that needs it: rustc
+# ships no linker of its own and drives `cc` for every host build, so a project
+# that compiles at all dies at link time with "error: linker `cc` not found"
+# before a single test runs. `mise` cannot stand in for it — it provisions
+# language versions, and its registry carries no prebuilt system compiler (the
+# gcc plugin builds from source, which needs a compiler already there). Nor can
+# a project work around it from its own config, so it belongs in the image.
+#
+# Rust is not an edge case here: a project can set a Cargo target cache cap, the
+# example toolchain list in the docs is `["rust", "pnpm"]`, and this harness is
+# itself a Cargo workspace. Roughly 150MB, against an image already carrying
+# ~400MB of Chromium for the browser tool. `pkg-config` rides along because the
+# `*-sys` crates that want a compiler almost always need it to find the library
+# too.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates curl file git bash xz-utils unzip jq libicu72 \
+        build-essential pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
 # GitHub CLI. The idea-to-pr pipeline's finalize / verify-pr-base / verify-pr-title
