@@ -15,6 +15,11 @@
 //! claiming them with a compare-and-swap — a second replica, or this one
 //! after a restart, can't start the same occurrence twice. After downtime a
 //! schedule catches up with **one** run, never one per missed slot.
+//!
+//! A schedule may also name a Linear team. Each run it starts is then tracked,
+//! and once the run succeeds its result is filed there as a new issue
+//! ([`file_results`]) — the output of the step marked `linear_comment: true`,
+//! linking back to the run.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -32,6 +37,9 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::accounts::{caller_trigger, AdminOnly};
+use super::linear_connections::resolve_for_project;
+use super::linear_oauth::linear_client;
+use super::linear_poller::{flagged_summary, MISSING_RUN_GRACE_MINS};
 use super::runs_routes::{start_run, CreateRunRequest, RunsState, SOURCE_SCHEDULE};
 
 /// How often the scheduler looks for due schedules. A schedule fires within
@@ -40,6 +48,10 @@ const TICK: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How many upcoming times the preview returns.
 const PREVIEW_COUNT: usize = 5;
+
+/// How many times to try filing a result before giving up on it. Spread over
+/// ticks, this rides out a Linear outage of a few minutes.
+const MAX_FILING_ATTEMPTS: i32 = 5;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "error": msg.into() }))).into_response()
@@ -107,6 +119,10 @@ pub struct ScheduleRequest {
     pub task: String,
     #[serde(default = "enabled_by_default")]
     pub enabled: bool,
+    /// File each successful run's result as an issue in this Linear team (an
+    /// id from the project's Linear discovery). Absent or blank: don't.
+    #[serde(default)]
+    pub linear_team_id: Option<String>,
 }
 
 fn enabled_by_default() -> bool {
@@ -140,6 +156,13 @@ async fn validate(
     if let Err(e) = harness_runner::authoring::get_workflow(&state.project_root, &workflow) {
         return Err(bad(format!("no workflow `{workflow}`: {e}")));
     }
+    let linear_team_id = req
+        .linear_team_id
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty());
+    if let Some(team) = &linear_team_id {
+        check_linear_team(state, &project, team).await?;
+    }
     let next = if req.enabled {
         let next = next_after(&cron, tz, Utc::now());
         if next.is_none() {
@@ -158,9 +181,39 @@ async fn validate(
             timezone: tz.name().to_string(),
             task: req.task.trim().to_string(),
             enabled: req.enabled,
+            linear_team_id,
         },
         next,
     ))
+}
+
+/// The team must be one the project's Linear connection can see — caught here
+/// rather than the first time a report has nowhere to go.
+#[allow(clippy::result_large_err)]
+async fn check_linear_team(
+    state: &Arc<RunsState>,
+    project: &str,
+    team: &str,
+) -> Result<(), Response> {
+    let bad = |m: String| err(StatusCode::BAD_REQUEST, m);
+    let conn = resolve_for_project(state, project)
+        .await
+        .map_err(|e| bad(format!("can't file in Linear for `{project}`: {e}")))?;
+    let client = linear_client(state, &conn)
+        .await
+        .map_err(|e| bad(format!("can't file in Linear for `{project}`: {e}")))?;
+    let teams = client
+        .discover()
+        .await
+        .map_err(|e| err(StatusCode::BAD_GATEWAY, format!("Linear: {}", e.0)))?
+        .teams;
+    if teams.iter().any(|t| t.id == team) {
+        Ok(())
+    } else {
+        Err(bad(format!(
+            "`{project}`'s Linear workspace has no team `{team}`"
+        )))
+    }
 }
 
 // ── Routes ─────────────────────────────────────────────────────────────────
@@ -345,8 +398,136 @@ async fn fire(state: &Arc<RunsState>, schedule: &Schedule) -> Result<String, (St
                 schedule.id
             );
         }
+        if let Some(team) = &schedule.linear_team_id {
+            if let Err(e) = store.track_filing(&run_id, &schedule.id, team).await {
+                tracing::warn!(
+                    "schedule {}: run {run_id} won't be filed in Linear: {e}",
+                    schedule.id
+                );
+            }
+        }
     }
     Ok(run_id)
+}
+
+/// The issue a successful run is filed as: the flagged step's summary, or a
+/// pointer to the report when the workflow flags none, then where it came from.
+fn issue_description(
+    detail: &harness_persist::RunDetail,
+    schedule: &Schedule,
+    run_link: Option<String>,
+) -> String {
+    let body = flagged_summary(detail).unwrap_or_else(|| {
+        "The scheduled run completed. Its report is on the run page.".to_string()
+    });
+    let run = match run_link {
+        Some(url) => format!("[run `{}`]({url})", detail.run.id),
+        None => format!("run `{}`", detail.run.id),
+    };
+    format!(
+        "{body}\n\n---\nFiled by the schedule “{}” from ai-harness {run}.",
+        schedule.name
+    )
+}
+
+/// One pass: file every finished run whose schedule asked for it. A run that
+/// failed or was cancelled files nothing; one still going waits for a later
+/// tick.
+async fn file_results(state: &Arc<RunsState>) {
+    let Ok(store) = state.schedule_store().await else {
+        return;
+    };
+    let open = match store.open_filings().await {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("scheduler: could not read runs to file: {e}");
+            return;
+        }
+    };
+    if open.is_empty() {
+        return;
+    }
+    let Ok(run_store) = state.store().await else {
+        return;
+    };
+    for filing in open {
+        let detail = match run_store.get_run(&filing.run_id).await {
+            Ok(Some(d)) => d,
+            // `start_run` returns before the run row is written; give it time.
+            Ok(None) => {
+                let age = Utc::now().signed_duration_since(filing.created_at);
+                if age.num_minutes() >= MISSING_RUN_GRACE_MINS {
+                    let _ = store.skip_filing(&filing.run_id).await;
+                }
+                continue;
+            }
+            Err(_) => continue,
+        };
+        match detail.run.status.as_str() {
+            "completed" => {}
+            "failed" | "cancelled" => {
+                let _ = store.skip_filing(&filing.run_id).await;
+                continue;
+            }
+            _ => continue,
+        }
+        let schedule = match store.get(&filing.schedule_id).await {
+            Ok(Some(s)) => s,
+            // Deleted since: nobody to file it for.
+            Ok(None) => {
+                let _ = store.skip_filing(&filing.run_id).await;
+                continue;
+            }
+            Err(_) => continue,
+        };
+        if !matches!(store.hold_filing(&filing.run_id).await, Ok(true)) {
+            continue;
+        }
+        let run_link = state
+            .public_url()
+            .map(|base| format!("{base}/runs/{}", detail.run.id));
+        let title = detail
+            .run
+            .title
+            .clone()
+            .unwrap_or_else(|| run_title(&schedule, detail.run.recorded_at));
+        let description = issue_description(&detail, &schedule, run_link);
+        let created = async {
+            let conn = resolve_for_project(state, &schedule.project).await?;
+            let client = linear_client(state, &conn).await?;
+            client
+                .create_issue(&filing.team_id, &title, &description, None, &[], None)
+                .await
+                .map_err(|e| e.0)
+        }
+        .await;
+        match created {
+            Ok(issue) => {
+                tracing::info!(
+                    "scheduler: `{}` run {} filed as {}",
+                    schedule.name,
+                    filing.run_id,
+                    issue.identifier
+                );
+                if let Err(e) = store
+                    .filed(&filing.run_id, &issue.identifier, &issue.url)
+                    .await
+                {
+                    tracing::warn!("scheduler: could not record {}: {e}", issue.identifier);
+                }
+            }
+            Err(e) => {
+                let give_up = filing.attempts + 1 >= MAX_FILING_ATTEMPTS;
+                tracing::warn!(
+                    "scheduler: could not file `{}` run {} in Linear{}: {e}",
+                    schedule.name,
+                    filing.run_id,
+                    if give_up { " (giving up)" } else { "" }
+                );
+                let _ = store.release_filing(&filing.run_id, give_up).await;
+            }
+        }
+    }
 }
 
 /// One pass: fire every due schedule exactly once.
@@ -401,6 +582,7 @@ pub(crate) fn spawn_scheduler(state: Arc<RunsState>) {
         loop {
             interval.tick().await;
             tick(&state).await;
+            file_results(&state).await;
         }
     });
 }
@@ -409,6 +591,108 @@ pub(crate) fn spawn_scheduler(state: Arc<RunsState>) {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn schedule() -> Schedule {
+        Schedule {
+            id: "s1".into(),
+            name: "Weekly INP report".into(),
+            project: "p".into(),
+            workflow: "grafana-inp-report".into(),
+            cron: "0 8 * * 1".into(),
+            timezone: "Europe/Copenhagen".into(),
+            task: String::new(),
+            enabled: true,
+            next_run_at: None,
+            last_run_at: None,
+            last_run_id: None,
+            linear_team_id: Some("team-1".into()),
+            last_issue_identifier: None,
+            last_issue_url: None,
+            created_by: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    fn completed_run(summary: Option<&str>) -> harness_persist::RunDetail {
+        let node = |id: &str, output: &str| harness_persist::PersistedNode {
+            node_id: id.into(),
+            ordinal: 0,
+            status: "success".into(),
+            provider: None,
+            model: None,
+            output: output.into(),
+            iterations: 1,
+            converged: None,
+            note: None,
+            input_tokens: None,
+            output_tokens: None,
+            cache_read: None,
+            cache_write: None,
+            started_at: None,
+            ended_at: None,
+            artifact_content: None,
+            error_count: 0,
+        };
+        let meta = |id: &str, flagged: bool| harness_dag::NodeMeta {
+            id: id.into(),
+            depends_on: vec![],
+            category: None,
+            artifact: None,
+            linear_comment: flagged,
+        };
+        harness_persist::RunDetail {
+            run: harness_persist::RunSummary {
+                triggered_by: None,
+                trigger_source: Some(SOURCE_SCHEDULE.into()),
+                trigger_actor: None,
+                id: "r1".into(),
+                workflow_name: "grafana-inp-report".into(),
+                title: Some("Weekly INP report — 2026-10-26".into()),
+                description: None,
+                status: "completed".into(),
+                node_count: 2,
+                started_at: None,
+                ended_at: None,
+                recorded_at: Utc::now(),
+                project: Some("p".into()),
+                ab_pair_id: None,
+                ab_arm: None,
+                ab_label: None,
+            },
+            nodes: vec![
+                node("report", "the long report"),
+                node("summary", summary.unwrap_or("")),
+            ],
+            graph: vec![meta("report", false), meta("summary", summary.is_some())],
+        }
+    }
+
+    #[test]
+    fn a_filed_issue_carries_the_flagged_summary_and_links_the_run() {
+        let text = issue_description(
+            &completed_run(Some("INP p75 rose to 240 ms on PDPs.")),
+            &schedule(),
+            Some("https://harness.example/runs/r1".into()),
+        );
+        assert!(
+            text.starts_with("INP p75 rose to 240 ms on PDPs."),
+            "{text}"
+        );
+        assert!(!text.contains("the long report"));
+        assert!(text.contains("“Weekly INP report”"));
+        assert!(
+            text.ends_with("[run `r1`](https://harness.example/runs/r1)."),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn without_a_flagged_step_the_issue_points_at_the_report() {
+        let text = issue_description(&completed_run(None), &schedule(), None);
+        assert!(text.starts_with("The scheduled run completed."), "{text}");
+        assert!(text.ends_with("run `r1`."), "{text}");
+    }
 
     #[test]
     fn five_fields_only() {
@@ -453,20 +737,8 @@ mod tests {
     #[test]
     fn the_run_title_uses_the_schedules_own_date() {
         let s = Schedule {
-            id: "s".into(),
             name: "Weekly INP".into(),
-            project: "p".into(),
-            workflow: "w".into(),
-            cron: "0 0 * * 1".into(),
-            timezone: "Europe/Copenhagen".into(),
-            task: String::new(),
-            enabled: true,
-            next_run_at: None,
-            last_run_at: None,
-            last_run_id: None,
-            created_by: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            ..schedule()
         };
         // 23:30 UTC Sunday is already Monday in Copenhagen.
         let at = Utc.with_ymd_and_hms(2026, 10, 25, 23, 30, 0).unwrap();

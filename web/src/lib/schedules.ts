@@ -20,6 +20,11 @@ export interface Schedule {
   next_run_at: string | null;
   last_run_at: string | null;
   last_run_id: string | null;
+  /** File each successful run's result as an issue in this Linear team. */
+  linear_team_id: string | null;
+  /** The issue the latest filed run became. */
+  last_issue_identifier: string | null;
+  last_issue_url: string | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;
@@ -33,6 +38,7 @@ export interface ScheduleInput {
   timezone: string;
   task: string;
   enabled: boolean;
+  linear_team_id: string | null;
 }
 
 /** The schedules most people want, so nobody has to write cron for them. */

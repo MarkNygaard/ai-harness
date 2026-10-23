@@ -38,9 +38,29 @@ It is an ordinary run. It appears under **Runs**, its report is on its run
 page, and it costs what the workflow costs. The run is credited to the schedule
 ("Schedule “Weekly INP report”"), not to whoever created it.
 
-With no issue there is nothing to post to. Choose a workflow that writes a
-report rather than one that opens a pull request. A workflow that reads from
+There is no issue behind it, so choose a workflow that writes a report rather
+than one that opens a pull request. A workflow that reads from
 [Sentry](/docs/setup/sentry) or Grafana needs that integration set up first.
+
+## Filing the result in Linear
+
+A report nobody opens is no use. **File the result in Linear** picks a team
+from the project's [Linear connection](/docs/setup/linear). Each run that
+succeeds then becomes a new issue there, titled like the run, so the team sees
+it on their board.
+
+- **The issue body** is the output of the workflow step marked
+  `linear_comment: true`, the same short summary a Linear-triggered run posts as
+  its comment. Write that step to produce something a person can act on. A
+  workflow with no such step files a pointer to the run page instead.
+- **It links back** to the run, where the full report is.
+- **A failed or cancelled run files nothing.**
+- **The issue isn't delegated to the harness.** It is filed for people to read
+  and triage. If a finding needs code changed, delegate the issue as usual.
+
+The list shows the issue the latest run became. If Linear is unreachable, the
+harness tries again for a few minutes, then gives up on that run. The report
+stays on its run page either way.
 
 ## When the server was down
 

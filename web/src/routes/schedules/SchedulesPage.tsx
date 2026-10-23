@@ -31,6 +31,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { isAdminOf, useAuthStatus } from "@/lib/auth";
 import { useWorkflowList } from "@/lib/authoring";
+import { useLinearDiscovery } from "@/lib/linear";
 import { useProjects } from "@/lib/projects";
 import {
   type Schedule,
@@ -47,6 +48,8 @@ import {
 
 /** Base UI's Select needs a concrete value for "write my own". */
 const CUSTOM = "__custom__";
+/** …and for "don't file in Linear". */
+const NO_TEAM = "__none__";
 
 function formatWhen(iso: string | null): string {
   if (!iso) return "—";
@@ -160,6 +163,20 @@ function ScheduleRow({
                 </Link>
               </>
             )}
+            {s.last_issue_url && (
+              <>
+                {" · Filed: "}
+                <a
+                  href={s.last_issue_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="underline"
+                >
+                  {s.last_issue_identifier ?? "issue"}
+                </a>
+              </>
+            )}
+            {s.linear_team_id && !s.last_issue_url && " · Files in Linear"}
           </div>
           {(run.isError || remove.isError) && (
             <div className="text-[11px] text-destructive">
@@ -233,12 +250,15 @@ function ScheduleDialog({
     timezone: schedule?.timezone ?? browserTimezone(),
     task: schedule?.task ?? "",
     enabled: schedule?.enabled ?? true,
+    linear_team_id: schedule?.linear_team_id ?? null,
   }));
   const set = <K extends keyof ScheduleInput>(k: K, v: ScheduleInput[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
   const preset = describeCron(form.cron) ? form.cron.trim() : CUSTOM;
   const [custom, setCustom] = useState(preset === CUSTOM);
   const preview = useSchedulePreview(form.cron, form.timezone);
+  const teams = useLinearDiscovery(form.project || null);
+  const teamList = teams.data?.teams ?? [];
 
   // A single project is the obvious choice.
   useEffect(() => {
@@ -309,7 +329,15 @@ function ScheduleDialog({
             <Field label="Project">
               <Select
                 value={form.project || null}
-                onValueChange={(v) => v != null && set("project", v)}
+                onValueChange={(v) =>
+                  // Teams belong to the project's Linear workspace.
+                  v != null &&
+                  setForm((f) =>
+                    f.project === v
+                      ? f
+                      : { ...f, project: v, linear_team_id: null },
+                  )
+                }
               >
                 <SelectTrigger className="w-full">
                   <SelectValue>
@@ -410,6 +438,42 @@ function ScheduleDialog({
               placeholder="Report on last week's INP from Grafana, by page type, compared with the four weeks before."
               className="min-h-24"
             />
+          </Field>
+
+          <Field
+            label="File the result in Linear"
+            hint={
+              teams.isError
+                ? "This project has no working Linear connection, so results stay on the run page."
+                : "Each successful run becomes a new issue in this team, with the summary from the step marked to post to Linear."
+            }
+          >
+            <Select
+              value={form.linear_team_id ?? NO_TEAM}
+              disabled={!form.project || teams.isError}
+              onValueChange={(v) =>
+                set("linear_team_id", v == null || v === NO_TEAM ? null : v)
+              }
+            >
+              <SelectTrigger className="w-full">
+                <SelectValue>
+                  {(v: string | null) =>
+                    !v || v === NO_TEAM
+                      ? "Don't file"
+                      : (teamList.find((t) => t.id === v)?.name ??
+                        (teams.isPending ? "Loading…" : v))
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NO_TEAM}>Don't file</SelectItem>
+                {teamList.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </Field>
 
           <label className="flex items-center gap-2 text-sm">

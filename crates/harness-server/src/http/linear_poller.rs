@@ -723,21 +723,25 @@ const MAX_LINEAR_SUMMARY_CHARS: usize = 12_000;
 /// done are internal and are stripped.
 fn completion_message(detail: &harness_persist::RunDetail, run_id: &str) -> String {
     let done = format!("✅ ai-harness run `{run_id}` completed.");
-    let Some(id) = detail
+    match flagged_summary(detail) {
+        Some(text) => format!("{text}\n\n---\n{done}"),
+        None => done,
+    }
+}
+
+/// The output of the node the workflow marked `linear_comment: true`, ready to
+/// post: `None` when no node is marked, it didn't succeed, or it said nothing.
+/// Also the body of an issue a schedule files.
+pub(super) fn flagged_summary(detail: &harness_persist::RunDetail) -> Option<String> {
+    let id = detail
         .graph
         .iter()
         .find(|m| m.linear_comment)
-        .map(|m| m.id.as_str())
-    else {
-        return done;
-    };
-    let Some(node) = detail
+        .map(|m| m.id.as_str())?;
+    let node = detail
         .nodes
         .iter()
-        .find(|n| n.node_id == id && n.status == "success")
-    else {
-        return done;
-    };
+        .find(|n| n.node_id == id && n.status == "success")?;
     let text: String = node
         .output
         .lines()
@@ -746,15 +750,14 @@ fn completion_message(detail: &harness_persist::RunDetail, run_id: &str) -> Stri
         .join("\n");
     let text = text.trim();
     if text.is_empty() {
-        return done;
+        return None;
     }
-    let text = if text.chars().count() > MAX_LINEAR_SUMMARY_CHARS {
+    Some(if text.chars().count() > MAX_LINEAR_SUMMARY_CHARS {
         let cut: String = text.chars().take(MAX_LINEAR_SUMMARY_CHARS).collect();
         format!("{cut}…\n\n_(Shortened — the full text is in the run.)_")
     } else {
         text.to_string()
-    };
-    format!("{text}\n\n---\n{done}")
+    })
 }
 
 /// `task` with the issue's linked resources appended — what integrations attach
@@ -1120,7 +1123,7 @@ async fn is_epic_piece(
 /// Linear reporting for the whole run, permanently, from a single unlucky tick.
 /// Long enough to cover worktree setup and a slow first write; short enough that a
 /// genuinely deleted run stops being swept the same day.
-const MISSING_RUN_GRACE_MINS: i64 = 10;
+pub(super) const MISSING_RUN_GRACE_MINS: i64 = 10;
 
 /// How long to keep retrying a Linear state transition that keeps failing.
 ///
