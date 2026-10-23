@@ -61,6 +61,8 @@ struct RawNode {
     hooks: Option<NodeHooks>,
     #[serde(default)]
     mcp: Vec<String>,
+    #[serde(default)]
+    linear_comment: bool,
 
     // Mutually exclusive body discriminators.
     #[serde(default)]
@@ -112,6 +114,7 @@ impl RawNode {
             output_format,
             hooks,
             mcp,
+            linear_comment,
         } = self;
 
         let mut found: Vec<&'static str> = Vec::new();
@@ -185,6 +188,7 @@ impl RawNode {
                 output_format,
                 hooks,
                 mcp,
+                linear_comment,
             },
         ))
     }
@@ -208,6 +212,7 @@ struct NodeKindParts {
     output_format: Option<serde_json::Value>,
     hooks: Option<NodeHooks>,
     mcp: Vec<String>,
+    linear_comment: bool,
 }
 
 /// Parse a workflow from YAML, validating node uniqueness, body exclusivity,
@@ -251,8 +256,20 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             output_format: parts.output_format,
             hooks: parts.hooks,
             mcp: parts.mcp,
+            linear_comment: parts.linear_comment,
             kind: parts.kind,
         });
+    }
+
+    // One summary per issue: two nodes both posting would leave the issue with
+    // two "results" and no way to tell which one is the answer.
+    let posting: Vec<String> = nodes
+        .iter()
+        .filter(|n| n.linear_comment)
+        .map(|n| n.id.clone())
+        .collect();
+    if posting.len() > 1 {
+        return Err(DagError::MultipleLinearComments(posting));
     }
 
     // All dependency references must resolve to a declared node.

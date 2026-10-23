@@ -291,6 +291,11 @@ pub struct NodeMeta {
     /// artifacts dir), for the step popup. Back-compat defaulted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact: Option<String>,
+    /// This node's output is what a Linear-triggered run posts to its issue
+    /// on completion. Kept with the run, not read back from the workflow, so
+    /// an edit to the workflow mid-run can't change what gets posted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub linear_comment: bool,
 }
 
 /// The result of driving a workflow to completion.
@@ -388,6 +393,7 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
             depends_on: n.depends_on.clone(),
             category: n.category.clone(),
             artifact: n.artifact.clone(),
+            linear_comment: n.linear_comment,
         })
         .collect();
     emit(

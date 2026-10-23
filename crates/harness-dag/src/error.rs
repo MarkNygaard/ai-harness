@@ -39,6 +39,10 @@ pub enum DagError {
         found: Vec<&'static str>,
     },
 
+    /// More than one node asks for its output to be posted to Linear.
+    #[error("only one node may set `linear_comment: true`; found: {0:?}")]
+    MultipleLinearComments(Vec<String>),
+
     /// A node's `mcp:` names a server the harness doesn't know how to start.
     #[error("node `{node}` asks for MCP server `{name}`; known: {known}")]
     UnknownMcpServer {

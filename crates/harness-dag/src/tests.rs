@@ -363,6 +363,38 @@ nodes:
 }
 
 #[test]
+fn one_node_may_post_its_output_to_linear() {
+    let yaml = r#"
+name: m
+nodes:
+  - id: work
+    prompt: "x"
+  - id: summary
+    prompt: "y"
+    depends_on: [work]
+    linear_comment: true
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    assert!(!wf.nodes[0].linear_comment);
+    assert!(wf.nodes[1].linear_comment);
+
+    let two = r#"
+name: m
+nodes:
+  - id: a
+    prompt: "x"
+    linear_comment: true
+  - id: b
+    prompt: "y"
+    linear_comment: true
+"#;
+    assert!(matches!(
+        parse_workflow(two),
+        Err(DagError::MultipleLinearComments(ids)) if ids == ["a", "b"]
+    ));
+}
+
+#[test]
 fn rejects_an_unknown_mcp_server() {
     let yaml = r#"
 name: m

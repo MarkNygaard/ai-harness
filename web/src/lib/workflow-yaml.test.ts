@@ -122,6 +122,7 @@ nodes:
   - id: explore
     prompt: look
     mcp: [sentry]
+    linear_comment: true
     retries: 2
     hooks:
       pre_tool_use:
@@ -134,6 +135,8 @@ nodes:
     expect(wf.nodes[0].mcp).toEqual(["sentry"]);
     const back = fromYaml(toYaml(wf));
     expect(back.nodes[0].mcp).toEqual(["sentry"]);
+    expect(back.nodes[0].linear_comment).toBe(true);
+    expect(back.nodes[1].linear_comment).toBeUndefined();
     expect(back.nodes[0].retries).toBe(2);
     expect(back.nodes[0].hooks).toEqual({
       pre_tool_use: [{ matcher: "Bash", decision: "deny" }],

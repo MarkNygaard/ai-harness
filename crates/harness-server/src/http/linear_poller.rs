@@ -710,6 +710,53 @@ fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     }
     task
 }
+/// Longest summary posted to an issue. A summary is a handful of paragraphs;
+/// past this the rest is in the run, and the comment says so.
+const MAX_LINEAR_SUMMARY_CHARS: usize = 12_000;
+
+/// What a completed run posts to its issue.
+///
+/// When the workflow marked a node `linear_comment: true` and that node
+/// succeeded with something to say, its output — the findings, a summary of
+/// the change — followed by the completion line. Otherwise the completion line
+/// alone, as before. The `<promise>` markers workflows use to signal a step is
+/// done are internal and are stripped.
+fn completion_message(detail: &harness_persist::RunDetail, run_id: &str) -> String {
+    let done = format!("✅ ai-harness run `{run_id}` completed.");
+    let Some(id) = detail
+        .graph
+        .iter()
+        .find(|m| m.linear_comment)
+        .map(|m| m.id.as_str())
+    else {
+        return done;
+    };
+    let Some(node) = detail
+        .nodes
+        .iter()
+        .find(|n| n.node_id == id && n.status == "success")
+    else {
+        return done;
+    };
+    let text: String = node
+        .output
+        .lines()
+        .filter(|l| !l.contains("<promise>"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let text = text.trim();
+    if text.is_empty() {
+        return done;
+    }
+    let text = if text.chars().count() > MAX_LINEAR_SUMMARY_CHARS {
+        let cut: String = text.chars().take(MAX_LINEAR_SUMMARY_CHARS).collect();
+        format!("{cut}…\n\n_(Shortened — the full text is in the run.)_")
+    } else {
+        text.to_string()
+    };
+    format!("{text}\n\n---\n{done}")
+}
+
 /// `task` with the issue's linked resources appended — what integrations attach
 /// under **Resources** rather than in the description, like Sentry's link to
 /// the error it filed the issue for. Without this a run sees only an empty
@@ -858,7 +905,8 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                 };
                 // A `response` activity is what marks a delegated session
                 // complete; a poller-claimed issue gets the comment instead.
-                let msg = format!("✅ ai-harness run `{}` completed.", c.run_id);
+                // Either carries the workflow's summary when it has one.
+                let msg = completion_message(&detail, &c.run_id);
                 if !report_to_session(&client, &c, AgentActivity::Response { body: msg.clone() })
                     .await
                 {
@@ -1482,9 +1530,10 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_local, human_duration, is_agent_session_preamble, ready_state_for, step_action,
-        step_duration, step_position, task_for_issue, unannounced_running_nodes,
-        unreported_finished_nodes, LinearSource,
+        completion_message, format_local, human_duration, is_agent_session_preamble,
+        ready_state_for, step_action, step_duration, step_position, task_for_issue,
+        unannounced_running_nodes, unreported_finished_nodes, LinearSource,
+        MAX_LINEAR_SUMMARY_CHARS,
     };
     use chrono::Utc;
     use harness_sources::linear::{Comment, Issue};
@@ -1517,6 +1566,7 @@ mod tests {
             depends_on: vec![],
             category: None,
             artifact: None,
+            linear_comment: false,
         }
     }
 
@@ -1875,6 +1925,47 @@ mod tests {
         detail.graph = ["lint", "test"].into_iter().map(meta).collect();
         assert_eq!(step_position("lint", &detail), Some((1, 2)));
         assert_eq!(step_position("test", &detail), Some((2, 2)));
+    }
+
+    #[test]
+    fn a_completed_run_posts_the_flagged_steps_summary() {
+        let mut summary = node("linear-summary", 1, "success");
+        summary.output =
+            "## Root cause\nThe cart fetch has no retry.\n\n<promise>SUMMARY-DONE</promise>\n"
+                .into();
+        let mut d = detail_with(vec![node("investigate", 0, "success"), summary]);
+        let mut flagged = meta("linear-summary");
+        flagged.linear_comment = true;
+        d.graph = vec![meta("investigate"), flagged];
+
+        let msg = completion_message(&d, "r-7");
+        assert!(msg.starts_with("## Root cause\nThe cart fetch has no retry."));
+        assert!(!msg.contains("<promise>"), "internal markers are stripped");
+        assert!(msg.ends_with("✅ ai-harness run `r-7` completed."));
+
+        // The flagged step didn't succeed: just the completion line.
+        d.nodes[1].status = "failed".into();
+        assert_eq!(
+            completion_message(&d, "r-7"),
+            "✅ ai-harness run `r-7` completed."
+        );
+
+        // No flagged step at all: unchanged from before.
+        d.graph = vec![meta("investigate"), meta("linear-summary")];
+        d.nodes[1].status = "success".into();
+        assert_eq!(
+            completion_message(&d, "r-7"),
+            "✅ ai-harness run `r-7` completed."
+        );
+
+        // A runaway summary is shortened, and says so.
+        let mut long = node("s", 0, "success");
+        long.output = "x".repeat(MAX_LINEAR_SUMMARY_CHARS + 50);
+        let mut d = detail_with(vec![long]);
+        let mut m = meta("s");
+        m.linear_comment = true;
+        d.graph = vec![m];
+        assert!(completion_message(&d, "r").contains("Shortened"));
     }
 
     #[test]

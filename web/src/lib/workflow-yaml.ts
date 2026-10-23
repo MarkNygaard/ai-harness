@@ -160,6 +160,8 @@ export function toYaml(wf: EditorWorkflow): string {
         retries: n.retries,
         hooks: n.hooks,
         mcp: n.mcp,
+        // `false` is the default, so only `true` is written.
+        linear_comment: n.linear_comment || undefined,
         prompt: n.prompt,
         bash: n.bash,
         command: n.command,
@@ -198,6 +200,7 @@ export function fromYaml(text: string): EditorWorkflow {
     retries: typeof n.retries === "number" ? n.retries : undefined,
     hooks: n.hooks ?? undefined,
     mcp: Array.isArray(n.mcp) ? (n.mcp as string[]) : undefined,
+    linear_comment: n.linear_comment === true ? true : undefined,
     prompt: n.prompt as string | undefined,
     bash: n.bash as string | undefined,
     command: n.command as string | undefined,
