@@ -77,6 +77,17 @@ export function IntegrationsPage() {
             />
           </ProviderSummary>
           <ProviderSummary
+            provider="grafana"
+            label={providerDef("grafana").label}
+            help={providerDef("grafana").help}
+            configured={is("grafana")}
+          >
+            <ProviderCard
+              provider={providerDef("grafana")}
+              configured={is("grafana")}
+            />
+          </ProviderSummary>
+          <ProviderSummary
             provider="linear"
             label="Linear"
             help="Connect each Linear account as an app so the harness's comments and status changes are authored by the app, not by a person. Projects pick which account their issues come from."

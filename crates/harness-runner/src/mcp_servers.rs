@@ -40,10 +40,58 @@ pub const SENTRY_TOOLS: &[&str] = &[
     "execute_sentry_tool",
 ];
 
+/// Run-environment keys the harness sets when Grafana is connected. Namespaced
+/// like Sentry's: `mcp-grafana` reads `GRAFANA_URL` and
+/// `GRAFANA_SERVICE_ACCOUNT_TOKEN`, mapped in its own process only.
+pub const GRAFANA_URL_ENV: &str = "HARNESS_GRAFANA_URL";
+pub const GRAFANA_TOKEN_ENV: &str = "HARNESS_GRAFANA_TOKEN";
+
+/// The tool categories `mcp-grafana` is started with: what Prometheus/Loki
+/// reporting and investigation need. Its default also turns on OnCall,
+/// Incident, Tempo, Pyroscope, rendering, the raw API proxy (which the docs
+/// say bypasses Loki scoping) and more.
+const GRAFANA_CATEGORIES: &str =
+    "search,datasource,prometheus,loki,dashboard,folder,navigation,annotations,alerting";
+
+/// The tools `mcp-grafana` 2.0.2 offers with `--disable-write` and
+/// [`GRAFANA_CATEGORIES`], as its `tools/list` reports them. Listed for omp's
+/// `--tools`; re-check on a version bump.
+pub const GRAFANA_TOOLS: &[&str] = &[
+    "alerting_manage_routing",
+    "alerting_rules_read",
+    "alerting_silences_read",
+    "analyze_loki_labels",
+    "check_datasources_health",
+    "generate_deeplink",
+    "get_annotation_tags",
+    "get_annotations",
+    "get_dashboard_by_uid",
+    "get_dashboard_panel_queries",
+    "get_dashboard_property",
+    "get_dashboard_summary",
+    "get_datasource",
+    "list_dashboard_versions",
+    "list_datasources",
+    "list_loki_label_names",
+    "list_loki_label_values",
+    "list_prometheus_label_names",
+    "list_prometheus_label_values",
+    "list_prometheus_metric_metadata",
+    "list_prometheus_metric_names",
+    "query_loki_logs",
+    "query_loki_patterns",
+    "query_loki_stats",
+    "query_prometheus",
+    "query_prometheus_histogram",
+    "search_dashboards",
+    "search_folders",
+];
+
 /// The tools a known server offers, by name (empty for an unknown one).
 pub fn tool_names(server: &str) -> &'static [&'static str] {
     match server {
         "sentry" => SENTRY_TOOLS,
+        "grafana" => GRAFANA_TOOLS,
         _ => &[],
     }
 }
@@ -99,10 +147,42 @@ fn sentry(env: &HashMap<String, String>) -> Option<Value> {
     }))
 }
 
+/// Grafana's own MCP server (`mcp-grafana`), for Prometheus metrics, Loki logs
+/// and dashboards.
+///
+/// Read-only twice over, like Sentry's: the service account the harness asks
+/// for has the Viewer role, and `--disable-write` drops every create/update
+/// tool. Only the categories in [`GRAFANA_CATEGORIES`] are on, and its
+/// anonymous usage reporting to Grafana Labs (on by default) is off.
+fn grafana(env: &HashMap<String, String>) -> Option<Value> {
+    env_value(env, GRAFANA_URL_ENV)?;
+    env_value(env, GRAFANA_TOKEN_ENV)?;
+    let command = std::env::var("HARNESS_GRAFANA_MCP")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "mcp-grafana".into());
+    Some(json!({
+        "type": "stdio",
+        "command": command,
+        "args": [
+            "--usage-stats=disabled",
+            "--disable-write",
+            format!("--enabled-tools={GRAFANA_CATEGORIES}"),
+        ],
+        "env": {
+            "GRAFANA_URL": format!("${{{GRAFANA_URL_ENV}}}"),
+            "GRAFANA_SERVICE_ACCOUNT_TOKEN": format!("${{{GRAFANA_TOKEN_ENV}}}"),
+            // Belt and braces with --usage-stats=disabled.
+            "DO_NOT_TRACK": "1",
+        }
+    }))
+}
+
 /// One requested server's config, or `None` when the project doesn't have it.
 fn config_for(name: &str, env: &HashMap<String, String>) -> Option<Value> {
     match name {
         "sentry" => sentry(env),
+        "grafana" => grafana(env),
         _ => None,
     }
 }
@@ -348,6 +428,47 @@ mod tests {
             .unwrap()
             .contains("cannot be given MCP servers"));
         assert_eq!(unavailable_note(&[], true), None);
+    }
+
+    #[test]
+    fn grafana_is_read_only_focused_and_quiet() {
+        let e = env(&[
+            (GRAFANA_URL_ENV, "https://grafana.dilling.example"),
+            (GRAFANA_TOKEN_ENV, "glsa_secret"),
+        ]);
+        let (doc, missing) = resolve(&["grafana".into(), "sentry".into()], &e);
+        // Sentry isn't connected here; Grafana is.
+        assert_eq!(missing, ["sentry"]);
+        let g = &doc.unwrap()["mcpServers"]["grafana"];
+        let args: Vec<&str> = g["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        assert!(args.contains(&"--disable-write"));
+        assert!(args.contains(&"--usage-stats=disabled"));
+        let cats = args
+            .iter()
+            .find_map(|a| a.strip_prefix("--enabled-tools="))
+            .unwrap();
+        assert!(cats.contains("prometheus") && cats.contains("loki"));
+        assert!(!cats.contains("api"), "the raw API proxy stays off");
+        assert_eq!(g["env"]["GRAFANA_URL"], "${HARNESS_GRAFANA_URL}");
+        assert_eq!(
+            g["env"]["GRAFANA_SERVICE_ACCOUNT_TOKEN"],
+            "${HARNESS_GRAFANA_TOKEN}"
+        );
+        assert!(!g.to_string().contains("glsa_secret"));
+        assert_eq!(tool_names("grafana").len(), 28);
+
+        // Without a token it isn't offered.
+        let (doc, missing) = resolve(
+            &["grafana".into()],
+            &env(&[(GRAFANA_URL_ENV, "https://g.example")]),
+        );
+        assert!(doc.is_none());
+        assert_eq!(missing, ["grafana"]);
     }
 
     #[test]

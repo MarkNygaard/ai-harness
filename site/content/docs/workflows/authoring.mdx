@@ -411,22 +411,26 @@ per provider at dispatch.
 
 ## External tools: `mcp:`
 
-A step can give its agent extra tools from an outside service with `mcp:`. The
-only one today is `sentry`, so a step that investigates or fixes a bug can read
-the production error it is about:
+A step can give its agent extra tools from an outside service with `mcp:`.
+There are two:
+
+- **`sentry`:** production errors, so a step that investigates or fixes a bug
+  can read the error itself ([setup](/docs/setup/sentry)).
+- **`grafana`:** Prometheus metrics, Loki logs and dashboards, for reports and
+  for investigating what happened around an error ([setup](/docs/setup/grafana)).
 
 ```yaml
 - id: explore
   command: explore-codebase
-  mcp: [sentry]
+  mcp: [sentry, grafana]
 ```
 
-- **Only when the project has it.** The tools are attached when Sentry is
-  connected ([setup](/docs/setup/sentry)). On a project without it the step
-  still runs, and its prompt says Sentry isn't available. That way a shared
-  workflow can ask for Sentry without breaking projects that don't use it.
-- **Read-only.** The agent can read issues, events, traces and releases. It
-  can't resolve, assign or change anything in Sentry.
+- **Only when it's connected.** The tools are attached when that service is
+  connected. Without it the step still runs, and its prompt says the service
+  isn't available. That way a shared workflow can ask for it without breaking
+  projects that don't use it.
+- **Read-only.** Agents can read Sentry issues, events and traces, and query
+  Grafana. They can't change anything in either.
 - **Claude and Pi steps.** `codex` and `cursor` steps run without it, and are
   told so.
 - An unknown name is a validation error, not a silent no-op.

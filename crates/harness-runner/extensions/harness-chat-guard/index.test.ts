@@ -147,6 +147,7 @@ describe("the extension", () => {
     for (const t of [
       "mcp__harness_run_list",
       "mcp__sentry_search_issues",
+      "mcp__grafana_query_prometheus",
       "code_read",
       "think",
       "yield",

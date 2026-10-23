@@ -1,0 +1,55 @@
+---
+title: "Grafana"
+description: "Let agents read Prometheus metrics, Loki logs and dashboards from your Grafana, read-only, for reports, investigations and questions in the chat."
+---
+
+With Grafana connected, agents can answer from your own data. They can look at
+traffic, latency, error rates, logs, or what a dashboard shows, for a report,
+while investigating an error, or when someone asks the chat. Agents use
+Grafana's own MCP server.
+
+Connect it on **Settings → Integrations → Grafana**.
+
+## The token
+
+In Grafana, go to **Administration → Users and access → Service accounts**.
+Add a service account with the **Viewer** role, and create a token for it. It
+starts with `glsa_`.
+
+Give it Viewer, nothing more. The harness also runs Grafana's server with
+writing switched off, so agents can query and read but never create or change
+dashboards, alerts or anything else. A Viewer token makes that hold even if
+something upstream changes.
+
+Also enter the **Grafana URL** the harness reaches it at. It has to be
+reachable from where the harness runs.
+
+## What agents can use
+
+The harness turns on the tools for reading:
+
+- **Prometheus:** metric and label names, metadata, queries and histograms.
+- **Loki:** labels, log queries, patterns and stats.
+- **Dashboards and folders:** search, summaries, panel queries.
+- **Annotations, alert rules and silences** (read).
+
+It leaves off the rest of what Grafana's server can do, such as OnCall,
+Incident, Tempo, rendering, and its raw API passthrough. Its anonymous usage
+reporting to Grafana Labs is off too.
+
+## Where agents use it
+
+- **Workflow steps that ask for it** with `mcp: [grafana]`. A report step is a
+  prompt that queries Grafana and writes up what it found. Combined with
+  [`linear_comment`](/docs/workflows/authoring#reporting-back-to-linear), it can
+  post that to a Linear issue. A step can have both Grafana and Sentry:
+  `mcp: [sentry, grafana]`.
+- **The chat**, for questions like "what did checkout latency look like
+  yesterday?"
+
+The token is never written to a file. It's handed to Grafana's server through
+the environment of the step or chat that uses it.
+
+Agents are told to find the data source and metric or label names before
+querying, to keep time ranges tight, and to show the PromQL or LogQL they ran,
+with a link, so you can check what they found.

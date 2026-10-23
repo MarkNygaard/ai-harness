@@ -36,10 +36,11 @@ const MAX_LINE_CHARS = 500;
 /** Tools a chat turn may call besides the MCP servers below. */
 const ALLOWED_TOOLS = new Set(["code_read", "code_grep", "code_glob", "think", "yield"]);
 /**
- * MCP servers a chat turn may use: the harness's own, and Sentry's — which the
- * harness runs read-only (a read-only token, and only its `inspect` skill).
+ * MCP servers a chat turn may use: the harness's own, and Sentry's and
+ * Grafana's — which the harness runs read-only (read-only credentials, and
+ * Sentry's `inspect` skill / Grafana's `--disable-write`).
  */
-const MCP_PREFIXES = ["mcp__harness_", "mcp__sentry_"];
+const MCP_PREFIXES = ["mcp__harness_", "mcp__sentry_", "mcp__grafana_"];
 
 export function isAllowedTool(name: string): boolean {
   return MCP_PREFIXES.some((p) => name.startsWith(p)) || ALLOWED_TOOLS.has(name);
