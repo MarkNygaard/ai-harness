@@ -553,6 +553,15 @@ async fn start_delegated_run(
     // Images pasted into the issue are downloaded and their links rewritten to
     // local paths, so the agent can see them rather than getting a URL it has no
     // credential for. Keyed by issue identifier, falling back to the session id.
+    // Linear's prompt context carries the description and comments but not the
+    // issue's attachments — where Sentry puts the link to the error it filed —
+    // so they are read and appended here, as the poller does.
+    let task = match event.issue_id.as_deref() {
+        Some(id) => {
+            super::linear_poller::with_linked_resources(state, &client, id, task_text(&event)).await
+        }
+        None => task_text(&event),
+    };
     let description = super::linear_attachments::localize(
         &client,
         &super::linear_attachments::attachments_root(&state.projects_dir),
@@ -560,7 +569,7 @@ async fn start_delegated_run(
             .issue_identifier
             .as_deref()
             .unwrap_or(&event.session_id),
-        &task_text(&event),
+        &task,
     )
     .await;
     // Move the issue out of the source status before firing, exactly as the

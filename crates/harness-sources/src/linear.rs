@@ -128,6 +128,50 @@ pub struct Comment {
     pub created_at: String,
 }
 
+/// Something linked to an issue under **Resources**: a Sentry issue, a pull
+/// request, a Figma file. Integrations put their link here rather than in the
+/// description — Sentry's leaves the description empty — so a run that only
+/// reads the description never sees it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct LinkedResource {
+    pub title: String,
+    /// Integrations' extra line (Sentry's "First seen 24 minutes ago").
+    pub subtitle: Option<String>,
+    pub url: String,
+    /// Which integration attached it (`sentry`, `github`, …), when Linear says.
+    pub source: Option<String>,
+}
+
+/// The `## Linked resources` section of a run's task, or `None` when there are
+/// none worth listing. `skip_prefix` drops links that point back at the
+/// harness itself (its own "ai-harness run" attachment).
+pub fn linked_resources_section(
+    resources: &[LinkedResource],
+    skip_prefix: Option<&str>,
+) -> Option<String> {
+    let listed: Vec<String> = resources
+        .iter()
+        .filter(|r| !skip_prefix.is_some_and(|p| !p.is_empty() && r.url.starts_with(p)))
+        .map(|r| {
+            let mut line = format!("- [{}]({})", r.title, r.url);
+            if let Some(s) = r.source.as_deref().filter(|s| !s.is_empty()) {
+                line.push_str(&format!(" — {s}"));
+            }
+            if let Some(s) = r.subtitle.as_deref().filter(|s| !s.is_empty()) {
+                line.push_str(&format!(" ({s})"));
+            }
+            line
+        })
+        .collect();
+    (!listed.is_empty()).then(|| {
+        format!(
+            "## Linked resources\n\nAttached to the issue in Linear (e.g. by an integration \
+             such as Sentry):\n\n{}",
+            listed.join("\n")
+        )
+    })
+}
+
 // ── GraphQL wire types (private) ─────────────────────────────────────────────
 
 #[derive(Deserialize)]
@@ -260,6 +304,26 @@ struct CommentUserNode {
     name: String,
 }
 
+#[derive(Deserialize)]
+struct AttachmentsData {
+    #[serde(default)]
+    issue: Option<IssueAttachmentsNode>,
+}
+#[derive(Deserialize)]
+struct IssueAttachmentsNode {
+    attachments: Conn<AttachmentNode>,
+}
+#[derive(Deserialize)]
+struct AttachmentNode {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    subtitle: Option<String>,
+    url: String,
+    #[serde(default, rename = "sourceType")]
+    source_type: Option<String>,
+}
+
 // ── GraphQL documents ────────────────────────────────────────────────────────
 
 // Linear caps GraphQL query complexity at 10,000, charged on the *requested*
@@ -385,6 +449,17 @@ query Comments($id: String!) {
   issue(id: $id) {
     comments(first: 50) {
       nodes { body createdAt user { name } }
+    }
+  }
+}"#;
+
+// An issue's attachments ("Resources"). `first: 25`: an issue with more links
+// than that is not one a run should be reading all of.
+const ATTACHMENTS_QUERY: &str = r#"
+query Attachments($id: String!) {
+  issue(id: $id) {
+    attachments(first: 25) {
+      nodes { title subtitle url sourceType }
     }
   }
 }"#;
@@ -541,6 +616,28 @@ pub fn parse_comments(json: &[u8]) -> Result<Vec<Comment>, LinearError> {
         })
         .collect();
     Ok(comments)
+}
+
+/// Parse an issue's `attachments` connection into [`LinkedResource`]s. An
+/// attachment with no title is named by its URL.
+pub fn parse_attachments(json: &[u8]) -> Result<Vec<LinkedResource>, LinearError> {
+    let data: AttachmentsData = gql_data(json)?;
+    Ok(data
+        .issue
+        .map(|i| i.attachments.nodes)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|a| !a.url.trim().is_empty())
+        .map(|a| LinkedResource {
+            title: a
+                .title
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| a.url.clone()),
+            subtitle: a.subtitle,
+            url: a.url,
+            source: a.source_type,
+        })
+        .collect())
 }
 
 /// Parse an epic's `children` connection into board-ordered [`SubIssue`]s.
@@ -1393,6 +1490,19 @@ impl LinearClient {
             "variables": { "id": issue_id },
         });
         parse_comments(&self.post(body).await?)
+    }
+
+    /// An issue's linked resources (attachments), read-only. `issue_id` is the
+    /// Linear internal id.
+    pub async fn list_attachments(
+        &self,
+        issue_id: &str,
+    ) -> Result<Vec<LinkedResource>, LinearError> {
+        let body = serde_json::json!({
+            "query": ATTACHMENTS_QUERY,
+            "variables": { "id": issue_id },
+        });
+        parse_attachments(&self.post(body).await?)
     }
 
     /// An epic's sub-issues, in board order.
@@ -2407,6 +2517,41 @@ mod tests {
         assert_eq!(comments[0].body, "First pass looks good");
         assert_eq!(comments[0].created_at, "2026-06-01T10:00:00Z");
     }
+    #[test]
+    fn attachments_become_a_linked_resources_section() {
+        // The shape of ECOM-600: Sentry's integration leaves the description
+        // empty and puts the link here; the harness added its own run link.
+        let json = br#"{"data":{"issue":{"attachments":{"nodes":[
+            {"title":"TypeError: Failed to fetch","subtitle":"First seen 24 minutes ago",
+             "url":"https://dilling-1m.sentry.io/issues/6912345678/","sourceType":"sentry"},
+            {"title":"ai-harness run","subtitle":null,
+             "url":"https://harness.example.com/runs/r-1","sourceType":null},
+            {"title":"","subtitle":null,"url":"https://example.com/doc","sourceType":null},
+            {"title":"empty url","url":"  "}
+        ]}}}}"#;
+        let resources = parse_attachments(json).unwrap();
+        assert_eq!(resources.len(), 3, "an attachment without a url is dropped");
+        assert_eq!(resources[0].source.as_deref(), Some("sentry"));
+        assert_eq!(resources[2].title, "https://example.com/doc");
+
+        let section =
+            linked_resources_section(&resources, Some("https://harness.example.com")).unwrap();
+        assert!(section.starts_with("## Linked resources"));
+        assert!(section.contains(
+            "- [TypeError: Failed to fetch](https://dilling-1m.sentry.io/issues/6912345678/) \
+             — sentry (First seen 24 minutes ago)"
+        ));
+        assert!(
+            !section.contains("ai-harness run"),
+            "the harness's own link is noise"
+        );
+
+        assert_eq!(linked_resources_section(&[], None), None);
+        assert!(parse_attachments(br#"{"data":{"issue":null}}"#)
+            .unwrap()
+            .is_empty());
+    }
+
     #[test]
     fn parse_comments_handles_missing_user() {
         let json = br#"{"data":{"issue":{"comments":{"nodes":[

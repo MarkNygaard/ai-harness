@@ -522,7 +522,8 @@ async fn claim_and_fire(
             client,
             &super::linear_attachments::attachments_root(&state.projects_dir),
             &issue.identifier,
-            &task_for_issue(&issue, &comments),
+            &with_linked_resources(state, client, &issue.id, task_for_issue(&issue, &comments))
+                .await,
         )
         .await,
         args: String::new(),
@@ -709,6 +710,36 @@ fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     }
     task
 }
+/// `task` with the issue's linked resources appended — what integrations attach
+/// under **Resources** rather than in the description, like Sentry's link to
+/// the error it filed the issue for. Without this a run sees only an empty
+/// description and a title.
+///
+/// Best-effort: a failed read is logged and the task goes out without the
+/// section. The harness's own links (its run link) are left out.
+pub(super) async fn with_linked_resources(
+    state: &RunsState,
+    client: &LinearClient,
+    issue_id: &str,
+    task: String,
+) -> String {
+    let resources = match client.list_attachments(issue_id).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(
+                "linear: could not read the attachments of {issue_id}: {} (proceeding without)",
+                e.0
+            );
+            return task;
+        }
+    };
+    let own = state.public_url();
+    match harness_sources::linear::linked_resources_section(&resources, own.as_deref()) {
+        Some(section) => format!("{}\n\n{section}\n", task.trim_end()),
+        None => task,
+    }
+}
+
 /// True for the poller's own status comments. The heuristic requires both an
 /// emoji prefix (🤖 / ✅ / ⚠️ / ❌) AND the string "ai-harness" in the body,
 /// so a human comment beginning with ✅ (e.g. "✅ LGTM") is not filtered out.
