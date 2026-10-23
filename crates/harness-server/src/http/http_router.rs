@@ -425,6 +425,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/run/linear/sub-issue",
             post(run_linear_routes::sub_issue),
         )
+        .route(
+            "/api/run/linear/create-issue",
+            post(run_linear_routes::create_issue),
+        )
         .route("/api/run/linear/state", post(run_linear_routes::move_state))
         .route("/api/run/linear/comment", post(run_linear_routes::comment))
         .route("/api/run/linear/release", post(run_linear_routes::release))

@@ -469,6 +469,46 @@ without opening the harness:
 - **Runs started from the dashboard don't post anywhere.** There's no issue to
   post to.
 
+### Filing a new issue
+
+A run with no issue behind it, such as a [scheduled](/docs/schedules) report,
+can hand its result to people as a new issue. Have one step write the report
+to an artifact, then file it from a `bash` step:
+
+```yaml
+- id: report
+  model: sonnet
+  mcp: [grafana]
+  prompt: |
+    Report on last week's INP by page type. Write the report as Markdown to
+    $ARTIFACTS_DIR/inp-report.md.
+
+- id: file-issue
+  depends_on: [report]
+  bash: |
+    harness linear create-issue \
+      --team ECOM \
+      --title "$TASK_TITLE" \
+      --description-file "$ARTIFACTS_DIR/inp-report.md" \
+      --label Performance
+```
+
+- **Team, status and labels by name.** `--team` takes the team's key or name,
+  `--state` a status name (the team's default if left out), and `--label` one
+  of the team's label names, repeatable. A name that doesn't match fails the
+  step and lists the ones that exist.
+- **Only the project's own workspace.** The step uses the project's Linear
+  connection, through a token scoped to the run. No Linear credential reaches
+  the run.
+- **It links back.** The issue ends with a link to the run that filed it.
+- **The output is the issue as JSON** (`id`, `identifier`, `url`), so a later
+  step can read `$file-issue.output.url`.
+- **Don't set `retries`** on this step. A retry after a slow success files the
+  issue twice.
+
+`$TASK_TITLE` is the run's title. A scheduled run's title is the schedule's
+name and the date.
+
 ## Good practices
 
 1. **Deterministic work → `bash`/`script`, not a prompt.** "Run the tests" is a

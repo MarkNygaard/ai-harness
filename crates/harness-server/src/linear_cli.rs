@@ -115,6 +115,28 @@ pub async fn create_sub_issue(
     .await
 }
 
+/// File a standalone issue in `team` (key, name or id) of the project's own
+/// workspace. `state` and `labels` are names or ids.
+pub async fn create_issue(
+    team: &str,
+    title: &str,
+    description: &str,
+    state: Option<&str>,
+    labels: &[String],
+) -> Result<String, String> {
+    ask(
+        "/api/run/linear/create-issue",
+        &serde_json::json!({
+            "team": team,
+            "title": title,
+            "description": description,
+            "state": state,
+            "labels": labels,
+        }),
+    )
+    .await
+}
+
 /// Move an issue to a workflow state — how a piece advances a column.
 pub async fn move_state(issue_id: &str, state_id: &str) -> Result<String, String> {
     ask(

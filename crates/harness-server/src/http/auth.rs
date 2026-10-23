@@ -147,6 +147,7 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             | "/api/run/linear/issue"
             | "/api/run/linear/children"
             | "/api/run/linear/sub-issue"
+            | "/api/run/linear/create-issue"
             | "/api/run/linear/state"
             | "/api/run/linear/comment"
             // MCP-over-HTTP. Exempt from *this* middleware so an editor holding

@@ -69,6 +69,27 @@ pub enum LinearAction {
         #[arg(long = "label")]
         labels: Vec<String>,
     },
+    /// File a standalone issue in a team of the project's workspace — how a
+    /// workflow hands a result such as a report to people. Prints the issue
+    CreateIssue {
+        /// The team's key (e.g. ECOM), name or id
+        #[arg(long)]
+        team: String,
+        #[arg(long)]
+        title: String,
+        /// Body markdown; use --description-file for anything with newlines
+        #[arg(long, conflicts_with = "description_file")]
+        description: Option<String>,
+        /// Read the body from a file, such as a report an earlier step wrote
+        #[arg(long)]
+        description_file: Option<PathBuf>,
+        /// Status to file it in, by name; omitted = the team's default
+        #[arg(long)]
+        state: Option<String>,
+        /// Label name; repeatable
+        #[arg(long = "label")]
+        labels: Vec<String>,
+    },
     /// Move an issue to a workflow state
     MoveState {
         #[arg(long)]
@@ -1572,6 +1593,24 @@ async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
             let body = markdown_arg(description, description_file, "description")?;
             harness_server::linear_cli::create_sub_issue(
                 &parent,
+                &title,
+                &body,
+                state.as_deref(),
+                &labels,
+            )
+            .await
+        }
+        LinearAction::CreateIssue {
+            team,
+            title,
+            description,
+            description_file,
+            state,
+            labels,
+        } => {
+            let body = markdown_arg(description, description_file, "description")?;
+            harness_server::linear_cli::create_issue(
+                &team,
                 &title,
                 &body,
                 state.as_deref(),
