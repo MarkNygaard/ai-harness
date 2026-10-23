@@ -106,6 +106,7 @@ pub struct RunsState {
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     finding_store: OnceCell<harness_persist::FindingStateStore>,
     chat_store: OnceCell<harness_persist::ChatStore>,
+    schedule_store: OnceCell<harness_persist::ScheduleStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     trash_store: OnceCell<harness_persist::TrashStore>,
     installed_workflow_store: OnceCell<harness_persist::InstalledWorkflowStore>,
@@ -214,6 +215,7 @@ impl RunsState {
             linear_claim_store: OnceCell::new(),
             finding_store: OnceCell::new(),
             chat_store: OnceCell::new(),
+            schedule_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
             trash_store: OnceCell::new(),
             installed_workflow_store: OnceCell::new(),
@@ -481,6 +483,21 @@ impl RunsState {
     }
 
     /// Lazily connect the built-in chat store.
+    /// Lazily connect the scheduled-runs store.
+    pub(crate) async fn schedule_store(&self) -> Result<&harness_persist::ScheduleStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.schedule_store
+            .get_or_try_init(|| async {
+                harness_persist::ScheduleStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
     pub(crate) async fn chat_store(&self) -> Result<&harness_persist::ChatStore, String> {
         let url = self
             .db_url
@@ -797,6 +814,7 @@ impl ModelRef {
 pub(crate) const SOURCE_UI: &str = "ui";
 pub(crate) const SOURCE_MCP: &str = "mcp";
 pub(crate) const SOURCE_CHAT: &str = "chat";
+pub(crate) const SOURCE_SCHEDULE: &str = "schedule";
 pub(crate) const SOURCE_LINEAR_WEBHOOK: &str = "linear-webhook";
 pub(crate) const SOURCE_LINEAR_POLLER: &str = "linear-poller";
 

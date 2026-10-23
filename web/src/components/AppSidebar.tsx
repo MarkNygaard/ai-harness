@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import {
   IconClipboardCheck,
+  IconClockPlay,
   IconGitCompare,
   IconHexagonalPrism,
   IconLayoutDashboard,
@@ -90,6 +91,7 @@ export function useOperationsNav(): NavItem[] {
     // Hideable like the rest (sidebar edit mode, Settings → Preferences); the
     // header's Ask button opens the same conversations in a side panel.
     { href: "/chat", label: "Chat", icon: IconMessageCircle },
+    { href: "/schedules", label: "Schedules", icon: IconClockPlay },
     ...declaredNav,
   ];
 }
