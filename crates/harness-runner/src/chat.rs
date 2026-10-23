@@ -580,11 +580,13 @@ mod tests {
 
     #[test]
     fn a_turn_with_sentry_can_call_sentrys_tools_and_nothing_else_new() {
-        let env: std::collections::HashMap<String, String> =
-            [("SENTRY_ACCESS_TOKEN", "t"), ("SENTRY_ORG", "dilling")]
-                .iter()
-                .map(|(k, v)| (k.to_string(), v.to_string()))
-                .collect();
+        let env: std::collections::HashMap<String, String> = [
+            ("HARNESS_SENTRY_TOKEN", "t"),
+            ("HARNESS_SENTRY_ORG", "dilling"),
+        ]
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
         let (doc, _) = crate::mcp_servers::resolve(&["sentry".into()], &env);
 
         let mut claude = turn("claude", None);
