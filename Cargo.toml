@@ -84,6 +84,9 @@ opentelemetry-otlp = { version = "0.27", features = ["trace", "metrics", "logs",
 # Time
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.8", features = ["serde"] }
+# Cron expressions for scheduled runs. Pinned exactly: a plain "4.0.1" let the
+# resolver take 4.0.2, released two days before this was added.
+croner = "=4.0.1"
 
 # IDs
 uuid = { version = "1", features = ["v4", "serde"] }

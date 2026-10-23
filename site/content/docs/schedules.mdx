@@ -1,0 +1,50 @@
+---
+title: "Schedules"
+description: "Run a workflow at set times, such as a weekly report, without a Linear issue behind it."
+---
+
+Some work has no issue behind it. A report on last week's INP from Grafana, a
+Monday sweep of new Sentry errors, a monthly dependency check: you want these
+to happen on time, not because someone remembered to ask. A **schedule** runs a
+workflow against a project at the times you set.
+
+**Schedules** in the sidebar lists them, with when each one runs next and a
+link to the run it last started. Anyone signed in can see the list.
+Administrators create, change, pause and delete schedules.
+
+## Creating one
+
+Choose **New schedule** and fill in:
+
+- **Name**, which also titles each run, followed by the date: "Weekly INP
+  report — 2026-10-26".
+- **Workflow** and **project**, as for any run.
+- **When.** Pick a preset, such as *Every Monday at 08:00* or *First of the
+  month at 08:00*, or choose **Custom (cron)** and write a five-field cron
+  expression (`minute hour day-of-month month day-of-week`). The form shows the
+  next few times it will fire, or why the expression is invalid.
+- **Timezone**, which defaults to your browser's. Times are read in it, so
+  `0 8 * * 1` in `Europe/Copenhagen` stays at 08:00 local time on both sides of
+  a daylight-saving change.
+- **Task**, the text the run gets as `$ARGUMENTS`, the same as a task typed
+  into the dashboard. Say what the run should produce, and for what period.
+
+**Run now** starts a run straight away without moving the schedule. Use it to
+try a new schedule out instead of waiting for Monday.
+
+## What a scheduled run is
+
+It is an ordinary run. It appears under **Runs**, its report is on its run
+page, and it costs what the workflow costs. The run is credited to the schedule
+("Schedule “Weekly INP report”"), not to whoever created it.
+
+With no issue there is nothing to post to. Choose a workflow that writes a
+report rather than one that opens a pull request. A workflow that reads from
+[Sentry](/docs/setup/sentry) or Grafana needs that integration set up first.
+
+## When the server was down
+
+A schedule doesn't pile up runs it missed. If the harness is down at 08:00 on
+Monday, it starts one run when it comes back, then carries on from the next
+occurrence. If several harness instances share a database, each occurrence
+still starts only one run.

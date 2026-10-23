@@ -9,8 +9,8 @@ use super::{
     auth, auth_routes, billing_routes, categories_routes, chat_routes, credentials_routes,
     finding_routes, github_sso, health_check, invites_routes, library_routes, linear_agent,
     linear_connections, linear_oauth, linear_routes, linear_source_routes, mcp_routes, oidc,
-    password_reset, run_linear_routes, runs_routes, settings_routes, state::AppState,
-    system_routes, tokens_routes, users_routes, workflows_routes,
+    password_reset, run_linear_routes, runs_routes, schedules_routes, settings_routes,
+    state::AppState, system_routes, tokens_routes, users_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -55,6 +55,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     runs_routes::spawn_worktree_sweeper(runs_state.clone());
     // And the chat's read-only code checkouts, once nobody has read one in a day.
     chat_routes::spawn_checkout_sweeper(runs_state.clone());
+    // Start scheduled runs as they come due.
+    schedules_routes::spawn_scheduler(runs_state.clone());
     // Bound the shared cargo build cache (size-gated) so it can't fill the disk.
     runs_routes::spawn_cache_sweeper(runs_state.clone());
     // Launch runs that are waiting for a concurrency slot. A finishing run
@@ -128,6 +130,26 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             post(chat_routes::post_message),
         )
         .route("/api/chat/actions/{id}", post(chat_routes::resolve_action))
+        // ── Scheduled runs. Reading is open; changing is administrator-only
+        // (in the handlers). ────────────────────────────────────────────────
+        .route(
+            "/api/schedules",
+            get(schedules_routes::list_schedules).post(schedules_routes::create_schedule),
+        )
+        .route(
+            "/api/schedules/preview",
+            post(schedules_routes::preview_schedule),
+        )
+        .route(
+            "/api/schedules/{id}",
+            get(schedules_routes::get_schedule)
+                .put(schedules_routes::update_schedule)
+                .delete(schedules_routes::delete_schedule),
+        )
+        .route(
+            "/api/schedules/{id}/run",
+            post(schedules_routes::run_schedule_now),
+        )
         // ── How the harness itself is configured. Administrator-only. ──────
         .route(
             "/api/settings/general",

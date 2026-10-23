@@ -48,6 +48,9 @@ pub use invites::{Invite, InviteStore, KIND_INVITE, KIND_RESET};
 mod chat;
 pub use chat::{ChatMessage, ChatStore, Conversation};
 
+mod schedules;
+pub use schedules::{Schedule, ScheduleInput, ScheduleStore};
+
 mod finding_state;
 pub use finding_state::{FindingState, FindingStateInput, FindingStateStore};
 

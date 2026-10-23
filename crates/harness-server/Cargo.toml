@@ -31,6 +31,7 @@ uuid = { workspace = true }
 sqlx = { workspace = true }
 chrono = { workspace = true }
 chrono-tz = { workspace = true }
+croner = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true, features = ["sync"] }
 async-trait = { workspace = true }
