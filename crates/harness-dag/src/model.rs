@@ -238,6 +238,11 @@ pub struct Node {
     /// configured; otherwise the step runs without it. AI bodies only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp: Vec<String>,
+    /// When the run was started from a Linear issue, post this node's output
+    /// to the issue when the run completes — in place of the bare "completed"
+    /// note. At most one node per workflow.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub linear_comment: bool,
     /// The executable body.
     pub kind: NodeKind,
 }

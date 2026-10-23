@@ -229,6 +229,8 @@ export interface EditorNode {
   hooks?: unknown;
   /** External MCP servers for this step's agent, e.g. `["sentry"]`. */
   mcp?: string[];
+  /** Post this step's output to the Linear issue when the run completes. */
+  linear_comment?: boolean;
   // Mutually exclusive bodies:
   prompt?: string;
   bash?: string;

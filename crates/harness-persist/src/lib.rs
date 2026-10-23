@@ -1605,12 +1605,14 @@ mod tests {
                     depends_on: vec![],
                     category: Some("implementation".into()),
                     artifact: None,
+                    linear_comment: false,
                 },
                 harness_dag::NodeMeta {
                     id: "review".into(),
                     depends_on: vec!["build".into()],
                     category: None,
                     artifact: None,
+                    linear_comment: false,
                 },
             ],
             nodes: vec![

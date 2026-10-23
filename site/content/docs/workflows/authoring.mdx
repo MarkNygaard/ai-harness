@@ -149,6 +149,7 @@ Every node has an `id` and exactly **one body** (`prompt` / `bash` / `command` /
 | `retries` | Re-run **this node only** on failure, up to N times, before the run fails (default `0` = run once). Same worktree/session — for transient failures (tests, builds, flaky network). Do **not** set on side-effecting steps (e.g. a push/PR step), where a retry could double-act. Capped at 10. |
 | `output_format` | JSON schema the AI body's output should match (see [output_format](#output_format)). |
 | `mcp` | External tools for this step's agent, e.g. `[sentry]` (see [External tools](#external-tools-mcp)). |
+| `linear_comment` | `true` on one node: when a Linear issue started the run, this node's output is posted to the issue when the run completes (see [Reporting back to Linear](#reporting-back-to-linear)). |
 
 ### Node bodies
 
@@ -433,6 +434,36 @@ the production error it is about:
 Ask for it only on the steps that need it. Every step that has it starts
 Sentry's server, and an agent with tools it has no use for may spend turns on
 them anyway.
+
+## Reporting back to Linear
+
+When a Linear issue starts a run, the harness reports on the issue when the run
+completes: the final response in the agent session for a delegated issue, or a
+comment. By default that's a single line saying the run completed.
+
+Set `linear_comment: true` on one node and its output is posted instead,
+followed by that line. That way the people on the issue see what the run found
+without opening the harness:
+
+```yaml
+- id: linear-summary
+  depends_on: [triage]
+  model: sonnet
+  context: fresh
+  linear_comment: true
+  prompt: |
+    Summarise for the Linear issue, in Markdown: what was found, what to do
+    about it, and what still needs a human. Output only the summary.
+```
+
+- **One node per workflow.** Two is a validation error.
+- **Only a successful node's output is posted.** If that step fails or is
+  skipped, the issue gets the plain completion line.
+- **Write it for the issue.** Its whole output is posted as Markdown. A
+  `<promise>` marker line is removed. Very long output is shortened, and the
+  comment says so.
+- **Runs started from the dashboard don't post anywhere.** There's no issue to
+  post to.
 
 ## Good practices
 

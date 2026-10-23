@@ -2128,6 +2128,7 @@ mod tests {
             depends_on: vec![],
             category: None,
             artifact: None,
+            linear_comment: false,
         };
         harness_persist::RunDetail {
             run: harness_persist::RunSummary {
