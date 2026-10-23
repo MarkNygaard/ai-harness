@@ -81,15 +81,20 @@ fn name<'a>(states: &'a States, id: &'a str) -> &'a str {
     states.get(id).map(String::as_str).unwrap_or(id)
 }
 
-/// Whether any enabled binding on the same team claims from `state`.
+/// Whether any enabled binding claims from `state` the issues `from` hands on:
+/// same team, and a Linear project that covers them — the whole team, or the
+/// same project. A binding for another Linear project never sees them.
 fn polled_by<'a>(
     bindings: &'a [LinearSource],
-    team: &str,
+    from: &LinearSource,
     state: &str,
 ) -> Option<&'a LinearSource> {
-    bindings
-        .iter()
-        .find(|b| b.enabled && b.team_id == team && b.source_state_id == state)
+    bindings.iter().find(|b| {
+        b.enabled
+            && b.team_id == from.team_id
+            && b.source_state_id == state
+            && (b.linear_project_id.is_none() || b.linear_project_id == from.linear_project_id)
+    })
 }
 
 /// Read a project's bindings and report what will not work.
@@ -209,7 +214,7 @@ pub fn diagnose(bindings: &[LinearSource], states: &States) -> Vec<Finding> {
                 });
                 continue;
             }
-            match polled_by(bindings, &b.team_id, target) {
+            match polled_by(bindings, b, target) {
                 Some(next) => out.push(Finding {
                     level: Level::Ok,
                     workflow: wf.clone(),
@@ -312,7 +317,7 @@ fn epic_findings(bindings: &[LinearSource], states: &States) -> Vec<Finding> {
             if b.piece_ready_state_id.is_some() {
                 continue;
             }
-            if polled_by(bindings, &b.team_id, ready).is_none() {
+            if polled_by(bindings, b, ready).is_none() {
                 out.push(Finding {
                     level: Level::Warn,
                     workflow: Some(b.workflow.clone()),
@@ -365,6 +370,8 @@ mod tests {
             max_attempts: 1,
             enabled: true,
             live: true,
+            linear_project_id: None,
+            linear_project_name: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

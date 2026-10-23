@@ -207,7 +207,12 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
 /// Log what a binding *would* claim, without mutating anything.
 async fn dry_run_log(client: &LinearClient, b: &LinearSource, delegate_id: &str) {
     match client
-        .preview_issues(&b.team_id, &b.source_state_id, delegate_id)
+        .preview_issues(
+            &b.team_id,
+            &b.source_state_id,
+            delegate_id,
+            b.linear_project_id.as_deref(),
+        )
         .await
     {
         Ok(issues) => {
@@ -365,7 +370,12 @@ async fn claim_and_fire(
     }
 
     let issues = match client
-        .preview_issues(&b.team_id, &b.source_state_id, delegate_id)
+        .preview_issues(
+            &b.team_id,
+            &b.source_state_id,
+            delegate_id,
+            b.linear_project_id.as_deref(),
+        )
         .await
     {
         Ok(i) => i,
@@ -1661,6 +1671,8 @@ mod tests {
             max_attempts: 1,
             enabled: true,
             live: true,
+            linear_project_id: None,
+            linear_project_name: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

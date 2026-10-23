@@ -41,6 +41,8 @@ export function asInput(s: LinearSource): LinearSourceInput {
     max_attempts: s.max_attempts,
     enabled: s.enabled,
     live: s.live,
+    linear_project_id: s.linear_project_id ?? undefined,
+    linear_project_name: s.linear_project_name ?? undefined,
   };
 }
 
@@ -103,6 +105,10 @@ export function epicBindingWrites(
     max_attempts: 1,
     enabled: build.enabled,
     live: build.live,
+    // The relay moves the build binding's issues, so it watches the same
+    // Linear project of the team — not the whole team.
+    linear_project_id: build.linear_project_id ?? undefined,
+    linear_project_name: build.linear_project_name ?? undefined,
   });
 
   return [

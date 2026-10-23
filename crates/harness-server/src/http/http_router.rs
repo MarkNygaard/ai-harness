@@ -274,6 +274,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(linear_routes::discovery),
         )
         .route(
+            "/api/projects/{project}/linear/teams/{team}/projects",
+            get(linear_routes::team_projects),
+        )
+        .route(
             "/api/projects/{project}/linear/preview",
             get(linear_routes::preview),
         )

@@ -464,9 +464,11 @@ async fn start_delegated_run(
                 .create_agent_activity(
                     &session,
                     &AgentActivity::Error {
-                        body: "No enabled Linear trigger covers this issue's team. Add one for \
-                               the project on the Projects page — or enable the existing one — \
-                               then delegate again."
+                        body: "No enabled Linear trigger covers this issue's team — or, where \
+                               the team's triggers are split by Linear project, this issue's \
+                               project. Add one for the project on the Projects page, enable \
+                               the existing one, or move the issue into a bound Linear \
+                               project, then delegate again."
                             .into(),
                     },
                 )
@@ -1254,11 +1256,22 @@ pub(crate) async fn route_issue(
     route
 }
 
+/// Whether `binding` takes issues from `issue_project`: any issue of its team
+/// when it names no Linear project, otherwise only that project's.
+pub(crate) fn project_matches(binding: &LinearSource, issue_project: Option<&str>) -> bool {
+    match binding.linear_project_id.as_deref() {
+        None => true,
+        Some(wanted) => issue_project == Some(wanted),
+    }
+}
+
 fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
     let active: Vec<&LinearSource> = bindings.iter().filter(|b| b.enabled).collect();
-    // Candidates: every active binding for the issue's team. With an unknown
-    // team, a lone active binding is assumed to be the intended one.
-    let candidates: Vec<&LinearSource> = match context.team_id.as_deref() {
+    // Candidates: every active binding for the issue's team — and, for one
+    // narrowed to a Linear project, only when the issue is in it. With an
+    // unknown team, a lone active binding is assumed to be the intended one.
+    let issue_project = context.project_id.as_deref();
+    let team_bindings: Vec<&LinearSource> = match context.team_id.as_deref() {
         Some(team) => active
             .iter()
             .copied()
@@ -1266,9 +1279,18 @@ fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
             .collect(),
         None => Vec::new(),
     };
+    let candidates: Vec<&LinearSource> = team_bindings
+        .iter()
+        .copied()
+        .filter(|b| project_matches(b, issue_project))
+        .collect();
     let candidates = if !candidates.is_empty() {
         candidates
-    } else if active.len() == 1 {
+    } else if !team_bindings.is_empty() {
+        // The team is bound, just not for this issue's Linear project: that is
+        // a statement about where it belongs, so no guessing past it.
+        return Target::NoBinding;
+    } else if active.len() == 1 && project_matches(active[0], issue_project) {
         vec![active[0]]
     } else {
         return Target::NoBinding;
@@ -1277,10 +1299,15 @@ fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
     // Pick the binding whose source status the issue is actually in. Two bindings
     // sharing a source status would be ambiguous; the first in `list_all` order
     // (project, then workflow) wins deterministically.
-    let chosen = context
-        .state_id
-        .as_deref()
-        .and_then(|state| candidates.iter().find(|b| b.source_state_id == state));
+    //
+    // A binding narrowed to the issue's Linear project beats one that takes the
+    // whole team: it is the more specific statement of where the issue belongs.
+    let chosen = context.state_id.as_deref().and_then(|state| {
+        let in_state = || candidates.iter().filter(|b| b.source_state_id == state);
+        in_state()
+            .find(|b| b.linear_project_id.is_some())
+            .or_else(|| in_state().next())
+    });
 
     let Some(chosen) = chosen else {
         // In a status none of the team's bindings trigger from — including the
@@ -1797,6 +1824,8 @@ mod tests {
             // `live` is poller-only (claim vs. dry-run) and stays off throughout:
             // delegation must resolve without it.
             live: false,
+            linear_project_id: None,
+            linear_project_name: None,
             created_at: now,
             updated_at: now,
         }
@@ -1869,6 +1898,107 @@ mod tests {
             }
             _ => panic!("expected WrongStatus"),
         }
+    }
+
+    fn in_linear_project(b: LinearSource, project: &str) -> LinearSource {
+        LinearSource {
+            linear_project_id: Some(project.into()),
+            linear_project_name: Some(project.into()),
+            ..b
+        }
+    }
+
+    fn context_in(team: &str, state: &str, project: Option<&str>) -> IssueContext {
+        IssueContext {
+            project_id: project.map(str::to_string),
+            ..context(team, state, state)
+        }
+    }
+
+    fn chosen_project(target: Target) -> Option<String> {
+        match target {
+            Target::Ready { binding } => Some(binding.project.clone()),
+            _ => None,
+        }
+    }
+
+    /// Linear's free plan has two teams, so two harness projects share one,
+    /// told apart by Linear project.
+    #[test]
+    fn a_shared_team_is_split_by_linear_project() {
+        let webshop = LinearSource {
+            project: "webshop".into(),
+            ..in_linear_project(binding("team-a", "idea-to-pr", "todo"), "lp-shop")
+        };
+        let backoffice = LinearSource {
+            project: "backoffice".into(),
+            ..in_linear_project(binding("team-a", "idea-to-pr", "todo"), "lp-back")
+        };
+        let bindings = vec![webshop, backoffice];
+        assert_eq!(
+            chosen_project(choose_target(
+                &bindings,
+                &context_in("team-a", "todo", Some("lp-back"))
+            )),
+            Some("backoffice".into())
+        );
+        assert_eq!(
+            chosen_project(choose_target(
+                &bindings,
+                &context_in("team-a", "todo", Some("lp-shop"))
+            )),
+            Some("webshop".into())
+        );
+        // In another Linear project, or none: the team is bound, but not for this.
+        for project in [Some("lp-other"), None] {
+            assert!(matches!(
+                choose_target(&bindings, &context_in("team-a", "todo", project)),
+                Target::NoBinding
+            ));
+        }
+    }
+
+    #[test]
+    fn a_binding_for_the_issues_project_beats_one_for_the_whole_team() {
+        let whole_team = LinearSource {
+            project: "everything".into(),
+            ..binding("team-a", "idea-to-pr", "todo")
+        };
+        let narrowed = LinearSource {
+            project: "webshop".into(),
+            ..in_linear_project(binding("team-a", "idea-to-pr", "todo"), "lp-shop")
+        };
+        // Listed whole-team first: order must not decide it.
+        let bindings = vec![whole_team, narrowed];
+        assert_eq!(
+            chosen_project(choose_target(
+                &bindings,
+                &context_in("team-a", "todo", Some("lp-shop"))
+            )),
+            Some("webshop".into())
+        );
+        // Anything else in the team still goes to the whole-team binding.
+        assert_eq!(
+            chosen_project(choose_target(
+                &bindings,
+                &context_in("team-a", "todo", Some("lp-x"))
+            )),
+            Some("everything".into())
+        );
+    }
+
+    #[test]
+    fn a_lone_binding_narrowed_to_a_project_is_not_a_fallback_for_other_issues() {
+        let only = vec![in_linear_project(
+            binding("team-a", "idea-to-pr", "todo"),
+            "lp-shop",
+        )];
+        // Unknown team, unknown project: the lone-binding guess must not apply.
+        let ctx = IssueContext {
+            team_id: None,
+            ..context_in("team-a", "todo", None)
+        };
+        assert!(matches!(choose_target(&only, &ctx), Target::NoBinding));
     }
 
     #[test]

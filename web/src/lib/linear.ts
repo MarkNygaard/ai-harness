@@ -8,6 +8,7 @@ import type {
   CreateLinearIssueInput,
   LinearConnection,
   LinearDiscovery,
+  LinearProjectRef,
   LinearFinding,
   LinearSource,
   LinearSourceInput,
@@ -188,6 +189,22 @@ export function useLinearDiscovery(project: string | null) {
       ),
     retry: false,
     staleTime: 60_000,
+  });
+}
+
+/** A team's Linear projects, for narrowing a binding to one. */
+export function useLinearTeamProjects(project: string | null, team: string) {
+  return useQuery<{ projects: LinearProjectRef[] }, Error>({
+    queryKey: ["linear", "team-projects", project, team],
+    enabled: !!project && !!team,
+    queryFn: ({ signal }) =>
+      apiJson<{ projects: LinearProjectRef[] }>(
+        `/api/projects/${encodeURIComponent(project!)}/linear/teams/${encodeURIComponent(team)}/projects`,
+        { signal },
+      ),
+    retry: false,
+    staleTime: 60_000,
+    refetchInterval: false,
   });
 }
 

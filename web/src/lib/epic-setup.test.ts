@@ -27,6 +27,8 @@ function binding(over: Partial<LinearSource>): LinearSource {
     max_attempts: 1,
     enabled: true,
     live: true,
+    linear_project_id: null,
+    linear_project_name: null,
     created_at: "",
     updated_at: "",
     ...over,
@@ -119,6 +121,28 @@ describe("isBuilder", () => {
     expect(isBuilder(binding({}))).toBe(true);
     for (const workflow of [MERGE_WORKFLOW, SUPERVISOR_WORKFLOW, "revise-pr"]) {
       expect(isBuilder(binding({ workflow }))).toBe(false);
+    }
+  });
+});
+
+describe("Linear project", () => {
+  it("survives the epic setup, and the relay inherits it", () => {
+    const build = binding({
+      linear_project_id: "lp-shop",
+      linear_project_name: "Webshop",
+    });
+    const writes = epicBindingWrites([build], build, columns);
+    expect(writes.length).toBeGreaterThan(1);
+    for (const w of writes) {
+      expect(w.linear_project_id).toBe("lp-shop");
+      expect(w.linear_project_name).toBe("Webshop");
+    }
+  });
+
+  it("stays off for a binding on the whole team", () => {
+    const build = binding({});
+    for (const w of epicBindingWrites([build], build, columns)) {
+      expect(w.linear_project_id).toBeUndefined();
     }
   });
 });
