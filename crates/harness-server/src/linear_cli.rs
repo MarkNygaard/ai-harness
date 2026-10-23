@@ -65,7 +65,7 @@ fn from_parts(base: Option<String>, token: Option<String>) -> Result<Grant, Stri
 ///
 /// The server's error message is surfaced verbatim: it is written for whoever
 /// is reading a failed run's log, and that is the only place it will be seen.
-async fn ask<T: Serialize>(path: &str, body: &T) -> Result<String, String> {
+pub(crate) async fn ask<T: Serialize>(path: &str, body: &T) -> Result<String, String> {
     let g = grant()?;
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))

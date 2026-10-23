@@ -608,6 +608,58 @@ impl RunsState {
         env
     }
 
+    /// Where `project`'s uploads go: the global S3 connection, with the
+    /// project's own bucket and folder when it sets them.
+    ///
+    /// The folder is the project's folder when it names one; otherwise the
+    /// global folder with the project's name under it, so two projects sharing
+    /// a bucket never write over each other's objects.
+    pub(crate) async fn s3_target(&self, project: &str) -> Result<crate::s3::S3Target, String> {
+        let store = self.cred_store().await?;
+        let global = store
+            .get("s3")
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        let own = store
+            .get_project(project, "s3")
+            .await
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default();
+        let field = |m: &std::collections::BTreeMap<String, String>, k: &str| {
+            m.get(k)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+        let (Some(access_key_id), Some(secret_access_key)) = (
+            field(&global, "access_key_id"),
+            field(&global, "secret_access_key"),
+        ) else {
+            return Err("S3 is not connected — add it under Settings → Integrations".to_string());
+        };
+        let bucket = field(&own, "s3_bucket")
+            .or_else(|| field(&global, "bucket"))
+            .ok_or(format!(
+                "no S3 bucket for `{project}` — set one under Settings → Integrations, \
+                 or for the project under Settings → Projects"
+            ))?;
+        let folder = match field(&own, "s3_folder") {
+            Some(own) => crate::s3::normalize_folder(&own),
+            None => crate::s3::normalize_folder(&format!(
+                "{}/{project}",
+                field(&global, "folder").unwrap_or_default()
+            )),
+        };
+        Ok(crate::s3::S3Target {
+            access_key_id,
+            secret_access_key,
+            region: field(&global, "region").unwrap_or_else(|| "us-east-1".to_string()),
+            bucket,
+            folder,
+            endpoint: field(&global, "endpoint"),
+        })
+    }
+
     /// The configured commit-author email for `project` (project github
     /// credential overrides global). Authors PR commits with a
     /// GitHub-recognized address so platforms that validate the commit author

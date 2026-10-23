@@ -46,6 +46,19 @@ pub enum AdminAction {
 /// which project it speaks for, and the server resolves that to a connection
 /// exactly as the poller would — so an epic's sub-issues cannot land in a
 /// workspace its build runs never watch, and a run cannot name somebody else's.
+/// What a workflow run may do with S3: put a file in its project's folder.
+#[derive(Subcommand)]
+pub enum S3Action {
+    /// Upload a file. Prints the object as JSON
+    Upload {
+        /// The file to upload, e.g. "$ARTIFACTS_DIR/production.tar.gz"
+        file: PathBuf,
+        /// Object name under the project's folder; default: <date>/<file name>
+        #[arg(long)]
+        name: Option<String>,
+    },
+}
+
 #[derive(Subcommand)]
 pub enum LinearAction {
     /// File a sub-issue under an epic, in the epic's own team
@@ -168,6 +181,11 @@ pub enum Command {
     Linear {
         #[command(subcommand)]
         action: LinearAction,
+    },
+    /// Upload to the project's S3 folder (used by workflow steps)
+    S3 {
+        #[command(subcommand)]
+        action: S3Action,
     },
 
     /// Execute a prompt non-interactively
@@ -690,6 +708,16 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             // No database, no key: the run's grant is the authentication, and
             // the server holds the credentials. See `harness_server::linear_cli`.
             let message = run_linear_action(action).await?;
+            println!("{message}");
+        }
+        Command::S3 {
+            action: S3Action::Upload { file, name },
+        } => {
+            // Same grant as `harness linear`; the server signs, the key stays
+            // there. See `harness_server::s3`.
+            let message = harness_server::s3_cli::upload(&file, name.as_deref())
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
             println!("{message}");
         }
         Command::Serve {

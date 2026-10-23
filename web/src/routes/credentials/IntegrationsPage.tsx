@@ -88,6 +88,14 @@ export function IntegrationsPage() {
             />
           </ProviderSummary>
           <ProviderSummary
+            provider="s3"
+            label={providerDef("s3").label}
+            help={providerDef("s3").help}
+            configured={is("s3")}
+          >
+            <ProviderCard provider={providerDef("s3")} configured={is("s3")} />
+          </ProviderSummary>
+          <ProviderSummary
             provider="linear"
             label="Linear"
             help="Connect each Linear account as an app so the harness's comments and status changes are authored by the app, not by a person. Projects pick which account their issues come from."

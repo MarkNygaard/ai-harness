@@ -174,6 +174,53 @@ const PROVIDERS: ProviderDef[] = [
     ],
   },
   {
+    id: "s3",
+    label: "Amazon S3",
+    help: "Lets workflow steps upload files to a bucket with `harness s3 upload <file>`, e.g. a nightly export. The key stays on the server: a run gets a short-lived upload link for one object under its project's folder, and can't read, list or delete anything. In AWS, create an IAM user whose only permission is s3:PutObject on arn:aws:s3:::<bucket>/<folder>/*, and give it an access key. Cloudflare R2 and MinIO work too, through the endpoint field.",
+    fields: [
+      {
+        key: "access_key_id",
+        label: "Access key ID",
+        secret: false,
+        placeholder: "AKIA…",
+        help: "The IAM user's access key. Identifies the key; not a secret on its own.",
+      },
+      {
+        key: "secret_access_key",
+        label: "Secret access key",
+        help: "Signs upload links on the server. Never given to a run.",
+      },
+      {
+        key: "region",
+        label: "Region",
+        secret: false,
+        placeholder: "eu-north-1",
+        help: "The bucket's AWS region. For Cloudflare R2, `auto`.",
+      },
+      {
+        key: "bucket",
+        label: "Bucket",
+        secret: false,
+        placeholder: "my-company-backups",
+        help: "A project can use its own bucket instead, under Settings → Projects.",
+      },
+      {
+        key: "folder",
+        label: "Folder (optional)",
+        secret: false,
+        placeholder: "harness",
+        help: "Uploads go under <folder>/<project>/. A project can name its own folder instead, under Settings → Projects.",
+      },
+      {
+        key: "endpoint",
+        label: "Endpoint (S3-compatible stores only)",
+        secret: false,
+        placeholder: "https://<account>.r2.cloudflarestorage.com",
+        help: "Leave empty for AWS.",
+      },
+    ],
+  },
+  {
     id: "linear",
     label: "Linear",
     help: "The OAuth application backing the workspace connection above. Create it in Linear → Settings → API → OAuth applications, registering the callback URL shown above.",

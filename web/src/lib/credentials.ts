@@ -63,6 +63,9 @@ export const PROJECT_CREDENTIALS: { provider: string; field: string }[] = [
   { provider: "github", field: "git_author_email" },
   // Only the slug is per project; the token and org are global.
   { provider: "sentry", field: "sentry_project" },
+  // Where this project's uploads go; the access key is global.
+  { provider: "s3", field: "s3_bucket" },
+  { provider: "s3", field: "s3_folder" },
 ];
 
 export function useProjectCredentials(project: string | null) {
