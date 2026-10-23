@@ -170,6 +170,16 @@ export interface Catalog {
   context_modes: string[];
   trigger_rules: string[];
   prebuilt_steps: PrebuiltStep[];
+  /** Steps people saved in the builder. Absent from an older server. */
+  saved_steps?: SavedStep[];
+}
+
+/** A step someone saved from the builder: inserted as a copy, like a prebuilt one. */
+export interface SavedStep extends PrebuiltStep {
+  created_by_label: string | null;
+  created_at: string;
+  /** Whether the caller may delete it: whoever saved it, or an admin. */
+  deletable: boolean;
 }
 
 /** The node-kind discriminators (the single body each editor node carries). */

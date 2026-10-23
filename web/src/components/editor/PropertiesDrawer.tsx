@@ -4,6 +4,7 @@ import { Markdown, ViewToggle } from "@/components/Markdown";
 import type { Catalog, EditorNode, NodeKindId } from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
 import { useCategories } from "@/lib/categories";
+import { SaveStepButton } from "./SaveStepDialog";
 import { isMetered } from "@/lib/models";
 import {
   Select,
@@ -99,13 +100,16 @@ export function PropertiesDrawer({
     <div className="flex w-1/3 min-w-[20rem] flex-none flex-col border-l border-border bg-card">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <span className="text-sm font-semibold">Step settings</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-1 hover:bg-secondary"
-        >
-          <X className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1">
+          <SaveStepButton node={node} />
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 hover:bg-secondary"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 overflow-auto p-4 text-[13px]">

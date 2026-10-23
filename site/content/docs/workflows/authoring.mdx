@@ -25,7 +25,7 @@ the file:
 
 | Tool | Use |
 |---|---|
-| `workflow_catalog` | discover legal node kinds, providers/models, commands, trigger rules |
+| `workflow_catalog` | discover legal node kinds, providers/models, commands, trigger rules, and saved steps |
 | `workflow_create` | new empty workflow (`name`, optional `description`/`provider`/`model`) |
 | `workflow_set_node` | add/replace a node by id from a JSON spec (`{id, <body>, depends_on, when, category, …}`) |
 | `workflow_connect` | add a dependency edge (`to` depends on `from`) |
@@ -508,6 +508,24 @@ to an artifact, then file it from a `bash` step:
 
 `$TASK_TITLE` is the run's title. A scheduled run's title is the schedule's
 name and the date.
+
+## Saved steps
+
+A step worth reusing, such as one that files a report in Linear or uploads an
+export, can be saved from the builder. Select it, choose **Save as step**, and
+give it a name. It appears under **Saved steps** in the palette for everyone
+who builds workflows. Click or drag it onto the canvas like a prebuilt step.
+
+- **Inserting adds a copy.** Changing the saved step later, or deleting it,
+  doesn't touch workflows that already use it.
+- **Its connections aren't saved.** `depends_on` and `when` are dropped,
+  because they name steps of the workflow it came from. Connect it again
+  where you insert it. References like `$report.output` in its body are kept;
+  give the upstream step that id, or edit the reference.
+- **Anyone who can use the builder can save a step.** Deleting one is for
+  whoever saved it, or an administrator.
+- **Over MCP,** `workflow_catalog` lists them under `saved_steps`; insert one
+  with `workflow_set_node`.
 
 ## Good practices
 
