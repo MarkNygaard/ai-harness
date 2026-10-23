@@ -3,7 +3,7 @@
  * catalog, workflow list/detail, validation, and save.
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiJson } from "./api";
+import { apiFetch, apiJson } from "./api";
 import type {
   Catalog,
   TrashedWorkflow,
@@ -19,6 +19,40 @@ export function useCatalog() {
     queryFn: ({ signal }) =>
       apiJson<Catalog>("/api/authoring/catalog", { signal }),
     staleTime: 60_000,
+  });
+}
+
+/** Save a node as a reusable step: a copy that shows up in everyone's palette. */
+export function useSaveStep() {
+  const qc = useQueryClient();
+  return useMutation<
+    { id: string; label: string },
+    Error,
+    { label: string; description: string; node: Record<string, unknown> }
+  >({
+    mutationFn: (body) =>
+      apiJson("/api/authoring/steps", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["authoring", "catalog"] }),
+  });
+}
+
+/** Remove a saved step from the palette. Workflows that used it keep their copy. */
+export function useDeleteStep() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    // `apiFetch`: a 204 has no body to parse.
+    mutationFn: async (id) => {
+      await apiFetch(`/api/authoring/steps/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: () =>
+      qc.invalidateQueries({ queryKey: ["authoring", "catalog"] }),
   });
 }
 

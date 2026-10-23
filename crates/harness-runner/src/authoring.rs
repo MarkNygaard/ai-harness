@@ -859,6 +859,35 @@ pub fn set_node(project_root: &Path, name: &str, node: serde_json::Value) -> Res
     save_doc(project_root, name, &doc)
 }
 
+/// Check a node saved as a reusable step, and return it ready to store.
+///
+/// Its wiring is dropped (`depends_on`, `when`): those name nodes of the
+/// workflow it came from, and are set again wherever it is inserted. The rest
+/// must be a valid node — exactly one body, a script's runtime, known `mcp:`
+/// servers. A `$other.output` reference in its body is allowed: it is how a
+/// step reads its input, and is resolved once the step is wired up.
+pub fn validate_step(node: serde_json::Value) -> Result<serde_json::Value, String> {
+    let mut node = node;
+    let obj = node
+        .as_object_mut()
+        .ok_or_else(|| "a step must be a node object".to_string())?;
+    obj.remove("depends_on");
+    obj.remove("when");
+    let id_ok = obj
+        .get("id")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| !s.trim().is_empty());
+    if !id_ok {
+        return Err("node must have a non-empty `id`".to_string());
+    }
+    let doc = serde_json::json!({ "name": "saved-step", "nodes": [node.clone()] });
+    let yaml = serde_yaml::to_string(&doc).map_err(|e| format!("convert node: {e}"))?;
+    match parse_workflow(&yaml) {
+        Ok(_) | Err(harness_dag::DagError::UnknownNodeReference { .. }) => Ok(node),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Set (or clear) the workflow-level `ui:` block — the declarative left-nav
 /// entry + findings/report tab. Pass the `ui` object (`{ nav?, report? }`);
 /// pass `null` to remove it. The save validates the whole workflow (e.g.
@@ -1105,6 +1134,37 @@ pub fn catalog(project_root: &Path, creds: ConnectedCreds) -> Catalog {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_step_loses_its_wiring_but_keeps_its_input_references() {
+        let step = validate_step(serde_json::json!({
+            "id": "file-issue",
+            "depends_on": ["report"],
+            "when": "$report.output != ''",
+            "bash": "harness linear create-issue --description \"$report.output\"",
+        }))
+        .unwrap();
+        assert!(step.get("depends_on").is_none());
+        assert!(step.get("when").is_none());
+        assert!(step["bash"].as_str().unwrap().contains("$report.output"));
+    }
+
+    #[test]
+    fn a_saved_step_must_be_a_valid_node() {
+        let two_bodies =
+            validate_step(serde_json::json!({ "id": "x", "bash": "a", "prompt": "b" }));
+        assert!(two_bodies.is_err());
+        let no_runtime = validate_step(serde_json::json!({ "id": "x", "script": "print(1)" }));
+        assert!(no_runtime.is_err());
+        let unknown_mcp =
+            validate_step(serde_json::json!({ "id": "x", "prompt": "p", "mcp": ["nope"] }));
+        assert!(unknown_mcp.is_err());
+        assert!(
+            validate_step(serde_json::json!({ "bash": "a" })).is_err(),
+            "no id"
+        );
+        assert!(validate_step(serde_json::json!("bash")).is_err());
+    }
 
     #[test]
     fn validates_a_good_workflow_and_summarizes_nodes() {

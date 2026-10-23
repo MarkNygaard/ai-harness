@@ -107,6 +107,7 @@ pub struct RunsState {
     finding_store: OnceCell<harness_persist::FindingStateStore>,
     chat_store: OnceCell<harness_persist::ChatStore>,
     schedule_store: OnceCell<harness_persist::ScheduleStore>,
+    saved_step_store: OnceCell<harness_persist::SavedStepStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     trash_store: OnceCell<harness_persist::TrashStore>,
     installed_workflow_store: OnceCell<harness_persist::InstalledWorkflowStore>,
@@ -216,6 +217,7 @@ impl RunsState {
             finding_store: OnceCell::new(),
             chat_store: OnceCell::new(),
             schedule_store: OnceCell::new(),
+            saved_step_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
             trash_store: OnceCell::new(),
             installed_workflow_store: OnceCell::new(),
@@ -482,7 +484,6 @@ impl RunsState {
             .await
     }
 
-    /// Lazily connect the built-in chat store.
     /// Lazily connect the scheduled-runs store.
     pub(crate) async fn schedule_store(&self) -> Result<&harness_persist::ScheduleStore, String> {
         let url = self
@@ -498,6 +499,24 @@ impl RunsState {
             .await
     }
 
+    /// Lazily connect the store of steps saved from the workflow builder.
+    pub(crate) async fn saved_step_store(
+        &self,
+    ) -> Result<&harness_persist::SavedStepStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.saved_step_store
+            .get_or_try_init(|| async {
+                harness_persist::SavedStepStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the built-in chat store.
     pub(crate) async fn chat_store(&self) -> Result<&harness_persist::ChatStore, String> {
         let url = self
             .db_url

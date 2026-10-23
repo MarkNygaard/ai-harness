@@ -3,6 +3,7 @@ import {
   emptyNode,
   fromYaml,
   nodeKind,
+  nodeToDoc,
   prebuiltNode,
   toYaml,
 } from "./workflow-yaml";
@@ -279,4 +280,23 @@ it("round-trips effort through toYaml/fromYaml", () => {
   const back = fromYaml(yaml);
   expect(back.nodes[0].effort).toBe("max");
   expect(back.nodes[1].effort).toBeUndefined();
+});
+
+describe("nodeToDoc", () => {
+  it("keeps what a workflow file would hold, and nothing empty", () => {
+    const doc = nodeToDoc({
+      id: "file-issue",
+      depends_on: [],
+      bash: "harness linear create-issue --team ECOM",
+      provider: "",
+      mcp: [],
+      linear_comment: false,
+      timeout: 60000,
+    });
+    expect(doc).toEqual({
+      id: "file-issue",
+      bash: "harness linear create-issue --team ECOM",
+      timeout: 60000,
+    });
+  });
 });

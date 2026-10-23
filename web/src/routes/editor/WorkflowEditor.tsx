@@ -47,7 +47,11 @@ import type {
 } from "@/types/authoring";
 import { EditorNode as EditorNodeView } from "@/components/editor/EditorNode";
 import { EditorActionsContext } from "@/components/editor/context";
-import { Palette } from "@/components/editor/Palette";
+import {
+  DRAG_PREBUILT,
+  DRAG_SAVED,
+  Palette,
+} from "@/components/editor/Palette";
 import { PropertiesDrawer } from "@/components/editor/PropertiesDrawer";
 import { VersionHistoryDialog } from "@/components/editor/VersionHistoryDialog";
 import { WorkflowDescriptionDrawer } from "@/components/editor/WorkflowDescriptionDrawer";
@@ -204,13 +208,18 @@ function Editor() {
     (e: React.DragEvent) => {
       e.preventDefault();
       const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
-      const prebuiltId = e.dataTransfer.getData(
-        "application/harness-prebuilt-step",
-      );
+      const prebuiltId = e.dataTransfer.getData(DRAG_PREBUILT);
       if (prebuiltId) {
         const step = catalog.data?.prebuilt_steps?.find(
           (s) => s.id === prebuiltId,
         );
+        if (step) addPrebuiltNode(step, pos);
+        return;
+      }
+      // A saved step inserts the same way: as a copy with a fresh id.
+      const savedId = e.dataTransfer.getData(DRAG_SAVED);
+      if (savedId) {
+        const step = catalog.data?.saved_steps?.find((s) => s.id === savedId);
         if (step) addPrebuiltNode(step, pos);
         return;
       }
@@ -508,6 +517,7 @@ function Editor() {
           <Palette
             kinds={catalog.data?.node_kinds ?? []}
             prebuilt={catalog.data?.prebuilt_steps ?? []}
+            saved={catalog.data?.saved_steps ?? []}
             onAdd={(k) => addNode(k)}
             onAddPrebuilt={(s) => addPrebuiltNode(s)}
           />

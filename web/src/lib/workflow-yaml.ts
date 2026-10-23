@@ -128,6 +128,48 @@ function uiFromRaw(raw: unknown): WorkflowUi | undefined {
   return { nav, report };
 }
 
+/** One node as it is written to YAML: its single body + set options, terse.
+ *  Also what "Save as step" stores, so a saved step is exactly what a
+ *  workflow file would hold. */
+export function nodeToDoc(n: EditorNode): Record<string, unknown> {
+  const loop = n.loop
+    ? clean(n.loop as unknown as Record<string, unknown>)
+    : undefined;
+  const approval = n.approval
+    ? clean(n.approval as unknown as Record<string, unknown>)
+    : undefined;
+  return clean({
+    id: n.id,
+    depends_on: n.depends_on,
+    when: n.when,
+    provider: n.provider,
+    model: n.model,
+    effort: n.effort,
+    context: n.context,
+    category: n.category,
+    artifact: n.artifact,
+    trigger_rule: n.trigger_rule,
+    timeout: n.timeout,
+    output_format: n.output_format,
+    // Fields the editor has no controls for yet: carried through so a
+    // save from the canvas doesn't delete what was written in YAML.
+    retries: n.retries,
+    hooks: n.hooks,
+    mcp: n.mcp,
+    // `false` is the default, so only `true` is written.
+    linear_comment: n.linear_comment || undefined,
+    prompt: n.prompt,
+    bash: n.bash,
+    command: n.command,
+    script: n.script,
+    runtime: n.runtime,
+    deps: n.deps,
+    loop,
+    approval,
+    cancel: n.cancel,
+  });
+}
+
 /** Serialize a workflow to YAML, keeping each node's single body + set options. */
 export function toYaml(wf: EditorWorkflow): string {
   const doc = clean({
@@ -135,44 +177,7 @@ export function toYaml(wf: EditorWorkflow): string {
     description: wf.description,
     provider: wf.provider,
     model: wf.model,
-    nodes: wf.nodes.map((n) => {
-      const loop = n.loop
-        ? clean(n.loop as unknown as Record<string, unknown>)
-        : undefined;
-      const approval = n.approval
-        ? clean(n.approval as unknown as Record<string, unknown>)
-        : undefined;
-      return clean({
-        id: n.id,
-        depends_on: n.depends_on,
-        when: n.when,
-        provider: n.provider,
-        model: n.model,
-        effort: n.effort,
-        context: n.context,
-        category: n.category,
-        artifact: n.artifact,
-        trigger_rule: n.trigger_rule,
-        timeout: n.timeout,
-        output_format: n.output_format,
-        // Fields the editor has no controls for yet: carried through so a
-        // save from the canvas doesn't delete what was written in YAML.
-        retries: n.retries,
-        hooks: n.hooks,
-        mcp: n.mcp,
-        // `false` is the default, so only `true` is written.
-        linear_comment: n.linear_comment || undefined,
-        prompt: n.prompt,
-        bash: n.bash,
-        command: n.command,
-        script: n.script,
-        runtime: n.runtime,
-        deps: n.deps,
-        loop,
-        approval,
-        cancel: n.cancel,
-      });
-    }),
+    nodes: wf.nodes.map(nodeToDoc),
     ui: uiToDoc(wf.ui),
   });
   return yaml.dump(doc, { lineWidth: 100, noRefs: true });

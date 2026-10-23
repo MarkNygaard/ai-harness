@@ -13,6 +13,8 @@
 //! - `POST /api/authoring/set-ui`           — `{name, ui}` → set/clear the `ui:` block
 //! - `POST /api/authoring/remove-node`      — `{name, id}` → delete a node
 //! - `POST /api/authoring/connect`          — `{name, from, to}` → add an edge
+//! - `POST /api/authoring/steps`            — `{label, description, node}` → save a step
+//! - `DELETE /api/authoring/steps/{id}`     — delete a saved step
 
 use std::sync::Arc;
 
@@ -86,10 +88,157 @@ pub(crate) const EDIT_SOURCE_CHAT: &str = "chat";
 /// somebody else's work.
 pub(crate) const EDIT_SOURCE_LIBRARY: &str = "library";
 
-/// `GET /api/authoring/catalog`
-pub async fn get_catalog(State(state): State<Arc<AppState>>) -> Response {
+/// `GET /api/authoring/catalog` — the bundled building blocks, plus the steps
+/// people saved (`saved_steps`), each marked with whether the caller may
+/// delete it.
+pub async fn get_catalog(
+    State(state): State<Arc<AppState>>,
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<super::runs_routes::RunsState>>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     let creds = crate::http::credentials_routes::connected_clis().await;
-    Json(authoring::catalog(&state.core.project_root, creds)).into_response()
+    let catalog = authoring::catalog(&state.core.project_root, creds);
+    let mut out = match serde_json::to_value(&catalog) {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    // No database: the catalog is exactly what it always was.
+    let saved = match runs.saved_step_store().await {
+        Ok(store) => store.list().await.unwrap_or_default(),
+        Err(_) => Vec::new(),
+    };
+    let caller = Caller::of(&runs, &headers).await;
+    let saved: Vec<serde_json::Value> = saved
+        .into_iter()
+        .map(|s| {
+            serde_json::json!({
+                "id": s.id,
+                "label": s.label,
+                "description": s.description,
+                "node": serde_json::from_str::<serde_json::Value>(&s.node)
+                    .unwrap_or(serde_json::Value::Null),
+                "created_by_label": s.created_by_label,
+                "created_at": s.created_at,
+                "deletable": caller.may_delete(s.created_by.as_deref()),
+            })
+        })
+        .collect();
+    out["saved_steps"] = serde_json::Value::Array(saved);
+    Json(out).into_response()
+}
+
+/// Who is asking, as far as saved steps care.
+struct Caller {
+    /// Without accounts there are no owners: whoever got in may tidy up.
+    open: bool,
+    user_id: Option<String>,
+    admin: bool,
+}
+
+impl Caller {
+    async fn of(
+        runs: &Arc<super::runs_routes::RunsState>,
+        headers: &axum::http::HeaderMap,
+    ) -> Self {
+        use super::accounts::{authenticated_user, mode, Mode, ROLE_ADMIN};
+        let open = mode(runs).await != Mode::Accounts;
+        let user = authenticated_user(runs, headers).await;
+        Caller {
+            open,
+            admin: user.as_ref().is_some_and(|u| u.role == ROLE_ADMIN),
+            user_id: user.map(|u| u.id),
+        }
+    }
+
+    /// A saved step is deleted by whoever saved it, or an administrator.
+    fn may_delete(&self, created_by: Option<&str>) -> bool {
+        self.open || self.admin || (self.user_id.is_some() && self.user_id.as_deref() == created_by)
+    }
+}
+
+#[derive(Deserialize)]
+pub struct SaveStepBody {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+    /// The node, as the editor holds it.
+    pub node: serde_json::Value,
+}
+
+/// `POST /api/authoring/steps` — save a node as a reusable step. Anyone who
+/// can use the builder may. The step is a copy: later changes to it never
+/// reach workflows that already inserted it.
+pub async fn save_step(
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<super::runs_routes::RunsState>>,
+    headers: axum::http::HeaderMap,
+    Json(req): Json<SaveStepBody>,
+) -> Response {
+    let label = req.label.trim();
+    if label.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "give the step a name");
+    }
+    let node = match authoring::validate_step(req.node) {
+        Ok(n) => n,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
+    };
+    let store = match runs.saved_step_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let (user, actor) = super::accounts::caller_trigger(&runs, &headers).await;
+    let id = uuid::Uuid::new_v4().to_string();
+    match store
+        .create(
+            &id,
+            label,
+            req.description.trim(),
+            &node.to_string(),
+            user.as_deref(),
+            actor.as_deref(),
+        )
+        .await
+    {
+        Ok(s) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "id": s.id, "label": s.label })),
+        )
+            .into_response(),
+        Err(e @ harness_persist::SaveStepError::DuplicateLabel(_)) => {
+            err(StatusCode::CONFLICT, e.to_string())
+        }
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
+/// `DELETE /api/authoring/steps/{id}` — by whoever saved it, or an
+/// administrator. Workflows that inserted it keep their copy.
+pub async fn delete_step(
+    axum::extract::Extension(runs): axum::extract::Extension<Arc<super::runs_routes::RunsState>>,
+    headers: axum::http::HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let store = match runs.saved_step_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let step = match store.get(&id).await {
+        Ok(Some(s)) => s,
+        Ok(None) => return err(StatusCode::NOT_FOUND, "no such step"),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    if !Caller::of(&runs, &headers)
+        .await
+        .may_delete(step.created_by.as_deref())
+    {
+        return err(
+            StatusCode::FORBIDDEN,
+            "only whoever saved this step, or an administrator, can delete it",
+        );
+    }
+    match store.delete(&id).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
 }
 
 /// `GET /api/authoring/workflows`
@@ -415,4 +564,30 @@ pub async fn connect_nodes(
     let root = &state.core.project_root;
     let r = authoring::connect_nodes(root, &req.name, &req.from, &req.to);
     mutation_result(&runs, &headers, root, &req.name, r).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn caller(open: bool, user: Option<&str>, admin: bool) -> Caller {
+        Caller {
+            open,
+            user_id: user.map(str::to_string),
+            admin,
+        }
+    }
+
+    #[test]
+    fn a_saved_step_is_deleted_by_its_author_or_an_admin() {
+        let ann = caller(false, Some("ann"), false);
+        assert!(ann.may_delete(Some("ann")));
+        assert!(!ann.may_delete(Some("bob")));
+        // Saved before accounts existed: nobody owns it, so only an admin.
+        assert!(!ann.may_delete(None));
+        assert!(caller(false, Some("root"), true).may_delete(Some("bob")));
+        assert!(!caller(false, None, false).may_delete(None), "signed out");
+        // Without accounts there are no owners to protect.
+        assert!(caller(true, None, false).may_delete(Some("bob")));
+    }
 }

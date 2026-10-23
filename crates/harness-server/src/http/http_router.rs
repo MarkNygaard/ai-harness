@@ -350,6 +350,11 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         // ── Workflow authoring API (visual editor + MCP) ────────────────────
         .route("/api/authoring/catalog", get(workflows_routes::get_catalog))
+        .route("/api/authoring/steps", post(workflows_routes::save_step))
+        .route(
+            "/api/authoring/steps/{id}",
+            delete(workflows_routes::delete_step),
+        )
         .route(
             "/api/authoring/workflows",
             get(workflows_routes::list_workflows).post(workflows_routes::save_workflow),
