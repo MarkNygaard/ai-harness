@@ -445,9 +445,12 @@ When a Linear issue starts a run, the harness reports on the issue when the run
 completes: the final response in the agent session for a delegated issue, or a
 comment. By default that's a single line saying the run completed.
 
-Set `linear_comment: true` on one node and its output is posted instead,
-followed by that line. That way the people on the issue see what the run found
-without opening the harness:
+Set `linear_comment: true` on one node and its output is posted as a comment on
+the issue, followed by that line. That way the people on the issue see what the
+run found without opening the harness. It is a regular comment even for a
+delegated issue: Linear folds an agent session's final response into one
+collapsed line, so there the session just closes with "Finished. The summary is
+posted as a comment on this issue."
 
 ```yaml
 - id: linear-summary
