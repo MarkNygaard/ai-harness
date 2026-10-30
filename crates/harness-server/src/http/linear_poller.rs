@@ -733,21 +733,24 @@ const MAX_LINEAR_SUMMARY_CHARS: usize = 12_000;
 /// done are internal and are stripped.
 fn completion_message(detail: &harness_persist::RunDetail, run_id: &str) -> String {
     let done = format!("✅ ai-harness run `{run_id}` completed.");
-    let Some(id) = detail
+    match flagged_summary(detail) {
+        Some(text) => format!("{text}\n\n---\n{done}"),
+        None => done,
+    }
+}
+
+/// The output of the node marked `linear_comment: true`, ready to post: `None`
+/// when no node is marked, it didn't succeed, or it said nothing.
+fn flagged_summary(detail: &harness_persist::RunDetail) -> Option<String> {
+    let id = detail
         .graph
         .iter()
         .find(|m| m.linear_comment)
-        .map(|m| m.id.as_str())
-    else {
-        return done;
-    };
-    let Some(node) = detail
+        .map(|m| m.id.as_str())?;
+    let node = detail
         .nodes
         .iter()
-        .find(|n| n.node_id == id && n.status == "success")
-    else {
-        return done;
-    };
+        .find(|n| n.node_id == id && n.status == "success")?;
     let text: String = node
         .output
         .lines()
@@ -756,15 +759,93 @@ fn completion_message(detail: &harness_persist::RunDetail, run_id: &str) -> Stri
         .join("\n");
     let text = text.trim();
     if text.is_empty() {
-        return done;
+        return None;
     }
-    let text = if text.chars().count() > MAX_LINEAR_SUMMARY_CHARS {
+    Some(if text.chars().count() > MAX_LINEAR_SUMMARY_CHARS {
         let cut: String = text.chars().take(MAX_LINEAR_SUMMARY_CHARS).collect();
         format!("{cut}…\n\n_(Shortened — the full text is in the run.)_")
     } else {
         text.to_string()
+    })
+}
+
+/// Marks a claim's completion as reported, in `reported_nodes` beside the node
+/// ids — which can't start with `__`, so it never collides with one.
+const COMPLETION_REPORTED: &str = "__completion__";
+
+/// The session's closing line when the summary went to a comment instead.
+const SUMMARY_IN_COMMENT: &str = "Finished. The summary is posted as a comment on this issue.";
+
+/// What a completed run posts, and where.
+#[derive(Debug, PartialEq, Eq)]
+struct CompletionReport {
+    /// A regular comment on the issue.
+    comment: Option<String>,
+    /// The `response` that closes a delegated agent session.
+    response: Option<String>,
+}
+
+/// Decide what a completed run posts.
+///
+/// A delegated session's closing `response` is shown by Linear as one
+/// collapsed "Finished …" line in the session card, with the rest behind a
+/// click — so a workflow's summary put there is all but invisible on the issue.
+/// The summary goes in a regular comment, where it reads in the activity feed,
+/// and the session closes with a line pointing at it. Without a summary the
+/// completion line alone is enough for the session.
+fn plan_completion(
+    detail: &harness_persist::RunDetail,
+    run_id: &str,
+    has_session: bool,
+) -> CompletionReport {
+    let full = completion_message(detail, run_id);
+    match (has_session, flagged_summary(detail).is_some()) {
+        (true, true) => CompletionReport {
+            comment: Some(full),
+            response: Some(SUMMARY_IN_COMMENT.to_string()),
+        },
+        (true, false) => CompletionReport {
+            comment: None,
+            response: Some(full),
+        },
+        (false, _) => CompletionReport {
+            comment: Some(full),
+            response: None,
+        },
+    }
+}
+
+/// Post a completed run's report to its issue. A session that can't be
+/// reached falls back to a comment carrying everything, so the summary is
+/// never lost to a failed activity.
+async fn report_completion(
+    client: &LinearClient,
+    claim: &LinearClaim,
+    detail: &harness_persist::RunDetail,
+) {
+    let plan = plan_completion(detail, &claim.run_id, claim.agent_session_id.is_some());
+    let commented = match &plan.comment {
+        Some(body) => client.add_comment(&claim.issue_id, body).await.is_ok(),
+        None => false,
     };
-    format!("{text}\n\n---\n{done}")
+    if let Some(response) = plan.response {
+        // The comment didn't land: the session gets the full text after all.
+        let body = if plan.comment.is_some() && !commented {
+            completion_message(detail, &claim.run_id)
+        } else {
+            response
+        };
+        if !report_to_session(
+            client,
+            claim,
+            AgentActivity::Response { body: body.clone() },
+        )
+        .await
+            && plan.comment.is_none()
+        {
+            let _ = client.add_comment(&claim.issue_id, &body).await;
+        }
+    }
 }
 
 /// `task` with the issue's linked resources appended — what integrations attach
@@ -913,14 +994,13 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
                     // is done as soon as the run is.
                     None => true,
                 };
-                // A `response` activity is what marks a delegated session
-                // complete; a poller-claimed issue gets the comment instead.
-                // Either carries the workflow's summary when it has one.
-                let msg = completion_message(&detail, &c.run_id);
-                if !report_to_session(&client, &c, AgentActivity::Response { body: msg.clone() })
-                    .await
-                {
-                    let _ = client.add_comment(&c.issue_id, &msg).await;
+                // Once per run: this block runs again every tick until the move
+                // below lands, and a summary posted each time would bury the
+                // issue in copies of itself.
+                if !c.has_reported(COMPLETION_REPORTED) {
+                    report_completion(&client, &c, &detail).await;
+                    let marked = c.with_reported(&[COMPLETION_REPORTED.to_string()]);
+                    let _ = claim_store.set_session_progress(&c.run_id, &marked).await;
                 }
                 // Closing the claim is what stops the retry, so it is gated on the
                 // move having landed. Left open, the next tick tries again — the
@@ -1541,9 +1621,9 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 mod tests {
     use super::{
         completion_message, format_local, human_duration, is_agent_session_preamble,
-        ready_state_for, step_action, step_duration, step_position, task_for_issue,
-        unannounced_running_nodes, unreported_finished_nodes, LinearSource,
-        MAX_LINEAR_SUMMARY_CHARS,
+        plan_completion, ready_state_for, step_action, step_duration, step_position,
+        task_for_issue, unannounced_running_nodes, unreported_finished_nodes, LinearClaim,
+        LinearSource, COMPLETION_REPORTED, MAX_LINEAR_SUMMARY_CHARS, SUMMARY_IN_COMMENT,
     };
     use chrono::Utc;
     use harness_sources::linear::{Comment, Issue};
@@ -1937,6 +2017,50 @@ mod tests {
         detail.graph = ["lint", "test"].into_iter().map(meta).collect();
         assert_eq!(step_position("lint", &detail), Some((1, 2)));
         assert_eq!(step_position("test", &detail), Some((2, 2)));
+    }
+
+    /// A delegated session's closing response collapses to one line in Linear,
+    /// so the summary goes in a comment people actually see (ECOM-677).
+    #[test]
+    fn a_delegated_runs_summary_is_a_comment_and_the_session_points_at_it() {
+        let mut summary = node("linear-summary", 1, "success");
+        summary.output = "**Root cause**: Edge for iOS.".into();
+        let mut d = detail_with(vec![node("investigate", 0, "success"), summary]);
+        let mut flagged = meta("linear-summary");
+        flagged.linear_comment = true;
+        d.graph = vec![meta("investigate"), flagged];
+
+        let delegated = plan_completion(&d, "r-7", true);
+        let comment = delegated.comment.expect("the summary is a comment");
+        assert!(comment.starts_with("**Root cause**: Edge for iOS."));
+        assert_eq!(delegated.response.as_deref(), Some(SUMMARY_IN_COMMENT));
+
+        // Poller-claimed: one comment, no session.
+        let polled = plan_completion(&d, "r-7", false);
+        assert_eq!(polled.comment, Some(comment));
+        assert_eq!(polled.response, None);
+
+        // No summary: the session just closes with the completion line, and
+        // nothing is added to the issue's feed.
+        d.graph = vec![meta("investigate"), meta("linear-summary")];
+        let plain = plan_completion(&d, "r-7", true);
+        assert_eq!(plain.comment, None);
+        assert_eq!(
+            plain.response.as_deref(),
+            Some("✅ ai-harness run `r-7` completed.")
+        );
+    }
+
+    #[test]
+    fn the_completion_marker_is_not_a_node() {
+        let c = claim("explore", 0);
+        assert!(!c.has_reported(COMPLETION_REPORTED));
+        let marked = LinearClaim {
+            reported_nodes: c.with_reported(&[COMPLETION_REPORTED.to_string()]),
+            ..c
+        };
+        assert!(marked.has_reported(COMPLETION_REPORTED));
+        assert!(marked.has_reported("explore"), "node reports are kept");
     }
 
     #[test]
