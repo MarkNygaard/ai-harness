@@ -21,6 +21,7 @@ pub(crate) mod kimi_routes;
 pub(crate) mod library_routes;
 pub(crate) mod linear_agent;
 pub(crate) mod linear_attachments;
+pub(crate) mod linear_chat;
 pub(crate) mod linear_connections;
 pub(crate) mod linear_diagnose;
 pub(crate) mod linear_oauth;

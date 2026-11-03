@@ -421,6 +421,41 @@ async fn handle_created(state: &Arc<RunsState>, conn: &ConnectionId, event: Agen
         }
     };
 
+    // A mention asks; delegating hands over work. One extra read at most, when
+    // the payload can't tell, so the acknowledgement still lands in time.
+    let mention = match event.opened_by_mention() {
+        Some(m) => m,
+        None => !delegated_to_app(state, conn, &client, &event).await,
+    };
+    tracing::info!(
+        session = %event.session_id,
+        mention,
+        in_thread = event.in_thread_mention,
+        comment_author = ?event.comment_author_id,
+        creator = ?event.creator.as_ref().and_then(|c| c.id.as_deref()),
+        "linear webhook: session opened by {}",
+        if mention { "a mention" } else { "delegation" }
+    );
+    if mention {
+        if let Err(e) = client
+            .create_agent_activity(
+                &event.session_id,
+                &AgentActivity::Thought {
+                    body: super::linear_chat::ACK.into(),
+                },
+            )
+            .await
+        {
+            tracing::warn!(
+                "linear webhook: failed to acknowledge session {}: {}",
+                event.session_id,
+                e.0
+            );
+        }
+        super::linear_chat::handle_mention(state, conn, event, client).await;
+        return;
+    }
+
     // ── The 10-second acknowledgement. Nothing slower may precede this. ──
     let ack_body = match &event.issue_identifier {
         Some(id) => format!("Picking up {id} — working out which workflow to run."),
@@ -762,6 +797,10 @@ async fn handle_prompted(state: &Arc<RunsState>, conn: &ConnectionId, event: Age
     let Ok(client) = linear_client(state, conn).await else {
         return;
     };
+    // A thread someone opened by mentioning the harness is a conversation.
+    if super::linear_chat::handle_reply(state, &event, &client).await {
+        return;
+    }
     let question = event.prompt_body.clone().unwrap_or_default();
     let body = match answer_for_session(state, &event.session_id, &question).await {
         Some(answer) => answer,
@@ -1409,6 +1448,28 @@ async fn wrong_status_message(
 
 /// Where a delegated issue sits — team, status, delegate. Empty when the event
 /// carried no issue id or the lookup failed.
+/// Whether the session's issue is delegated to this app — how a `created`
+/// event is read when its payload doesn't say whether it was a mention.
+/// Unknown (no app id, no issue, a failed read) counts as delegated, which is
+/// what every session was treated as before mentions became questions.
+async fn delegated_to_app(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+    client: &LinearClient,
+    event: &AgentSessionEvent,
+) -> bool {
+    let (Some(app), Some(issue)) = (
+        super::linear_oauth::app_user_id(state, conn).await,
+        event.issue_id.as_deref(),
+    ) else {
+        return true;
+    };
+    match client.issue_context(issue).await {
+        Ok(ctx) => ctx.delegate_id.as_deref() == Some(app.as_str()),
+        Err(_) => true,
+    }
+}
+
 async fn issue_context(
     state: &Arc<RunsState>,
     conn: &ConnectionId,

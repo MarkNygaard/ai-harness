@@ -451,6 +451,33 @@ pub(crate) async fn call_tool(
                 Err(e) => tool_error(e.0),
             }
         }
+        "pr_diff" => {
+            let url = s("url");
+            let Some(pr) = harness_sources::github::parse_pr_url(&url) else {
+                return tool_error("`url` must be a GitHub pull request URL");
+            };
+            let project = s("project");
+            let token = if project.is_empty() {
+                state.github_token().await
+            } else {
+                state.github_token_for_project(&project).await
+            };
+            match harness_sources::github::GithubClient::new(token)
+                .pr_files(&pr)
+                .await
+            {
+                Ok(files) => {
+                    let path = s("path");
+                    let view = harness_sources::github::diff_view(
+                        &files,
+                        (!path.is_empty()).then_some(path.as_str()),
+                        PR_DIFF_BUDGET,
+                    );
+                    to_result(format!("{url}: {} file(s) changed", files.len()), &view)
+                }
+                Err(e) => tool_error(e.0),
+            }
+        }
         "workflow_models" => {
             match resolve_workflow_models(state, &s("workflow"), Some(&s("project"))) {
                 Ok(pairs) => to_result(
@@ -912,6 +939,20 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "pr_diff",
+            "description": "What a GitHub pull request changes: every changed file with its additions and deletions, and the diffs. Read-only. Diffs come whole per file up to a size budget; a file past it is listed with `patch_omitted`, so ask again with `path` (a file, or a folder prefix) to read it. Pass `project` as for pr_status.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "url": { "type": "string", "description": "https://github.com/<owner>/<repo>/pull/<n>" },
+                    "path": { "type": "string", "description": "Only this file, or files under this folder; their diffs are returned whole." },
+                    "project": { "type": "string", "description": "Project whose GitHub credential to use; empty = the global one." }
+                },
+                "required": ["url"],
+            }
+        }),
+        json!({
             "name": "workflow_models",
             "description": "List the distinct provider+model pairs a workflow uses (default, nodes, loop bodies) — the candidate swap targets for an A/B test.",
             "inputSchema": {
@@ -1271,7 +1312,7 @@ fn is_issue_identifier(s: &str) -> bool {
 /// failed after opening its PR, then a rerun that opened another. A PR is
 /// fetched once however many runs mention it (a `revise-pr` run names the PR
 /// it revised).
-async fn issue_prs(state: &Arc<RunsState>, issue: &str) -> Result<Value, String> {
+pub(crate) async fn issue_prs(state: &Arc<RunsState>, issue: &str) -> Result<Value, String> {
     /// Enough for an issue's whole history; a cap so a malformed title
     /// convention can't turn this into a scan of every run.
     const MAX_RUNS: i64 = 20;
@@ -1466,9 +1507,10 @@ mod tests {
             "library_list",
             "library_install",
             "library_uninstall",
-            // Which of an issue's PRs to test.
+            // Which of an issue's PRs to test, and what each changes.
             "issue_prs",
             "pr_status",
+            "pr_diff",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
@@ -1594,7 +1636,13 @@ const RUN_TOOLS: &[&str] = &[
     "run_findings",
     "issue_prs",
     "pr_status",
+    "pr_diff",
 ];
+
+/// Characters of diff one `pr_diff` call returns before it lists the rest by
+/// name. A typical harness PR is well under it; a sweeping one is read a
+/// folder at a time.
+const PR_DIFF_BUDGET: usize = 60_000;
 /// Reading and diagnosing what triggers a run, as opposed to starting one.
 const LINEAR_TOOLS: &[&str] = &["linear_states", "linear_bindings", "linear_check"];
 const AUTHORING_TOOLS: &[&str] = &[
