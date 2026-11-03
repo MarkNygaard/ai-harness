@@ -54,6 +54,100 @@ pub fn parse_pr_url(url: &str) -> Option<PrRef> {
     })
 }
 
+/// One file a pull request changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PrFile {
+    pub path: String,
+    /// `added`, `modified`, `removed`, `renamed`, …
+    pub status: String,
+    pub additions: u64,
+    pub deletions: u64,
+    /// The old path of a renamed file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_path: Option<String>,
+    /// The unified diff. `None` for a binary file, or one too large for
+    /// GitHub to diff.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patch: Option<String>,
+}
+
+/// Parse a `pulls/{n}/files` page.
+pub fn parse_pr_files(v: &Value) -> Vec<PrFile> {
+    let s = |f: &Value, k: &str| f.get(k).and_then(Value::as_str).map(str::to_string);
+    v.as_array()
+        .map(|files| {
+            files
+                .iter()
+                .filter_map(|f| {
+                    Some(PrFile {
+                        path: s(f, "filename")?,
+                        status: s(f, "status").unwrap_or_default(),
+                        additions: f.get("additions").and_then(Value::as_u64).unwrap_or(0),
+                        deletions: f.get("deletions").and_then(Value::as_u64).unwrap_or(0),
+                        previous_path: s(f, "previous_filename"),
+                        patch: s(f, "patch"),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A PR's diff as an agent reads it: every file listed, diffs included until
+/// `budget` characters, the rest marked for a second call by `path`.
+///
+/// Diffs are never cut mid-file — half a hunk reads as a different change — so
+/// a file either comes whole or is left out with a note saying how to get it.
+/// `path` narrows to one file (or a folder prefix), whole whatever the budget.
+pub fn diff_view(files: &[PrFile], path: Option<&str>, budget: usize) -> Value {
+    let wanted: Vec<&PrFile> = match path.map(str::trim).filter(|p| !p.is_empty()) {
+        Some(p) => files
+            .iter()
+            .filter(|f| f.path == p || f.path.starts_with(&format!("{}/", p.trim_end_matches('/'))))
+            .collect(),
+        None => files.iter().collect(),
+    };
+    let narrowed = path.is_some_and(|p| !p.trim().is_empty());
+    let mut used = 0usize;
+    let mut omitted = 0usize;
+    let shown: Vec<Value> = wanted
+        .iter()
+        .map(|f| {
+            let mut v = serde_json::json!({
+                "path": f.path,
+                "status": f.status,
+                "additions": f.additions,
+                "deletions": f.deletions,
+            });
+            if let Some(prev) = &f.previous_path {
+                v["previous_path"] = Value::String(prev.clone());
+            }
+            match &f.patch {
+                Some(patch) if narrowed || used + patch.len() <= budget => {
+                    used += patch.len();
+                    v["patch"] = Value::String(patch.clone());
+                }
+                Some(_) => {
+                    omitted += 1;
+                    v["patch_omitted"] = Value::String("over budget; ask again with `path`".into());
+                }
+                None => {
+                    v["patch_omitted"] =
+                        Value::String("binary, or too large for GitHub to diff".into());
+                }
+            }
+            v
+        })
+        .collect();
+    serde_json::json!({
+        "files_changed": files.len(),
+        "additions": files.iter().map(|f| f.additions).sum::<u64>(),
+        "deletions": files.iter().map(|f| f.deletions).sum::<u64>(),
+        "shown": shown,
+        "omitted_for_budget": omitted,
+    })
+}
+
 /// What a person needs to decide whether to test a PR.
 #[derive(Debug, Clone, Serialize)]
 pub struct PrSnapshot {
@@ -286,6 +380,27 @@ impl GithubClient {
 
     /// A PR's state, CI and preview URL. Only the PR itself is required; a check
     /// or deployment read that fails becomes a warning on the snapshot.
+    /// The files a pull request changes, with their diffs. Up to 300 files,
+    /// which is past where reading a PR file by file stops being useful.
+    pub async fn pr_files(&self, pr: &PrRef) -> Result<Vec<PrFile>, GithubError> {
+        let mut out = Vec::new();
+        for page in 1..=3 {
+            let v = self
+                .get(&format!(
+                    "/repos/{}/{}/pulls/{}/files?per_page=100&page={page}",
+                    pr.owner, pr.repo, pr.number
+                ))
+                .await?;
+            let files = parse_pr_files(&v);
+            let full = files.len() == 100;
+            out.extend(files);
+            if !full {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     pub async fn pr_snapshot(&self, pr: &PrRef) -> Result<PrSnapshot, GithubError> {
         let base = format!("/repos/{}/{}", pr.owner, pr.repo);
         let pull = parse_pull(&self.get(&format!("{base}/pulls/{}", pr.number)).await?)?;
@@ -434,5 +549,55 @@ mod tests {
             preview_url_from_statuses(&json!([{ "state": "success", "target_url": "https://ci" }])),
             None
         );
+    }
+
+    fn files() -> Vec<PrFile> {
+        parse_pr_files(&json!([
+            { "filename": "apps/web/lib/sentry/filters.ts", "status": "modified",
+              "additions": 5, "deletions": 0, "patch": "@@ -90 +90,5 @@\n+  \"logMutedMessage\"," },
+            { "filename": "apps/web/lib/sentry/filters.test.ts", "status": "modified",
+              "additions": 2, "deletions": 0, "patch": "@@ -137 +137,2 @@\n+  case" },
+            { "filename": "public/logo.png", "status": "added", "additions": 0, "deletions": 0 },
+            { "filename": "docs/new.md", "previous_filename": "docs/old.md",
+              "status": "renamed", "additions": 0, "deletions": 0 }
+        ]))
+    }
+
+    #[test]
+    fn a_prs_files_are_read_with_their_diffs() {
+        let f = files();
+        assert_eq!(f.len(), 4);
+        assert_eq!(f[0].path, "apps/web/lib/sentry/filters.ts");
+        assert_eq!(f[0].additions, 5);
+        assert!(f[2].patch.is_none(), "binary");
+        assert_eq!(f[3].previous_path.as_deref(), Some("docs/old.md"));
+    }
+
+    #[test]
+    fn a_diff_is_shown_whole_files_within_the_budget() {
+        let f = files();
+        let all = diff_view(&f, None, 10_000);
+        assert_eq!(all["files_changed"], 4);
+        assert_eq!(all["additions"], 7);
+        assert!(all["shown"][0]["patch"].is_string());
+        assert_eq!(all["omitted_for_budget"], 0);
+        assert!(all["shown"][2]["patch_omitted"]
+            .as_str()
+            .unwrap()
+            .contains("binary"));
+
+        // A budget that fits the first file only: the second is listed, not cut.
+        let first = f[0].patch.as_ref().unwrap().len();
+        let tight = diff_view(&f, None, first);
+        assert!(tight["shown"][0]["patch"].is_string());
+        assert!(tight["shown"][1]["patch"].is_null());
+        assert_eq!(tight["omitted_for_budget"], 1);
+
+        // Asking by path gets the file whole, whatever the budget; a folder too.
+        let one = diff_view(&f, Some("apps/web/lib/sentry/filters.test.ts"), 0);
+        assert_eq!(one["shown"].as_array().unwrap().len(), 1);
+        assert!(one["shown"][0]["patch"].is_string());
+        let folder = diff_view(&f, Some("apps/web/lib/sentry/"), 0);
+        assert_eq!(folder["shown"].as_array().unwrap().len(), 2);
     }
 }

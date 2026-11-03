@@ -268,6 +268,11 @@ the issue as context:
   connected.
 - **Code:** the project's code, read-only, when the issue's team is bound to
   exactly one harness project.
+- **An open pull request.** Once the issue has an open PR, the harness reads
+  the code on that PR's branch for its repo instead of the base branch, so "how
+  does it work now?" is answered from the change. The answer says which PR it
+  read. With several open PRs it reads the newest. "What did the PR change?"
+  works for any of them: it reads the diff.
 
 Reply in the thread to follow up; it is one conversation. It also appears in
 your **Chat** list in the dashboard.

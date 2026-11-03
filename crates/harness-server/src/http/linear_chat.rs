@@ -111,6 +111,73 @@ async fn issue_project(
     }
 }
 
+/// `owner/repo` of a GitHub URL — https, ssh, with or without `.git`.
+fn github_slug(url: &str) -> Option<String> {
+    let rest = url
+        .trim()
+        .strip_prefix("https://github.com/")
+        .or_else(|| url.trim().strip_prefix("http://github.com/"))
+        .or_else(|| url.trim().strip_prefix("git@github.com:"))
+        .or_else(|| url.trim().strip_prefix("ssh://git@github.com/"))?;
+    let mut parts = rest.trim_end_matches('/').split('/');
+    let owner = parts.next().filter(|s| !s.is_empty())?;
+    let repo = parts.next().filter(|s| !s.is_empty())?;
+    Some(format!("{owner}/{}", repo.trim_end_matches(".git")).to_lowercase())
+}
+
+/// The pull request whose code the conversation should read: the newest open
+/// one for the issue (`prs` as `issue_prs` returns them, newest first), in a
+/// repo of the project. `repos` is the project's layout as (folder, git url);
+/// a single-repo project has one entry with no folder.
+///
+/// Once a PR is open, "how does it work now?" is a question about the change.
+/// Answering it from the base branch would be confidently wrong.
+fn pr_pin(prs: &Value, repos: &[(Option<String>, String)]) -> Option<Value> {
+    prs.as_array()?.iter().find_map(|pr| {
+        if pr.get("state").and_then(Value::as_str) != Some("open") {
+            return None;
+        }
+        let url = pr.get("url").and_then(Value::as_str)?;
+        let sha = pr
+            .get("head_sha")
+            .and_then(Value::as_str)
+            .filter(|s| !s.is_empty())?;
+        let parsed = harness_sources::github::parse_pr_url(url)?;
+        let slug = format!("{}/{}", parsed.owner, parsed.repo).to_lowercase();
+        let (folder, _) = repos
+            .iter()
+            .find(|(_, git)| github_slug(git).as_deref() == Some(slug.as_str()))?;
+        Some(json!({
+            "url": url,
+            "number": parsed.number,
+            "branch": pr.get("head_branch").and_then(Value::as_str).unwrap_or(""),
+            "sha": sha,
+            "folder": folder,
+        }))
+    })
+}
+
+/// [`pr_pin`] for `identifier` in `project`, reading both.
+async fn open_pr_pin(state: &Arc<RunsState>, identifier: &str, project: &str) -> Option<Value> {
+    let found = super::mcp_routes::issue_prs(state, identifier).await.ok()?;
+    let p = state
+        .project_store()
+        .await
+        .ok()?
+        .get(project)
+        .await
+        .ok()??;
+    let repos: Vec<(Option<String>, String)> = if p.repos.is_empty() {
+        vec![(None, p.git_url.clone())]
+    } else {
+        super::runs_routes::plan_layout(&p.git_url, &p.base_branch, &p.repos)
+            .into_iter()
+            .map(|r| (Some(r.folder), r.url))
+            .collect()
+    };
+    pr_pin(&found["prs"], &repos)
+}
+
 /// What the agent is told about where it is answering, and the issue itself.
 ///
 /// The issue's text was written by whoever could edit it — Sentry, a
@@ -324,6 +391,13 @@ pub(crate) async fn handle_mention(
     let mut ctx = json!({ "linear_issue": identifier });
     if let Some(p) = &project {
         ctx["project"] = Value::String(p.clone());
+        // With a PR open, read the change rather than the base branch: that
+        // repo is pinned to the PR's head commit, the others to their base.
+        if let Some(pin) = open_pr_pin(state, &identifier, p).await {
+            ctx["checkout"] = json!([{ "folder": pin["folder"], "sha": pin["sha"] }]);
+            ctx[chat_routes::CHECKOUT_UNBUILT] = json!(true);
+            ctx["pr"] = pin;
+        }
     }
     let store = match state.chat_store().await {
         Ok(s) => s,
@@ -441,6 +515,74 @@ pub(crate) async fn handle_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn github_urls_name_their_repo_however_written() {
+        for url in [
+            "https://github.com/DILLING-A-S/frontend-monorepo.git",
+            "https://github.com/dilling-a-s/frontend-monorepo",
+            "git@github.com:DILLING-A-S/frontend-monorepo.git",
+            "ssh://git@github.com/DILLING-A-S/frontend-monorepo/",
+        ] {
+            assert_eq!(
+                github_slug(url).as_deref(),
+                Some("dilling-a-s/frontend-monorepo"),
+                "{url}"
+            );
+        }
+        assert_eq!(github_slug("https://gitlab.com/a/b"), None);
+    }
+
+    #[test]
+    fn the_newest_open_pr_in_a_project_repo_is_read() {
+        let repos = vec![
+            (
+                Some("frontend".to_string()),
+                "https://github.com/DILLING-A-S/frontend-monorepo.git".to_string(),
+            ),
+            (
+                Some("backend".to_string()),
+                "https://github.com/DILLING-A-S/webapi-dotnet.git".to_string(),
+            ),
+        ];
+        let prs = json!([
+            // Newest first: merged, then the open one, then an older open one.
+            { "url": "https://github.com/DILLING-A-S/frontend-monorepo/pull/1131",
+              "state": "merged", "head_sha": "aaa", "head_branch": "x" },
+            { "url": "https://github.com/DILLING-A-S/frontend-monorepo/pull/1130",
+              "state": "open", "head_sha": "bbb", "head_branch": "harness/ecom-677" },
+            { "url": "https://github.com/DILLING-A-S/webapi-dotnet/pull/12",
+              "state": "open", "head_sha": "ccc", "head_branch": "y" }
+        ]);
+        let pin = pr_pin(&prs, &repos).unwrap();
+        assert_eq!(pin["number"], 1130);
+        assert_eq!(pin["sha"], "bbb");
+        assert_eq!(pin["folder"], "frontend");
+        assert_eq!(pin["branch"], "harness/ecom-677");
+
+        // A single-repo project: no folder.
+        let single = vec![(
+            None,
+            "git@github.com:DILLING-A-S/webapi-dotnet.git".to_string(),
+        )];
+        let pin = pr_pin(&prs, &single).unwrap();
+        assert_eq!(pin["number"], 12);
+        assert!(pin["folder"].is_null());
+
+        // Nothing open, or open only in a repo the project doesn't have.
+        assert!(pr_pin(
+            &json!([{ "url": "https://github.com/a/b/pull/1", "state": "closed",
+                                 "head_sha": "d" }]),
+            &repos
+        )
+        .is_none());
+        assert!(pr_pin(
+            &json!([{ "url": "https://github.com/other/repo/pull/1", "state": "open",
+                                 "head_sha": "d" }]),
+            &repos
+        )
+        .is_none());
+    }
 
     #[test]
     fn only_a_plain_yes_goes_ahead() {

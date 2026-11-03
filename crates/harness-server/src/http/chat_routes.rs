@@ -890,6 +890,10 @@ async fn code_checkout(
     }
     let token = state.github_token_for_project(project).await;
     let pinned = pinned_commits(&conv.context.0);
+    // A pin set before any checkout was built — a pull request's head commit,
+    // chosen when a Linear conversation started — may not be in the local
+    // clone yet, so the first build fetches even though it is pinned.
+    let unbuilt = conv.context.0.get(CHECKOUT_UNBUILT) == Some(&json!(true));
 
     let _one_at_a_time = CHECKOUT_LOCK.lock().await;
     let make = |pin: Option<Vec<harness_runner::SnapshotRepo>>| {
@@ -905,7 +909,7 @@ async fn code_checkout(
                     // A single-repo project already has a clone the runs use.
                     None => {
                         let clone = projects_dir.join(&project);
-                        if pin.is_none() {
+                        if pin.is_none() || unbuilt {
                             let _ = harness_runner::fetch_repo(&clone, token.as_deref());
                         }
                         (clone, format!("origin/{base}"))
@@ -945,12 +949,15 @@ async fn code_checkout(
     };
     let (dir, repos) = made;
 
-    if pinned.as_deref() != Some(repos.as_slice()) {
+    if unbuilt || pinned.as_deref() != Some(repos.as_slice()) {
         let mut ctx = conv.context.0.clone();
         ctx["checkout"] = json!(repos
             .iter()
             .map(|r| json!({ "folder": r.folder, "sha": r.sha }))
             .collect::<Vec<_>>());
+        if let Some(obj) = ctx.as_object_mut() {
+            obj.remove(CHECKOUT_UNBUILT);
+        }
         if let Ok(store) = state.chat_store().await {
             let _ = store.set_context(&conv.id, &ctx).await;
         }
@@ -966,10 +973,46 @@ async fn code_checkout(
         })
         .collect::<Vec<_>>()
         .join(", ");
-    Ok(CodeCheckout {
-        dir,
-        note: code_note(&conv.provider, project, &at),
-    })
+    let mut note = code_note(&conv.provider, project, &at);
+    if let Some(pr) = pr_note(&conv.context.0, &repos) {
+        note.push(' ');
+        note.push_str(&pr);
+    }
+    Ok(CodeCheckout { dir, note })
+}
+
+/// Context key: the checkout pin was set before any checkout was built.
+pub(crate) const CHECKOUT_UNBUILT: &str = "checkout_unbuilt";
+
+/// Which pull request the checkout reads, when the conversation was pinned to
+/// one — said plainly, so an answer about "the code" is never mistaken for the
+/// base branch. `None` once the pin no longer points at the PR (a force-push
+/// dropped its commit and the checkout fell back to the base branch).
+fn pr_note(context: &Value, repos: &[harness_runner::SnapshotRepo]) -> Option<String> {
+    let pr = context.get("pr")?;
+    let sha = pr.get("sha")?.as_str()?;
+    let folder = pr.get("folder").and_then(Value::as_str);
+    let on_pr = repos
+        .iter()
+        .any(|r| r.folder.as_deref() == folder && r.sha == sha);
+    if !on_pr {
+        return None;
+    }
+    let number = pr.get("number").and_then(Value::as_u64)?;
+    let branch = pr
+        .get("branch")
+        .and_then(Value::as_str)
+        .unwrap_or("its branch");
+    let url = pr.get("url").and_then(Value::as_str).unwrap_or("");
+    let which = match folder {
+        Some(f) => format!("`{f}/` is"),
+        None => "the code is".to_string(),
+    };
+    Some(format!(
+        "Because the issue has an open pull request, {which} pull request #{number} \
+         (`{branch}`, {url}) — the change, not the base branch. Say so when it matters. \
+         For what the PR changes compared with the base, use pr_diff."
+    ))
 }
 
 /// What the agent is told about the checkout. The tools differ by agent:
@@ -1025,6 +1068,7 @@ ids, statuses, PR numbers or workflow contents. Typical questions and where the 
 run_node_output for that step's output; run_activity_errors, run_list.
 - Which pull request to test for a Linear issue (e.g. ECOM-44), or whether a PR is merged: \
 issue_prs, pr_status. Recommend one, say why in a sentence, and give its preview link.
+- What a pull request changes, or whether it does what the issue asks: pr_diff.
 - Why a Linear issue did not start: linear_check, linear_bindings, linear_states.
 - Creating or changing a workflow: workflow_catalog and workflow_get first, workflow_validate \
 before workflow_save. Saving keeps the previous version, so edits can be undone.
@@ -1282,6 +1326,35 @@ mod tests {
             label: id,
             models: models.to_vec(),
         }
+    }
+
+    #[test]
+    fn the_note_names_the_pr_only_while_the_checkout_is_on_it() {
+        let ctx = json!({ "pr": {
+            "url": "https://github.com/acme/shop/pull/1130", "number": 1130,
+            "branch": "harness/ecom-677", "sha": "bbb", "folder": "frontend" } });
+        let on_pr = [
+            harness_runner::SnapshotRepo {
+                folder: Some("frontend".into()),
+                sha: "bbb".into(),
+            },
+            harness_runner::SnapshotRepo {
+                folder: Some("backend".into()),
+                sha: "main-tip".into(),
+            },
+        ];
+        let note = pr_note(&ctx, &on_pr).unwrap();
+        assert!(note.contains("`frontend/` is pull request #1130"), "{note}");
+        assert!(note.contains("pr_diff"));
+
+        // The PR's commit was dropped by a force-push and the checkout fell
+        // back to the base branch: saying "this is the PR" would be false.
+        let fell_back = [harness_runner::SnapshotRepo {
+            folder: Some("frontend".into()),
+            sha: "main-tip".into(),
+        }];
+        assert_eq!(pr_note(&ctx, &fell_back), None);
+        assert_eq!(pr_note(&json!({}), &on_pr), None);
     }
 
     #[test]
