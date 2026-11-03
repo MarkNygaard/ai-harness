@@ -241,6 +241,14 @@ export function EditorConnectionPage() {
                       {data?.run_tools.join(" · ")}
                     </div>
                   </div>
+                  {!!data?.schedule_tools?.length && (
+                    <div>
+                      <div className="mb-1 font-medium">Schedules</div>
+                      <div className="font-mono text-muted-foreground">
+                        {data.schedule_tools.join(" · ")}
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <div className="mb-1 font-medium">Authoring</div>
                     <div className="font-mono text-muted-foreground">

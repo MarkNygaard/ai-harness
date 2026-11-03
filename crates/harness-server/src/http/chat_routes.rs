@@ -1069,6 +1069,8 @@ run_node_output for that step's output; run_activity_errors, run_list.
 - Which pull request to test for a Linear issue (e.g. ECOM-44), or whether a PR is merged: \
 issue_prs, pr_status. Recommend one, say why in a sentence, and give its preview link.
 - What a pull request changes, or whether it does what the issue asks: pr_diff.
+- Workflows that run on a schedule: schedule_list. To set one up or change it, check the \
+cron expression with schedule_preview first, then schedule_create or schedule_update.
 - Why a Linear issue did not start: linear_check, linear_bindings, linear_states.
 - Creating or changing a workflow: workflow_catalog and workflow_get first, workflow_validate \
 before workflow_save. Saving keeps the previous version, so edits can be undone.
