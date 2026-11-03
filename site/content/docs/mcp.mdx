@@ -161,6 +161,25 @@ Useful if you are not using Linear, or for the A/B case below.
 | `run_trigger_pair` | Start the **same task twice** on different models |
 | `run_linear_claim` | Claim a Linear issue for a run |
 
+### Schedules
+
+The same [schedules](/docs/schedules) as the Schedules page: workflows that
+run at set times with no Linear issue behind them.
+
+| Tool | What it does |
+| --- | --- |
+| `schedule_list` | Every schedule, with its next run and the last run it started |
+| `schedule_preview` | The next five times a cron expression fires in a timezone, or why it's invalid |
+| `schedule_create` | Schedule a workflow: project, workflow, cron, timezone, task |
+| `schedule_update` | Change a schedule. Only the fields you give change; `enabled: false` pauses it |
+| `schedule_delete` | Delete a schedule. The runs it started are kept |
+| `schedule_run_now` | Start one run now, without moving the schedule |
+
+Creating, changing, deleting and starting schedules is for administrators,
+as on the page. A personal token must be an administrator's; the shared MCP key,
+which an administrator issues, may do it too. In the built-in chat each of
+these waits for you to confirm.
+
 ### Diagnosing Linear
 
 | Tool | What it does |

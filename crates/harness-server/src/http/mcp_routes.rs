@@ -478,6 +478,78 @@ pub(crate) async fn call_tool(
                 Err(e) => tool_error(e.0),
             }
         }
+        // ── Schedules ───────────────────────────────────────────────────────
+        "schedule_list" => match super::schedules_routes::list(state).await {
+            Ok(rows) => to_result(
+                format!("{} schedule(s)", rows.len()),
+                &json!({ "schedules": rows }),
+            ),
+            Err((_, msg)) => tool_error(msg),
+        },
+        "schedule_preview" => match super::schedules_routes::preview(&s("cron"), &s("timezone")) {
+            Ok(next) => to_result(
+                format!(
+                    "next: {}",
+                    next.first().map(|t| t.to_rfc3339()).unwrap_or_default()
+                ),
+                &json!({ "next": next }),
+            ),
+            Err(e) => tool_error(e),
+        },
+        "schedule_create" | "schedule_update" | "schedule_delete" | "schedule_run_now" => {
+            if let Err(e) = may_change_schedules(state, actor).await {
+                return tool_error(e);
+            }
+            use super::schedules_routes as sched;
+            let done = match name {
+                "schedule_create" => {
+                    let base = sched::ScheduleRequest {
+                        name: String::new(),
+                        project: String::new(),
+                        workflow: String::new(),
+                        cron: String::new(),
+                        timezone: "UTC".into(),
+                        task: String::new(),
+                        enabled: true,
+                    };
+                    sched::create(
+                        state,
+                        schedule_request(base, args),
+                        actor.user_id.as_deref(),
+                    )
+                    .await
+                    .map(|s| {
+                        (
+                            format!("created `{}`, next run {:?}", s.name, s.next_run_at),
+                            json!(s),
+                        )
+                    })
+                }
+                "schedule_update" => match sched::get(state, &s("id")).await {
+                    Ok(current) => {
+                        let req =
+                            schedule_request(sched::ScheduleRequest::from_schedule(&current), args);
+                        sched::update(state, &s("id"), req).await.map(|s| {
+                            (
+                                format!("updated `{}`, next run {:?}", s.name, s.next_run_at),
+                                json!(s),
+                            )
+                        })
+                    }
+                    Err(e) => Err(e),
+                },
+                "schedule_delete" => sched::delete(state, &s("id"))
+                    .await
+                    .map(|()| ("deleted".to_string(), json!({ "deleted": s("id") }))),
+                _ => sched::run_now(state, &s("id"))
+                    .await
+                    .map(|run_id| (format!("started run {run_id}"), json!({ "run_id": run_id }))),
+            };
+            match done {
+                Ok((summary, body)) => to_result(summary, &body),
+                Err((_, msg)) => tool_error(msg),
+            }
+        }
         "workflow_models" => {
             match resolve_workflow_models(state, &s("workflow"), Some(&s("project"))) {
                 Ok(pairs) => to_result(
@@ -953,6 +1025,81 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "schedule_list",
+            "description": "Every scheduled workflow: name, project, workflow, cron and timezone, task text, enabled, next run (UTC) and the last run it started. Read-only.",
+            "inputSchema": { "type": "object", "additionalProperties": false, "properties": {} }
+        }),
+        json!({
+            "name": "schedule_preview",
+            "description": "The next five times a five-field cron expression fires in a timezone, or why it is invalid. Read-only; use it before creating a schedule.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "cron": { "type": "string", "description": "minute hour day-of-month month day-of-week, e.g. `0 8 * * 1` for Mondays at 08:00" },
+                    "timezone": { "type": "string", "description": "IANA timezone, e.g. Europe/Copenhagen" }
+                },
+                "required": ["cron", "timezone"],
+            }
+        }),
+        json!({
+            "name": "schedule_create",
+            "description": "Schedule a workflow to run against a project at set times, with no Linear issue behind it (e.g. a weekly report). The task text becomes the run's $ARGUMENTS. Administrators only.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "name": { "type": "string", "description": "Also titles each run, with the date." },
+                    "project": { "type": "string" },
+                    "workflow": { "type": "string" },
+                    "cron": { "type": "string", "description": "Five fields, read in `timezone`." },
+                    "timezone": { "type": "string", "description": "IANA timezone; default UTC." },
+                    "task": { "type": "string", "description": "What each run is asked to do." },
+                    "enabled": { "type": "boolean", "description": "Default true; false creates it paused." }
+                },
+                "required": ["name", "project", "workflow", "cron"],
+            }
+        }),
+        json!({
+            "name": "schedule_update",
+            "description": "Change a schedule; only the fields given change. The next run is recomputed from now. `enabled: false` pauses it. Administrators only.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": { "type": "string", "description": "From schedule_list." },
+                    "name": { "type": "string" },
+                    "project": { "type": "string" },
+                    "workflow": { "type": "string" },
+                    "cron": { "type": "string" },
+                    "timezone": { "type": "string" },
+                    "task": { "type": "string" },
+                    "enabled": { "type": "boolean" }
+                },
+                "required": ["id"],
+            }
+        }),
+        json!({
+            "name": "schedule_delete",
+            "description": "Delete a schedule. Runs it already started are kept. Administrators only.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"],
+            }
+        }),
+        json!({
+            "name": "schedule_run_now",
+            "description": "Start one run of a schedule now, e.g. to try it out. Its next scheduled time is unchanged. Administrators only.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "id": { "type": "string" } },
+                "required": ["id"],
+            }
+        }),
+        json!({
             "name": "workflow_models",
             "description": "List the distinct provider+model pairs a workflow uses (default, nodes, loop bodies) — the candidate swap targets for an A/B test.",
             "inputSchema": {
@@ -1283,7 +1430,57 @@ pub(crate) const NEEDS_CONFIRMATION: &[&str] = &[
     "run_trigger_pair",
     "workflow_delete",
     "library_uninstall",
+    // A schedule starts runs by itself from then on, so setting one up or
+    // changing it is as weighty as starting a run.
+    "schedule_create",
+    "schedule_update",
+    "schedule_delete",
+    "schedule_run_now",
 ];
+
+/// Changing schedules is for administrators, as on the Schedules page.
+///
+/// Without accounts there are no roles. With them, a personal token or a chat
+/// turn must belong to an administrator. The shared MCP key belongs to nobody
+/// in particular; an administrator issued it, and it already starts runs and
+/// deletes workflows, so it may change schedules too.
+async fn may_change_schedules(
+    state: &Arc<RunsState>,
+    actor: &super::runs_routes::TriggerInfo,
+) -> Result<(), String> {
+    use super::accounts::{mode, Mode, ROLE_ADMIN};
+    if mode(state).await != Mode::Accounts {
+        return Ok(());
+    }
+    let Some(user_id) = actor.user_id.as_deref() else {
+        return Ok(());
+    };
+    match state.user_store().await?.get(user_id).await {
+        Ok(Some(u)) if u.role == ROLE_ADMIN => Ok(()),
+        _ => Err("Only an administrator can create, change, delete or start schedules.".into()),
+    }
+}
+
+/// Fields of a schedule an MCP call sets, onto `base`. Absent fields keep
+/// their value, so `schedule_update` can change just the time.
+fn schedule_request(
+    base: super::schedules_routes::ScheduleRequest,
+    args: &Value,
+) -> super::schedules_routes::ScheduleRequest {
+    let s = |k: &str| args.get(k).and_then(Value::as_str).map(str::to_string);
+    super::schedules_routes::ScheduleRequest {
+        name: s("name").unwrap_or(base.name),
+        project: s("project").unwrap_or(base.project),
+        workflow: s("workflow").unwrap_or(base.workflow),
+        cron: s("cron").unwrap_or(base.cron),
+        timezone: s("timezone").unwrap_or(base.timezone),
+        task: s("task").unwrap_or(base.task),
+        enabled: args
+            .get("enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(base.enabled),
+    }
+}
 
 /// Every tool this endpoint exposes, by name.
 pub(crate) fn tool_names() -> Vec<String> {
@@ -1460,6 +1657,33 @@ mod tests {
     }
 
     #[test]
+    fn a_schedule_update_changes_only_what_it_names() {
+        let base = crate::http::schedules_routes::ScheduleRequest {
+            name: "Weekly INP".into(),
+            project: "dilling-ecom".into(),
+            workflow: "grafana-inp-report".into(),
+            cron: "0 8 * * 1".into(),
+            timezone: "Europe/Copenhagen".into(),
+            task: "Report".into(),
+            enabled: true,
+        };
+        let changed = schedule_request(base, &json!({ "cron": "0 7 * * 1", "enabled": false }));
+        assert_eq!(changed.cron, "0 7 * * 1");
+        assert!(!changed.enabled);
+        assert_eq!(changed.name, "Weekly INP");
+        assert_eq!(changed.timezone, "Europe/Copenhagen");
+        assert_eq!(changed.task, "Report");
+    }
+
+    #[test]
+    fn changing_a_schedule_waits_for_confirmation_in_the_chat() {
+        for tool in SCHEDULE_TOOLS {
+            let changes = !matches!(*tool, "schedule_list" | "schedule_preview");
+            assert_eq!(NEEDS_CONFIRMATION.contains(tool), changes, "{tool}");
+        }
+    }
+
+    #[test]
     fn issue_identifiers_are_team_hyphen_number() {
         for ok in ["ECOM-44", "ecom-44", "A1-2"] {
             assert!(is_issue_identifier(ok), "{ok}");
@@ -1511,6 +1735,13 @@ mod tests {
             "issue_prs",
             "pr_status",
             "pr_diff",
+            // Schedules, which the Schedules page manages.
+            "schedule_list",
+            "schedule_preview",
+            "schedule_create",
+            "schedule_update",
+            "schedule_delete",
+            "schedule_run_now",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
@@ -1645,6 +1876,15 @@ const RUN_TOOLS: &[&str] = &[
 const PR_DIFF_BUDGET: usize = 60_000;
 /// Reading and diagnosing what triggers a run, as opposed to starting one.
 const LINEAR_TOOLS: &[&str] = &["linear_states", "linear_bindings", "linear_check"];
+/// Workflows run on a cron schedule (the Schedules page).
+const SCHEDULE_TOOLS: &[&str] = &[
+    "schedule_list",
+    "schedule_preview",
+    "schedule_create",
+    "schedule_update",
+    "schedule_delete",
+    "schedule_run_now",
+];
 const AUTHORING_TOOLS: &[&str] = &[
     "workflow_list",
     "workflow_get",
@@ -1680,6 +1920,7 @@ fn connection_body(state: &Arc<RunsState>, token: Option<String>) -> Value {
         "unauthenticated": token.is_none() && state.api_token().is_none(),
         "run_tools": RUN_TOOLS,
         "linear_tools": LINEAR_TOOLS,
+        "schedule_tools": SCHEDULE_TOOLS,
         "authoring_tools": AUTHORING_TOOLS,
     })
 }

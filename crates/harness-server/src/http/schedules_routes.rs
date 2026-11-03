@@ -113,14 +113,47 @@ fn enabled_by_default() -> bool {
     true
 }
 
+impl ScheduleRequest {
+    /// The request that would save `s` unchanged — what a partial update
+    /// (MCP's `schedule_update`) starts from.
+    pub(crate) fn from_schedule(s: &Schedule) -> Self {
+        ScheduleRequest {
+            name: s.name.clone(),
+            project: s.project.clone(),
+            workflow: s.workflow.clone(),
+            cron: s.cron.clone(),
+            timezone: s.timezone.clone(),
+            task: s.task.clone(),
+            enabled: s.enabled,
+        }
+    }
+}
+
+/// Why an operation was refused: the HTTP status, and a message written for
+/// whoever asked — a person on the page, or an agent over MCP.
+pub(crate) type Refusal = (StatusCode, String);
+
+fn refuse(status: StatusCode, msg: impl Into<String>) -> Refusal {
+    (status, msg.into())
+}
+
+async fn store(state: &Arc<RunsState>) -> Result<&harness_persist::ScheduleStore, Refusal> {
+    state
+        .schedule_store()
+        .await
+        .map_err(|e| refuse(StatusCode::SERVICE_UNAVAILABLE, e))
+}
+
+fn internal(e: impl std::fmt::Display) -> Refusal {
+    refuse(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())
+}
+
 /// Check a request against what exists, and work out its next occurrence.
-// The error is the HTTP response itself, returned as-is by every caller.
-#[allow(clippy::result_large_err)]
 async fn validate(
     state: &Arc<RunsState>,
     req: ScheduleRequest,
-) -> Result<(ScheduleInput, Option<DateTime<Utc>>), Response> {
-    let bad = |m: String| err(StatusCode::BAD_REQUEST, m);
+) -> Result<(ScheduleInput, Option<DateTime<Utc>>), Refusal> {
+    let bad = |m: String| refuse(StatusCode::BAD_REQUEST, m);
     let name = req.name.trim().to_string();
     if name.is_empty() {
         return Err(bad("give the schedule a name".into()));
@@ -128,13 +161,12 @@ async fn validate(
     let cron = parse_cron(req.cron.trim()).map_err(bad)?;
     let tz = parse_timezone(&req.timezone).map_err(bad)?;
     let project = req.project.trim().to_string();
-    match state.project_store().await {
-        Ok(store) => match store.get(&project).await {
-            Ok(Some(_)) => {}
-            Ok(None) => return Err(bad(format!("no project `{project}`"))),
-            Err(e) => return Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-        },
-        Err(e) => return Err(err(StatusCode::SERVICE_UNAVAILABLE, e)),
+    let projects = state
+        .project_store()
+        .await
+        .map_err(|e| refuse(StatusCode::SERVICE_UNAVAILABLE, e))?;
+    if projects.get(&project).await.map_err(internal)?.is_none() {
+        return Err(bad(format!("no project `{project}`")));
     }
     let workflow = req.workflow.trim().to_string();
     if let Err(e) = harness_runner::authoring::get_workflow(&state.project_root, &workflow) {
@@ -163,17 +195,90 @@ async fn validate(
     ))
 }
 
+// ── Operations, shared by the page's routes and the MCP tools ──────────────
+
+pub(crate) async fn list(state: &Arc<RunsState>) -> Result<Vec<Schedule>, Refusal> {
+    store(state).await?.list().await.map_err(internal)
+}
+
+pub(crate) async fn get(state: &Arc<RunsState>, id: &str) -> Result<Schedule, Refusal> {
+    store(state)
+        .await?
+        .get(id)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| refuse(StatusCode::NOT_FOUND, "no such schedule"))
+}
+
+pub(crate) async fn create(
+    state: &Arc<RunsState>,
+    req: ScheduleRequest,
+    created_by: Option<&str>,
+) -> Result<Schedule, Refusal> {
+    let (input, next) = validate(state, req).await?;
+    let id = uuid::Uuid::new_v4().to_string();
+    store(state)
+        .await?
+        .create(&id, &input, next, created_by)
+        .await
+        .map_err(internal)
+}
+
+/// Replace a schedule's settings. Recomputes the next occurrence from now, so
+/// a changed time takes effect at once.
+pub(crate) async fn update(
+    state: &Arc<RunsState>,
+    id: &str,
+    req: ScheduleRequest,
+) -> Result<Schedule, Refusal> {
+    let (input, next) = validate(state, req).await?;
+    store(state)
+        .await?
+        .update(id, &input, next)
+        .await
+        .map_err(internal)?
+        .ok_or_else(|| refuse(StatusCode::NOT_FOUND, "no such schedule"))
+}
+
+pub(crate) async fn delete(state: &Arc<RunsState>, id: &str) -> Result<(), Refusal> {
+    if store(state).await?.delete(id).await.map_err(internal)? {
+        Ok(())
+    } else {
+        Err(refuse(StatusCode::NOT_FOUND, "no such schedule"))
+    }
+}
+
+/// Start a run now. The schedule's own next occurrence is left alone.
+pub(crate) async fn run_now(state: &Arc<RunsState>, id: &str) -> Result<String, Refusal> {
+    let schedule = get(state, id).await?;
+    fire(state, &schedule).await
+}
+
+/// The next few times an expression fires in a timezone, or why it can't.
+pub(crate) fn preview(cron: &str, timezone: &str) -> Result<Vec<DateTime<Utc>>, String> {
+    let parsed = parse_cron(cron.trim())?;
+    let tz = parse_timezone(timezone)?;
+    let next = upcoming(&parsed, tz, Utc::now(), PREVIEW_COUNT);
+    if next.is_empty() {
+        return Err(format!("`{}` never fires", cron.trim()));
+    }
+    Ok(next)
+}
+
 // ── Routes ─────────────────────────────────────────────────────────────────
+
+fn respond<T: serde::Serialize>(status: StatusCode, r: Result<T, Refusal>) -> Response {
+    match r {
+        Ok(v) => (status, Json(v)).into_response(),
+        Err((status, msg)) => err(status, msg),
+    }
+}
 
 /// `GET /api/schedules`.
 pub async fn list_schedules(Extension(state): Extension<Arc<RunsState>>) -> Response {
-    let store = match state.schedule_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
-    match store.list().await {
+    match list(&state).await {
         Ok(rows) => Json(json!({ "schedules": rows })).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err((status, msg)) => err(status, msg),
     }
 }
 
@@ -182,15 +287,7 @@ pub async fn get_schedule(
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    let store = match state.schedule_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
-    match store.get(&id).await {
-        Ok(Some(s)) => Json(s).into_response(),
-        Ok(None) => err(StatusCode::NOT_FOUND, "no such schedule"),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
+    respond(StatusCode::OK, get(&state, &id).await)
 }
 
 /// `POST /api/schedules`.
@@ -200,43 +297,21 @@ pub async fn create_schedule(
     headers: HeaderMap,
     Json(req): Json<ScheduleRequest>,
 ) -> Response {
-    let (input, next) = match validate(&state, req).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
     let (user, _) = caller_trigger(&state, &headers).await;
-    let store = match state.schedule_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
-    let id = uuid::Uuid::new_v4().to_string();
-    match store.create(&id, &input, next, user.as_deref()).await {
-        Ok(s) => (StatusCode::CREATED, Json(s)).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
+    respond(
+        StatusCode::CREATED,
+        create(&state, req, user.as_deref()).await,
+    )
 }
 
-/// `PUT /api/schedules/{id}`. Recomputes the next occurrence from now, so a
-/// changed time takes effect at once.
+/// `PUT /api/schedules/{id}`.
 pub async fn update_schedule(
     _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(id): AxumPath<String>,
     Json(req): Json<ScheduleRequest>,
 ) -> Response {
-    let (input, next) = match validate(&state, req).await {
-        Ok(v) => v,
-        Err(resp) => return resp,
-    };
-    let store = match state.schedule_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
-    match store.update(&id, &input, next).await {
-        Ok(Some(s)) => Json(s).into_response(),
-        Ok(None) => err(StatusCode::NOT_FOUND, "no such schedule"),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
+    respond(StatusCode::OK, update(&state, &id, req).await)
 }
 
 /// `DELETE /api/schedules/{id}`.
@@ -245,34 +320,19 @@ pub async fn delete_schedule(
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    let store = match state.schedule_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
-    match store.delete(&id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => err(StatusCode::NOT_FOUND, "no such schedule"),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    match delete(&state, &id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err((status, msg)) => err(status, msg),
     }
 }
 
-/// `POST /api/schedules/{id}/run` — start it now. The schedule's own next
-/// occurrence is left alone.
+/// `POST /api/schedules/{id}/run` — start it now.
 pub async fn run_schedule_now(
     _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    let store = match state.schedule_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
-    let schedule = match store.get(&id).await {
-        Ok(Some(s)) => s,
-        Ok(None) => return err(StatusCode::NOT_FOUND, "no such schedule"),
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    };
-    match fire(&state, &schedule).await {
+    match run_now(&state, &id).await {
         Ok(run_id) => (StatusCode::ACCEPTED, Json(json!({ "run_id": run_id }))).into_response(),
         Err((status, msg)) => err(status, msg),
     }
@@ -286,22 +346,10 @@ pub struct PreviewRequest {
 
 /// `POST /api/schedules/preview` — the next few times, or why it's invalid.
 pub async fn preview_schedule(Json(req): Json<PreviewRequest>) -> Response {
-    let cron = match parse_cron(req.cron.trim()) {
-        Ok(c) => c,
-        Err(e) => return err(StatusCode::BAD_REQUEST, e),
-    };
-    let tz = match parse_timezone(&req.timezone) {
-        Ok(t) => t,
-        Err(e) => return err(StatusCode::BAD_REQUEST, e),
-    };
-    let next = upcoming(&cron, tz, Utc::now(), PREVIEW_COUNT);
-    if next.is_empty() {
-        return err(
-            StatusCode::BAD_REQUEST,
-            format!("`{}` never fires", req.cron.trim()),
-        );
+    match preview(&req.cron, &req.timezone) {
+        Ok(next) => Json(json!({ "next": next })).into_response(),
+        Err(e) => err(StatusCode::BAD_REQUEST, e),
     }
-    Json(json!({ "next": next })).into_response()
 }
 
 // ── Firing ─────────────────────────────────────────────────────────────────

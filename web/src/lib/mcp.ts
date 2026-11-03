@@ -12,6 +12,8 @@ export interface McpConnection {
   /** True when `/mcp` is reachable with no credential at all. */
   unauthenticated: boolean;
   run_tools: string[];
+  /** Absent from a server older than scheduled-run tools. */
+  schedule_tools?: string[];
   authoring_tools: string[];
 }
 
