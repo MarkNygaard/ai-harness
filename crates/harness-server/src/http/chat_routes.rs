@@ -184,10 +184,10 @@ async fn chat_options() -> Vec<ProviderInfo> {
 
 /// What new conversations run on.
 #[derive(Debug, Clone, PartialEq)]
-struct Effective {
-    provider: Option<String>,
-    model: Option<String>,
-    effort: Option<String>,
+pub(crate) struct Effective {
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 /// The stored choice when it can run, else the first agent that can — Claude
@@ -221,7 +221,7 @@ fn effective(
     }
 }
 
-async fn load_settings(state: &Arc<RunsState>) -> (Vec<ProviderInfo>, Effective, Value) {
+pub(crate) async fn load_settings(state: &Arc<RunsState>) -> (Vec<ProviderInfo>, Effective, Value) {
     let options = chat_options().await;
     let (p, m, e) = match state.settings_store().await {
         Ok(s) => (
@@ -530,6 +530,97 @@ fn release(id: &str) {
     RUNNING.lock().unwrap_or_else(|p| p.into_inner()).remove(id);
 }
 
+/// Releases a conversation's "a turn is running" mark however the turn ends —
+/// a panic included — or it would refuse every later message as "still
+/// answering".
+struct Release(String);
+
+impl Drop for Release {
+    fn drop(&mut self) {
+        release(&self.0);
+    }
+}
+
+/// One turn for a conversation that lives outside the web chat — a Linear
+/// thread: record the message, answer it, record the answer. Waits for the
+/// answer, which the caller posts wherever the person asked. `note` is told to
+/// the agent at the start of a session, alongside the code and service notes.
+pub(crate) async fn converse(
+    state: &Arc<RunsState>,
+    conv: &harness_persist::Conversation,
+    caller: &ChatCaller,
+    text: &str,
+    note: Option<&str>,
+) -> Result<String, String> {
+    {
+        let mut running = RUNNING.lock().unwrap_or_else(|p| p.into_inner());
+        if running.contains_key(&conv.id) {
+            return Err(
+                "I'm still answering your previous message. Ask again once it's in.".into(),
+            );
+        }
+        running.insert(conv.id.clone(), Vec::new());
+    }
+    let _release = Release(conv.id.clone());
+    let store = state.chat_store().await?;
+    store
+        .add_message(&conv.id, "user", text, &json!([]), None)
+        .await
+        .map_err(|e| e.to_string())?;
+    let _ = store.set_title_if_empty(&conv.id, &title_for(text)).await;
+    let outcome = answer(state, conv, caller, text, &conv.context.0, note).await;
+    let activity = running_activity(&conv.id).unwrap_or_default();
+    match outcome {
+        Ok(reply) => {
+            if let Some(session) = reply.session.as_deref() {
+                let _ = store.set_session(&conv.id, session).await;
+            }
+            let text = reply.text.trim().to_string();
+            let _ = store
+                .add_message(&conv.id, "assistant", &text, &json!(activity), None)
+                .await;
+            Ok(text)
+        }
+        Err(e) => {
+            let _ = store
+                .add_message(&conv.id, "error", &e, &json!(activity), None)
+                .await;
+            Err(e)
+        }
+    }
+}
+
+/// A tool call held for the person's confirmation.
+#[derive(Debug, Clone)]
+pub(crate) struct PendingAction {
+    pub id: i64,
+    pub tool: String,
+}
+
+/// The conversation's actions still waiting for a yes or no.
+pub(crate) async fn pending_actions(
+    state: &Arc<RunsState>,
+    conversation_id: &str,
+) -> Vec<PendingAction> {
+    let Ok(store) = state.chat_store().await else {
+        return Vec::new();
+    };
+    store
+        .messages(conversation_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|m| m.role == "action")
+        .filter_map(|m| {
+            let action = m.action?.0;
+            (action["status"] == "pending").then(|| PendingAction {
+                id: m.id,
+                tool: action["tool"].as_str().unwrap_or_default().to_string(),
+            })
+        })
+        .collect()
+}
+
 /// The first line of the first message, shortened.
 fn title_for(text: &str) -> String {
     let line = text.lines().next().unwrap_or("").trim();
@@ -562,16 +653,8 @@ async fn run_turn_task(
     context: Value,
 ) {
     let id = conv.id.clone();
-    // Released however this ends — a panic included — or the conversation
-    // would refuse every later message as "still answering".
-    struct Release(String);
-    impl Drop for Release {
-        fn drop(&mut self) {
-            release(&self.0);
-        }
-    }
     let _release = Release(id.clone());
-    let outcome = answer(&state, &conv, &caller, &text, &context).await;
+    let outcome = answer(&state, &conv, &caller, &text, &context, None).await;
     let activity = running_activity(&id).unwrap_or_default();
     if let Ok(store) = state.chat_store().await {
         let saved = match outcome {
@@ -602,6 +685,7 @@ async fn answer(
     caller: &ChatCaller,
     text: &str,
     context: &Value,
+    extra_note: Option<&str>,
 ) -> Result<harness_runner::chat::ChatReply, String> {
     // Fresh agent credentials, as a run gets them.
     match state.cred_store().await {
@@ -690,6 +774,7 @@ async fn answer(
         }
     }
     let notes: Vec<&str> = [
+        extra_note,
         code.as_ref().map(|c| c.note.as_str()),
         sentry_note.as_deref(),
         grafana_note.as_deref(),
@@ -1069,6 +1154,16 @@ pub(crate) async fn hold_for_confirmation(
         Err(e) => return super::mcp_routes::tool_error(e),
     };
     let action = json!({ "tool": name, "args": args, "status": "pending" });
+    // A Linear thread has no card to click: the person replies "yes" there.
+    let in_linear = matches!(
+        store.get(&caller.conversation_id).await,
+        Ok(Some(c)) if c.linear_session_id.is_some()
+    );
+    let how = if in_linear {
+        "they will be asked to reply \"yes\" in the Linear thread to go ahead"
+    } else {
+        "a card asking them to confirm it is now showing in the chat"
+    };
     match store
         .add_message(
             &caller.conversation_id,
@@ -1081,9 +1176,8 @@ pub(crate) async fn hold_for_confirmation(
     {
         Ok(msg) => super::mcp_routes::to_result(
             format!(
-                "Not run yet: `{name}` needs the person's confirmation, and a card asking them \
-                 to confirm it is now showing in the chat. Tell them in one or two sentences \
-                 what it will do, then stop. Do not call it again."
+                "Not run yet: `{name}` needs the person's confirmation, and {how}. Tell them in \
+                 one or two sentences what it will do, then stop. Do not call it again."
             ),
             &json!({ "status": "pending_confirmation", "action_id": msg.id }),
         ),
@@ -1116,20 +1210,39 @@ pub async fn resolve_action(
         Ok(c) => c,
         Err(_) => return err(StatusCode::NOT_FOUND, "no such action"),
     };
-    let mut action = msg.action.map(|a| a.0).unwrap_or_else(|| json!({}));
-    if action["status"] != "pending" {
-        return err(StatusCode::CONFLICT, "already answered");
+    let caller = ChatCaller {
+        conversation_id: msg.conversation_id.clone(),
+        user_id: user,
+        actor,
+    };
+    match settle_action(&state, &caller, &msg, req.confirm).await {
+        Ok(action) => Json(json!({ "id": message_id, "action": action })).into_response(),
+        Err(SettleError::AlreadyAnswered) => err(StatusCode::CONFLICT, "already answered"),
+        Err(SettleError::Store(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
-    if req.confirm {
+}
+
+pub(crate) enum SettleError {
+    AlreadyAnswered,
+    Store(String),
+}
+
+/// Run a held tool call as `caller`, or drop it, and record which. Shared by
+/// the web chat's Confirm/Cancel and a "yes" in a Linear thread.
+pub(crate) async fn settle_action(
+    state: &Arc<RunsState>,
+    caller: &ChatCaller,
+    msg: &ChatMessage,
+    confirm: bool,
+) -> Result<Value, SettleError> {
+    let mut action = msg.action.clone().map(|a| a.0).unwrap_or_else(|| json!({}));
+    if action["status"] != "pending" {
+        return Err(SettleError::AlreadyAnswered);
+    }
+    if confirm {
         let tool = action["tool"].as_str().unwrap_or_default().to_string();
         let args = action["args"].clone();
-        let trigger = ChatCaller {
-            conversation_id: msg.conversation_id.clone(),
-            user_id: user,
-            actor,
-        }
-        .trigger();
-        let result = super::mcp_routes::call_tool(&state, &trigger, &tool, &args).await;
+        let result = super::mcp_routes::call_tool(state, &caller.trigger(), &tool, &args).await;
         let failed = result["isError"].as_bool().unwrap_or(false);
         action["status"] = json!(if failed { "failed" } else { "confirmed" });
         action["result"] = result["content"][0]["text"].clone();
@@ -1139,10 +1252,24 @@ pub async fn resolve_action(
     } else {
         action["status"] = json!("cancelled");
     }
-    if let Err(e) = store.set_action(message_id, &action).await {
-        return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string());
+    let store = state.chat_store().await.map_err(SettleError::Store)?;
+    store
+        .set_action(msg.id, &action)
+        .await
+        .map_err(|e| SettleError::Store(e.to_string()))?;
+    Ok(action)
+}
+
+/// Settle every pending action of a conversation the same way.
+pub(crate) async fn settle_pending(state: &Arc<RunsState>, caller: &ChatCaller, confirm: bool) {
+    let Ok(store) = state.chat_store().await else {
+        return;
+    };
+    for pending in pending_actions(state, &caller.conversation_id).await {
+        if let Ok(Some(msg)) = store.message(pending.id).await {
+            let _ = settle_action(state, caller, &msg, confirm).await;
+        }
     }
-    Json(json!({ "id": message_id, "action": action })).into_response()
 }
 
 #[cfg(test)]

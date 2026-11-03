@@ -404,6 +404,13 @@ query IssueContext($id: String!) {
   }
 }"#;
 
+// One user — who mentioned the agent or replied to it — for matching to a
+// harness account by email.
+const USER_QUERY: &str = r#"
+query User($id: String!) {
+  user(id: $id) { id name email }
+}"#;
+
 // A team's Linear projects, for binding a harness project to one. Its own
 // query rather than part of discovery: nesting projects under every team there
 // would take discovery past Linear's complexity cap, and only the binding form
@@ -754,6 +761,16 @@ pub struct AgentSessionEvent {
     pub issue_description: Option<String>,
     /// Body of the comment that opened the session, when it was a mention.
     pub comment_body: Option<String>,
+    /// Who wrote the session's root comment. For a mention it is the person
+    /// who mentioned the agent; for a delegation the thread is Linear's own.
+    pub comment_author_id: Option<String>,
+    /// The human responsible for the session — who mentioned or delegated.
+    /// The email is filled only when the payload carries it.
+    pub creator: Option<LinearPerson>,
+    /// Opened by a mention in a reply inside a thread (`previousComments`).
+    pub in_thread_mention: bool,
+    /// Who wrote the message on a `prompted` event.
+    pub prompt_author_id: Option<String>,
     /// Linear's pre-formatted summary of the session's context.
     pub prompt_context: Option<String>,
     /// Workspace/team-level instructions for agents.
@@ -763,6 +780,26 @@ pub struct AgentSessionEvent {
 }
 
 impl AgentSessionEvent {
+    /// Whether a person opened this session by @-mentioning the agent, rather
+    /// than by delegating the issue to it. `None` when the payload can't tell;
+    /// the caller then asks the issue whether it is delegated.
+    ///
+    /// Linear sends `created` for both and names no discriminator. A mention
+    /// inside a thread carries `previousComments`. Otherwise the session's root
+    /// comment says it: for a mention it is the comment that mentioned the
+    /// agent, written by the session's creator; for a delegation it is the
+    /// thread Linear opens itself ("This thread is for an agent session").
+    pub fn opened_by_mention(&self) -> Option<bool> {
+        if self.in_thread_mention {
+            return Some(true);
+        }
+        let creator = self.creator.as_ref().and_then(|c| c.id.as_deref());
+        match (self.comment_author_id.as_deref(), creator) {
+            (Some(author), Some(creator)) => Some(author == creator),
+            _ => None,
+        }
+    }
+
     /// The task text to hand a workflow: prefer the issue's own description,
     /// falling back to Linear's formatted context, then the triggering comment.
     pub fn task_text(&self) -> Option<&str> {
@@ -838,6 +875,11 @@ struct AgentSessionEventWire {
     prompt_context: Option<String>,
     #[serde(default)]
     guidance: Option<String>,
+    /// Present only when the session was opened by mentioning the agent in a
+    /// reply inside a thread.
+    #[serde(default)]
+    #[serde(rename = "previousComments")]
+    previous_comments: Option<Vec<serde_json::Value>>,
 }
 
 #[derive(Deserialize)]
@@ -848,6 +890,12 @@ struct AgentSessionWire {
     issue: Option<SessionIssueWire>,
     #[serde(default)]
     comment: Option<SessionCommentWire>,
+    /// The human responsible for the session.
+    #[serde(default)]
+    #[serde(rename = "creatorId")]
+    creator_id: Option<String>,
+    #[serde(default)]
+    creator: Option<UserWire>,
     // Linear also supplies these at session level on some payloads.
     #[serde(default)]
     #[serde(rename = "promptContext")]
@@ -872,10 +920,37 @@ struct SessionIssueWire {
 struct SessionCommentWire {
     #[serde(default)]
     body: Option<String>,
+    #[serde(default)]
+    #[serde(rename = "userId")]
+    user_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UserWire {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    email: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct AgentActivityWire {
+    #[serde(default)]
+    body: Option<String>,
+    /// Where Linear's schema puts a prompt's text; `body` is what earlier
+    /// payloads carried at the top level.
+    #[serde(default)]
+    content: Option<ActivityContentWire>,
+    /// Who wrote it.
+    #[serde(default)]
+    #[serde(rename = "userId")]
+    user_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ActivityContentWire {
     #[serde(default)]
     body: Option<String>,
 }
@@ -903,6 +978,13 @@ pub fn parse_agent_session_event(json: &[u8]) -> Result<Option<AgentSessionEvent
         .and_then(|s| s.id.clone())
         .ok_or_else(|| LinearError("agent session event had no agentSession.id".into()))?;
     let issue = session.as_ref().and_then(|s| s.issue.as_ref());
+    let creator = session.as_ref().and_then(|s| s.creator.as_ref());
+    let creator_id = session
+        .as_ref()
+        .and_then(|s| s.creator_id.clone())
+        .or_else(|| creator.and_then(|c| c.id.clone()));
+    let comment = session.as_ref().and_then(|s| s.comment.as_ref());
+    let activity = wire.agent_activity;
     Ok(Some(AgentSessionEvent {
         action,
         session_id,
@@ -910,10 +992,14 @@ pub fn parse_agent_session_event(json: &[u8]) -> Result<Option<AgentSessionEvent
         issue_identifier: issue.and_then(|i| i.identifier.clone()),
         issue_title: issue.and_then(|i| i.title.clone()),
         issue_description: issue.and_then(|i| i.description.clone()),
-        comment_body: session
-            .as_ref()
-            .and_then(|s| s.comment.as_ref())
-            .and_then(|c| c.body.clone()),
+        comment_body: comment.and_then(|c| c.body.clone()),
+        comment_author_id: comment.and_then(|c| c.user_id.clone()),
+        creator: creator_id.map(|id| LinearPerson {
+            id: Some(id),
+            name: creator.and_then(|c| c.name.clone()),
+            email: creator.and_then(|c| c.email.clone()),
+        }),
+        in_thread_mention: wire.previous_comments.is_some(),
         // Top-level wins; Linear has carried this at either level.
         prompt_context: wire
             .prompt_context
@@ -921,7 +1007,8 @@ pub fn parse_agent_session_event(json: &[u8]) -> Result<Option<AgentSessionEvent
         guidance: wire
             .guidance
             .or_else(|| session.as_ref().and_then(|s| s.guidance.clone())),
-        prompt_body: wire.agent_activity.and_then(|a| a.body),
+        prompt_author_id: activity.as_ref().and_then(|a| a.user_id.clone()),
+        prompt_body: activity.and_then(|a| a.body.or_else(|| a.content.and_then(|c| c.body))),
     }))
 }
 
@@ -1180,6 +1267,25 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
             .labels
             .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
             .unwrap_or_default(),
+    })
+}
+
+/// Parse a `user(id:)` response. An unknown user is an error: the caller is
+/// deciding whether someone may use the harness, and "nobody" can't.
+pub fn parse_user(json: &[u8]) -> Result<LinearPerson, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        user: Option<UserWire>,
+    }
+    let data: Data = gql_data(json)?;
+    let user = data
+        .user
+        .ok_or_else(|| LinearError("Linear has no such user".into()))?;
+    Ok(LinearPerson {
+        id: user.id,
+        name: user.name,
+        email: user.email,
     })
 }
 
@@ -1489,6 +1595,16 @@ impl LinearClient {
             "variables": { "id": issue_id },
         });
         parse_issue_initiator(&self.post(body).await?, into_state, app_user_id)
+    }
+
+    /// One Linear user, by id: who mentioned the agent, or who replied to it.
+    /// The email is the join key to a harness account.
+    pub async fn user(&self, user_id: &str) -> Result<LinearPerson, LinearError> {
+        let body = serde_json::json!({
+            "query": USER_QUERY,
+            "variables": { "id": user_id },
+        });
+        parse_user(&self.post(body).await?)
     }
 
     /// Emit an activity into an agent session.
@@ -1856,6 +1972,63 @@ mod tests {
         assert_eq!(ev.guidance.as_deref(), Some("Always open a PR"));
         // The issue's own description is the preferred task text.
         assert_eq!(ev.task_text(), Some("The thing is broken."));
+    }
+
+    #[test]
+    fn a_mention_is_told_from_a_delegation() {
+        // A mention in a new comment: the root comment is the person's own.
+        let mention = br#"{
+            "type":"AgentSessionEvent","action":"created",
+            "agentSession":{"id":"s1","creatorId":"u-mark",
+                "creator":{"id":"u-mark","name":"Mark","email":"mnl@dilling.com"},
+                "comment":{"body":"@ai-harness which PR should I test?","userId":"u-mark"}}}"#;
+        let ev = parse_agent_session_event(mention).unwrap().unwrap();
+        assert_eq!(ev.opened_by_mention(), Some(true));
+        assert_eq!(
+            ev.creator.as_ref().and_then(|c| c.email.as_deref()),
+            Some("mnl@dilling.com")
+        );
+
+        // A delegation: the thread is Linear's own, not the creator's.
+        let delegation = br#"{
+            "type":"AgentSessionEvent","action":"created",
+            "agentSession":{"id":"s2","creatorId":"u-mark",
+                "comment":{"body":"This thread is for an agent session with aiharness.",
+                           "userId":"u-linear"}}}"#;
+        let ev = parse_agent_session_event(delegation).unwrap().unwrap();
+        assert_eq!(ev.opened_by_mention(), Some(false));
+
+        // A mention in a reply inside a thread.
+        let in_thread = br#"{
+            "type":"AgentSessionEvent","action":"created","previousComments":[{"body":"hi"}],
+            "agentSession":{"id":"s3"}}"#;
+        let ev = parse_agent_session_event(in_thread).unwrap().unwrap();
+        assert_eq!(ev.opened_by_mention(), Some(true));
+
+        // Nothing to go on: the caller asks the issue.
+        let sparse =
+            br#"{"type":"AgentSessionEvent","action":"created","agentSession":{"id":"s4"}}"#;
+        let ev = parse_agent_session_event(sparse).unwrap().unwrap();
+        assert_eq!(ev.opened_by_mention(), None);
+    }
+
+    #[test]
+    fn a_follow_up_names_its_author_and_reads_content_body() {
+        let json = br#"{
+            "type":"AgentSessionEvent","action":"prompted",
+            "agentSession":{"id":"s"},
+            "agentActivity":{"userId":"u-mark","content":{"type":"prompt","body":"yes"}}}"#;
+        let ev = parse_agent_session_event(json).unwrap().unwrap();
+        assert_eq!(ev.prompt_author_id.as_deref(), Some("u-mark"));
+        assert_eq!(ev.prompt_body.as_deref(), Some("yes"));
+    }
+
+    #[test]
+    fn a_user_is_read_with_their_email() {
+        let p =
+            parse_user(br#"{"data":{"user":{"id":"u","name":"Mark","email":"m@x.dk"}}}"#).unwrap();
+        assert_eq!(p.email.as_deref(), Some("m@x.dk"));
+        assert!(parse_user(br#"{"data":{"user":null}}"#).is_err());
     }
 
     #[test]

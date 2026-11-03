@@ -65,6 +65,9 @@ pub struct Conversation {
     pub session_id: Option<String>,
     /// Where it was opened from (`{ run_id?, workflow?, project? }`).
     pub context: Json<Value>,
+    /// The Linear agent session it answers in, when someone @-mentioned the
+    /// harness on an issue. Replies in that thread continue this conversation.
+    pub linear_session_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -89,8 +92,18 @@ pub struct ChatStore {
     pool: PgPool,
 }
 
-const CONVERSATION_COLUMNS: &str =
-    "id, user_id, title, provider, model, session_id, context, created_at, updated_at";
+const CONVERSATION_COLUMNS: &str = "id, user_id, title, provider, model, session_id, context, \
+     linear_session_id, created_at, updated_at";
+
+/// Conversations opened from Linear came after the table did.
+const ALTER_CONVERSATIONS_LINEAR: &str = "
+ALTER TABLE harness_chat_conversations ADD COLUMN IF NOT EXISTS linear_session_id text";
+
+/// One conversation per Linear session: a webhook redelivery must find the
+/// conversation it already started, not open a second.
+const INDEX_CONVERSATIONS_LINEAR: &str = "
+CREATE UNIQUE INDEX IF NOT EXISTS harness_chat_conversations_linear
+    ON harness_chat_conversations (linear_session_id) WHERE linear_session_id IS NOT NULL";
 const MESSAGE_COLUMNS: &str = "id, conversation_id, role, body, activity, action, created_at";
 
 impl ChatStore {
@@ -111,7 +124,57 @@ impl ChatStore {
         sqlx::query(INDEX_MESSAGES_CONVERSATION)
             .execute(&pool)
             .await?;
+        sqlx::query(ALTER_CONVERSATIONS_LINEAR)
+            .execute(&pool)
+            .await?;
+        sqlx::query(INDEX_CONVERSATIONS_LINEAR)
+            .execute(&pool)
+            .await?;
         Ok(Self { pool })
+    }
+
+    /// Start a conversation that answers in a Linear agent session. `None`
+    /// when that session already has one (a redelivered webhook).
+    pub async fn create_for_linear(
+        &self,
+        id: &str,
+        user_id: Option<&str>,
+        provider: &str,
+        model: Option<&str>,
+        context: &Value,
+        linear_session_id: &str,
+    ) -> Result<Option<Conversation>, PersistError> {
+        let row = sqlx::query_as::<_, Conversation>(&format!(
+            "INSERT INTO harness_chat_conversations
+                (id, user_id, provider, model, context, linear_session_id)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (linear_session_id) WHERE linear_session_id IS NOT NULL DO NOTHING
+             RETURNING {CONVERSATION_COLUMNS}"
+        ))
+        .bind(id)
+        .bind(user_id)
+        .bind(provider)
+        .bind(model)
+        .bind(Json(context))
+        .bind(linear_session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
+    }
+
+    /// The conversation answering in a Linear agent session, if any.
+    pub async fn by_linear_session(
+        &self,
+        linear_session_id: &str,
+    ) -> Result<Option<Conversation>, PersistError> {
+        let row = sqlx::query_as::<_, Conversation>(&format!(
+            "SELECT {CONVERSATION_COLUMNS} FROM harness_chat_conversations
+             WHERE linear_session_id = $1"
+        ))
+        .bind(linear_session_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row)
     }
 
     /// Start a conversation.
@@ -282,6 +345,48 @@ mod tests {
     fn db_url() -> Option<String> {
         let url = std::env::var("HARNESS_DATABASE_URL").ok()?;
         crate::is_test_db(&url).then_some(url)
+    }
+
+    /// A Linear session gets one conversation, however often the webhook that
+    /// opened it is delivered.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_linear_session_has_one_conversation() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = ChatStore::connect(&url).await.expect("connect");
+        let ts = chrono::Utc::now().timestamp_nanos_opt().unwrap();
+        let session = format!("lin-sess-{ts}");
+        let first = store
+            .create_for_linear(
+                &format!("c1-{ts}"),
+                Some("u"),
+                "claude",
+                None,
+                &json!({}),
+                &session,
+            )
+            .await
+            .unwrap()
+            .expect("created");
+        assert_eq!(first.linear_session_id.as_deref(), Some(session.as_str()));
+        let again = store
+            .create_for_linear(
+                &format!("c2-{ts}"),
+                Some("u"),
+                "claude",
+                None,
+                &json!({}),
+                &session,
+            )
+            .await
+            .unwrap();
+        assert!(again.is_none(), "a redelivery opens no second conversation");
+        let found = store.by_linear_session(&session).await.unwrap().unwrap();
+        assert_eq!(found.id, first.id);
+        assert!(store.delete(&first.id).await.unwrap());
     }
 
     /// The lifecycle the chat routes rely on: create, talk, hold an action,

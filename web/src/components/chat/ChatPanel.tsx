@@ -225,7 +225,13 @@ export function ChatView({ variant }: { variant: "panel" | "page" }) {
                 onClick={() => setCurrentId(c.id)}
                 className="truncate"
               >
-                {c.title || "Untitled"}
+                <span className="truncate">{c.title || "Untitled"}</span>
+                {/* Asked by mentioning the harness in Linear; it answered there. */}
+                {c.context.linear_issue && (
+                  <span className="ml-auto shrink-0 text-[11px] text-muted-foreground">
+                    {c.context.linear_issue}
+                  </span>
+                )}
               </DropdownMenuItem>
             ))}
             {currentId && (

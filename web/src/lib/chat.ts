@@ -34,11 +34,15 @@ export interface ChatContext {
   run_id?: string;
   workflow?: string;
   project?: string;
+  /** Set when someone asked by mentioning the harness on this Linear issue. */
+  linear_issue?: string;
 }
 
 export interface Conversation {
   id: string;
   title: string;
+  /** The Linear thread it answers in, for a conversation started there. */
+  linear_session_id?: string | null;
   provider: string;
   model: string | null;
   context: ChatContext;

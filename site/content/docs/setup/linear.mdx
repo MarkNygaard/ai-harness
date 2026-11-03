@@ -32,7 +32,8 @@ Two gates, and **both** must hold before anything starts:
 1. **Delegated to the harness.** Assigning an issue to the app sets it as the
    issue's *delegate* (not its assignee — a human keeps ownership). This replaced
    the old "AI Eligible" label: a person choosing to delegate is a better signal
-   than a label anyone can add. @-mentioning the app counts too.
+   than a label anyone can add. @-mentioning the app does **not** start work: it
+   asks a question (see [Asking the harness in Linear](#asking-the-harness-in-linear)).
 2. **In the binding's source status.** The trigger you configured still decides
    *when* work is ready. Delegating an issue that's sitting in Backlog does not
    start it.
@@ -253,6 +254,36 @@ another group. Twenty minutes leaves one group in the common case.
 
 A poller-claimed run has no session, so it still gets the plain issue comments it
 always did.
+
+## Asking the harness in Linear
+
+Mention the app in a comment, such as `@AI Harness which PR should I test?`, and
+the harness answers in that thread. It is the [built-in chat](/docs/chat) with
+the issue as context:
+
+- **The issue:** its description, linked resources (such as a Sentry link) and
+  latest comments.
+- **What the chat can look up:** the issue's runs and pull requests, Linear
+  bindings, and [Sentry](/docs/setup/sentry) and Grafana when they're
+  connected.
+- **Code:** the project's code, read-only, when the issue's team is bound to
+  exactly one harness project.
+
+Reply in the thread to follow up; it is one conversation. It also appears in
+your **Chat** list in the dashboard.
+
+- **Asking never starts work.** Delegating the issue does that, as above. Ask
+  it to start something ("start idea-to-pr for this") and it says what it would
+  do, then waits. Reply **yes** to go ahead; anything else cancels it.
+- **Only people with an ai-harness account.** The commenter is matched to an
+  account by email, and the conversation runs as that person, with their
+  permissions. Anyone else gets a reply saying to ask an administrator for an
+  invite. On an install without accounts, anyone can ask.
+- **One person's conversation.** Others in the thread can read it, but only the
+  person who mentioned the harness can continue it or confirm with "yes". To
+  ask your own question, mention it in a new comment.
+- **The issue's text is read as information.** Whatever it says, the harness
+  doesn't take instructions from the issue, only from the person asking.
 
 ## Asking the agent something mid-run
 
