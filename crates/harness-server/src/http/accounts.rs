@@ -425,6 +425,31 @@ pub(crate) fn actor_label(name: Option<&str>, email: Option<&str>) -> Option<Str
     }
 }
 
+/// The account behind a Linear user: the one that linked that Linear user id,
+/// else the one whose sign-in address is `email`.
+///
+/// The link comes first because it is the stronger answer — the person signed
+/// in to Linear to make it — and because the address it replaces is exactly
+/// the one that differs: a GitHub sign-in address against a Linear work one.
+pub(crate) async fn linear_account(
+    users: &UserStore,
+    linear_user_id: Option<&str>,
+    email: Option<&str>,
+) -> Result<Option<User>, harness_persist::PersistError> {
+    if let Some(id) = linear_user_id.filter(|id| !id.is_empty()) {
+        if let Some(user) = users
+            .get_by_identity(super::linear_oauth::IDENTITY_PROVIDER, id)
+            .await?
+        {
+            return Ok(Some(user));
+        }
+    }
+    match email.filter(|e| !e.is_empty()) {
+        Some(email) => users.get_by_email(email).await,
+        None => Ok(None),
+    }
+}
+
 /// The signed-in caller as a run's trigger: their account id and a label.
 ///
 /// Returns `(user_id, actor_label)`, both `None` when nobody is signed in.

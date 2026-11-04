@@ -7,10 +7,11 @@ use std::sync::Arc;
 
 use super::{
     auth, auth_routes, billing_routes, categories_routes, chat_routes, credentials_routes,
-    finding_routes, github_sso, health_check, invites_routes, library_routes, linear_agent,
-    linear_connections, linear_oauth, linear_routes, linear_source_routes, mcp_routes, oidc,
-    password_reset, run_linear_routes, run_s3_routes, runs_routes, schedules_routes,
-    settings_routes, state::AppState, system_routes, tokens_routes, users_routes, workflows_routes,
+    finding_routes, github_sso, health_check, identities_routes, invites_routes, library_routes,
+    linear_agent, linear_connections, linear_oauth, linear_routes, linear_source_routes,
+    mcp_routes, oidc, password_reset, run_linear_routes, run_s3_routes, runs_routes,
+    schedules_routes, settings_routes, state::AppState, system_routes, tokens_routes, users_routes,
+    workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -111,6 +112,25 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(tokens_routes::list_tokens).post(tokens_routes::create_token),
         )
         .route("/api/tokens/{id}", delete(tokens_routes::revoke_token))
+        // Your Linear account, linked so mentions and runs from Linear count as
+        // you. Scoped to whoever is signed in; the `/api/users` pair is admin.
+        .route("/api/me/identities", get(identities_routes::list_mine))
+        .route(
+            "/api/me/identities/linear/start",
+            post(identities_routes::start_linear),
+        )
+        .route(
+            "/api/me/identities/{id}",
+            delete(identities_routes::unlink_mine),
+        )
+        .route(
+            "/api/users/{id}/identities",
+            get(identities_routes::list_for_user),
+        )
+        .route(
+            "/api/users/{id}/identities/{identity}",
+            delete(identities_routes::unlink_for_user),
+        )
         // ── The built-in chat. Each route scopes itself to the caller; only
         // choosing its agent is administrator-only (in the handler). ──────────
         .route(

@@ -77,3 +77,8 @@ A run carries three fields: `trigger_source` (which door it came in through),
 `trigger_actor` (the person, as a human reads them) and `triggered_by` (their
 harness account id). The last is empty for a colleague who works only in Linear
 and has no account here — `trigger_actor` still names them.
+
+A Linear person is matched to an account by their
+[linked Linear account](/docs/setup/linear#link-your-linear-account) first, then
+by email. Once matched, the run carries the account's name, so the same person
+reads the same on a run from Linear as on one from the dashboard.

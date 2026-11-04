@@ -12,6 +12,11 @@
 //! - `GET  /api/linear/oauth/status`            — how the harness authenticates
 //! - `POST /api/linear/oauth/disconnect`        — revoke + clear the tokens
 //!
+//! The same OAuth app and callback also let a **person** link their own Linear
+//! account (see [`super::identities_routes`]): no `actor=app`, `read` only, and
+//! the token is revoked once it has said who it belongs to. The `state` nonce
+//! records which of the two flows the callback is finishing.
+//!
 //! **One credential per connected workspace.** Each install is a
 //! [`ConnectionId`] whose secrets live under its own provider key — see
 //! [`super::linear_connections`] — and a project resolves to one of them. The
@@ -30,10 +35,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, LazyLock};
 
 use axum::extract::{Extension, Query};
-use axum::http::{header, StatusCode};
+use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use harness_persist::CredentialStore;
+use harness_persist::{CredentialStore, LinkOutcome};
 use harness_sources::linear::{LinearAuth, LinearClient};
 use serde::Deserialize;
 
@@ -56,6 +61,12 @@ pub(crate) const WEBHOOK_PATH: &str = "/api/linear/webhook";
 /// Where the callback sends the browser afterwards (the Credentials page, which
 /// owns the Linear connection).
 const UI_RETURN_PATH: &str = "/credentials";
+
+/// Where a person linking their own Linear account is sent back to.
+const PROFILE_RETURN_PATH: &str = "/settings/preferences";
+
+/// `provider` of a linked Linear identity in `harness_user_identities`.
+pub(crate) const IDENTITY_PROVIDER: &str = "linear";
 
 /// Scopes requested. `read` powers discovery/preview; `write` covers everything
 /// the poller mutates (issue state, comments, labels, attachments);
@@ -131,14 +142,29 @@ fn now_ms() -> i64 {
 // lands on the same instance that issued the nonce. A restart mid-flow just
 // means the user clicks Connect again.
 
-/// Nonce -> (minted at, the connection being authorized). Carrying the
-/// connection through the redirect is what lets the callback store the tokens
-/// against the right workspace without trusting anything Linear sends back.
-static PENDING: LazyLock<std::sync::Mutex<HashMap<String, (i64, ConnectionId)>>> =
+/// What an authorization in flight is for. Both share the one registered
+/// callback, so the nonce is what tells the callback which it is finishing.
+#[derive(Debug, Clone, PartialEq)]
+enum Pending {
+    /// An admin connecting the workspace as the app.
+    Install(ConnectionId),
+    /// A person linking their own Linear account to their harness account.
+    Link { conn: ConnectionId, user_id: String },
+}
+
+/// Nonce -> (minted at, what it authorizes). Carrying the connection — and
+/// for a link, the account — through the redirect is what lets the callback
+/// act without trusting anything Linear sends back.
+static PENDING: LazyLock<std::sync::Mutex<HashMap<String, (i64, Pending)>>> =
     LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
-/// Mint a single-use `state` nonce for `conn`, pruning expired ones.
+/// Mint a single-use `state` nonce for installing `conn`.
 fn issue_state(conn: &ConnectionId) -> String {
+    issue_pending(Pending::Install(conn.clone()))
+}
+
+/// Mint a single-use `state` nonce for `pending`, pruning expired ones.
+fn issue_pending(pending: Pending) -> String {
     // Two v4 UUIDs = 256 bits of randomness (the `uuid` crate is already a dep;
     // this avoids pulling `rand` into harness-server just for a nonce).
     let nonce = format!(
@@ -149,15 +175,14 @@ fn issue_state(conn: &ConnectionId) -> String {
     let now = now_ms();
     if let Ok(mut map) = PENDING.lock() {
         map.retain(|_, (created, _)| now - *created < PENDING_TTL_MS);
-        map.insert(nonce.clone(), (now, conn.clone()));
+        map.insert(nonce.clone(), (now, pending));
     }
     nonce
 }
 
-/// Consume a `state` nonce, returning the connection it was minted for.
-/// `None` if unknown, already used, or expired — all of which must fail the
-/// callback.
-fn take_state(nonce: &str) -> Option<ConnectionId> {
+/// Consume a `state` nonce, returning what it was minted for. `None` if
+/// unknown, already used, or expired — all of which must fail the callback.
+fn take_state(nonce: &str) -> Option<Pending> {
     let mut map = PENDING.lock().ok()?;
     let (created, conn) = map.remove(nonce)?;
     (now_ms() - created < PENDING_TTL_MS).then_some(conn)
@@ -189,6 +214,20 @@ fn build_authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> Stri
         enc(client_id),
         enc(redirect_uri),
         enc(&SCOPES.join(",")),
+        enc(state),
+    )
+}
+
+/// The authorization URL for a person linking their account: **no**
+/// `actor=app` — the point is to learn who the person is, not to act as the
+/// app — and `read` only, since the token is used once to ask who it belongs
+/// to and then revoked.
+fn build_link_authorize_url(client_id: &str, redirect_uri: &str, state: &str) -> String {
+    format!(
+        "{}?response_type=code&client_id={}&redirect_uri={}&scope=read&state={}",
+        authorize_url(),
+        enc(client_id),
+        enc(redirect_uri),
         enc(state),
     )
 }
@@ -643,6 +682,31 @@ pub async fn start(
     Json(serde_json::json!({ "url": url, "callback_url": redirect })).into_response()
 }
 
+/// The Linear sign-in URL for `user_id` to link their Linear account through
+/// `conn`. Uses the connection's OAuth app, so there is nothing new to register
+/// in Linear — only the callback this module already owns.
+pub(crate) async fn link_authorize_url(
+    state: &Arc<RunsState>,
+    conn: &ConnectionId,
+    user_id: &str,
+) -> Result<String, String> {
+    let store = state.cred_store().await?;
+    let redirect = redirect_uri(state)?;
+    let (client_id, _) = client_credentials(store, conn)
+        .await
+        .ok_or("this Linear connection has no OAuth app configured, so it cannot sign anyone in")?;
+    let nonce = issue_pending(Pending::Link {
+        conn: conn.clone(),
+        user_id: user_id.to_string(),
+    });
+    Ok(build_link_authorize_url(&client_id, &redirect, &nonce))
+}
+
+/// Whether `conn` has an OAuth app a person can link through.
+pub(crate) async fn can_link(store: &CredentialStore, conn: &ConnectionId) -> bool {
+    client_credentials(store, conn).await.is_some()
+}
+
 /// `?connection=<id>` on the routes that act on one connection. Absent means
 /// the legacy connection, which is the only one a single-account install has.
 #[derive(Debug, Default, Deserialize)]
@@ -655,7 +719,7 @@ impl ConnectionQuery {
     /// The connection addressed, or the parse error as a finished 400.
     // The `Err` here IS the finished HTTP response, handed straight back to axum.
     #[allow(clippy::result_large_err)]
-    fn resolve(&self) -> Result<ConnectionId, Response> {
+    pub(crate) fn resolve(&self) -> Result<ConnectionId, Response> {
         match self.connection.as_deref().map(str::trim) {
             None | Some("") => Ok(ConnectionId::default()),
             Some(raw) => ConnectionId::parse(raw).map_err(|e| err(StatusCode::BAD_REQUEST, e)),
@@ -692,24 +756,37 @@ fn back_to_ui(status: &str, detail: Option<&str>) -> Response {
 /// single-use `state`, exchanges the code, probes the token, and stores it.
 pub async fn callback(
     Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
     Query(q): Query<CallbackQuery>,
 ) -> Response {
+    // Single-use nonce: this is what authenticates an unauthenticated callback,
+    // and it carries what the flow was started for. Taken before anything
+    // else, so even a denied authorization lands on the page that started it.
+    let pending = q.state.as_deref().and_then(take_state);
+    let back = |status: &str, detail: Option<&str>| match &pending {
+        Some(Pending::Link { .. }) => back_to_profile(status, detail),
+        _ => back_to_ui(status, detail),
+    };
     if let Some(e) = q.error.as_deref() {
         let detail = q.error_description.as_deref().unwrap_or(e);
         tracing::warn!("linear oauth: authorization denied: {detail}");
-        return back_to_ui("denied", Some(detail));
+        return back("denied", Some(detail));
     }
-    let (Some(code), Some(nonce)) = (q.code.as_deref(), q.state.as_deref()) else {
-        return back_to_ui("error", Some("callback missing `code` or `state`"));
+    let Some(code) = q.code.as_deref() else {
+        return back("error", Some("callback missing `code` or `state`"));
     };
-    // Single-use nonce: this is what authenticates an unauthenticated callback,
-    // and it carries which connection the operator started the flow for.
-    let Some(conn) = take_state(nonce) else {
-        tracing::warn!("linear oauth: callback with unknown/expired state");
-        return back_to_ui(
-            "error",
-            Some("authorization expired or was already used — start again"),
-        );
+    let conn = match &pending {
+        Some(Pending::Install(conn)) => conn.clone(),
+        Some(Pending::Link { conn, user_id }) => {
+            return finish_link(&state, &headers, conn, user_id, code).await;
+        }
+        None => {
+            tracing::warn!("linear oauth: callback with unknown/expired state");
+            return back_to_ui(
+                "error",
+                Some("authorization expired or was already used — start again"),
+            );
+        }
     };
 
     let store = match state.cred_store().await {
@@ -766,6 +843,110 @@ pub async fn callback(
         workspace.name
     );
     back_to_ui("connected", Some(&workspace.name))
+}
+
+/// Send the browser back to the profile page a link was started from.
+fn back_to_profile(status: &str, detail: Option<&str>) -> Response {
+    let mut location = format!("{PROFILE_RETURN_PATH}?linear_link={}", enc(status));
+    if let Some(d) = detail {
+        let short: String = d.chars().take(200).collect();
+        location.push_str(&format!("&linear_message={}", enc(&short)));
+    }
+    (StatusCode::SEE_OTHER, [(header::LOCATION, location)]).into_response()
+}
+
+/// The callback's second half when a person is linking their Linear account:
+/// learn who the token belongs to, record it against the account, and throw
+/// the token away.
+async fn finish_link(
+    state: &Arc<RunsState>,
+    headers: &HeaderMap,
+    conn: &ConnectionId,
+    user_id: &str,
+    code: &str,
+) -> Response {
+    // The browser finishing the link must be the account that started it.
+    // Without this, a link URL someone else started could be handed to you,
+    // and your Linear identity would land on their account.
+    match super::accounts::current_user(state, headers).await {
+        Some(user) if user.id == user_id => {}
+        _ => {
+            return back_to_profile(
+                "error",
+                Some("sign in as the account that started linking, then try again"),
+            )
+        }
+    }
+    let store = match state.cred_store().await {
+        Ok(s) => s,
+        Err(e) => return back_to_profile("error", Some(&e)),
+    };
+    let Ok(redirect) = redirect_uri(state) else {
+        return back_to_profile("error", Some("no public URL configured"));
+    };
+    let Some((client_id, client_secret)) = client_credentials(store, conn).await else {
+        return back_to_profile("error", Some("Linear OAuth client credentials are missing"));
+    };
+    let tokens = match exchange_code(code, &redirect, &client_id, &client_secret).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::warn!("linear link: code exchange failed: {e}");
+            return back_to_profile("error", Some(&e));
+        }
+    };
+    let client = LinearClient::with_auth(LinearAuth::OauthToken(tokens.access_token.clone()));
+    let viewer = client.viewer().await;
+    // Used once: the identity is all that is kept.
+    revoke_token(&tokens.access_token).await;
+    let person = match viewer {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("linear link: could not read who signed in: {}", e.0);
+            return back_to_profile("error", Some(&e.0));
+        }
+    };
+    let Some(linear_id) = person.id.as_deref() else {
+        return back_to_profile("error", Some("Linear did not say who signed in"));
+    };
+    let users = match state.user_store().await {
+        Ok(u) => u,
+        Err(e) => return back_to_profile("error", Some(&e)),
+    };
+    let linked = users
+        .link_identity(
+            user_id,
+            IDENTITY_PROVIDER,
+            conn.as_str(),
+            linear_id,
+            person.email.as_deref(),
+            person.name.as_deref(),
+        )
+        .await;
+    match linked {
+        Ok(LinkOutcome::Linked(identity)) => {
+            // Earlier runs from Linear are this person's too: put their name on
+            // them. Best-effort — the link stands either way.
+            if let Err(e) = users
+                .attribute_runs(user_id, identity.email.as_deref())
+                .await
+            {
+                tracing::warn!("linear link: could not relabel earlier runs: {e}");
+            }
+            let shown = identity
+                .email
+                .or(identity.name)
+                .unwrap_or_else(|| linear_id.to_string());
+            back_to_profile("linked", Some(&shown))
+        }
+        Ok(LinkOutcome::HeldByAnother) => back_to_profile(
+            "error",
+            Some(
+                "that Linear account is already linked to another ai-harness account — \
+                 ask an administrator to unlink it there first",
+            ),
+        ),
+        Err(e) => back_to_profile("error", Some(&e.to_string())),
+    }
 }
 
 /// `GET /api/linear/oauth/status` — how the harness talks to Linear, and what
@@ -926,11 +1107,48 @@ mod tests {
 
         // The nonce is how the callback knows which workspace was being
         // connected — nothing Linear sends back says so.
-        assert_eq!(take_state(&a), Some(default));
+        assert_eq!(take_state(&a), Some(Pending::Install(default)));
         // Replaying it must fail — this is the callback's only authentication.
         assert_eq!(take_state(&a), None);
         assert_eq!(take_state("never-issued"), None);
-        assert_eq!(take_state(&b), Some(acme));
+        assert_eq!(take_state(&b), Some(Pending::Install(acme)));
+    }
+
+    #[test]
+    fn a_link_nonce_names_the_account_and_is_not_an_install() {
+        let conn = ConnectionId::default();
+        let nonce = issue_pending(Pending::Link {
+            conn: conn.clone(),
+            user_id: "user-1".into(),
+        });
+        assert_eq!(
+            take_state(&nonce),
+            Some(Pending::Link {
+                conn,
+                user_id: "user-1".into()
+            })
+        );
+        assert_eq!(take_state(&nonce), None);
+    }
+
+    #[test]
+    fn link_authorize_url_asks_for_the_person_with_read_only() {
+        let url = build_link_authorize_url(
+            "cid-1",
+            "https://harness.example.com/api/linear/oauth/callback",
+            "nonce-1",
+        );
+        // The person, not the app — and nothing that can write.
+        assert!(!url.contains("actor=app"), "{url}");
+        assert!(url.contains("&scope=read&"), "{url}");
+        assert!(url.contains("client_id=cid-1"), "{url}");
+        assert!(url.contains("state=nonce-1"), "{url}");
+        assert!(
+            url.contains(
+                "redirect_uri=https%3A%2F%2Fharness.example.com%2Fapi%2Flinear%2Foauth%2Fcallback"
+            ),
+            "{url}"
+        );
     }
 
     #[test]

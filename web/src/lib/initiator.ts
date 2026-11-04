@@ -117,14 +117,22 @@ export function distinctInitiators(
   runs: {
     trigger_actor: string | null;
     trigger_source: string | null;
+    triggered_by?: string | null;
   }[],
 ): { actor: string; source: string | null }[] {
   const seen = new Set<string>();
   const out: { actor: string; source: string | null }[] = [];
   for (const run of runs) {
     const who = parseInitiator(run.trigger_actor);
-    if (!who || seen.has(who.label)) continue;
-    seen.add(who.label);
+    if (!who) continue;
+    // One account is one person, whatever each run's label says — a run from
+    // Linear written before the account was linked can still carry Linear's
+    // name for them. The label only identifies people without an account.
+    const key = run.triggered_by
+      ? `account:${run.triggered_by}`
+      : `label:${who.label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push({
       actor: run.trigger_actor as string,
       source: run.trigger_source,

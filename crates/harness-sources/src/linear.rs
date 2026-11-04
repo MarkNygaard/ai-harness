@@ -365,6 +365,13 @@ query Me {
   viewer { id }
 }"#;
 
+// Who a *person's* token belongs to — what linking a Linear account to a
+// harness account records. Under a user token `viewer` is that person.
+const VIEWER_QUERY: &str = r#"
+query Viewer {
+  viewer { id name email }
+}"#;
+
 const AGENT_ACTIVITY_MUTATION: &str = r#"
 mutation AgentActivityCreate($input: AgentActivityCreateInput!) {
   agentActivityCreate(input: $input) { success }
@@ -1289,6 +1296,28 @@ pub fn parse_user(json: &[u8]) -> Result<LinearPerson, LinearError> {
     })
 }
 
+/// Parse `query Viewer { viewer { id name email } }`. Linear always has a
+/// viewer for a valid token, so one without an id is an error: the caller is
+/// about to record it as somebody's identity.
+pub fn parse_viewer(json: &[u8]) -> Result<LinearPerson, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        viewer: UserWire,
+    }
+    let data: Data = gql_data(json)?;
+    let viewer = data.viewer;
+    if viewer.id.as_deref().is_none_or(str::is_empty) {
+        return Err(LinearError(
+            "Linear did not say who this token belongs to".into(),
+        ));
+    }
+    Ok(LinearPerson {
+        id: viewer.id,
+        name: viewer.name,
+        email: viewer.email,
+    })
+}
+
 /// Parse a team's projects. An unknown team reads as none.
 pub fn parse_team_projects(json: &[u8]) -> Result<Vec<LinearProject>, LinearError> {
     #[derive(Deserialize)]
@@ -1566,6 +1595,13 @@ impl LinearClient {
     pub async fn app_user_id(&self) -> Result<String, LinearError> {
         let body = serde_json::json!({ "query": ME_QUERY });
         parse_app_user_id(&self.post(body).await?)
+    }
+
+    /// Who this token belongs to. Meaningful for a person's token — under the
+    /// app-actor token it is the app, which is what [`Self::app_user_id`] reads.
+    pub async fn viewer(&self) -> Result<LinearPerson, LinearError> {
+        let body = serde_json::json!({ "query": VIEWER_QUERY });
+        parse_viewer(&self.post(body).await?)
     }
 
     /// Where an issue sits — team, status and delegated agent.
@@ -2363,6 +2399,18 @@ mod tests {
         let json = br#"{"data":{"viewer":{"id":"app-user-1"}}}"#;
         assert_eq!(parse_app_user_id(json).unwrap(), "app-user-1");
         assert!(parse_app_user_id(br#"{"errors":[{"message":"nope"}]}"#).is_err());
+    }
+
+    #[test]
+    fn parse_viewer_reads_the_person() {
+        let p = parse_viewer(
+            br#"{"data":{"viewer":{"id":"u-1","name":"Mark","email":"mnl@work.test"}}}"#,
+        )
+        .unwrap();
+        assert_eq!(p.id.as_deref(), Some("u-1"));
+        assert_eq!(p.email.as_deref(), Some("mnl@work.test"));
+        assert!(parse_viewer(br#"{"data":{"viewer":{"id":""}}}"#).is_err());
+        assert!(parse_viewer(br#"{"errors":[{"message":"nope"}]}"#).is_err());
     }
 
     #[test]

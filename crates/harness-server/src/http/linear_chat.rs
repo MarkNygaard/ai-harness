@@ -22,7 +22,7 @@ use harness_persist::Conversation;
 use harness_sources::linear::{AgentActivity, AgentSessionEvent, LinearClient};
 use serde_json::{json, Value};
 
-use super::accounts::{actor_label, mode, Mode};
+use super::accounts::{actor_label, linear_account, mode, Mode};
 use super::chat_routes::{self, ChatCaller, PendingAction};
 use super::linear_connections::ConnectionId;
 use super::runs_routes::RunsState;
@@ -49,6 +49,15 @@ async fn asker(
     known_email: Option<&str>,
 ) -> Result<Asker, String> {
     let accounts = mode(state).await == Mode::Accounts;
+    if accounts {
+        // A linked Linear account answers without asking Linear anything more.
+        if let Some(id) = linear_user_id {
+            let users = state.user_store().await?;
+            if let Ok(Some(user)) = linear_account(users, Some(id), None).await {
+                return account_asker(user);
+            }
+        }
+    }
     let person = match (known_email, linear_user_id) {
         (Some(email), _) => Some((None, Some(email.to_string()))),
         (None, Some(id)) => client.user(id).await.ok().map(|p| (p.name, p.email)),
@@ -61,24 +70,44 @@ async fn asker(
             actor: actor_label(name.as_deref(), email.as_deref()),
         });
     }
+    let link_hint = state
+        .public_url()
+        .map(|base| {
+            format!(
+                " If you already have one, link your Linear account to it at \
+                 {base}/settings/preferences."
+            )
+        })
+        .unwrap_or_else(|| {
+            " If you already have one, link your Linear account to it under \
+             Settings → Preferences."
+                .to_string()
+        });
     let Some(email) = person.and_then(|(_, email)| email) else {
-        return Err(
+        return Err(format!(
             "I couldn't see who's asking — Linear didn't share an email address \
-                    with me — so I can't match you to an ai-harness account."
-                .to_string(),
-        );
+             with me — so I can't match you to an ai-harness account.{link_hint}"
+        ));
     };
     let users = state.user_store().await?;
-    match users.get_by_email(&email).await {
-        Ok(Some(user)) if user.disabled_at.is_none() => Ok(Asker {
-            actor: actor_label(Some(&user.name), Some(&user.email)),
-            user_id: Some(user.id),
-        }),
+    match linear_account(users, None, Some(&email)).await {
+        Ok(Some(user)) => account_asker(user),
         _ => Err(format!(
             "I only answer people with an ai-harness account, and {email} doesn't have one. \
-             Ask an administrator to invite you."
+             Ask an administrator to invite you.{link_hint}"
         )),
     }
+}
+
+/// The asker as the account they matched, or why an account can't ask.
+fn account_asker(user: harness_persist::User) -> Result<Asker, String> {
+    if user.disabled_at.is_some() {
+        return Err("Your ai-harness account is disabled, so I can't answer you.".to_string());
+    }
+    Ok(Asker {
+        actor: actor_label(Some(&user.name), Some(&user.email)),
+        user_id: Some(user.id),
+    })
 }
 
 /// The harness project the issue belongs to, when exactly one binding says so

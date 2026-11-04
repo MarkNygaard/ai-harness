@@ -124,6 +124,25 @@ describe("distinctInitiators", () => {
     ]);
   });
 
+  it("counts one account once, even under two labels", () => {
+    const got = distinctInitiators([
+      {
+        ...run("Mark Leth <mnl@work.test>", "linear-webhook"),
+        triggered_by: "user-1",
+      },
+      {
+        ...run("Mark Nygaard Leth <mark@private.test>", "ui"),
+        triggered_by: "user-1",
+      },
+      // Same label as the first, but no account: a different person to us.
+      run("Mark Leth <mnl@work.test>", "linear-poller"),
+    ]);
+    expect(got.map((g) => g.actor)).toEqual([
+      "Mark Leth <mnl@work.test>",
+      "Mark Leth <mnl@work.test>",
+    ]);
+  });
+
   it("skips runs with nobody on them", () => {
     expect(distinctInitiators([run(null, "ui"), run("  ", "mcp")])).toEqual([]);
     expect(distinctInitiators([])).toEqual([]);
