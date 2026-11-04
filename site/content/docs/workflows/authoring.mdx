@@ -512,6 +512,60 @@ to an artifact, then file it from a `bash` step:
 `$TASK_TITLE` is the run's title. A scheduled run's title is the schedule's
 name and the date.
 
+### Triaging issues
+
+A run can also read a team's issues and label them, so a
+[scheduled](/docs/schedules) workflow can triage a column by itself and leave
+the issues where they are. List them in a `bash` step, then let an agent judge
+each one and write back with `harness linear comment` and `harness linear label`:
+
+```yaml
+- id: waiting
+  bash: |
+    harness linear issues \
+      --team ECOM \
+      --state Todo \
+      --assignee none \
+      --without-label 'wayfinder:*' \
+      --without-label 'harness:*' \
+      --limit 10
+
+- id: triage
+  depends_on: [waiting]
+  model: sonnet
+  prompt: |
+    These Linear issues are waiting in Todo, as JSON:
+
+    $waiting.output
+
+    For each one, decide whether it is ready to build: a clear goal and
+    checkable acceptance criteria. Then, from the shell:
+    - post your reasoning with
+      `harness linear comment --issue <identifier> --body-file <file>`
+    - label it with
+      `harness linear label --issue <identifier> --add harness:ready`
+      or `--add harness:skip`.
+```
+
+- **`issues` is read-only.** It prints a JSON array, newest first: `id`,
+  `identifier`, `title`, `description`, `url`, `state`, `assignee`, `labels`
+  and `created_at`.
+- **Filters.** `--state` takes a status name. `--assignee` takes `none` or an
+  email address. `--label` keeps issues that have every label named, and
+  `--without-label` drops issues that have any of them. Both are repeatable.
+  A trailing `*` matches a prefix, and a label group's name matches every
+  label in the group. `--limit` defaults to 25, with a maximum of 100.
+- **`label` only uses labels that exist.** It looks for the name in the issue's
+  team, then in the workspace. An unknown name fails the step before anything
+  changes. Adding a label the issue already has, or removing one it doesn't,
+  does nothing, so running the triage twice gives the same result.
+- **Only the project's own workspace,** through the run's token, as for filing
+  an issue.
+
+These steps can't change an issue's status or assignee. Labelling an issue
+`harness:ready` doesn't start a build either. Builds start when someone
+delegates the issue to the harness.
+
 ## Saved steps
 
 A step worth reusing, such as one that files a report in Linear or uploads an

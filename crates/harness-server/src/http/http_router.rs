@@ -441,6 +441,8 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         )
         .route("/api/run/linear/state", post(run_linear_routes::move_state))
         .route("/api/run/linear/comment", post(run_linear_routes::comment))
+        .route("/api/run/linear/issues", post(run_linear_routes::issues))
+        .route("/api/run/linear/labels", post(run_linear_routes::labels))
         .route("/api/run/linear/release", post(run_linear_routes::release))
         .route(
             "/api/run/linear/epic-review-state",

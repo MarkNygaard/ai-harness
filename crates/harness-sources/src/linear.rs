@@ -1915,6 +1915,370 @@ pub fn parse_created_session(json: &[u8]) -> Result<String, LinearError> {
         .ok_or_else(|| LinearError("agentSessionCreate returned no session".into()))
 }
 
+// ── Listing a team's issues, and labelling one ───────────────────────────────
+
+// One page of a team's issues, newest first, for a workflow that triages them.
+// The filter is built by `IssueQuery::filter`; label filtering is done here
+// rather than in Linear, because "no label starting with `wayfinder:`" is not
+// something `IssueFilter` can say.
+const TEAM_ISSUES_QUERY: &str = r#"
+query TeamIssues($filter: IssueFilter!, $first: Int!, $after: String) {
+  issues(filter: $filter, first: $first, after: $after) {
+    nodes {
+      id identifier title description url createdAt
+      state { name }
+      assignee { name email }
+      labels { nodes { name parent { name } } }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}"#;
+
+// An issue's team and current labels, by id or `ECOM-12` identifier — what
+// adding and removing labels needs to know first.
+const ISSUE_LABELS_QUERY: &str = r#"
+query IssueLabels($id: String!) {
+  issue(id: $id) {
+    id identifier
+    team { id }
+    labels { nodes { id name } }
+  }
+}"#;
+
+// Labels with one name, team or workspace. Never created: an unknown name is
+// an error the workflow's author fixes.
+const LABELS_NAMED_QUERY: &str = r#"
+query LabelsNamed($name: String!) {
+  issueLabels(filter: { name: { eqIgnoreCase: $name } }, first: 20) {
+    nodes { id name isGroup team { id } }
+  }
+}"#;
+
+/// Whose issues [`IssueQuery`] asks for.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum AssigneeFilter {
+    /// Anyone's, or nobody's.
+    #[default]
+    Any,
+    /// Only issues nobody is assigned to.
+    Unassigned,
+    /// Only issues assigned to this email address.
+    Email(String),
+}
+
+/// Which of a team's issues to list.
+#[derive(Debug, Clone, Default)]
+pub struct IssueQuery {
+    pub team_id: String,
+    /// Only issues in this workflow state.
+    pub state_id: Option<String>,
+    pub assignee: AssigneeFilter,
+    /// Only issues carrying **every** one of these labels (patterns — see
+    /// [`label_matches`]).
+    pub with_labels: Vec<String>,
+    /// Only issues carrying **none** of these labels (patterns).
+    pub without_labels: Vec<String>,
+    /// At most this many issues, after label filtering.
+    pub limit: usize,
+}
+
+impl IssueQuery {
+    /// The part of the query Linear filters on itself.
+    fn filter(&self) -> serde_json::Value {
+        let mut filter = serde_json::json!({ "team": { "id": { "eq": self.team_id } } });
+        if let Some(state) = &self.state_id {
+            filter["state"] = serde_json::json!({ "id": { "eq": state } });
+        }
+        match &self.assignee {
+            AssigneeFilter::Any => {}
+            AssigneeFilter::Unassigned => {
+                filter["assignee"] = serde_json::json!({ "null": true });
+            }
+            AssigneeFilter::Email(email) => {
+                filter["assignee"] = serde_json::json!({ "email": { "eqIgnoreCase": email } });
+            }
+        }
+        filter
+    }
+
+    /// Whether an issue passes the label filters.
+    fn keeps(&self, issue: &TeamIssue) -> bool {
+        let has = |pattern: &str| {
+            issue
+                .labels
+                .iter()
+                .zip(&issue.label_groups)
+                .any(|(name, group)| label_matches(pattern, name, group.as_deref()))
+        };
+        self.with_labels.iter().all(|p| has(p)) && !self.without_labels.iter().any(|p| has(p))
+    }
+}
+
+/// Whether `pattern` names a label: its name, or the name of the group it is
+/// in, ignoring case. A trailing `*` matches any rest, so `wayfinder:*` catches
+/// `wayfinder:blocked` and `harness*` catches a `harness` group's labels.
+pub fn label_matches(pattern: &str, name: &str, group: Option<&str>) -> bool {
+    let pattern = pattern.trim().to_lowercase();
+    let one = |candidate: &str| {
+        let candidate = candidate.to_lowercase();
+        match pattern.strip_suffix('*') {
+            Some(prefix) => candidate.starts_with(prefix),
+            None => candidate == pattern,
+        }
+    };
+    !pattern.is_empty() && (one(name) || group.is_some_and(one))
+}
+
+/// One issue as [`LinearClient::team_issues`] lists it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct TeamIssue {
+    pub id: String,
+    pub identifier: String,
+    pub title: String,
+    pub description: String,
+    pub url: Option<String>,
+    pub state: Option<String>,
+    pub assignee: Option<String>,
+    pub labels: Vec<String>,
+    /// The group each of `labels` is in, in the same order. Read by the label
+    /// filters, not printed.
+    #[serde(skip)]
+    pub label_groups: Vec<Option<String>>,
+    pub created_at: Option<String>,
+}
+
+/// One page of [`TEAM_ISSUES_QUERY`]: the issues and the cursor after them.
+pub fn parse_team_issues(json: &[u8]) -> Result<(Vec<TeamIssue>, Option<String>), LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        issues: Page,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Page {
+        nodes: Vec<Node>,
+        page_info: PageInfo,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PageInfo {
+        has_next_page: bool,
+        end_cursor: Option<String>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Node {
+        id: String,
+        identifier: String,
+        title: String,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        created_at: Option<String>,
+        #[serde(default)]
+        state: Option<Named>,
+        #[serde(default)]
+        assignee: Option<UserWire>,
+        #[serde(default)]
+        labels: Option<Labels>,
+    }
+    #[derive(Deserialize)]
+    struct Named {
+        name: String,
+    }
+    #[derive(Deserialize)]
+    struct Labels {
+        nodes: Vec<LabelNode>,
+    }
+    #[derive(Deserialize)]
+    struct LabelNode {
+        name: String,
+        #[serde(default)]
+        parent: Option<Named>,
+    }
+    let data: Data = gql_data(json)?;
+    let next = data
+        .issues
+        .page_info
+        .has_next_page
+        .then_some(data.issues.page_info.end_cursor)
+        .flatten();
+    let issues = data
+        .issues
+        .nodes
+        .into_iter()
+        .map(|n| {
+            let labels = n.labels.map(|l| l.nodes).unwrap_or_default();
+            TeamIssue {
+                id: n.id,
+                identifier: n.identifier,
+                title: n.title,
+                description: n.description.unwrap_or_default(),
+                url: n.url,
+                state: n.state.map(|s| s.name),
+                assignee: n.assignee.and_then(|a| a.email.or(a.name)),
+                label_groups: labels
+                    .iter()
+                    .map(|l| l.parent.as_ref().map(|p| p.name.clone()))
+                    .collect(),
+                labels: labels.into_iter().map(|l| l.name).collect(),
+                created_at: n.created_at,
+            }
+        })
+        .collect();
+    Ok((issues, next))
+}
+
+/// An issue's id, team and current labels (id, name).
+#[derive(Debug, Clone, PartialEq)]
+pub struct IssueLabels {
+    pub id: String,
+    pub identifier: String,
+    pub team_id: Option<String>,
+    pub labels: Vec<(String, String)>,
+}
+
+pub fn parse_issue_labels(json: &[u8]) -> Result<IssueLabels, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        issue: Option<Node>,
+    }
+    #[derive(Deserialize)]
+    struct Node {
+        id: String,
+        identifier: String,
+        #[serde(default)]
+        team: Option<IdRef>,
+        #[serde(default)]
+        labels: Option<Labels>,
+    }
+    #[derive(Deserialize)]
+    struct IdRef {
+        id: String,
+    }
+    #[derive(Deserialize)]
+    struct Labels {
+        nodes: Vec<LabelWire>,
+    }
+    #[derive(Deserialize)]
+    struct LabelWire {
+        id: String,
+        name: String,
+    }
+    let data: Data = gql_data(json)?;
+    let issue = data
+        .issue
+        .ok_or_else(|| LinearError("Linear has no such issue".into()))?;
+    Ok(IssueLabels {
+        id: issue.id,
+        identifier: issue.identifier,
+        team_id: issue.team.map(|t| t.id),
+        labels: issue
+            .labels
+            .map(|l| l.nodes.into_iter().map(|l| (l.id, l.name)).collect())
+            .unwrap_or_default(),
+    })
+}
+
+/// The label `name` an issue in `team_id` can carry: the team's own if it has
+/// one, else the workspace's. Group labels are skipped — Linear won't put one
+/// on an issue. `None` when there is no such label.
+pub fn pick_label(json: &[u8], team_id: Option<&str>) -> Result<Option<String>, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(rename = "issueLabels")]
+        labels: Nodes,
+    }
+    #[derive(Deserialize)]
+    struct Nodes {
+        nodes: Vec<Node>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Node {
+        id: String,
+        #[serde(default)]
+        is_group: bool,
+        #[serde(default)]
+        team: Option<IdRef>,
+    }
+    #[derive(Deserialize)]
+    struct IdRef {
+        id: String,
+    }
+    let data: Data = gql_data(json)?;
+    let usable: Vec<Node> = data
+        .labels
+        .nodes
+        .into_iter()
+        .filter(|n| !n.is_group)
+        .collect();
+    let own = usable
+        .iter()
+        .find(|n| n.team.as_ref().map(|t| t.id.as_str()) == team_id && team_id.is_some());
+    let workspace = usable.iter().find(|n| n.team.is_none());
+    Ok(own.or(workspace).map(|n| n.id.clone()))
+}
+
+impl LinearClient {
+    /// A team's issues, newest first, filtered as `query` says. Read-only.
+    ///
+    /// Label filters are applied after Linear answers, so this pages on until
+    /// it has `query.limit` survivors or has looked at [`MAX_SCANNED`] issues.
+    pub async fn team_issues(&self, query: &IssueQuery) -> Result<Vec<TeamIssue>, LinearError> {
+        const PAGE: usize = 50;
+        let filter = query.filter();
+        let mut out = Vec::new();
+        let mut after: Option<String> = None;
+        let mut scanned = 0;
+        while out.len() < query.limit && scanned < MAX_SCANNED {
+            let body = serde_json::json!({
+                "query": TEAM_ISSUES_QUERY,
+                "variables": { "filter": filter, "first": PAGE, "after": after },
+            });
+            let (page, next) = parse_team_issues(&self.post(body).await?)?;
+            scanned += page.len();
+            out.extend(page.into_iter().filter(|i| query.keeps(i)));
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => break,
+            }
+        }
+        out.truncate(query.limit);
+        Ok(out)
+    }
+
+    /// An issue's id, team and labels. `issue` is an id or an identifier.
+    pub async fn issue_labels(&self, issue: &str) -> Result<IssueLabels, LinearError> {
+        let body = serde_json::json!({
+            "query": ISSUE_LABELS_QUERY,
+            "variables": { "id": issue },
+        });
+        parse_issue_labels(&self.post(body).await?)
+    }
+
+    /// The id of the existing label `name` usable in `team_id`, if there is one.
+    pub async fn find_label(
+        &self,
+        name: &str,
+        team_id: Option<&str>,
+    ) -> Result<Option<String>, LinearError> {
+        let body = serde_json::json!({
+            "query": LABELS_NAMED_QUERY,
+            "variables": { "name": name.trim() },
+        });
+        pick_label(&self.post(body).await?, team_id)
+    }
+}
+
+/// How many issues [`LinearClient::team_issues`] looks at before giving up on
+/// filling its limit — a team with thousands of labelled issues should not
+/// turn one listing into a hundred requests.
+pub const MAX_SCANNED: usize = 500;
+
 /// Check a mutation response reported `{ <field>: { success: true } }`.
 fn expect_mutation_success(json: &[u8], field: &str) -> Result<(), LinearError> {
     let data: serde_json::Value = gql_data(json)?;
@@ -2363,6 +2727,121 @@ mod tests {
         let json = br#"{"data":{"viewer":{"id":"app-user-1"}}}"#;
         assert_eq!(parse_app_user_id(json).unwrap(), "app-user-1");
         assert!(parse_app_user_id(br#"{"errors":[{"message":"nope"}]}"#).is_err());
+    }
+
+    #[test]
+    fn label_patterns_match_names_groups_and_prefixes() {
+        assert!(label_matches("harness:ready", "Harness:Ready", None));
+        assert!(!label_matches("harness:ready", "harness:skip", None));
+        assert!(label_matches("wayfinder:*", "wayfinder:blocked", None));
+        assert!(!label_matches("wayfinder:*", "wayfinding", None));
+        // A group's name stands for every label in it.
+        assert!(label_matches("harness", "ready", Some("Harness")));
+        assert!(label_matches("harness*", "ready", Some("harness")));
+        assert!(!label_matches("  ", "anything", None));
+    }
+
+    #[test]
+    fn issue_query_filters_in_linear_and_on_labels() {
+        let q = IssueQuery {
+            team_id: "t-1".into(),
+            state_id: Some("s-todo".into()),
+            assignee: AssigneeFilter::Unassigned,
+            with_labels: vec![],
+            without_labels: vec!["wayfinder:*".into(), "harness:*".into()],
+            limit: 5,
+        };
+        assert_eq!(
+            q.filter(),
+            serde_json::json!({
+                "team": { "id": { "eq": "t-1" } },
+                "state": { "id": { "eq": "s-todo" } },
+                "assignee": { "null": true },
+            })
+        );
+        let issue = |labels: &[&str]| TeamIssue {
+            id: "i".into(),
+            identifier: "ECOM-1".into(),
+            title: "t".into(),
+            description: String::new(),
+            url: None,
+            state: None,
+            assignee: None,
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+            label_groups: vec![None; labels.len()],
+            created_at: None,
+        };
+        assert!(q.keeps(&issue(&[])));
+        assert!(q.keeps(&issue(&["bug"])));
+        assert!(!q.keeps(&issue(&["bug", "harness:ready"])));
+        assert!(!q.keeps(&issue(&["wayfinder:later"])));
+
+        let only_bugs = IssueQuery {
+            with_labels: vec!["bug".into()],
+            ..q.clone()
+        };
+        assert!(only_bugs.keeps(&issue(&["Bug"])));
+        assert!(!only_bugs.keeps(&issue(&[])));
+
+        let mine = IssueQuery {
+            assignee: AssigneeFilter::Email("a@x.test".into()),
+            ..q
+        };
+        assert_eq!(
+            mine.filter()["assignee"],
+            serde_json::json!({ "email": { "eqIgnoreCase": "a@x.test" } })
+        );
+    }
+
+    #[test]
+    fn parse_team_issues_reads_a_page_and_its_cursor() {
+        let json = br#"{"data":{"issues":{
+            "nodes":[{"id":"i-1","identifier":"ECOM-7","title":"Fix it","description":"Body",
+              "url":"https://linear.app/x/issue/ECOM-7","createdAt":"2026-11-01T00:00:00Z",
+              "state":{"name":"Todo"},"assignee":null,
+              "labels":{"nodes":[{"name":"bug","parent":null},{"name":"ready","parent":{"name":"harness"}}]}}],
+            "pageInfo":{"hasNextPage":true,"endCursor":"c-1"}}}}"#;
+        let (issues, next) = parse_team_issues(json).unwrap();
+        assert_eq!(next.as_deref(), Some("c-1"));
+        assert_eq!(issues[0].identifier, "ECOM-7");
+        assert_eq!(issues[0].labels, vec!["bug", "ready"]);
+        assert_eq!(issues[0].label_groups, vec![None, Some("harness".into())]);
+        assert_eq!(issues[0].state.as_deref(), Some("Todo"));
+        // The group list is for filtering, not for printing.
+        let printed = serde_json::to_value(&issues[0]).unwrap();
+        assert!(printed.get("label_groups").is_none());
+
+        let last = br#"{"data":{"issues":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":"c-9"}}}}"#;
+        assert_eq!(parse_team_issues(last).unwrap().1, None);
+    }
+
+    #[test]
+    fn pick_label_prefers_the_team_and_never_a_group() {
+        let json = br#"{"data":{"issueLabels":{"nodes":[
+            {"id":"grp","name":"harness:ready","isGroup":true,"team":null},
+            {"id":"ws","name":"harness:ready","isGroup":false,"team":null},
+            {"id":"other","name":"harness:ready","isGroup":false,"team":{"id":"t-2"}},
+            {"id":"own","name":"harness:ready","isGroup":false,"team":{"id":"t-1"}}]}}}"#;
+        assert_eq!(
+            pick_label(json, Some("t-1")).unwrap().as_deref(),
+            Some("own")
+        );
+        assert_eq!(
+            pick_label(json, Some("t-3")).unwrap().as_deref(),
+            Some("ws")
+        );
+        let none = br#"{"data":{"issueLabels":{"nodes":[]}}}"#;
+        assert_eq!(pick_label(none, Some("t-1")).unwrap(), None);
+    }
+
+    #[test]
+    fn parse_issue_labels_reads_team_and_labels() {
+        let json = br#"{"data":{"issue":{"id":"i-1","identifier":"ECOM-7","team":{"id":"t-1"},
+            "labels":{"nodes":[{"id":"l-1","name":"bug"}]}}}}"#;
+        let got = parse_issue_labels(json).unwrap();
+        assert_eq!(got.team_id.as_deref(), Some("t-1"));
+        assert_eq!(got.labels, vec![("l-1".to_string(), "bug".to_string())]);
+        assert!(parse_issue_labels(br#"{"data":{"issue":null}}"#).is_err());
     }
 
     #[test]
