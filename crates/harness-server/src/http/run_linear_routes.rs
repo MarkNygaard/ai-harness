@@ -25,8 +25,24 @@ use serde::Deserialize;
 use super::run_grants::{self, Grant};
 use super::runs_routes::RunsState;
 
+/// The status for "Linear (or the claim store behind it) failed".
+///
+/// Not 502, although that is what it means: a reverse proxy in front of the
+/// harness — Cloudflare, for one — replaces a 502 from the origin with its own
+/// page, so the run read `502 Bad Gateway: error code: 502` and never Linear's
+/// message. A run's log is the only place that message is ever seen, so it has
+/// to survive the trip. 424 ("a request this one depends on failed") passes
+/// through untouched.
+const UPSTREAM_FAILED: StatusCode = StatusCode::FAILED_DEPENDENCY;
+
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
-    (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
+    let msg = msg.into();
+    // Also into the server's log: an operator looking at why a run's Linear
+    // step failed should not need the run's output to find out.
+    if status == UPSTREAM_FAILED {
+        tracing::warn!("run linear: request failed: {msg}");
+    }
+    (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
 /// Why a request was refused, before it becomes a response.
@@ -91,7 +107,7 @@ pub async fn issue(
     };
     match c.issue_context(&req.issue).await {
         Ok(ctx) => Json(ctx).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -111,7 +127,7 @@ pub async fn children(
     };
     match c.list_children(&req.issue).await {
         Ok(kids) => Json(kids).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -154,7 +170,7 @@ pub async fn sub_issue(
                 )
             }
         },
-        Err(e) => return err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => return err(UPSTREAM_FAILED, e.0),
     };
     match c
         .create_issue(
@@ -168,7 +184,7 @@ pub async fn sub_issue(
         .await
     {
         Ok(created) => Json(created).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -297,7 +313,7 @@ pub async fn create_issue(
     };
     let discovery = match c.discover().await {
         Ok(d) => d,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => return err(UPSTREAM_FAILED, e.0),
     };
     let place = match resolve_placement(&discovery, &req) {
         Ok(p) => p,
@@ -316,7 +332,7 @@ pub async fn create_issue(
         .await
     {
         Ok(created) => Json(created).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -357,7 +373,7 @@ pub async fn move_state(
     };
     match c.set_issue_state(&req.issue, &req.state).await {
         Ok(()) => Json(serde_json::json!({ "moved": req.issue })).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -417,7 +433,7 @@ pub async fn ready_state(
             ),
         },
         Ok(None) => err(StatusCode::NOT_FOUND, "this run has no Linear claim"),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
+        Err(e) => err(UPSTREAM_FAILED, e.to_string()),
     }
 }
 
@@ -453,7 +469,7 @@ pub async fn epic_review_state(
             None => Json(serde_json::json!({ "state": null })).into_response(),
         },
         Ok(None) => err(StatusCode::NOT_FOUND, "no binding started this run"),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.to_string()),
+        Err(e) => err(UPSTREAM_FAILED, e.to_string()),
     }
 }
 
@@ -479,7 +495,7 @@ pub async fn release(
     };
     match c.clear_delegate(&req.issue).await {
         Ok(()) => Json(serde_json::json!({ "released": req.issue })).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -510,7 +526,7 @@ pub async fn comment(
     };
     match c.add_comment(&req.issue, &req.body).await {
         Ok(()) => Json(serde_json::json!({ "commented": req.issue })).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -599,7 +615,7 @@ pub async fn issues(
     };
     let discovery = match c.discover().await {
         Ok(d) => d,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => return err(UPSTREAM_FAILED, e.0),
     };
     let query = match issue_query(&discovery, &req) {
         Ok(q) => q,
@@ -607,7 +623,7 @@ pub async fn issues(
     };
     match c.team_issues(&query).await {
         Ok(issues) => Json(issues).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -687,7 +703,7 @@ pub async fn labels(
                     ),
                 )
             }
-            Err(e) => return err(StatusCode::BAD_GATEWAY, e.0),
+            Err(e) => return err(UPSTREAM_FAILED, e.0),
         }
     }
 
@@ -704,7 +720,7 @@ pub async fn labels(
             _ => Ok(()),
         };
         if let Err(e) = done {
-            return err(StatusCode::BAD_GATEWAY, e.0);
+            return err(UPSTREAM_FAILED, e.0);
         }
     }
     Json(serde_json::json!({
@@ -755,6 +771,20 @@ mod tests {
             state: state.map(str::to_string),
             labels: labels.iter().map(|l| l.to_string()).collect(),
         }
+    }
+
+    #[test]
+    fn a_linear_failure_uses_a_status_proxies_pass_through() {
+        // Cloudflare swaps a 502, 503 or 504 from the origin for its own page,
+        // and the run then never sees why its step failed.
+        for replaced in [
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert_ne!(UPSTREAM_FAILED, replaced);
+        }
+        assert_eq!(err(UPSTREAM_FAILED, "x").status().as_u16(), 424);
     }
 
     fn issues_req(assignee: Option<&str>, limit: Option<usize>) -> IssuesRequest {
