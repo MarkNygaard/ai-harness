@@ -95,6 +95,16 @@ const ALTER_LINEAR_SOURCES_LINEAR_PROJECT: &str = "ALTER TABLE harness_linear_so
     ADD COLUMN IF NOT EXISTS linear_project_id text, \
     ADD COLUMN IF NOT EXISTS linear_project_name text";
 
+/// Claim by label as well as by delegation, and cap claims per day.
+///
+/// Delegation needs a person in the loop. A label can be set by anyone — a
+/// triage run included, through `harness linear label` — so a trigger label
+/// lets a workflow queue work on its own. The daily cap is what keeps "anyone
+/// can set a label" affordable.
+const ALTER_LINEAR_SOURCES_TRIGGER_LABEL: &str = "ALTER TABLE harness_linear_sources \
+    ADD COLUMN IF NOT EXISTS trigger_label text, \
+    ADD COLUMN IF NOT EXISTS max_runs_per_day integer";
+
 /// A persisted Linear trigger binding (matches `harness_linear_sources`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LinearSource {
@@ -134,6 +144,13 @@ pub struct LinearSource {
     /// That project's name, for display. Like `team_name`, kept from when the
     /// binding was saved.
     pub linear_project_name: Option<String>,
+    /// Also claim issues carrying this label that nobody has delegated, as
+    /// well as issues delegated to the app. `None` (default) is delegation
+    /// only, as before. The poller takes the label off when it claims one.
+    pub trigger_label: Option<String>,
+    /// At most this many claims in any 24 hours. `None` (default) is no limit
+    /// beyond [`Self::max_concurrent_runs`].
+    pub max_runs_per_day: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -158,6 +175,8 @@ pub struct LinearSourceInput {
     pub live: bool,
     pub linear_project_id: Option<String>,
     pub linear_project_name: Option<String>,
+    pub trigger_label: Option<String>,
+    pub max_runs_per_day: Option<i32>,
 }
 
 /// Postgres-backed store for Linear trigger bindings.
@@ -199,6 +218,9 @@ impl LinearSourceStore {
         sqlx::query(ALTER_LINEAR_SOURCES_LINEAR_PROJECT)
             .execute(&pool)
             .await?;
+        sqlx::query(ALTER_LINEAR_SOURCES_TRIGGER_LABEL)
+            .execute(&pool)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -211,7 +233,7 @@ impl LinearSourceStore {
         let row = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, trigger_label, max_runs_per_day, created_at, updated_at
              FROM harness_linear_sources
              WHERE project = $1 AND workflow = $2",
         )
@@ -227,7 +249,7 @@ impl LinearSourceStore {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, trigger_label, max_runs_per_day, created_at, updated_at
              FROM harness_linear_sources
              WHERE project = $1
              ORDER BY workflow",
@@ -243,7 +265,7 @@ impl LinearSourceStore {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, trigger_label, max_runs_per_day, created_at, updated_at
              FROM harness_linear_sources
              WHERE enabled = true
              ORDER BY project, workflow",
@@ -263,7 +285,7 @@ impl LinearSourceStore {
         let rows = sqlx::query_as::<_, LinearSource>(
             "SELECT project, workflow, team_id, team_name, source_state_id, failed_label,
                     in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at
+                    poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, trigger_label, max_runs_per_day, created_at, updated_at
              FROM harness_linear_sources
              ORDER BY project, workflow",
         )
@@ -285,8 +307,8 @@ impl LinearSourceStore {
                 project, workflow, team_id, team_name, source_state_id,
                 failed_label, in_progress_state_id, review_state_id, ready_state_id,
                 piece_ready_state_id, epic_review_state_id, base_branch, poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live,
-                linear_project_id, linear_project_name, created_at, updated_at
-            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, now(), now())
+                linear_project_id, linear_project_name, trigger_label, max_runs_per_day, created_at, updated_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, now(), now())
             ON CONFLICT (project, workflow) DO UPDATE SET
                 team_id              = excluded.team_id,
                 team_name            = excluded.team_name,
@@ -305,10 +327,12 @@ impl LinearSourceStore {
                 live                 = excluded.live,
                 linear_project_id    = excluded.linear_project_id,
                 linear_project_name  = excluded.linear_project_name,
+                trigger_label        = excluded.trigger_label,
+                max_runs_per_day     = excluded.max_runs_per_day,
                 updated_at           = now()
             RETURNING project, workflow, team_id, team_name, source_state_id, failed_label,
                       in_progress_state_id, review_state_id, ready_state_id, piece_ready_state_id, epic_review_state_id, base_branch,
-                      poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, created_at, updated_at",
+                      poll_interval_secs, max_concurrent_runs, max_attempts, enabled, live, linear_project_id, linear_project_name, trigger_label, max_runs_per_day, created_at, updated_at",
         )
         .bind(project)
         .bind(workflow)
@@ -329,6 +353,8 @@ impl LinearSourceStore {
         .bind(input.live)
         .bind(input.linear_project_id.as_deref())
         .bind(input.linear_project_name.as_deref())
+        .bind(input.trigger_label.as_deref())
+        .bind(input.max_runs_per_day)
         .fetch_one(&self.pool)
         .await?;
         Ok(row)
@@ -386,6 +412,8 @@ mod tests {
             live: false,
             linear_project_id: None,
             linear_project_name: None,
+            trigger_label: None,
+            max_runs_per_day: None,
         };
         let created = store.upsert(project, &workflow, &input).await.unwrap();
         assert_eq!(created.team_id, "team-1");
@@ -426,6 +454,8 @@ mod tests {
             live: true,
             linear_project_id: None,
             linear_project_name: None,
+            trigger_label: None,
+            max_runs_per_day: None,
         };
         let updated = store.upsert(project, &workflow, &input2).await.unwrap();
         assert_eq!(updated.team_id, "team-2");

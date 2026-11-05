@@ -148,6 +148,42 @@ therefore starts it by itself once a slot frees — nothing to re-delegate. A bi
 with `live` off has no poller coming back, so its reply asks you to delegate again
 later, and says so.
 
+### Start by label
+
+A binding starts work that someone delegated to the harness. Set its **Also
+start on label** field, and the poller also claims issues in the source status
+that carry that label. A person or a workflow can set the label. For example, a
+nightly [triage workflow](/docs/workflows/authoring#triaging-issues) labels the
+issues it judges ready with `harness:ready`, and the idea-to-pr binding on Todo
+builds them.
+
+- **Delegation still works.** The label is an extra way in, not a
+  replacement. Delegated issues go first, then labelled ones.
+- **Only issues nobody has delegated.** A delegated issue is already claimed by
+  delegation, so the label doesn't start it a second time.
+- **Not twice.** A labelled issue that already has a GitHub pull request linked
+  is skipped, and so is any issue that already has a run in flight.
+- **The label comes off when the run starts.** An issue a failed run sends back
+  to the source status isn't started again on the next check. Add the label
+  again to retry. If the run can't start at all, the label is put back.
+- **The binding has to be `live`.** Only the poller reads the label. While
+  `live` is off it only logs which issues it would claim, and delegation works
+  as before.
+
+Anyone who can edit labels in the team can start a build this way, as anyone
+can delegate today. Set **Max runs per day** on the binding to limit the cost.
+
+### Max runs per day
+
+**Max runs per day** caps how many runs the poller starts for a binding in any
+24 hours, counting failed runs too. Leave it empty for no limit. It works on top
+of **Max simultaneous tasks**: with 1 at a time and 5 a day, the binding builds
+one issue after another until it has started five, then waits until the oldest
+of those is 24 hours old.
+
+The daily limit applies only to the poller. A delegation is a person asking
+directly, and still starts as long as a slot is free.
+
 ## Images pasted into an issue
 
 Screenshots and images in an issue's description or comments are **downloaded and

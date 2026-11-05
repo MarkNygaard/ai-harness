@@ -131,14 +131,24 @@ pub fn diagnose(bindings: &[LinearSource], states: &States) -> Vec<Finding> {
             continue;
         }
         if !b.live {
-            out.push(Finding {
-                level: Level::Warn,
-                workflow: wf.clone(),
-                message: format!(
+            // Only the poller reads the trigger label, so not-live switches that
+            // way in off; delegation still works either way.
+            let message = match b.trigger_label.as_deref() {
+                Some(label) => format!(
+                    "Enabled but not live: the poller only logs what it *would* claim from {}, \
+                     so labelling an issue `{label}` starts nothing. Delegation still works.",
+                    name(states, &b.source_state_id)
+                ),
+                None => format!(
                     "Enabled but not live: the poller only logs what it *would* claim from {}. \
                      Delegation still works.",
                     name(states, &b.source_state_id)
                 ),
+            };
+            out.push(Finding {
+                level: Level::Warn,
+                workflow: wf.clone(),
+                message,
             });
         }
         if !states.contains_key(&b.source_state_id) {
@@ -372,6 +382,8 @@ mod tests {
             live: true,
             linear_project_id: None,
             linear_project_name: None,
+            trigger_label: None,
+            max_runs_per_day: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }
