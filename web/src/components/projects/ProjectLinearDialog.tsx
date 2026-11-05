@@ -398,6 +398,8 @@ function DialogBody({
                   starts from {resolveStateName(s.team_id, s.source_state_id)}
                   {s.linear_project_id &&
                     ` · only ${s.linear_project_name ?? "one Linear project"}`}
+                  {s.trigger_label && ` · labelled ${s.trigger_label}`}
+                  {s.max_runs_per_day && ` · ${s.max_runs_per_day}/day`}
                 </span>
               </div>
               <Button
@@ -541,6 +543,11 @@ function BindingForm({
     source?.max_concurrent_runs ?? 1,
   );
   const [maxAttempts, setMaxAttempts] = useState(source?.max_attempts ?? 1);
+  const [triggerLabel, setTriggerLabel] = useState(source?.trigger_label ?? "");
+  // Empty = no daily limit.
+  const [maxRunsPerDay, setMaxRunsPerDay] = useState(
+    source?.max_runs_per_day ? String(source.max_runs_per_day) : "",
+  );
   const [enabled, setEnabled] = useState(source?.enabled ?? false);
   const [live, setLive] = useState(source?.live ?? false);
   const [linearProject, setLinearProject] = useState<{
@@ -607,6 +614,8 @@ function BindingForm({
         live,
         linear_project_id: linearProject?.id,
         linear_project_name: linearProject?.name,
+        trigger_label: triggerLabel.trim() || undefined,
+        max_runs_per_day: parseInt(maxRunsPerDay, 10) || undefined,
       },
       { onSuccess: () => onDone() },
     );
@@ -683,6 +692,34 @@ function BindingForm({
         disabled={!teamId}
         placeholder="Select a status…"
       />
+
+      {/* Trigger label — a second way in besides delegation (optional). */}
+      <Field label="Also start on label">
+        <select
+          className={inputCls}
+          value={triggerLabel}
+          onChange={(e) => setTriggerLabel(e.target.value)}
+          disabled={!teamId}
+        >
+          <option value="">(none — delegation only)</option>
+          {/* A workspace label isn't in the team's list; keep it choosable. */}
+          {triggerLabel && !labels.some((l) => l.name === triggerLabel) && (
+            <option value={triggerLabel}>{triggerLabel}</option>
+          )}
+          {labels
+            .filter((l) => l.name !== failedLabel)
+            .map((l) => (
+              <option key={l.id} value={l.name}>
+                {l.name}
+              </option>
+            ))}
+        </select>
+        <span className="text-[10px] text-muted-foreground">
+          {triggerLabel
+            ? `Besides delegated issues, the poller claims issues in the source status labelled ${triggerLabel} that nobody has delegated, skipping any that already have a pull request. The label comes off when the run starts; add it again to retry. Needs Live.`
+            : "Pick a label to let it start a run without delegating — for instance one a triage workflow sets."}
+        </span>
+      </Field>
 
       {/* Failed label — applied when the binding gives up (optional). */}
       <Field label="Failed label">
@@ -809,6 +846,28 @@ function BindingForm({
           />
         </Field>
       </div>
+
+      {/* Daily cap — how many runs the poller may start in any 24 hours. */}
+      <Field label="Max runs per day">
+        <input
+          className={inputCls}
+          type="number"
+          min={1}
+          max={1000}
+          value={maxRunsPerDay}
+          placeholder="no limit"
+          onChange={(e) => {
+            const n = parseInt(e.target.value, 10);
+            setMaxRunsPerDay(
+              Number.isNaN(n) ? "" : String(Math.min(1000, Math.max(1, n))),
+            );
+          }}
+        />
+        <span className="text-[10px] text-muted-foreground">
+          At most this many runs in any 24 hours, failed ones included. Leave
+          empty for no limit beyond Max simultaneous tasks.
+        </span>
+      </Field>
 
       {/* Attempt budget — whole-workflow retries before the poller gives up. */}
       <Field label="Max attempts (retries before giving up)">

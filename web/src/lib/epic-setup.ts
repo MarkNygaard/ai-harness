@@ -43,6 +43,8 @@ export function asInput(s: LinearSource): LinearSourceInput {
     live: s.live,
     linear_project_id: s.linear_project_id ?? undefined,
     linear_project_name: s.linear_project_name ?? undefined,
+    trigger_label: s.trigger_label ?? undefined,
+    max_runs_per_day: s.max_runs_per_day ?? undefined,
   };
 }
 

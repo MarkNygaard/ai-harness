@@ -29,6 +29,8 @@ function binding(over: Partial<LinearSource>): LinearSource {
     live: true,
     linear_project_id: null,
     linear_project_name: null,
+    trigger_label: null,
+    max_runs_per_day: null,
     created_at: "",
     updated_at: "",
     ...over,
@@ -143,6 +145,23 @@ describe("Linear project", () => {
     const build = binding({});
     for (const w of epicBindingWrites([build], build, columns)) {
       expect(w.linear_project_id).toBeUndefined();
+    }
+  });
+});
+
+describe("Trigger label", () => {
+  it("survives the epic setup, but the relay starts by delegation", () => {
+    const build = binding({
+      trigger_label: "harness:ready",
+      max_runs_per_day: 5,
+    });
+    const [own, ...relay] = epicBindingWrites([build], build, columns);
+    // Re-saving the build binding must not quietly turn its trigger off.
+    expect(own.trigger_label).toBe("harness:ready");
+    expect(own.max_runs_per_day).toBe(5);
+    // The relay moves pieces between columns; a label is not how they arrive.
+    for (const w of relay) {
+      expect(w.trigger_label).toBeUndefined();
     }
   });
 });

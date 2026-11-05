@@ -204,33 +204,96 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
     }
 }
 
-/// Log what a binding *would* claim, without mutating anything.
-async fn dry_run_log(client: &LinearClient, b: &LinearSource, delegate_id: &str) {
-    match client
+/// An issue a binding could claim, and why.
+struct Candidate {
+    issue: Issue,
+    /// Picked up by the binding's trigger label rather than by delegation.
+    by_label: bool,
+}
+
+/// The issues a binding could claim from its column: those delegated to the
+/// app, then — for a binding with a trigger label — those carrying the label
+/// that nobody has delegated. Delegated ones first: a person asked for those
+/// directly. The two sets can't overlap, since a labelled candidate has no
+/// delegate.
+async fn candidates(
+    client: &LinearClient,
+    b: &LinearSource,
+    delegate_id: &str,
+) -> Result<Vec<Candidate>, harness_sources::linear::LinearError> {
+    let mut out: Vec<Candidate> = client
         .preview_issues(
             &b.team_id,
             &b.source_state_id,
             delegate_id,
             b.linear_project_id.as_deref(),
         )
-        .await
-    {
-        Ok(issues) => {
+        .await?
+        .into_iter()
+        .map(|issue| Candidate {
+            issue,
+            by_label: false,
+        })
+        .collect();
+    if let Some(label) = b.trigger_label.as_deref() {
+        let labelled = client
+            .preview_labelled_issues(
+                &b.team_id,
+                &b.source_state_id,
+                label,
+                b.linear_project_id.as_deref(),
+            )
+            .await?;
+        out.extend(labelled.into_iter().map(|issue| Candidate {
+            issue,
+            by_label: true,
+        }));
+    }
+    Ok(out)
+}
+
+/// Whether the issue carries the binding's failed-label, which keeps it out of
+/// pickup until a person removes it.
+fn has_failed_label(b: &LinearSource, issue: &Issue) -> bool {
+    b.failed_label
+        .as_deref()
+        .is_some_and(|fl| issue.labels.iter().any(|l| l == fl))
+}
+
+/// Whether an issue's linked resources include a GitHub pull request — work
+/// that is already under way, which a label binding must not start again.
+fn has_pull_request(links: &[harness_sources::linear::LinkedResource]) -> bool {
+    links.iter().any(|l| {
+        let url = l.url.to_ascii_lowercase();
+        url.contains("github.com/") && url.contains("/pull/")
+    })
+}
+
+/// Whether a binding has used up its runs for the last 24 hours.
+fn over_daily_cap(claimed_last_day: i64, max_runs_per_day: Option<i32>) -> bool {
+    max_runs_per_day.is_some_and(|cap| claimed_last_day >= i64::from(cap.max(1)))
+}
+
+/// Log what a binding *would* claim, without mutating anything.
+async fn dry_run_log(client: &LinearClient, b: &LinearSource, delegate_id: &str) {
+    match candidates(client, b, delegate_id).await {
+        Ok(found) => {
             // Mirror the live path: failed-labeled issues are gated off.
-            let issues: Vec<Issue> = match b.failed_label.as_deref() {
-                Some(fl) => issues
-                    .into_iter()
-                    .filter(|i| !i.labels.iter().any(|l| l == fl))
-                    .collect(),
-                None => issues,
-            };
-            if issues.is_empty() {
+            let found: Vec<Candidate> = found
+                .into_iter()
+                .filter(|c| !has_failed_label(b, &c.issue))
+                .collect();
+            if found.is_empty() {
                 return;
             }
-            let ids: Vec<&str> = issues.iter().map(|i| i.identifier.as_str()).collect();
+            let ids: Vec<&str> = found.iter().map(|c| c.issue.identifier.as_str()).collect();
             let pick = ids.first().copied().unwrap_or("?");
+            let how = match b.trigger_label.as_deref() {
+                Some(label) => format!("delegated or labelled `{label}`"),
+                None => "delegated".to_string(),
+            };
             tracing::info!(
-                "linear poller [dry-run]: {}/{} — {} delegated in the source status [{}]; would claim {} and fire `{}` (set live=true to act)",
+                "linear poller [dry-run]: {}/{} — {} {how} in the source status [{}]; would claim {} and fire `{}` (set live=true to act)",
                 b.project, b.workflow, ids.len(), ids.join(", "), pick, b.workflow
             );
         }
@@ -368,16 +431,32 @@ async fn claim_and_fire(
             return;
         }
     }
+    // Daily gate: a binding with `max_runs_per_day` claims no more than that in
+    // any 24 hours, however fast its column fills. What makes "anyone can set
+    // a label" affordable.
+    if b.max_runs_per_day.is_some() {
+        match claim_store.count_since(&b.project, &b.workflow, 24).await {
+            Ok(n) if over_daily_cap(n, b.max_runs_per_day) => {
+                tracing::debug!(
+                    "linear poller: {}/{} — {n} runs in the last 24 hours, at its daily limit",
+                    b.project,
+                    b.workflow
+                );
+                return;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(
+                    "linear poller: count_since failed for {}/{}: {e}",
+                    b.project,
+                    b.workflow
+                );
+                return;
+            }
+        }
+    }
 
-    let issues = match client
-        .preview_issues(
-            &b.team_id,
-            &b.source_state_id,
-            delegate_id,
-            b.linear_project_id.as_deref(),
-        )
-        .await
-    {
+    let found = match candidates(client, b, delegate_id).await {
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(
@@ -391,13 +470,10 @@ async fn claim_and_fire(
     };
     // Issues already carrying the binding's failed-label are gated off: they've
     // been given up on, and stay excluded until a human removes the label.
-    let issues: Vec<Issue> = match b.failed_label.as_deref() {
-        Some(fl) => issues
-            .into_iter()
-            .filter(|i| !i.labels.iter().any(|l| l == fl))
-            .collect(),
-        None => issues,
-    };
+    let found: Vec<Candidate> = found
+        .into_iter()
+        .filter(|c| !has_failed_label(b, &c.issue))
+        .collect();
     // Pick the first eligible issue that hasn't already exhausted its attempt
     // cap (per (issue, workflow), so an issue that legitimately flows through
     // several bindings across pipeline stages isn't exhausted by an earlier one).
@@ -410,7 +486,7 @@ async fn claim_and_fire(
         b.max_attempts.max(1) as i64
     };
     let mut chosen = None;
-    for issue in issues {
+    for Candidate { issue, by_label } in found {
         match claim_store
             .failed_attempts_for_issue(&issue.id, &b.workflow)
             .await
@@ -448,7 +524,35 @@ async fn claim_and_fire(
                     );
                     continue;
                 }
-                chosen = Some((issue, guard));
+                // A label is easier to leave behind than a delegation: an issue
+                // that already has a pull request is under way, whoever started
+                // it, so a label alone doesn't start it again.
+                if by_label {
+                    match client.list_attachments(&issue.id).await {
+                        Ok(links) if has_pull_request(&links) => {
+                            tracing::info!(
+                                "linear poller: {}/{} — {} already has a pull request; skipping",
+                                b.project,
+                                b.workflow,
+                                issue.identifier
+                            );
+                            continue;
+                        }
+                        Ok(_) => {}
+                        // Unknown is not "none": skip rather than risk a second PR.
+                        Err(e) => {
+                            tracing::warn!(
+                                "linear poller: {}/{} — could not read {}'s links: {}; skipping",
+                                b.project,
+                                b.workflow,
+                                issue.identifier,
+                                e.0
+                            );
+                            continue;
+                        }
+                    }
+                }
+                chosen = Some((issue, by_label, guard));
                 break;
             }
             Err(e) => tracing::warn!("linear poller: attempts lookup failed: {e}"),
@@ -456,7 +560,7 @@ async fn claim_and_fire(
     }
     // `_issue_guard` lives as long as this claim: dropping it at the end of the
     // function is the point, so delegation cannot slip in behind us.
-    let Some((issue, _issue_guard)) = chosen else {
+    let Some((issue, by_label, _issue_guard)) = chosen else {
         return; // nothing eligible (retries exhausted, or already being claimed)
     };
 
@@ -481,6 +585,20 @@ async fn claim_and_fire(
             return;
         }
     }
+    // A label binding takes its label off as part of the claim, so an issue a
+    // failed run drops back into the column isn't started again every tick.
+    // Putting the label back is the retry, as delegating again is for
+    // delegation.
+    let trigger_label_id = match b.trigger_label.as_deref().filter(|_| by_label) {
+        Some(label) => match take_label_off(client, b, &issue, label).await {
+            Some(id) => Some(id),
+            // Without an In Progress move the label is the only claim signal,
+            // so a claim that can't remove it must not go ahead.
+            None if b.in_progress_state_id.is_none() => return,
+            None => None,
+        },
+        None => None,
+    };
 
     let comments = client.list_comments(&issue.id).await.unwrap_or_else(|e| {
         tracing::warn!(
@@ -674,6 +792,62 @@ async fn claim_and_fire(
                 "source",
             )
             .await;
+            // And give the label back, or the issue would wait for a person.
+            if let Some(label_id) = &trigger_label_id {
+                if let Err(e) = client.add_label(&issue.id, label_id).await {
+                    tracing::warn!(
+                        "linear poller: {}/{} — could not put the trigger label back on {}: {}",
+                        b.project,
+                        b.workflow,
+                        issue.identifier,
+                        e.0
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Remove a label binding's trigger label from the issue it is claiming.
+/// Returns the label's id, to put back if the run can't start; `None` when
+/// it couldn't be removed (logged).
+async fn take_label_off(
+    client: &LinearClient,
+    b: &LinearSource,
+    issue: &Issue,
+    label: &str,
+) -> Option<String> {
+    let id = match client.find_label(label, Some(&b.team_id)).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            tracing::warn!(
+                "linear poller: {}/{} — trigger label `{label}` no longer exists in Linear",
+                b.project,
+                b.workflow
+            );
+            return None;
+        }
+        Err(e) => {
+            tracing::warn!(
+                "linear poller: {}/{} — could not look up `{label}`: {}",
+                b.project,
+                b.workflow,
+                e.0
+            );
+            return None;
+        }
+    };
+    match client.remove_label(&issue.id, &id).await {
+        Ok(()) => Some(id),
+        Err(e) => {
+            tracing::warn!(
+                "linear poller: {}/{} — could not take `{label}` off {}: {}",
+                b.project,
+                b.workflow,
+                issue.identifier,
+                e.0
+            );
+            None
         }
     }
 }
@@ -1620,10 +1794,11 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        completion_message, format_local, human_duration, is_agent_session_preamble,
-        plan_completion, ready_state_for, step_action, step_duration, step_position,
-        task_for_issue, unannounced_running_nodes, unreported_finished_nodes, LinearClaim,
-        LinearSource, COMPLETION_REPORTED, MAX_LINEAR_SUMMARY_CHARS, SUMMARY_IN_COMMENT,
+        completion_message, format_local, has_pull_request, human_duration,
+        is_agent_session_preamble, over_daily_cap, plan_completion, ready_state_for, step_action,
+        step_duration, step_position, task_for_issue, unannounced_running_nodes,
+        unreported_finished_nodes, LinearClaim, LinearSource, COMPLETION_REPORTED,
+        MAX_LINEAR_SUMMARY_CHARS, SUMMARY_IN_COMMENT,
     };
     use chrono::Utc;
     use harness_sources::linear::{Comment, Issue};
@@ -1702,6 +1877,36 @@ mod tests {
     }
 
     #[test]
+    fn a_daily_cap_counts_the_last_24_hours() {
+        assert!(!over_daily_cap(100, None), "no cap, no limit");
+        assert!(!over_daily_cap(4, Some(5)));
+        assert!(over_daily_cap(5, Some(5)));
+        assert!(over_daily_cap(6, Some(5)));
+        // A nonsense cap still means at least one.
+        assert!(!over_daily_cap(0, Some(0)));
+        assert!(over_daily_cap(1, Some(0)));
+    }
+
+    #[test]
+    fn a_github_pull_request_link_means_work_is_under_way() {
+        use harness_sources::linear::LinkedResource;
+        let link = |url: &str| LinkedResource {
+            title: "x".into(),
+            subtitle: None,
+            url: url.into(),
+            source: None,
+        };
+        assert!(has_pull_request(&[link(
+            "https://github.com/acme/shop/pull/42"
+        )]));
+        assert!(!has_pull_request(&[
+            link("https://github.com/acme/shop/issues/42"),
+            link("https://harness.example.com/runs/r-1"),
+        ]));
+        assert!(!has_pull_request(&[]));
+    }
+
+    #[test]
     fn only_finished_and_unreported_nodes_are_selected() {
         let detail = detail_with(vec![
             node("explore", 0, "success"),
@@ -1753,6 +1958,8 @@ mod tests {
             live: true,
             linear_project_id: None,
             linear_project_name: None,
+            trigger_label: None,
+            max_runs_per_day: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

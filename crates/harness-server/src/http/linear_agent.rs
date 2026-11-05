@@ -1899,6 +1899,8 @@ mod tests {
             live: false,
             linear_project_id: None,
             linear_project_name: None,
+            trigger_label: None,
+            max_runs_per_day: None,
             created_at: now,
             updated_at: now,
         }
@@ -1944,6 +1946,21 @@ mod tests {
             started("changes-requested", "Changes requested"),
             "revise-pr"
         );
+    }
+
+    #[test]
+    fn a_trigger_label_adds_to_delegation_rather_than_replacing_it() {
+        // One binding per (project, workflow): a label can't be a second
+        // binding for the same workflow, so it is an extra way in to this one,
+        // and delegating still starts it.
+        let with_label = LinearSource {
+            trigger_label: Some("harness:ready".into()),
+            ..binding("ecom", "idea-to-pr", "todo")
+        };
+        match choose_target(&[with_label], &context("ecom", "todo", "Todo")) {
+            Target::Ready { binding } => assert_eq!(binding.workflow, "idea-to-pr"),
+            _ => panic!("delegation should still start idea-to-pr"),
+        }
     }
 
     #[test]

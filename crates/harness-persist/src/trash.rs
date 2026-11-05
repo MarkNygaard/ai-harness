@@ -316,6 +316,8 @@ mod tests {
             live: true,
             linear_project_id: None,
             linear_project_name: None,
+            trigger_label: None,
+            max_runs_per_day: None,
         }
     }
 

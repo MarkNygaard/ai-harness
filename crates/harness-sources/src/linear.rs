@@ -489,6 +489,38 @@ query PreviewInProject($teamId: ID!, $stateId: ID!, $delegateId: ID!, $projectId
     nodes { id identifier title url description labels { nodes { name } } }
   }
 }"#;
+// Issues in a team's column that carry a **trigger label** and are delegated to
+// nobody — what a binding with a trigger label picks up besides delegations. The filter is a
+// variable (built by `label_trigger_filter`) so the optional project narrowing
+// is one more key rather than another document.
+const LABELLED_ISSUES_QUERY: &str = r#"
+query LabelPreview($filter: IssueFilter!) {
+  issues(first: 50, filter: $filter) {
+    nodes { id identifier title url description labels { nodes { name } } }
+  }
+}"#;
+
+/// The filter for [`LABELLED_ISSUES_QUERY`]: in the team's column, carrying
+/// `label`, with no delegate. A delegated issue is already a candidate by
+/// delegation, so the two sets never overlap.
+pub fn label_trigger_filter(
+    team_id: &str,
+    state_id: &str,
+    label: &str,
+    project_id: Option<&str>,
+) -> serde_json::Value {
+    let mut filter = serde_json::json!({
+        "team": { "id": { "eq": team_id } },
+        "state": { "id": { "eq": state_id } },
+        "delegate": { "null": true },
+        "labels": { "some": { "name": { "eqIgnoreCase": label.trim() } } },
+    });
+    if let Some(project) = project_id {
+        filter["project"] = serde_json::json!({ "id": { "eq": project } });
+    }
+    filter
+}
+
 // A single issue's comments connection is flat (no nested connections), so
 // even first: 50 stays well under Linear's 10k complexity cap. Linear returns
 // comments in createdAt order (oldest first in practice), so the reviewer's
@@ -1720,6 +1752,24 @@ impl LinearClient {
         parse_issues(&self.post(body).await?)
     }
 
+    /// Issues in `team + state` that carry `label` and are delegated to nobody
+    /// — a binding's candidates by trigger label. Read-only.
+    pub async fn preview_labelled_issues(
+        &self,
+        team_id: &str,
+        state_id: &str,
+        label: &str,
+        project_id: Option<&str>,
+    ) -> Result<Vec<Issue>, LinearError> {
+        let body = serde_json::json!({
+            "query": LABELLED_ISSUES_QUERY,
+            "variables": {
+                "filter": label_trigger_filter(team_id, state_id, label, project_id),
+            },
+        });
+        parse_issues(&self.post(body).await?)
+    }
+
     /// A team's Linear projects (id and name), for the binding form.
     pub async fn team_projects(&self, team_id: &str) -> Result<Vec<LinearProject>, LinearError> {
         let body = serde_json::json!({
@@ -2775,6 +2825,26 @@ mod tests {
         assert_eq!(p.email.as_deref(), Some("mnl@work.test"));
         assert!(parse_viewer(br#"{"data":{"viewer":{"id":""}}}"#).is_err());
         assert!(parse_viewer(br#"{"errors":[{"message":"nope"}]}"#).is_err());
+    }
+
+    #[test]
+    fn label_trigger_filter_wants_the_label_and_no_delegate() {
+        let f = label_trigger_filter("t-1", "s-todo", " harness:ready ", None);
+        assert_eq!(
+            f,
+            serde_json::json!({
+                "team": { "id": { "eq": "t-1" } },
+                "state": { "id": { "eq": "s-todo" } },
+                "delegate": { "null": true },
+                "labels": { "some": { "name": { "eqIgnoreCase": "harness:ready" } } },
+            })
+        );
+        let in_project = label_trigger_filter("t-1", "s-todo", "x", Some("p-1"));
+        assert_eq!(
+            in_project["project"],
+            serde_json::json!({ "id": { "eq": "p-1" } })
+        );
+        assert!(LABELLED_ISSUES_QUERY.contains("$filter: IssueFilter!"));
     }
 
     #[test]

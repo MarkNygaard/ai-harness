@@ -89,6 +89,13 @@ pub struct PutSourceBody {
     pub linear_project_id: Option<String>,
     #[serde(default)]
     pub linear_project_name: Option<String>,
+    /// Also claim issues with this label and no delegate, as well as issues
+    /// delegated to the app. Absent = delegation only.
+    #[serde(default)]
+    pub trigger_label: Option<String>,
+    /// At most this many claims in any 24 hours; absent = no daily limit.
+    #[serde(default)]
+    pub max_runs_per_day: Option<i32>,
 }
 
 fn default_poll() -> i32 {
@@ -324,8 +331,28 @@ pub async fn put_source(
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
 
+    let trigger_label = optional_trimmed_non_empty(body.trigger_label);
+    // The failed-label keeps an issue out of pickup; the trigger label pulls it
+    // in. One label can't do both.
+    if let (Some(t), Some(f)) = (trigger_label.as_deref(), body.failed_label.as_deref()) {
+        if t.eq_ignore_ascii_case(f.trim()) {
+            return err(
+                StatusCode::BAD_REQUEST,
+                "the trigger label can't also be the failed label",
+            );
+        }
+    }
+    if body.max_runs_per_day.is_some_and(|n| n < 1) {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "`max_runs_per_day` must be at least 1 — leave it out for no daily limit",
+        );
+    }
+
     let linear_project_id = optional_trimmed_non_empty(body.linear_project_id);
     let input = LinearSourceInput {
+        trigger_label,
+        max_runs_per_day: body.max_runs_per_day,
         team_id,
         team_name,
         source_state_id,

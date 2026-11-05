@@ -562,9 +562,11 @@ each one and write back with `harness linear comment` and `harness linear label`
 - **Only the project's own workspace,** through the run's token, as for filing
   an issue.
 
-These steps can't change an issue's status or assignee. Labelling an issue
-`harness:ready` doesn't start a build either. Builds start when someone
-delegates the issue to the harness.
+These steps can't change an issue's status or assignee. To have the label
+start the build, set the build workflow's binding to
+[also start on that label](/docs/setup/linear#start-by-label), with a
+**Max runs per day** limit. The triage run labels issues, and the binding
+builds up to that many a day.
 
 ## Saved steps
 

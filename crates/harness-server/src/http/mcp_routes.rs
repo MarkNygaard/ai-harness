@@ -1844,6 +1844,10 @@ async fn linear_bindings(state: &Arc<RunsState>, project: &str) -> Result<Vec<Va
                 // Only issues in this Linear project of the team; null = all.
                 "linear_project": b.linear_project_name.as_deref().or(b.linear_project_id.as_deref()),
                 "claims_from": show(Some(&b.source_state_id)),
+                // Also claims issues with this label and no delegate; null =
+                // only issues delegated to the app.
+                "trigger_label": b.trigger_label,
+                "max_runs_per_day": b.max_runs_per_day,
                 "in_progress": show(b.in_progress_state_id.as_deref()),
                 "review": show(b.review_state_id.as_deref()),
                 "ready": show(b.ready_state_id.as_deref()),
