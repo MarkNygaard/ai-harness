@@ -383,7 +383,6 @@ mod tests {
             linear_project_id: None,
             linear_project_name: None,
             trigger_label: None,
-            max_runs_per_day: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

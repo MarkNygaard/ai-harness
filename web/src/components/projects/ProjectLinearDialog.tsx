@@ -399,7 +399,6 @@ function DialogBody({
                   {s.linear_project_id &&
                     ` · only ${s.linear_project_name ?? "one Linear project"}`}
                   {s.trigger_label && ` · labelled ${s.trigger_label}`}
-                  {s.max_runs_per_day && ` · ${s.max_runs_per_day}/day`}
                 </span>
               </div>
               <Button
@@ -544,10 +543,6 @@ function BindingForm({
   );
   const [maxAttempts, setMaxAttempts] = useState(source?.max_attempts ?? 1);
   const [triggerLabel, setTriggerLabel] = useState(source?.trigger_label ?? "");
-  // Empty = no daily limit.
-  const [maxRunsPerDay, setMaxRunsPerDay] = useState(
-    source?.max_runs_per_day ? String(source.max_runs_per_day) : "",
-  );
   const [enabled, setEnabled] = useState(source?.enabled ?? false);
   const [live, setLive] = useState(source?.live ?? false);
   const [linearProject, setLinearProject] = useState<{
@@ -615,7 +610,6 @@ function BindingForm({
         linear_project_id: linearProject?.id,
         linear_project_name: linearProject?.name,
         trigger_label: triggerLabel.trim() || undefined,
-        max_runs_per_day: parseInt(maxRunsPerDay, 10) || undefined,
       },
       { onSuccess: () => onDone() },
     );
@@ -846,28 +840,6 @@ function BindingForm({
           />
         </Field>
       </div>
-
-      {/* Daily cap — how many runs the poller may start in any 24 hours. */}
-      <Field label="Max runs per day">
-        <input
-          className={inputCls}
-          type="number"
-          min={1}
-          max={1000}
-          value={maxRunsPerDay}
-          placeholder="no limit"
-          onChange={(e) => {
-            const n = parseInt(e.target.value, 10);
-            setMaxRunsPerDay(
-              Number.isNaN(n) ? "" : String(Math.min(1000, Math.max(1, n))),
-            );
-          }}
-        />
-        <span className="text-[10px] text-muted-foreground">
-          At most this many runs in any 24 hours, failed ones included. Leave
-          empty for no limit beyond Max simultaneous tasks.
-        </span>
-      </Field>
 
       {/* Attempt budget — whole-workflow retries before the poller gives up. */}
       <Field label="Max attempts (retries before giving up)">

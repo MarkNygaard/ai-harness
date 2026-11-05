@@ -93,9 +93,6 @@ pub struct PutSourceBody {
     /// delegated to the app. Absent = delegation only.
     #[serde(default)]
     pub trigger_label: Option<String>,
-    /// At most this many claims in any 24 hours; absent = no daily limit.
-    #[serde(default)]
-    pub max_runs_per_day: Option<i32>,
 }
 
 fn default_poll() -> i32 {
@@ -342,17 +339,9 @@ pub async fn put_source(
             );
         }
     }
-    if body.max_runs_per_day.is_some_and(|n| n < 1) {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "`max_runs_per_day` must be at least 1 — leave it out for no daily limit",
-        );
-    }
-
     let linear_project_id = optional_trimmed_non_empty(body.linear_project_id);
     let input = LinearSourceInput {
         trigger_label,
-        max_runs_per_day: body.max_runs_per_day,
         team_id,
         team_name,
         source_state_id,

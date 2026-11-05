@@ -564,9 +564,9 @@ each one and write back with `harness linear comment` and `harness linear label`
 
 These steps can't change an issue's status or assignee. To have the label
 start the build, set the build workflow's binding to
-[also start on that label](/docs/setup/linear#start-by-label), with a
-**Max runs per day** limit. The triage run labels issues, and the binding
-builds up to that many a day.
+[also start on that label](/docs/setup/linear#start-by-label). The binding
+builds every issue the triage run labels, so the triage run decides how many:
+`--limit 5` on `issues` queues at most five per run.
 
 ## Saved steps
 

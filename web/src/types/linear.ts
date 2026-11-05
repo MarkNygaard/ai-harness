@@ -90,8 +90,6 @@ export interface LinearSource {
   linear_project_name: string | null;
   /** Claim issues with this label and no delegate; null = delegated issues. */
   trigger_label: string | null;
-  /** At most this many claims in any 24 hours; null = no daily limit. */
-  max_runs_per_day: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -145,8 +143,6 @@ export interface LinearSourceInput {
   linear_project_name?: string;
   /** Claim issues with this label instead of delegated ones; omitted = delegation. */
   trigger_label?: string;
-  /** At most this many claims in any 24 hours; omitted = no daily limit. */
-  max_runs_per_day?: number;
 }
 
 /** A Linear project inside a team, for narrowing a binding to it. */
