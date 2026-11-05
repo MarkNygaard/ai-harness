@@ -18,7 +18,13 @@ use super::linear_oauth::linear_client;
 use super::runs_routes::RunsState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
-    (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
+    let msg = msg.into();
+    // Into the server's log too, so a failing Linear call is findable there
+    // and not only in whichever browser happened to ask.
+    if status == super::UPSTREAM_FAILED {
+        tracing::warn!("linear: request failed: {msg}");
+    }
+    (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
 /// Verify the project exists, or return a 4xx/5xx response.
@@ -160,7 +166,7 @@ pub async fn check_sources(
     }
     match super::linear_diagnose::check_project(&state, &project).await {
         Ok(findings) => Json(findings).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e),
+        Err(e) => err(super::UPSTREAM_FAILED, e),
     }
 }
 
@@ -251,7 +257,7 @@ pub async fn create_issue(
     {
         Ok(issue) => (StatusCode::CREATED, Json(issue)).into_response(),
         Err(e) => err(
-            StatusCode::BAD_GATEWAY,
+            super::UPSTREAM_FAILED,
             format!("Linear issueCreate failed: {e}"),
         ),
     }

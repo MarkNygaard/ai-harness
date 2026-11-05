@@ -90,7 +90,7 @@ impl LibraryError {
         match self {
             Self::Off => StatusCode::NOT_IMPLEMENTED,
             Self::NoToken => StatusCode::FORBIDDEN,
-            Self::Unreachable(_) => StatusCode::BAD_GATEWAY,
+            Self::Unreachable(_) => super::UPSTREAM_FAILED,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict { .. } => StatusCode::CONFLICT,
             Self::Failed(_) => StatusCode::INTERNAL_SERVER_ERROR,

@@ -25,15 +25,7 @@ use serde::Deserialize;
 use super::run_grants::{self, Grant};
 use super::runs_routes::RunsState;
 
-/// The status for "Linear (or the claim store behind it) failed".
-///
-/// Not 502, although that is what it means: a reverse proxy in front of the
-/// harness — Cloudflare, for one — replaces a 502 from the origin with its own
-/// page, so the run read `502 Bad Gateway: error code: 502` and never Linear's
-/// message. A run's log is the only place that message is ever seen, so it has
-/// to survive the trip. 424 ("a request this one depends on failed") passes
-/// through untouched.
-const UPSTREAM_FAILED: StatusCode = StatusCode::FAILED_DEPENDENCY;
+use super::UPSTREAM_FAILED;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     let msg = msg.into();

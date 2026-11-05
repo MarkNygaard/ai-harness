@@ -24,7 +24,13 @@ use super::linear_connections::{resolve_for_project, ConnectionId};
 use super::runs_routes::RunsState;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
-    (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
+    let msg = msg.into();
+    // Into the server's log too, so a failing Linear call is findable there
+    // and not only in whichever browser happened to ask.
+    if status == super::UPSTREAM_FAILED {
+        tracing::warn!("linear: request failed: {msg}");
+    }
+    (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
 /// The Linear connection `project` belongs to, or a 4xx response.
@@ -62,7 +68,7 @@ pub async fn discovery(
     };
     match client.discover().await {
         Ok(d) => Json(d).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(super::UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -115,7 +121,7 @@ pub async fn preview(
         Ok(issues) => {
             Json(serde_json::json!({ "count": issues.len(), "issues": issues })).into_response()
         }
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(super::UPSTREAM_FAILED, e.0),
     }
 }
 
@@ -135,6 +141,6 @@ pub async fn team_projects(
     };
     match client.team_projects(&team).await {
         Ok(projects) => Json(serde_json::json!({ "projects": projects })).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+        Err(e) => err(super::UPSTREAM_FAILED, e.0),
     }
 }

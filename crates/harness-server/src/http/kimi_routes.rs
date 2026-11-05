@@ -122,7 +122,7 @@ pub async fn connect_start(Extension(state): Extension<Arc<RunsState>>) -> Respo
         Ok(r) => r,
         Err(e) => {
             return err(
-                StatusCode::BAD_GATEWAY,
+                super::UPSTREAM_FAILED,
                 format!("device authorization request failed: {e}"),
             )
         }
@@ -131,7 +131,7 @@ pub async fn connect_start(Extension(state): Extension<Arc<RunsState>>) -> Respo
         let code = resp.status();
         let body = resp.text().await.unwrap_or_default();
         return err(
-            StatusCode::BAD_GATEWAY,
+            super::UPSTREAM_FAILED,
             format!("device authorization failed: {code} {body}"),
         );
     }
@@ -139,7 +139,7 @@ pub async fn connect_start(Extension(state): Extension<Arc<RunsState>>) -> Respo
         Ok(p) => p,
         Err(e) => {
             return err(
-                StatusCode::BAD_GATEWAY,
+                super::UPSTREAM_FAILED,
                 format!("bad device authorization response: {e}"),
             )
         }
@@ -150,7 +150,7 @@ pub async fn connect_start(Extension(state): Extension<Arc<RunsState>>) -> Respo
         payload.verification_uri,
     ) else {
         return err(
-            StatusCode::BAD_GATEWAY,
+            super::UPSTREAM_FAILED,
             "device authorization response missing fields",
         );
     };
@@ -207,7 +207,7 @@ pub async fn connect_poll(
         .await;
     let resp = match resp {
         Ok(r) => r,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, format!("token poll failed: {e}")),
+        Err(e) => return err(super::UPSTREAM_FAILED, format!("token poll failed: {e}")),
     };
     let ok = resp.status().is_success();
     let payload: TokenResponse = resp.json().await.unwrap_or_default();
