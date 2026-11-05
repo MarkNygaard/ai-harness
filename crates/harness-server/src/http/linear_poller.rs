@@ -269,11 +269,6 @@ fn has_pull_request(links: &[harness_sources::linear::LinkedResource]) -> bool {
     })
 }
 
-/// Whether a binding has used up its runs for the last 24 hours.
-fn over_daily_cap(claimed_last_day: i64, max_runs_per_day: Option<i32>) -> bool {
-    max_runs_per_day.is_some_and(|cap| claimed_last_day >= i64::from(cap.max(1)))
-}
-
 /// Log what a binding *would* claim, without mutating anything.
 async fn dry_run_log(client: &LinearClient, b: &LinearSource, delegate_id: &str) {
     match candidates(client, b, delegate_id).await {
@@ -429,30 +424,6 @@ async fn claim_and_fire(
                 b.workflow
             );
             return;
-        }
-    }
-    // Daily gate: a binding with `max_runs_per_day` claims no more than that in
-    // any 24 hours, however fast its column fills. What makes "anyone can set
-    // a label" affordable.
-    if b.max_runs_per_day.is_some() {
-        match claim_store.count_since(&b.project, &b.workflow, 24).await {
-            Ok(n) if over_daily_cap(n, b.max_runs_per_day) => {
-                tracing::debug!(
-                    "linear poller: {}/{} — {n} runs in the last 24 hours, at its daily limit",
-                    b.project,
-                    b.workflow
-                );
-                return;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                tracing::warn!(
-                    "linear poller: count_since failed for {}/{}: {e}",
-                    b.project,
-                    b.workflow
-                );
-                return;
-            }
         }
     }
 
@@ -1795,10 +1766,10 @@ fn delivery_succeeded(detail: &harness_persist::RunDetail) -> bool {
 mod tests {
     use super::{
         completion_message, format_local, has_pull_request, human_duration,
-        is_agent_session_preamble, over_daily_cap, plan_completion, ready_state_for, step_action,
-        step_duration, step_position, task_for_issue, unannounced_running_nodes,
-        unreported_finished_nodes, LinearClaim, LinearSource, COMPLETION_REPORTED,
-        MAX_LINEAR_SUMMARY_CHARS, SUMMARY_IN_COMMENT,
+        is_agent_session_preamble, plan_completion, ready_state_for, step_action, step_duration,
+        step_position, task_for_issue, unannounced_running_nodes, unreported_finished_nodes,
+        LinearClaim, LinearSource, COMPLETION_REPORTED, MAX_LINEAR_SUMMARY_CHARS,
+        SUMMARY_IN_COMMENT,
     };
     use chrono::Utc;
     use harness_sources::linear::{Comment, Issue};
@@ -1877,17 +1848,6 @@ mod tests {
     }
 
     #[test]
-    fn a_daily_cap_counts_the_last_24_hours() {
-        assert!(!over_daily_cap(100, None), "no cap, no limit");
-        assert!(!over_daily_cap(4, Some(5)));
-        assert!(over_daily_cap(5, Some(5)));
-        assert!(over_daily_cap(6, Some(5)));
-        // A nonsense cap still means at least one.
-        assert!(!over_daily_cap(0, Some(0)));
-        assert!(over_daily_cap(1, Some(0)));
-    }
-
-    #[test]
     fn a_github_pull_request_link_means_work_is_under_way() {
         use harness_sources::linear::LinkedResource;
         let link = |url: &str| LinkedResource {
@@ -1959,7 +1919,6 @@ mod tests {
             linear_project_id: None,
             linear_project_name: None,
             trigger_label: None,
-            max_runs_per_day: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
         }

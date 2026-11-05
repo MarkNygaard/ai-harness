@@ -170,19 +170,12 @@ builds them.
   `live` is off it only logs which issues it would claim, and delegation works
   as before.
 
+- **How many get built is up to whoever sets the label.** The binding builds
+  every labelled issue, one after another within **Max simultaneous tasks**. A
+  triage workflow that should queue five a night labels five.
+
 Anyone who can edit labels in the team can start a build this way, as anyone
-can delegate today. Set **Max runs per day** on the binding to limit the cost.
-
-### Max runs per day
-
-**Max runs per day** caps how many runs the poller starts for a binding in any
-24 hours, counting failed runs too. Leave it empty for no limit. It works on top
-of **Max simultaneous tasks**: with 1 at a time and 5 a day, the binding builds
-one issue after another until it has started five, then waits until the oldest
-of those is 24 hours old.
-
-The daily limit applies only to the poller. A delegation is a person asking
-directly, and still starts as long as a slot is free.
+can delegate today.
 
 ## Images pasted into an issue
 

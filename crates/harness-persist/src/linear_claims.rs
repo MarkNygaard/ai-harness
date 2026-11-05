@@ -245,28 +245,6 @@ impl LinearClaimStore {
         Ok(row.0)
     }
 
-    /// How many claims a binding has made in the last `hours` hours, finished
-    /// or not — what a per-day cap counts. A failed attempt counts: it spent
-    /// the run all the same.
-    pub async fn count_since(
-        &self,
-        project: &str,
-        workflow: &str,
-        hours: i32,
-    ) -> Result<i64, PersistError> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM harness_linear_claims
-             WHERE project = $1 AND workflow = $2
-               AND created_at > now() - make_interval(hours => $3)",
-        )
-        .bind(project)
-        .bind(workflow)
-        .bind(hours)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(row.0)
-    }
-
     /// All active (non-`done`) claims — the status-sync work-list.
     pub async fn list_active(&self) -> Result<Vec<LinearClaim>, PersistError> {
         let rows = sqlx::query_as::<_, LinearClaim>(
@@ -621,7 +599,6 @@ mod tests {
         let wf = "idea-to-pr";
 
         assert_eq!(store.count_active(&project, wf).await.unwrap(), 0);
-        assert_eq!(store.count_since(&project, wf, 24).await.unwrap(), 0);
 
         store
             .record("ca-run-1", &project, wf, "iss-1", "P-1", "todo", None)
@@ -636,12 +613,6 @@ mod tests {
         // A `done` claim no longer counts against the cap.
         store.set_phase("ca-run-1", "done").await.unwrap();
         assert_eq!(store.count_active(&project, wf).await.unwrap(), 1);
-        // …but it still counts against a daily one: it was a run all the same.
-        assert_eq!(store.count_since(&project, wf, 24).await.unwrap(), 2);
-        assert_eq!(
-            store.count_since(&project, "merge-pr", 24).await.unwrap(),
-            0
-        );
 
         // A different workflow on the same project is counted separately.
         assert_eq!(store.count_active(&project, "merge-pr").await.unwrap(), 0);
