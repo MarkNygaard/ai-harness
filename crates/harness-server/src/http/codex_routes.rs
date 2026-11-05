@@ -175,7 +175,7 @@ pub async fn connect_complete(
         Ok(r) => r,
         Err(e) => {
             return err(
-                StatusCode::BAD_GATEWAY,
+                super::UPSTREAM_FAILED,
                 format!("token exchange failed: {e}"),
             )
         }
@@ -187,18 +187,18 @@ pub async fn connect_complete(
             .error_description
             .or(payload.error)
             .unwrap_or_else(|| "token exchange failed".to_string());
-        return err(StatusCode::BAD_GATEWAY, msg);
+        return err(super::UPSTREAM_FAILED, msg);
     }
     let (Some(access), Some(refresh), Some(id_token)) = (
         payload.access_token,
         payload.refresh_token,
         payload.id_token,
     ) else {
-        return err(StatusCode::BAD_GATEWAY, "token response missing fields");
+        return err(super::UPSTREAM_FAILED, "token response missing fields");
     };
     let Some(account_id) = account_id_from_jwt(&access) else {
         return err(
-            StatusCode::BAD_GATEWAY,
+            super::UPSTREAM_FAILED,
             "could not read account id from token",
         );
     };

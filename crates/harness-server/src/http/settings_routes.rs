@@ -264,7 +264,7 @@ pub async fn test_mail(
     );
     match mail::send(&state, &user.email, "ai-harness: mail is working", &body).await {
         Ok(()) => Json(json!({ "sent": true, "to": user.email })).into_response(),
-        Err(e) => err(StatusCode::BAD_GATEWAY, e),
+        Err(e) => err(super::UPSTREAM_FAILED, e),
     }
 }
 

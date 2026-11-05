@@ -50,6 +50,18 @@ pub(crate) mod usage_routes;
 pub(crate) mod users_routes;
 pub(crate) mod workflows_routes;
 
+/// The status for "a service the harness depends on failed": Linear, a token
+/// endpoint, the workflow registry.
+///
+/// Not 502, although that is what it means. A reverse proxy in front of the
+/// harness — Cloudflare, for one — replaces a 502 from the origin with its own
+/// page, so the UI showed `HTTP 502` and a run read `error code: 502`, and the
+/// service's own message, the one thing worth reading, never arrived. 424 ("a
+/// request this one depends on failed") passes through untouched. Every route
+/// that reports an upstream failure uses this, not `StatusCode::BAD_GATEWAY`.
+pub(crate) const UPSTREAM_FAILED: axum::http::StatusCode =
+    axum::http::StatusCode::FAILED_DEPENDENCY;
+
 #[cfg(test)]
 mod shutdown_test;
 #[cfg(test)]
