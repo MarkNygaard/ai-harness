@@ -17,6 +17,13 @@ const userFixture: AuthUser = {
 };
 
 function renderWithClient(ui: React.ReactElement) {
+  // The open dialog also lists the member's linked Linear accounts. Answer
+  // that here so each test's own mock sees only the requests it is about.
+  const inner = global.fetch;
+  global.fetch = ((input: RequestInfo | URL, init?: RequestInit) =>
+    String(input).includes("/identities")
+      ? Promise.resolve(new Response(JSON.stringify({ identities: [] })))
+      : inner(input, init)) as typeof fetch;
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },

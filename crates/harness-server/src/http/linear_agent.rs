@@ -1213,16 +1213,28 @@ pub(crate) async fn linear_trigger(
         return trigger;
     };
     trigger.actor = super::accounts::actor_label(person.name.as_deref(), person.email.as_deref());
-    if let Some(email) = person.email.as_deref() {
-        match state.user_store().await {
-            Ok(users) => match users.get_by_email(email).await {
-                Ok(Some(user)) => trigger.user_id = Some(user.id),
-                // No account for that address: `actor` still names them.
-                Ok(None) => {}
-                Err(e) => tracing::warn!("linear: user lookup failed for {email}: {e}"),
-            },
-            Err(e) => tracing::warn!("linear: no user store while attributing a run: {e}"),
-        }
+    if person.id.is_none() && person.email.is_none() {
+        return trigger;
+    }
+    match state.user_store().await {
+        Ok(users) => match super::accounts::linear_account(
+            users,
+            person.id.as_deref(),
+            person.email.as_deref(),
+        )
+        .await
+        {
+            // The account's name, not Linear's: the same person reads the same
+            // on a run from Linear as on one from the dashboard.
+            Ok(Some(user)) => {
+                trigger.actor = super::accounts::actor_label(Some(&user.name), Some(&user.email));
+                trigger.user_id = Some(user.id);
+            }
+            // No account for them: `actor` still names them.
+            Ok(None) => {}
+            Err(e) => tracing::warn!("linear: account lookup failed while attributing a run: {e}"),
+        },
+        Err(e) => tracing::warn!("linear: no user store while attributing a run: {e}"),
     }
     trigger
 }

@@ -281,14 +281,36 @@ your **Chat** list in the dashboard.
   it to start something ("start idea-to-pr for this") and it says what it would
   do, then waits. Reply **yes** to go ahead; anything else cancels it.
 - **Only people with an ai-harness account.** The commenter is matched to an
-  account by email, and the conversation runs as that person, with their
-  permissions. Anyone else gets a reply saying to ask an administrator for an
-  invite. On an install without accounts, anyone can ask.
+  account by their [linked Linear account](#link-your-linear-account), else by
+  email, and the conversation runs as that person, with their permissions.
+  Anyone else gets a reply saying to ask an administrator for an invite, or to
+  link their Linear account if they already have one. On an install without
+  accounts, anyone can ask.
 - **One person's conversation.** Others in the thread can read it, but only the
   person who mentioned the harness can continue it or confirm with "yes". To
   ask your own question, mention it in a new comment.
 - **The issue's text is read as information.** Whatever it says, the harness
   doesn't take instructions from the issue, only from the person asking.
+
+### Link your Linear account
+
+The harness recognises a Linear person by email, which fails when you sign in
+here with one address (often your GitHub one) and use another in Linear. Link
+the two once:
+
+1. Open **Settings → Preferences**.
+2. Under **Linear account**, click **Link Linear account** and sign in to
+   Linear.
+
+From then on, your mentions are answered as you, and runs you start from Linear
+are credited to you under your account's name. Earlier runs from Linear that
+carry your Linear address are moved to your account at the same time.
+
+The harness asks Linear only who you are, with read access, and discards the
+token straight after. It uses the workspace's existing OAuth application, so
+there is nothing new to register. A Linear account can be linked to one
+ai-harness account at a time. An administrator can remove a link from the
+member's **Edit** dialog on the Members page, but can't create one.
 
 ## Asking the agent something mid-run
 

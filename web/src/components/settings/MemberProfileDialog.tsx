@@ -21,8 +21,52 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import type { AuthUser } from "@/lib/auth";
+import {
+  identityLabel,
+  useUnlinkForUser,
+  useUserIdentities,
+} from "@/lib/identities";
 import type { ProfileUpdate } from "@/lib/users";
 import { useSetUserProfile } from "@/lib/users";
+
+/**
+ * The Linear accounts a member has linked. An administrator can remove one —
+ * a wrong link, or a departed colleague's — but never add one: that takes the
+ * member's own Linear sign-in.
+ */
+function LinkedLinearAccounts({ userId }: { userId: string }) {
+  const links = useUserIdentities(userId, true);
+  const unlink = useUnlinkForUser();
+  const identities = links.data?.identities ?? [];
+  if (identities.length === 0) return null;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <Label>Linked Linear accounts</Label>
+      {identities.map((identity) => (
+        <div
+          key={identity.id}
+          className="flex items-center justify-between gap-3 text-[13px]"
+        >
+          <span className="min-w-0 truncate">{identityLabel(identity)}</span>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={unlink.isPending}
+            onClick={() => unlink.mutate({ userId, id: identity.id })}
+          >
+            Remove
+          </Button>
+        </div>
+      ))}
+      {unlink.isError && (
+        <p role="alert" className="text-[11px] text-destructive">
+          {unlink.error.message}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export function MemberProfileDialog({
   user,
@@ -145,6 +189,7 @@ export function MemberProfileDialog({
               {save.error.message}
             </p>
           )}
+          {open && <LinkedLinearAccounts userId={user.id} />}
           <DialogFooter>
             <DialogClose
               render={

@@ -4,6 +4,8 @@ import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useOperationsNav } from "@/components/AppSidebar";
+import { LinearAccountSection } from "@/components/settings/LinearAccountSection";
+import { useAuthStatus } from "@/lib/auth";
 import { resetNavHidden, toggleNavHidden, useHiddenNav } from "@/lib/nav-prefs";
 import { useTheme } from "@/lib/theme";
 import type { ThemePreference } from "@/lib/theme";
@@ -135,12 +137,18 @@ function SidebarItems() {
 }
 
 export function PreferencesPage() {
+  const auth = useAuthStatus();
+  const signedIn = auth.data?.mode === "accounts" && !!auth.data.user;
   return (
     <SettingsShell title="Preferences">
       <div className="mx-auto flex max-w-3xl flex-col gap-6 p-6">
+        {/* Belongs to your account, not this browser — so it sits above the
+            line that says the rest is browser-only. */}
+        {signedIn && <LinearAccountSection />}
+
         <p className="max-w-prose text-xs text-muted-foreground">
-          Personal to this browser. Nothing here is shared with anyone else
-          using this harness.
+          {signedIn ? "The settings below are personal" : "Personal"} to this
+          browser. Nothing here is shared with anyone else using this harness.
         </p>
 
         <Section title="Interface and theme">

@@ -53,6 +53,33 @@ CREATE TABLE IF NOT EXISTS harness_sessions (
 const CREATE_SESSIONS_USER_IDX: &str =
     "CREATE INDEX IF NOT EXISTS harness_sessions_user_idx ON harness_sessions (user_id)";
 
+/// Who an account is somewhere else — today, in Linear. Recorded when the person
+/// signs in to that service from their profile, so the row is proof, not a
+/// claim: it is how a Linear mention or delegation finds the account even when
+/// the person's Linear address is not the one they sign in here with.
+const CREATE_IDENTITIES: &str = "
+CREATE TABLE IF NOT EXISTS harness_user_identities (
+    id               text PRIMARY KEY,
+    user_id          text NOT NULL REFERENCES harness_users(id) ON DELETE CASCADE,
+    -- `linear`.
+    provider         text NOT NULL,
+    -- Which connection (Linear workspace) it was linked through. Informative:
+    -- the provider's user id is already unique across workspaces.
+    connection       text NOT NULL,
+    provider_user_id text NOT NULL,
+    email            text,
+    name             text,
+    linked_at        timestamptz NOT NULL DEFAULT now()
+)";
+
+/// One provider identity, one account.
+const CREATE_IDENTITIES_KEY: &str = "CREATE UNIQUE INDEX IF NOT EXISTS harness_user_identities_key
+     ON harness_user_identities (provider, provider_user_id)";
+
+const CREATE_IDENTITIES_USER_IDX: &str =
+    "CREATE INDEX IF NOT EXISTS harness_user_identities_user_idx
+     ON harness_user_identities (user_id)";
+
 /// A registered person. Never carries the password hash outward.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct User {
@@ -92,6 +119,30 @@ pub struct UserActivity {
 pub struct ProfileUpdate {
     pub user: User,
     pub sessions_closed: bool,
+}
+
+/// An account's identity at another service — see [`UserStore::link_identity`].
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct LinkedIdentity {
+    pub id: String,
+    pub user_id: String,
+    pub provider: String,
+    pub connection: String,
+    pub provider_user_id: String,
+    pub email: Option<String>,
+    pub name: Option<String>,
+    pub linked_at: DateTime<Utc>,
+}
+
+const IDENTITY_COLUMNS: &str =
+    "id, user_id, provider, connection, provider_user_id, email, name, linked_at";
+
+/// What [`UserStore::link_identity`] did.
+#[derive(Debug, Clone)]
+pub enum LinkOutcome {
+    Linked(LinkedIdentity),
+    /// Another account already holds this identity. Nothing was written.
+    HeldByAnother,
 }
 
 /// Fields accepted when creating an account.
@@ -142,6 +193,11 @@ impl UserStore {
         ensure_schema(&pool).await?;
         sqlx::query(CREATE_SESSIONS).execute(&pool).await?;
         sqlx::query(CREATE_SESSIONS_USER_IDX).execute(&pool).await?;
+        sqlx::query(CREATE_IDENTITIES).execute(&pool).await?;
+        sqlx::query(CREATE_IDENTITIES_KEY).execute(&pool).await?;
+        sqlx::query(CREATE_IDENTITIES_USER_IDX)
+            .execute(&pool)
+            .await?;
         Ok(Self { pool })
     }
 
@@ -501,6 +557,163 @@ impl UserStore {
             .execute(&self.pool)
             .await?;
         Ok(result.rows_affected())
+    }
+
+    // ── Linked identities ───────────────────────────────────────────────────
+
+    /// Record that `user_id` is `provider_user_id` at `provider`.
+    ///
+    /// An account holds one identity per provider and connection: linking a
+    /// different one replaces it, and linking the same one again refreshes its
+    /// name and address. An identity another account holds is refused, not
+    /// moved — taking it over is for that account (or an admin) to undo first.
+    pub async fn link_identity(
+        &self,
+        user_id: &str,
+        provider: &str,
+        connection: &str,
+        provider_user_id: &str,
+        email: Option<&str>,
+        name: Option<&str>,
+    ) -> Result<LinkOutcome, PersistError> {
+        let mut tx = self.pool.begin().await?;
+        let holder: Option<(String,)> = sqlx::query_as(
+            "SELECT user_id FROM harness_user_identities
+             WHERE provider = $1 AND provider_user_id = $2 FOR UPDATE",
+        )
+        .bind(provider)
+        .bind(provider_user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if holder.is_some_and(|(holder,)| holder != user_id) {
+            return Ok(LinkOutcome::HeldByAnother);
+        }
+        sqlx::query(
+            "DELETE FROM harness_user_identities
+             WHERE user_id = $1 AND provider = $2 AND connection = $3
+               AND provider_user_id <> $4",
+        )
+        .bind(user_id)
+        .bind(provider)
+        .bind(connection)
+        .bind(provider_user_id)
+        .execute(&mut *tx)
+        .await?;
+        let sql = format!(
+            "INSERT INTO harness_user_identities
+                 (id, user_id, provider, connection, provider_user_id, email, name)
+             VALUES ($1, $2, $3, $4, $5, lower($6), $7)
+             ON CONFLICT (provider, provider_user_id) DO UPDATE
+                 SET connection = excluded.connection, email = excluded.email,
+                     name = excluded.name, linked_at = now()
+                 WHERE harness_user_identities.user_id = excluded.user_id
+             RETURNING {IDENTITY_COLUMNS}"
+        );
+        let linked = sqlx::query_as::<_, LinkedIdentity>(&sql)
+            .bind(uuid::Uuid::new_v4().to_string())
+            .bind(user_id)
+            .bind(provider)
+            .bind(connection)
+            .bind(provider_user_id)
+            .bind(email.map(str::trim).filter(|e| !e.is_empty()))
+            .bind(name.map(str::trim).filter(|n| !n.is_empty()))
+            .fetch_optional(&mut *tx)
+            .await?;
+        // No row back means the conflict's `WHERE` refused: another account
+        // linked the same identity between the check above and the insert.
+        let Some(linked) = linked else {
+            return Ok(LinkOutcome::HeldByAnother);
+        };
+        tx.commit().await?;
+        Ok(LinkOutcome::Linked(linked))
+    }
+
+    /// Every identity an account has linked, oldest first.
+    pub async fn list_identities(
+        &self,
+        user_id: &str,
+    ) -> Result<Vec<LinkedIdentity>, PersistError> {
+        let sql = format!(
+            "SELECT {IDENTITY_COLUMNS} FROM harness_user_identities
+             WHERE user_id = $1 ORDER BY linked_at"
+        );
+        Ok(sqlx::query_as::<_, LinkedIdentity>(&sql)
+            .bind(user_id)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    /// Remove one of an account's identities. `false` when the account holds
+    /// no identity with that id — including one held by somebody else.
+    pub async fn unlink_identity(&self, user_id: &str, id: &str) -> Result<bool, PersistError> {
+        let result =
+            sqlx::query("DELETE FROM harness_user_identities WHERE user_id = $1 AND id = $2")
+                .bind(user_id)
+                .bind(id)
+                .execute(&self.pool)
+                .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Put an account's name on the runs that are theirs, now that a link says
+    /// which runs those are.
+    ///
+    /// Two kinds of run: ones already attributed to the account, which may
+    /// still carry the name Linear had for the person; and Linear runs nobody
+    /// could attribute, whose label carries `linked_email` — the address that
+    /// failed to match before the link existed. Both end up as the account,
+    /// under the account's name. Returns how many runs were written.
+    pub async fn attribute_runs(
+        &self,
+        user_id: &str,
+        linked_email: Option<&str>,
+    ) -> Result<u64, PersistError> {
+        let email = linked_email
+            .map(|e| e.trim().to_lowercase())
+            .filter(|e| !e.is_empty());
+        let result = sqlx::query(
+            "UPDATE harness_workflow_runs r
+                SET triggered_by = u.id,
+                    trigger_actor = CASE WHEN u.name = '' THEN u.email
+                                         ELSE u.name || ' <' || u.email || '>' END
+               FROM harness_users u
+              WHERE u.id = $1
+                AND (r.triggered_by = u.id
+                     OR ($2::text IS NOT NULL
+                         AND r.triggered_by IS NULL
+                         AND r.trigger_source LIKE 'linear%'
+                         AND (lower(r.trigger_actor) = $2
+                              OR right(lower(r.trigger_actor), length($2) + 2)
+                                 = '<' || $2 || '>')))",
+        )
+        .bind(user_id)
+        .bind(email)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// The account that linked `provider_user_id` at `provider`, if any.
+    pub async fn get_by_identity(
+        &self,
+        provider: &str,
+        provider_user_id: &str,
+    ) -> Result<Option<User>, PersistError> {
+        let sql = format!(
+            "SELECT {} FROM harness_users u
+             JOIN harness_user_identities i ON i.user_id = u.id
+             WHERE i.provider = $1 AND i.provider_user_id = $2",
+            USER_COLUMNS
+                .split(", ")
+                .map(|c| format!("u.{c}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        Ok(sqlx::query_as::<_, User>(&sql)
+            .bind(provider)
+            .bind(provider_user_id)
+            .fetch_optional(&self.pool)
+            .await?)
     }
 }
 
@@ -967,5 +1180,100 @@ mod tests {
             .is_none());
 
         store.delete(&user.id).await.unwrap();
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn linked_identities() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = UserStore::connect(&url).await.expect("connect");
+        let new = |tag: &str| NewUser {
+            email: unique_email(tag),
+            name: tag.into(),
+            role: "member".into(),
+            password_hash: None,
+        };
+        let ada = store.create(&new("ada")).await.unwrap();
+        let bob = store.create(&new("bob")).await.unwrap();
+        let linear_id = format!("lin-{}", uuid::Uuid::new_v4());
+
+        let LinkOutcome::Linked(first) = store
+            .link_identity(
+                &ada.id,
+                "linear",
+                "default",
+                &linear_id,
+                Some("Ada@Work.test"),
+                Some("Ada L"),
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("first link should succeed");
+        };
+        assert_eq!(first.email.as_deref(), Some("ada@work.test"));
+        let found = store
+            .get_by_identity("linear", &linear_id)
+            .await
+            .unwrap()
+            .expect("found by identity");
+        assert_eq!(found.id, ada.id);
+
+        // Relinking the same identity refreshes it in place.
+        let LinkOutcome::Linked(again) = store
+            .link_identity(&ada.id, "linear", "default", &linear_id, None, Some("Ada"))
+            .await
+            .unwrap()
+        else {
+            panic!("relink should succeed");
+        };
+        assert_eq!(again.id, first.id);
+        assert_eq!(again.name.as_deref(), Some("Ada"));
+
+        // Another account cannot take it.
+        assert!(matches!(
+            store
+                .link_identity(&bob.id, "linear", "default", &linear_id, None, None)
+                .await
+                .unwrap(),
+            LinkOutcome::HeldByAnother
+        ));
+
+        // A different Linear user on the same connection replaces the first.
+        let other_id = format!("lin-{}", uuid::Uuid::new_v4());
+        store
+            .link_identity(&ada.id, "linear", "default", &other_id, None, None)
+            .await
+            .unwrap();
+        let held = store.list_identities(&ada.id).await.unwrap();
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].provider_user_id, other_id);
+        assert!(store
+            .get_by_identity("linear", &linear_id)
+            .await
+            .unwrap()
+            .is_none());
+
+        // Unlinking only works on the holder's own identity.
+        assert!(!store.unlink_identity(&bob.id, &held[0].id).await.unwrap());
+        assert!(store.unlink_identity(&ada.id, &held[0].id).await.unwrap());
+        assert!(store.list_identities(&ada.id).await.unwrap().is_empty());
+
+        // Deleting an account takes its identities with it.
+        store
+            .link_identity(&bob.id, "linear", "default", &linear_id, None, None)
+            .await
+            .unwrap();
+        store.delete(&bob.id).await.unwrap();
+        assert!(store
+            .get_by_identity("linear", &linear_id)
+            .await
+            .unwrap()
+            .is_none());
+
+        store.delete(&ada.id).await.unwrap();
     }
 }
