@@ -124,6 +124,41 @@ pub enum LinearAction {
         #[arg(long)]
         issue: String,
     },
+    /// Print a team's issues as JSON, newest first — for a step that triages
+    /// them. Read-only
+    Issues {
+        /// The team's key (e.g. ECOM), name or id
+        #[arg(long)]
+        team: String,
+        /// Only issues in this status, by name
+        #[arg(long)]
+        state: Option<String>,
+        /// `none` for unassigned issues, or an email address
+        #[arg(long)]
+        assignee: Option<String>,
+        /// Only issues with this label; repeatable (all must match). A
+        /// trailing `*` matches a prefix, and a group's name matches its labels
+        #[arg(long = "label")]
+        labels: Vec<String>,
+        /// Only issues without this label; repeatable, same patterns
+        #[arg(long = "without-label")]
+        without_labels: Vec<String>,
+        /// At most this many issues (default 25, at most 100)
+        #[arg(long)]
+        limit: Option<usize>,
+    },
+    /// Add or remove an issue's labels by name. Never creates a label
+    Label {
+        /// The issue's id or identifier, e.g. ECOM-12
+        #[arg(long)]
+        issue: String,
+        /// Label to add; repeatable
+        #[arg(long)]
+        add: Vec<String>,
+        /// Label to remove; repeatable
+        #[arg(long)]
+        remove: Vec<String>,
+    },
     /// Print an epic's sub-issues as JSON, in board order
     Children {
         #[arg(long)]
@@ -1659,6 +1694,27 @@ async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
         }
         LinearAction::Issue { issue } => harness_server::linear_cli::issue(&issue).await,
         LinearAction::Children { issue } => harness_server::linear_cli::children(&issue).await,
+        LinearAction::Issues {
+            team,
+            state,
+            assignee,
+            labels,
+            without_labels,
+            limit,
+        } => {
+            harness_server::linear_cli::issues(&harness_server::linear_cli::IssueFilter {
+                team,
+                state,
+                assignee,
+                labels,
+                without_labels,
+                limit,
+            })
+            .await
+        }
+        LinearAction::Label { issue, add, remove } => {
+            harness_server::linear_cli::labels(&issue, &add, &remove).await
+        }
         LinearAction::Release { issue } => harness_server::linear_cli::release(&issue).await,
         LinearAction::EpicReviewState => harness_server::linear_cli::epic_review_state().await,
         LinearAction::ReadyState { issue } => {

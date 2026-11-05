@@ -8,10 +8,11 @@
 //! A run is never asked which project it is, so it cannot answer wrongly.
 //!
 //! Deliberately few operations, matching what workflows need: read an issue,
-//! read its children, file a sub-issue, move one, comment on one, and file a
-//! standalone issue for a workflow's result. No delete, and no way out of the
-//! project's own workspace: the one operation that names a team can only name
-//! a team that workspace has.
+//! read its children, list a team's issues, file a sub-issue, move one,
+//! comment on one, label one with an existing label, and file a standalone
+//! issue for a workflow's result. No delete, no creating labels, and no way out
+//! of the project's own workspace: the operations that name a team can only
+//! name a team that workspace has.
 
 use std::sync::Arc;
 
@@ -513,6 +514,206 @@ pub async fn comment(
     }
 }
 
+/// Most issues one listing returns, and how many when the run doesn't say.
+const ISSUES_MAX: usize = 100;
+const ISSUES_DEFAULT: usize = 25;
+
+#[derive(Debug, Deserialize)]
+pub struct IssuesRequest {
+    /// The team's key (`ECOM`), name or id.
+    pub team: String,
+    /// A status name or id.
+    #[serde(default)]
+    pub state: Option<String>,
+    /// `none` for unassigned issues, or an email address.
+    #[serde(default)]
+    pub assignee: Option<String>,
+    /// Label patterns the issue must all carry.
+    #[serde(default)]
+    pub labels: Vec<String>,
+    /// Label patterns the issue must carry none of.
+    #[serde(default)]
+    pub without_labels: Vec<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Turn a listing request into a query against the project's workspace.
+fn issue_query(
+    discovery: &harness_sources::linear::Discovery,
+    req: &IssuesRequest,
+) -> Result<harness_sources::linear::IssueQuery, String> {
+    use harness_sources::linear::{AssigneeFilter, IssueQuery};
+    let place = resolve_placement(
+        discovery,
+        &CreateIssueRequest {
+            team: req.team.clone(),
+            title: String::new(),
+            description: String::new(),
+            state: req.state.clone(),
+            labels: Vec::new(),
+        },
+    )?;
+    let assignee = match req
+        .assignee
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+    {
+        None => AssigneeFilter::Any,
+        Some(a) if a.eq_ignore_ascii_case("none") => AssigneeFilter::Unassigned,
+        Some(a) if a.contains('@') => AssigneeFilter::Email(a.to_string()),
+        Some(a) => {
+            return Err(format!(
+                "assignee `{a}` is neither `none` nor an email address"
+            ))
+        }
+    };
+    Ok(IssueQuery {
+        team_id: place.team,
+        state_id: place.state,
+        assignee,
+        with_labels: req.labels.clone(),
+        without_labels: req.without_labels.clone(),
+        limit: req.limit.unwrap_or(ISSUES_DEFAULT).clamp(1, ISSUES_MAX),
+    })
+}
+
+/// `POST /api/run/linear/issues` — list a team's issues. Read-only.
+///
+/// What a triage workflow starts from: which issues are waiting, with enough
+/// of each (title, description, labels) to judge it. The team has to be one
+/// the project's own connection can see, as for filing an issue.
+pub async fn issues(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Json(req): Json<IssuesRequest>,
+) -> Response {
+    let g = match grant(&headers) {
+        Ok(g) => g,
+        Err((s, m)) => return err(s, m),
+    };
+    let c = match client(&state, &g).await {
+        Ok(c) => c,
+        Err((s, m)) => return err(s, m),
+    };
+    let discovery = match c.discover().await {
+        Ok(d) => d,
+        Err(e) => return err(StatusCode::BAD_GATEWAY, e.0),
+    };
+    let query = match issue_query(&discovery, &req) {
+        Ok(q) => q,
+        Err(m) => return err(StatusCode::BAD_REQUEST, m),
+    };
+    match c.team_issues(&query).await {
+        Ok(issues) => Json(issues).into_response(),
+        Err(e) => err(StatusCode::BAD_GATEWAY, e.0),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LabelsRequest {
+    /// The issue's id or identifier (`ECOM-12`).
+    pub issue: String,
+    /// Label names to put on it.
+    #[serde(default)]
+    pub add: Vec<String>,
+    /// Label names to take off it.
+    #[serde(default)]
+    pub remove: Vec<String>,
+}
+
+/// `POST /api/run/linear/labels` — add and remove an issue's labels, by name.
+///
+/// **Existing labels only.** A name that isn't a label in the issue's team or
+/// workspace is refused before anything changes, so a typo can't half-apply a
+/// set or invent a label nobody asked for. Adding one the issue already has, or
+/// removing one it lacks, is a no-op rather than an error: a triage pass that
+/// runs twice should land in the same place.
+pub async fn labels(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Json(req): Json<LabelsRequest>,
+) -> Response {
+    let g = match grant(&headers) {
+        Ok(g) => g,
+        Err((s, m)) => return err(s, m),
+    };
+    let wanted = |names: &[String]| -> Vec<String> {
+        names
+            .iter()
+            .map(|n| n.trim().to_string())
+            .filter(|n| !n.is_empty())
+            .collect()
+    };
+    let (add, remove) = (wanted(&req.add), wanted(&req.remove));
+    if add.is_empty() && remove.is_empty() {
+        return err(StatusCode::BAD_REQUEST, "name a label to add or remove");
+    }
+    if let Some(both) = add
+        .iter()
+        .find(|a| remove.iter().any(|r| r.eq_ignore_ascii_case(a)))
+    {
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!("`{both}` is both added and removed"),
+        );
+    }
+    let c = match client(&state, &g).await {
+        Ok(c) => c,
+        Err((s, m)) => return err(s, m),
+    };
+    let issue = match c.issue_labels(&req.issue).await {
+        Ok(i) => i,
+        Err(e) => return err(StatusCode::NOT_FOUND, e.0),
+    };
+
+    // Resolve every name first, so nothing changes unless all of them exist.
+    let mut resolved = Vec::new();
+    for (name, adding) in add
+        .iter()
+        .map(|n| (n, true))
+        .chain(remove.iter().map(|n| (n, false)))
+    {
+        match c.find_label(name, issue.team_id.as_deref()).await {
+            Ok(Some(id)) => resolved.push((id, name, adding)),
+            Ok(None) => {
+                return err(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "no label `{name}` in {}'s team or workspace — labels are never created \
+                         from a workflow; add it in Linear first",
+                        issue.identifier
+                    ),
+                )
+            }
+            Err(e) => return err(StatusCode::BAD_GATEWAY, e.0),
+        }
+    }
+
+    let mut now: Vec<(String, String)> = issue.labels.clone();
+    for (id, name, adding) in resolved {
+        let has = now.iter().any(|(l, _)| *l == id);
+        let done = match (adding, has) {
+            (true, false) => c.add_label(&issue.id, &id).await.map(|()| {
+                now.push((id.clone(), name.clone()));
+            }),
+            (false, true) => c.remove_label(&issue.id, &id).await.map(|()| {
+                now.retain(|(l, _)| *l != id);
+            }),
+            _ => Ok(()),
+        };
+        if let Err(e) = done {
+            return err(StatusCode::BAD_GATEWAY, e.0);
+        }
+    }
+    Json(serde_json::json!({
+        "issue": issue.identifier,
+        "labels": now.into_iter().map(|(_, name)| name).collect::<Vec<_>>(),
+    }))
+    .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -554,6 +755,48 @@ mod tests {
             state: state.map(str::to_string),
             labels: labels.iter().map(|l| l.to_string()).collect(),
         }
+    }
+
+    fn issues_req(assignee: Option<&str>, limit: Option<usize>) -> IssuesRequest {
+        IssuesRequest {
+            team: "ecom".into(),
+            state: Some("todo".into()),
+            assignee: assignee.map(str::to_string),
+            labels: vec![],
+            without_labels: vec!["harness:*".into()],
+            limit,
+        }
+    }
+
+    #[test]
+    fn a_listing_resolves_its_team_state_and_assignee() {
+        use harness_sources::linear::AssigneeFilter;
+        let q = issue_query(&workspace(), &issues_req(Some("none"), Some(10))).unwrap();
+        assert_eq!(q.team_id, "t-ecom");
+        assert_eq!(q.state_id.as_deref(), Some("s-todo"));
+        assert_eq!(q.assignee, AssigneeFilter::Unassigned);
+        assert_eq!(q.without_labels, vec!["harness:*".to_string()]);
+        assert_eq!(q.limit, 10);
+
+        let by_email = issue_query(&workspace(), &issues_req(Some("a@x.test"), None)).unwrap();
+        assert_eq!(by_email.assignee, AssigneeFilter::Email("a@x.test".into()));
+        assert_eq!(by_email.limit, ISSUES_DEFAULT);
+        // A limit is clamped rather than refused.
+        let huge = issue_query(&workspace(), &issues_req(None, Some(10_000))).unwrap();
+        assert_eq!(huge.limit, ISSUES_MAX);
+        assert_eq!(huge.assignee, AssigneeFilter::Any);
+
+        let err = issue_query(&workspace(), &issues_req(Some("mark"), None)).unwrap_err();
+        assert!(err.contains("neither `none` nor an email"), "{err}");
+        let err = issue_query(
+            &workspace(),
+            &IssuesRequest {
+                team: "nope".into(),
+                ..issues_req(None, None)
+            },
+        )
+        .unwrap_err();
+        assert!(err.contains("ECOM (E-commerce)"), "{err}");
     }
 
     #[test]
