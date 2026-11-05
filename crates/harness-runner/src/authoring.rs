@@ -1186,6 +1186,41 @@ nodes:
     }
 
     #[test]
+    fn the_documented_triage_workflow_validates() {
+        // The "Triaging issues" example in site/content/docs/workflows/authoring.mdx.
+        let yaml = r#"
+name: triage-todo
+nodes:
+  - id: waiting
+    bash: |
+      harness linear issues \
+        --team ECOM \
+        --state Todo \
+        --assignee none \
+        --without-label 'wayfinder:*' \
+        --without-label 'harness:*' \
+        --limit 10
+  - id: triage
+    depends_on: [waiting]
+    model: sonnet
+    prompt: |
+      These Linear issues are waiting in Todo, as JSON:
+
+      $waiting.output
+
+      For each one, decide whether it is ready to build. Then, from the shell:
+      - post your reasoning with
+        `harness linear comment --issue <identifier> --body-file <file>`
+      - label it with
+        `harness linear label --issue <identifier> --add harness:ready`
+        or `--add harness:skip`.
+"#;
+        let r = validate_workflow(yaml);
+        assert!(r.valid, "{:?}", r.error);
+        assert_eq!(r.nodes.len(), 2);
+    }
+
+    #[test]
     fn flags_unknown_dependency() {
         let yaml = r#"
 name: demo

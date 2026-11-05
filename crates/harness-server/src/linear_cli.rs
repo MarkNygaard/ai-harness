@@ -202,6 +202,32 @@ pub async fn issue(issue_id: &str) -> Result<String, String> {
     .await
 }
 
+/// Which of a team's issues [`issues`] lists.
+#[derive(Debug, Default, Serialize)]
+pub struct IssueFilter {
+    pub team: String,
+    pub state: Option<String>,
+    /// `none`, or an email address.
+    pub assignee: Option<String>,
+    pub labels: Vec<String>,
+    pub without_labels: Vec<String>,
+    pub limit: Option<usize>,
+}
+
+/// A team's issues as JSON, newest first. Read-only.
+pub async fn issues(filter: &IssueFilter) -> Result<String, String> {
+    ask("/api/run/linear/issues", filter).await
+}
+
+/// Add and remove an issue's labels by name. Existing labels only.
+pub async fn labels(issue_id: &str, add: &[String], remove: &[String]) -> Result<String, String> {
+    ask(
+        "/api/run/linear/labels",
+        &serde_json::json!({ "issue": issue_id, "add": add, "remove": remove }),
+    )
+    .await
+}
+
 /// An epic's sub-issues as JSON, in board order.
 pub async fn children(issue_id: &str) -> Result<String, String> {
     ask(
