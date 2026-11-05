@@ -2007,6 +2007,12 @@ pub fn parse_created_session(json: &[u8]) -> Result<String, LinearError> {
 // The filter is built by `IssueQuery::filter`; label filtering is done here
 // rather than in Linear, because "no label starting with `wayfinder:`" is not
 // something `IssueFilter` can say.
+//
+// Kept well under Linear's per-query complexity cap: a connection costs its
+// page size times what each node asks for, and an unbounded `labels` defaults
+// to 50 per issue — 50 issues × 50 labels × a parent each is a query Linear
+// may refuse outright. 25 issues a page and 20 labels an issue is plenty for
+// triage, and a page is just one more request.
 const TEAM_ISSUES_QUERY: &str = r#"
 query TeamIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(filter: $filter, first: $first, after: $after) {
@@ -2014,7 +2020,7 @@ query TeamIssues($filter: IssueFilter!, $first: Int!, $after: String) {
       id identifier title description url createdAt
       state { name }
       assignee { name email }
-      labels { nodes { name parent { name } } }
+      labels(first: 20) { nodes { name parent { name } } }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -2315,7 +2321,7 @@ impl LinearClient {
     /// Label filters are applied after Linear answers, so this pages on until
     /// it has `query.limit` survivors or has looked at [`MAX_SCANNED`] issues.
     pub async fn team_issues(&self, query: &IssueQuery) -> Result<Vec<TeamIssue>, LinearError> {
-        const PAGE: usize = 50;
+        const PAGE: usize = 25;
         let filter = query.filter();
         let mut out = Vec::new();
         let mut after: Option<String> = None;
