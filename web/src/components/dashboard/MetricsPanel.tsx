@@ -443,13 +443,14 @@ function Runs({ m }: { m: Metrics }) {
               />
             }
           />
+          {/* Not stacked: each line sits at its own count, so a day with two
+              completed and one failed reads 2 and 1, not 2 and 3. */}
           {(["completed", "failed"] as const).map((key) => (
             <Area
               key={key}
               {...lineProps(key)}
-              stackId="runs"
               fill={`var(--color-${key})`}
-              fillOpacity={0.2}
+              fillOpacity={0.12}
               hide={hidden.has(key)}
             />
           ))}
