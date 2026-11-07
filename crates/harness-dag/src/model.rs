@@ -41,6 +41,13 @@ pub enum TriggerRule {
     NoneFailedMinOneSuccess,
     /// Run once every dependency reached a terminal state, regardless of result.
     AllDone,
+    /// Run only if a step before this one failed: a dependency, or anything
+    /// it depends on in turn. A step after a failure is *skipped*, not failed,
+    /// so a cleanup step at the end would never see the failure in its direct
+    /// dependencies alone. For handling a failure — labelling the issue,
+    /// saying what broke. Skipped when nothing failed; the run stays failed
+    /// either way.
+    OneFailed,
 }
 
 /// Runtime for an inline [`NodeKind::Script`] body.

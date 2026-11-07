@@ -83,6 +83,11 @@ nodes:
     linear: { move_state: In Review }
 ```
 
+There is no failed label on the trigger either. A workflow that should label
+its issue when a run fails ends with a `linear:` step using
+`trigger_rule: one_failed`, which runs only when a step before it failed — see
+[handling a failure](/docs/workflows/authoring).
+
 A Linear trigger fires **once each time an issue comes to match it**. While the
 issue stays in the status it doesn't fire again; move it out and back (or
 un-delegate and delegate it) to run it again. Delegating always starts a run

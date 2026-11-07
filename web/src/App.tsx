@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes, useParams } from "react-router-dom";
 import { DashboardPage } from "./routes/dashboard/DashboardPage";
 import { RunsPage } from "./routes/runs/RunsPage";
 import { RunDetailPage } from "./routes/runs/RunDetailPage";
@@ -87,10 +87,13 @@ export function App() {
               element={<RunPairComparisonPage />}
             />
             <Route path="/runs/:id" element={<RunDetailPage />} />
-            {/* The workflow editor keeps the app frame and its own URL: it is a
-              full-canvas view, not a settings form, and run pages link into it. */}
-            <Route path="/editor/new" element={<WorkflowEditor />} />
-            <Route path="/editor/:name" element={<WorkflowEditor />} />
+            {/* The editor's old address: run pages, bookmarks and the docs
+              still point at it. */}
+            <Route
+              path="/editor/new"
+              element={<Navigate to="/settings/workflows/new" replace />}
+            />
+            <Route path="/editor/:name" element={<EditorRedirect />} />
 
             {/* ── Settings ─────────────────────────────────────────────────── */}
             <Route
@@ -129,6 +132,16 @@ export function App() {
               element={<ProjectPage />}
             />
             <Route path="/settings/workflows" element={<WorkflowsList />} />
+            {/* Building a workflow is configuring the harness, so the editor
+              sits in Settings with the list it was opened from. */}
+            <Route
+              path="/settings/workflows/new"
+              element={<WorkflowEditor />}
+            />
+            <Route
+              path="/settings/workflows/:name"
+              element={<WorkflowEditor />}
+            />
             <Route path="/settings/categories" element={<CategoriesPage />} />
 
             {/* These were live URLs before Settings existed, and `/editor` is
@@ -162,5 +175,13 @@ export function App() {
         </TooltipProvider>
       </ChatProvider>
     </QueryClientProvider>
+  );
+}
+
+/** `/editor/:name` → the editor's place under Settings. */
+function EditorRedirect() {
+  const { name = "" } = useParams();
+  return (
+    <Navigate to={`/settings/workflows/${encodeURIComponent(name)}`} replace />
   );
 }

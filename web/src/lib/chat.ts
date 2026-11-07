@@ -92,7 +92,10 @@ export interface ConversationDetail {
 export function contextFromPath(pathname: string): ChatContext {
   const run = /^\/runs\/(?!pair\/)([^/]+)\/?$/.exec(pathname);
   if (run) return { run_id: decodeURIComponent(run[1]) };
-  const editor = /^\/editor\/(?!new\/?$)([^/]+)\/?$/.exec(pathname);
+  // Under Settings, and the old `/editor/` address it redirects from.
+  const editor =
+    /^\/settings\/workflows\/(?!new\/?$)([^/]+)\/?$/.exec(pathname) ??
+    /^\/editor\/(?!new\/?$)([^/]+)\/?$/.exec(pathname);
   if (editor) return { workflow: decodeURIComponent(editor[1]) };
   return {};
 }

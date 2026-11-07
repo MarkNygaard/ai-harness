@@ -283,6 +283,7 @@ that never ran (skipped/upstream-skipped) counts as `Skipped` — **not** succes
 | `one_success` | at least one dependency succeeded |
 | `none_failed_min_one_success` | no dependency failed **and** at least one succeeded |
 | `all_done` | every dependency reached any terminal state (use for cleanup / "run regardless") |
+| `one_failed` | a step before it failed — a dependency, **or anything further up** (use for handling a failure) |
 
 **The classic gotcha:** after a `when:`-gated branch, the merge node sees a
 *skipped* dependency, so the default `all_success` would skip the merge. Use
@@ -302,6 +303,34 @@ that never ran (skipped/upstream-skipped) counts as `Skipped` — **not** succes
   trigger_rule: none_failed_min_one_success   # exactly one branch ran
   command: open-pr
 ```
+
+### Handling a failure
+
+A step after a failed one is *skipped*, not failed — so a cleanup step at the
+end would never see the failure among its direct dependencies. `one_failed`
+looks all the way up: put the step last, depending on the final step, and it
+runs only if something before it failed. The run still ends failed; handling a
+failure doesn't hide it.
+
+This is how a workflow started by a [Linear trigger](/docs/triggers) marks its
+issue — the trigger only starts the run, so what happens to the issue on
+failure is the workflow's to say:
+
+```yaml
+- id: mark-failed
+  depends_on: [final-verify-loop]
+  trigger_rule: one_failed
+  linear: { add_labels: [harness:failed] }
+- id: say-what-broke
+  depends_on: [final-verify-loop]
+  trigger_rule: one_failed
+  linear:
+    comment: "This run failed. See the run for which step broke."
+```
+
+The label has to exist on the issue's team. A Linear trigger already won't
+start an issue twice while it stays in its status, so the label is for people —
+a filter for "what needs a look" — not a gate.
 
 ## Variables
 

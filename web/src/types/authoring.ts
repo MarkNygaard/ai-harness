@@ -202,7 +202,11 @@ export type NodeKindId =
 
 export type ContextMode = "fresh" | "shared";
 export type TriggerRule =
-  "all_success" | "one_success" | "none_failed_min_one_success" | "all_done";
+  | "all_success"
+  | "one_success"
+  | "none_failed_min_one_success"
+  | "all_done"
+  | "one_failed";
 export type ScriptRuntime = "bun" | "uv";
 /** Reasoning-effort override for AI bodies, forwarded as `--effort` to
  * claude/codex CLIs. Higher effort suits high-leverage steps like planning. */
