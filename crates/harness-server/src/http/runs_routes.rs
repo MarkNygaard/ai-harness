@@ -108,6 +108,7 @@ pub struct RunsState {
     chat_store: OnceCell<harness_persist::ChatStore>,
     schedule_store: OnceCell<harness_persist::ScheduleStore>,
     trigger_store: OnceCell<harness_persist::TriggerStore>,
+    pr_store: OnceCell<harness_persist::PrStore>,
     improvement_store: OnceCell<harness_persist::ImprovementStore>,
     saved_step_store: OnceCell<harness_persist::SavedStepStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
@@ -220,6 +221,7 @@ impl RunsState {
             chat_store: OnceCell::new(),
             schedule_store: OnceCell::new(),
             trigger_store: OnceCell::new(),
+            pr_store: OnceCell::new(),
             improvement_store: OnceCell::new(),
             saved_step_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
@@ -514,6 +516,21 @@ impl RunsState {
         self.improvement_store
             .get_or_try_init(|| async {
                 harness_persist::ImprovementStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the store of pull requests the runs opened.
+    pub(crate) async fn pr_store(&self) -> Result<&harness_persist::PrStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.pr_store
+            .get_or_try_init(|| async {
+                harness_persist::PrStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })

@@ -11,11 +11,23 @@ export interface Outcomes {
   cancelled: number;
 }
 
+/** Pull requests over a period (see the server's `pr_tracking`). */
+export interface PrTotals {
+  prs_opened: number;
+  prs_merged: number;
+  /** Median from a run starting to its PR opening. */
+  median_to_pr_secs: number | null;
+  /** Median from a PR opening to it merging. */
+  median_to_merge_secs: number | null;
+}
+
 export interface DayMetrics extends Outcomes {
   /** UTC day, `YYYY-MM-DD`. */
   day: string;
   median_secs: number | null;
   cost_usd: number;
+  prs_opened: number;
+  prs_merged: number;
 }
 
 export interface WorkflowMetrics extends Outcomes {
@@ -24,7 +36,7 @@ export interface WorkflowMetrics extends Outcomes {
   cost_usd: number;
 }
 
-export interface Totals extends Outcomes {
+export interface Totals extends Outcomes, PrTotals {
   runs: number;
   /** Distinct tasks (runs sharing a title) with a completed run. */
   tasks: number;

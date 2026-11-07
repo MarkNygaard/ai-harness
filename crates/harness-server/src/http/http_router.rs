@@ -71,6 +71,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // tokens spent on each dedicated lane (kimi, codex) to keep their billing
     // profiles' estimated monthly value calibrated.
     crate::billing_calibration::spawn_billing_calibrator(runs_state.clone());
+    // Follow the PRs runs opened until they merge or close, for the
+    // dashboard's lead-time charts.
+    super::pr_tracking::spawn_poller(runs_state.clone());
     // Linear poller (Slice 3a, dry-run): logs which eligible issues each enabled
     // binding WOULD fire — no claim, no transition, no run triggered.
     super::linear_poller::spawn_poller(runs_state.clone());

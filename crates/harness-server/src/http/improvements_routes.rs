@@ -108,6 +108,7 @@ async fn on_run_finished_inner(state: Arc<RunsState>, run_id: String) {
     let Ok(Some(detail)) = store.get_run(&run_id).await else {
         return;
     };
+    super::pr_tracking::record_run(&state, &detail).await;
     if detail.run.workflow_name == IMPROVEMENTS_WORKFLOW {
         finish_review_run(&state, &detail).await;
         return;
