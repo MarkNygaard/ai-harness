@@ -100,7 +100,7 @@ Click **Reconnect**.
 ## Per project: bind a team
 
 Delegation carries no configuration of its own, so the issue's **team** is matched
-against the Linear trigger bindings (Projects → the project → the ⚡ icon). The
+against the Linear trigger bindings (Projects → the project → **Linear**). The
 matching binding supplies the project, the workflow to run, the base branch, the
 source status that gates it, and the rest of the status map.
 
@@ -411,8 +411,8 @@ workspace, pointing at the *same* callback and webhook URLs as the first, and
 connect it. Each workspace needs its own application: you are installing the
 harness into that workspace, and an app belongs to the workspace that owns it.
 
-Assign a project to an account from the ⚡ dialog on its row on the **Projects**
-page.
+Assign a project to an account on the project's **Linear** tab (**Settings →
+Projects** → the project).
 
 How a project's account is resolved:
 
@@ -507,7 +507,7 @@ in one step is possible if that ever becomes the preference.)
 | `redirect_uri` mismatch error from Linear | The app's registered callback differs from the URL shown in the panel — they must match character for character. |
 | "authorization expired or was already used" | The one-time `state` nonce was replayed or is older than 10 minutes (it is also lost if the server restarted mid-flow). Start again. |
 | Comments still show a person's name | The panel reads **personal key** — a global `api_key` is still the credential in use. Connect as app, then clear the key. |
-| The project's Linear trigger button disappeared | The bindings dialog only appears once Linear is connected. Connect on the Integrations page. |
+| The project's Linear tab says no account is connected | Bindings need a Linear account that can authenticate. Connect one on the Integrations page. |
 | Delegating does nothing | Check the panel's two Delegation lines. Then check the OAuth app's webhook is enabled, subscribed to *Agent session events*, and pointed at the webhook URL shown. Server logs record every rejected delivery with the reason. |
 | Session shows "unresponsive" in Linear | The acknowledging `thought` didn't land within 10s — usually the webhook never arrived, or the Linear credential can't write. The log line is `failed to acknowledge session`. |
 | A poller-claimed run posts plain comments instead of a session thread | Session creation failed and the run fell back. The reason is logged as `could not open an agent session, falling back to comments: <reason>` — `Access denied` means the workspace is not connected as an app (reconnect on the Integrations page); the run itself is unaffected either way. |

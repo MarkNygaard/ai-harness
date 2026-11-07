@@ -7,7 +7,9 @@ A **project** is a registered repository, plus the settings runs need to work on
 it. Everything else in the harness points at one: bindings name a project,
 credentials can be overridden per project, and a run always belongs to one.
 
-Add one on the **Projects** page.
+Add one on the **Projects** page (**Settings → Projects**). Clicking a project
+opens its own page, with a tab for each group of settings: **General**,
+**Linear**, **Credentials**, **Environment** and **Cache**.
 
 ## The required parts
 
@@ -43,7 +45,8 @@ a language does not mean rebuilding the image.
 audits, and it is a project setting rather than a run argument because it does
 not change between runs.
 
-**Cargo target cap.** A per-project override of the Rust build cache ceiling.
+**Cargo target cap.** A per-project override of the Rust build cache ceiling,
+set on the project's **Cache** tab.
 Useful when one project's `target` directory is much larger than the rest and
 you would rather it did not evict everything else. See
 [configuration](/docs/operating/configuration#cache-and-storage-limits).
@@ -74,18 +77,20 @@ Two things, and only two.
 
 **GitHub credentials.** A project can carry its own token and commit author
 email, falling back to the global pair. This is how a run pushes as a different
-identity for a repository in another organisation. See
+identity for a repository in another organisation. They are on the project's
+**Credentials** tab. See
 [GitHub](/docs/setup/github#per-project-with-a-global-fallback).
 
 **Build environment variables.** Values a project's build or test steps need,
-stored with the project rather than baked into the workflow.
+stored with the project rather than baked into the workflow. They are on the
+project's **Environment** tab.
 
 Everything else, meaning the model accounts and the Linear connection, is
 global. There is one of each and they are shared.
 
 ## Linear bindings
 
-A project's Linear triggers live behind the ⚡ icon on its row. They connect a
+A project's Linear triggers live on its **Linear** tab. They connect a
 team and a column to a workflow, and they are per project because that is where
 the workflow and the base branch come from. See
 [trigger bindings](/docs/setup/bindings).

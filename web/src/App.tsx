@@ -9,6 +9,7 @@ import { WorkflowReportsPage } from "./routes/runs/WorkflowReportsPage";
 import { WorkflowEditor } from "./routes/editor/WorkflowEditor";
 import { WorkflowsList } from "./routes/editor/WorkflowsList";
 import { ProjectsPage } from "./routes/projects/ProjectsPage";
+import { ProjectPage } from "./routes/projects/ProjectPage";
 import { AgentsPage } from "./routes/credentials/AgentsPage";
 import { SubscriptionsPage } from "./routes/credentials/SubscriptionsPage";
 import { IntegrationsPage } from "./routes/credentials/IntegrationsPage";
@@ -104,6 +105,11 @@ export function App() {
               element={<Navigate to="/settings/subscriptions" replace />}
             />
             <Route path="/settings/projects" element={<ProjectsPage />} />
+            {/* The trailing segment is the open tab; none means General. */}
+            <Route
+              path="/settings/projects/:name/:tab?"
+              element={<ProjectPage />}
+            />
             <Route path="/settings/workflows" element={<WorkflowsList />} />
             <Route path="/settings/categories" element={<CategoriesPage />} />
 

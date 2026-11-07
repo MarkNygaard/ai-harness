@@ -98,8 +98,8 @@ nodes:
 ```
 
 - **Sanity needs a token.** Create a read token in Sanity (**API → Tokens**,
-  Viewer) and add it to the project's environment variables under
-  **Settings → Projects** as `SANITY_AUTH_TOKEN`. Runs get it in their
+  Viewer) and add it to the project's environment variables (**Settings →
+  Projects** → the project → **Environment**) as `SANITY_AUTH_TOKEN`. Runs get it in their
   environment.
 - **Run it in the Studio's folder.** `sanity dataset export` reads the Sanity
   project ID from `sanity.cli.ts`. If the Studio lives in a subfolder,
