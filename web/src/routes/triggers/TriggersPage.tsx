@@ -206,6 +206,7 @@ function TriggerRow({
 }) {
   const state = STATE_BADGE[triggerState(t, system)];
   const lastError = t.kind === "schedule" ? null : t.trigger.last_error;
+  const shadowedBy = t.kind === "schedule" ? null : t.trigger.shadowed_by;
   return (
     <Link
       to={triggerHref(t)}
@@ -228,6 +229,15 @@ function TriggerRow({
               >
                 {state.label}
               </Badge>
+              {shadowedBy && (
+                <Badge
+                  variant="outline"
+                  title={`"${shadowedBy.name}" starts runs from the same Linear status, so this one doesn't fire. Remove one, and let a route node in the other's workflow choose.`}
+                  className="shrink-0 border-destructive/50 text-[10px] text-destructive"
+                >
+                  held back
+                </Badge>
+              )}
               {lastError && (
                 <Badge
                   variant="outline"

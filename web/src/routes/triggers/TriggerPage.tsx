@@ -307,6 +307,19 @@ function LastFired({ trigger: t }: { trigger: RunTrigger }) {
           Last attempt failed: {t.last_error}
         </span>
       )}
+      {t.shadowed_by && (
+        <span className="text-destructive">
+          Not firing:{" "}
+          <Link
+            to={`/triggers/${encodeURIComponent(t.shadowed_by.id)}`}
+            className="underline"
+          >
+            {t.shadowed_by.name}
+          </Link>{" "}
+          starts runs from the same Linear status. Remove one of the two, and
+          let a route node in the other&rsquo;s workflow choose what to run.
+        </span>
+      )}
     </div>
   );
 }
