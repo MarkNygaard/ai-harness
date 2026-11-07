@@ -33,7 +33,10 @@ mod run;
 mod worktree;
 pub use code_agent::CodeAgentRunner;
 pub use cursor::{parse_cursor_output, CursorAgent, ParsedCursor};
-pub use defaults::{default_command, default_workflow, resolve_workflow_source, DEFAULT_WORKFLOW};
+pub use defaults::{
+    default_command, default_workflow, resolve_workflow_source, DEFAULT_WORKFLOW,
+    IMPROVEMENTS_WORKFLOW,
+};
 pub use dispatch::DispatchAgent;
 pub use local::{LocalRunner, Shell};
 pub use pi::{parse_omp_stream, ParsedOmp, PiAgent};

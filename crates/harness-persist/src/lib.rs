@@ -52,7 +52,13 @@ pub use chat::{ChatMessage, ChatStore, Conversation};
 
 mod schedules;
 pub use schedules::{Schedule, ScheduleInput, ScheduleStore};
+mod improvements;
 mod triggers;
+pub use improvements::{
+    ImprovementReview, ImprovementStore, ImprovementSuggestion, NewSuggestion, SuggestionFilter,
+    REVIEW_DONE, REVIEW_FAILED, REVIEW_RUNNING, SUGGESTION_APPLIED, SUGGESTION_DISMISSED,
+    SUGGESTION_NEW,
+};
 pub use triggers::{RunTrigger, TriggerInput, TriggerStore, KIND_LINEAR, KIND_WEBHOOK};
 mod saved_steps;
 pub use saved_steps::{SaveStepError, SavedStep, SavedStepStore};
@@ -70,7 +76,7 @@ mod trash;
 pub use trash::{RestoreError, TrashEntry, TrashKind, TrashStore, TRASH_RETENTION_DAYS};
 
 /// A run row (matches `harness_workflow_runs`).
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct RunSummary {
     pub id: String,
     pub workflow_name: String,
@@ -173,7 +179,7 @@ pub struct ModelTokenSum {
 }
 
 /// A persisted per-node row (matches `harness_run_nodes`).
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct PersistedNode {
     pub node_id: String,
     pub ordinal: i32,
@@ -313,7 +319,7 @@ pub fn error_fingerprint(message: &str) -> String {
 /// cursor the UI pages through to fetch only lines newer than what it has.
 /// `kind` is one of `text` / `tool` / `tool_result`; `detail` carries a tool's
 /// input summary or a result snippet (`None` for plain text).
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct ActivityEvent {
     pub id: i64,
     pub node_id: String,
@@ -1302,6 +1308,48 @@ impl RunStore {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
+    }
+
+    /// The runs an improvement review of `workflow` in `project` would read:
+    /// newest first, at most `limit`, finished after `since` when given.
+    ///
+    /// Only runs worth learning from: finished (completed or failed — a
+    /// failure teaches the most; a cancelled run says nothing about the
+    /// workflow), not an arm of an A/B comparison (two models on one task is
+    /// an experiment, not the workflow's normal work), and one whose agents
+    /// actually used a model. A dry run (the echo agent) or a workflow of
+    /// shell steps only has no agent session to learn from — and dry runs
+    /// aren't recorded as such, so token usage is how they are told apart.
+    pub async fn improvement_candidates(
+        &self,
+        workflow: &str,
+        project: &str,
+        since: Option<chrono::DateTime<chrono::Utc>>,
+        limit: i64,
+    ) -> Result<Vec<String>, PersistError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT r.id
+             FROM harness_workflow_runs r
+             WHERE r.workflow_name = $1
+               AND r.project = $2
+               AND r.status IN ('completed', 'failed')
+               AND r.ab_pair_id IS NULL
+               AND ($3::timestamptz IS NULL OR r.recorded_at > $3)
+               AND EXISTS (
+                   SELECT 1 FROM harness_run_nodes n
+                   WHERE n.run_id = r.id
+                     AND COALESCE(n.input_tokens, 0) + COALESCE(n.output_tokens, 0) > 0
+               )
+             ORDER BY r.recorded_at DESC
+             LIMIT $4",
+        )
+        .bind(workflow)
+        .bind(project)
+        .bind(since)
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
     /// Runs fired for a Linear issue, newest first, found by its identifier

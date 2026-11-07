@@ -108,6 +108,7 @@ pub struct RunsState {
     chat_store: OnceCell<harness_persist::ChatStore>,
     schedule_store: OnceCell<harness_persist::ScheduleStore>,
     trigger_store: OnceCell<harness_persist::TriggerStore>,
+    improvement_store: OnceCell<harness_persist::ImprovementStore>,
     saved_step_store: OnceCell<harness_persist::SavedStepStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     trash_store: OnceCell<harness_persist::TrashStore>,
@@ -219,6 +220,7 @@ impl RunsState {
             chat_store: OnceCell::new(),
             schedule_store: OnceCell::new(),
             trigger_store: OnceCell::new(),
+            improvement_store: OnceCell::new(),
             saved_step_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
             trash_store: OnceCell::new(),
@@ -495,6 +497,23 @@ impl RunsState {
         self.schedule_store
             .get_or_try_init(|| async {
                 harness_persist::ScheduleStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the improvements store (reviews and their suggestions).
+    pub(crate) async fn improvement_store(
+        &self,
+    ) -> Result<&harness_persist::ImprovementStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.improvement_store
+            .get_or_try_init(|| async {
+                harness_persist::ImprovementStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -1018,6 +1037,10 @@ pub struct ListRunsQuery {
     pub project: Option<String>,
     #[serde(default)]
     pub unassigned: bool,
+    /// Include the harness's own runs (improvements reviews), which the
+    /// Runs list otherwise leaves to the Improvements page.
+    #[serde(default)]
+    pub internal: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1550,7 +1573,12 @@ pub async fn list_runs(
         store.list_runs(100).await
     };
     match result {
-        Ok(runs) => Json(runs).into_response(),
+        Ok(mut runs) => {
+            if !q.internal {
+                runs.retain(|r| r.workflow_name != harness_runner::IMPROVEMENTS_WORKFLOW);
+            }
+            Json(runs).into_response()
+        }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
 }
@@ -2299,6 +2327,16 @@ async fn start_run_inner(
             .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     let mut workflow = parse_workflow(&yaml)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("invalid workflow: {e}")))?;
+    // The harness's own machinery is started by the harness, never by a
+    // person, an editor or a trigger.
+    if workflow.internal
+        && req.trigger_source.as_deref() != Some(super::improvements_routes::SOURCE_IMPROVEMENTS)
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!("`{workflow_name}` is part of the harness itself and isn't started by hand"),
+        ));
+    }
 
     // A/B substitution: swap one integration model for another wherever the
     // workflow pins it, leaving every other step constant. Both halves required.
@@ -2484,6 +2522,10 @@ async fn execute_run_task(
                 status: harness_dag::RunStatus::Failed,
             });
             state.live.lock().await.remove(&run_id);
+            tokio::spawn(super::improvements_routes::on_run_finished(
+                state.clone(),
+                run_id.clone(),
+            ));
             dispatch_next_queued(state.clone()).await;
             return;
         }
@@ -2846,6 +2888,13 @@ async fn execute_run_task(
     }
 
     state.live.lock().await.remove(&run_id);
+    // Counts towards its workflow's next improvements review — or, for a
+    // review's own run, stores what it found. In the background: it reads
+    // the run back and may start another.
+    tokio::spawn(super::improvements_routes::on_run_finished(
+        state.clone(),
+        run_id.clone(),
+    ));
     // A slot just freed. Hand it to whatever has been waiting longest.
     dispatch_next_queued(state.clone()).await;
 }

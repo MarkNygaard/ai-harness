@@ -479,6 +479,12 @@ pub(crate) async fn call_tool(
             }
         }
         // ── Triggers: every kind, one interface ─────────────────────────────
+        "improvements_list" | "improvements_act" => {
+            match super::improvements_routes::mcp_call(state, actor, name, args).await {
+                Ok((summary, body)) => to_result(summary, &body),
+                Err(e) => tool_error(e),
+            }
+        }
         "trigger_list" | "trigger_save" | "trigger_delete" => {
             match super::trigger_tools::call(state, actor, name, args).await {
                 Ok((summary, body)) => to_result(summary, &body),
@@ -1198,7 +1204,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_save",
-            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project). The YAML may include a top-level `ui:` block ({ nav: { label, icon }, report: { label, verdict_node?, scored } }) to give the workflow a left-nav entry + a findings/report tab; or set it incrementally with workflow_set_ui.",
+            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project). The YAML may include a top-level `ui:` block ({ nav: { label, icon }, report: { label, verdict_node?, scored } }) to give the workflow a left-nav entry + a findings/report tab; or set it incrementally with workflow_set_ui. A top-level `improvements: { every: N }` (3-100) switches on improvement suggestions: after every N finished runs per project the harness reviews them and suggests changes, read with improvements_list.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1349,6 +1355,7 @@ fn mcp_tools() -> Vec<Value> {
     ]
     .into_iter()
     .chain(super::trigger_tools::tool_defs())
+    .chain(super::improvements_routes::mcp_tool_defs())
     .collect()
 }
 
@@ -1449,6 +1456,8 @@ pub(crate) const NEEDS_CONFIRMATION: &[&str] = &[
     // A trigger starts runs by itself from then on, the same as a schedule.
     "trigger_save",
     "trigger_delete",
+    // Starts a review, or a run applying a suggestion.
+    "improvements_act",
 ];
 
 /// Changing schedules is for administrators, as on the Schedules page.
@@ -1759,6 +1768,9 @@ mod tests {
             "trigger_list",
             "trigger_save",
             "trigger_delete",
+            // What recent runs suggest changing.
+            "improvements_list",
+            "improvements_act",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
@@ -1942,6 +1954,7 @@ fn connection_body(state: &Arc<RunsState>, token: Option<String>) -> Value {
         "linear_tools": LINEAR_TOOLS,
         "schedule_tools": SCHEDULE_TOOLS,
         "trigger_tools": super::trigger_tools::TRIGGER_TOOLS,
+        "improvement_tools": super::improvements_routes::IMPROVEMENT_TOOLS,
         "authoring_tools": AUTHORING_TOOLS,
     })
 }

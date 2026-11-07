@@ -151,6 +151,7 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             | "/api/run/linear/state"
             | "/api/run/linear/comment"
             | "/api/run/s3/upload-url"
+            | "/api/run/improvements/evidence"
             // MCP-over-HTTP. Exempt from *this* middleware so an editor holding
             // only the MCP key can reach it — a key this middleware knows
             // nothing about. `handle_mcp` then authenticates every request

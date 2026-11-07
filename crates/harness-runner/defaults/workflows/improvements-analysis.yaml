@@ -1,0 +1,152 @@
+name: improvements-analysis
+internal: true
+description: |
+  The harness's own improvement review. The server starts it when a workflow
+  with `improvements:` has finished its set number of runs in a project; a
+  person never does, so it is hidden from every workflow list.
+
+  It reads what those runs went through — every step, its tool calls and
+  errors, what the review passes had to fix — and suggests changes that would
+  make the next runs smoother. Mostly to the project's repo (`CLAUDE.md` /
+  `AGENTS.md`, skills, checks), sometimes to the workflow itself. It runs in the
+  project's checkout so it can see what is already there, and changes nothing.
+
+provider: claude
+model: opus
+
+nodes:
+  - id: evidence
+    category: setup
+    bash: |
+      set -euo pipefail
+      if [ -z "${HARNESS_RUN_URL:-}" ] || [ -z "${HARNESS_RUN_TOKEN:-}" ]; then
+        echo "improvements: this run cannot reach the harness — set its public URL under Settings → General" >&2
+        exit 1
+      fi
+      curl -fsS --max-time 120 \
+        -H "Authorization: Bearer $HARNESS_RUN_TOKEN" \
+        "$HARNESS_RUN_URL/api/run/improvements/evidence" \
+        -o "$ARTIFACTS_DIR/evidence.md"
+      echo "evidence: $(wc -c < "$ARTIFACTS_DIR/evidence.md") bytes"
+
+  - id: suggest
+    category: planning
+    depends_on: [evidence]
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        summary:
+          type: string
+          description: Two or three sentences on how these runs went overall.
+        suggestions:
+          type: array
+          items:
+            type: object
+            properties:
+              title: { type: string }
+              target: { type: string, enum: [repo, workflow] }
+              category:
+                type: string
+                enum: [navigation, check, standard, skill, prune, access, workflow]
+              node:
+                type: string
+                description: The workflow node it concerns, when there is one.
+              problem: { type: string }
+              change: { type: string }
+              evidence:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    run_id: { type: string }
+                    node: { type: string }
+                    note: { type: string }
+                  required: [run_id, note]
+            required: [title, target, category, problem, change, evidence]
+      required: [suggestions]
+    prompt: |
+      You review how a workflow's recent runs went in this project and suggest
+      what would make the next runs go smoother. You change nothing: you only
+      suggest. A person reads each suggestion and decides whether to apply it.
+
+      ## What to read
+
+      1. `$ARTIFACTS_DIR/evidence.md` — the workflow's definition, a digest of
+         each run (every step: status, model, iterations, tool calls, failed
+         tool calls with their messages, tool calls repeated within a step, and
+         the end of each step's output), and the suggestions made before and
+         what became of them.
+      2. This project's checkout, your working directory. Before suggesting
+         anything, look at what is already there: `CLAUDE.md`, `AGENTS.md`,
+         `.claude/skills/`, `CONTRIBUTING.md` or a standards file, lint and
+         formatter config, pre-commit hooks, CI workflows. A suggestion to add
+         something that exists is wrong; one to wire up something that exists
+         but isn't used is often right.
+
+      ## What counts
+
+      Only problems that **recur** — in at least two of the runs — or one
+      that cost a great deal once. A single run's quirk is noise. Signals:
+
+      - a step searching a long time for a file or fact (many reads, many
+        `grep`/`find`/`ls` calls, the same file read again and again);
+      - a mistake a tool could have caught: a lint, type or test failure
+        found late, by validation or a review pass rather than by the step
+        that made it;
+      - what the review and fix passes keep correcting — that is what the
+        implementing step keeps getting wrong;
+      - tool calls that fail the same way across runs (a missing command, a
+        wrong path, a permission);
+      - information a step needed and couldn't reach;
+      - lines in `CLAUDE.md` / `AGENTS.md` that the runs show change nothing,
+        or that are out of date.
+
+      **Every suggestion must cite evidence**: run ids, the step, and what
+      happened there, from `evidence.md`. If you can't point at it, drop it.
+      No generic advice — nothing that would be true of any repo.
+
+      ## Where a fix belongs
+
+      Pick one category; it decides where the change goes.
+
+      - `navigation` — the agent took long to find something: a short pointer
+        in `CLAUDE.md` or `AGENTS.md`. Those files load into every run, so
+        they hold navigation pointers and little else; keep them short.
+      - `check` — a mechanical rule (a banned API, an import shape, a file
+        location, formatting): a lint rule, type, test, pre-commit hook or CI
+        job. A check can fail; a sentence in a file can't. If the check
+        exists but isn't wired into hooks or CI, the fix is to wire it.
+      - `standard` — a judgement call a reviewer should enforce: a rule in the
+        repo's standards file for reviewers, not more instructions for the
+        implementer, who is already under the most context pressure.
+      - `skill` — a multi-step procedure the agents keep rediscovering (how to
+        run this repo's tests against a database, how to add a migration): a
+        skill in `.claude/skills/<name>/SKILL.md`. Only Claude Code loads
+        skills. If the evidence shows the steps that need it run on another
+        agent, also add a one-line pointer to the skill in `AGENTS.md`.
+      - `prune` — remove or move lines from `CLAUDE.md` / `AGENTS.md` that
+        changed nothing. A file that gets shorter is a good outcome.
+      - `access` — information the agents couldn't reach (a log, a service):
+        how to make it reachable.
+      - `workflow` — the workflow itself is the cause: a step's prompt, its
+        model, or the order of steps. Name the step in `node`. Use
+        `target: workflow` for these and `target: repo` for everything else.
+
+      ## The suggestion itself
+
+      - `title`: what to change, in a few words.
+      - `problem`: what keeps happening, in plain words, with how often.
+      - `change`: a self-contained task a coding agent can carry out in one
+        pull request, as written — which file, what to add or remove, and why.
+        For a `skill`, include the skill's name, its description line, and
+        what its steps are.
+      - `evidence`: one entry per run that shows it.
+
+      Do not repeat a suggestion `evidence.md` lists as dismissed. If one
+      listed as applied didn't help — the same problem still shows — say so in
+      `problem` and suggest something different.
+
+      At most five suggestions, most valuable first. Fewer is better than
+      padding; none is the right answer when the runs went smoothly. Say how
+      the runs went in `summary` either way.

@@ -192,6 +192,9 @@ export function toYaml(wf: EditorWorkflow): string {
     model: wf.model,
     nodes: wf.nodes.map(nodeToDoc),
     ui: uiToDoc(wf.ui),
+    improvements: wf.improvements?.every
+      ? { every: wf.improvements.every }
+      : undefined,
   });
   return yaml.dump(doc, { lineWidth: 100, noRefs: true });
 }
@@ -237,5 +240,12 @@ export function fromYaml(text: string): EditorWorkflow {
     model: raw.model as string | undefined,
     nodes,
     ui: uiFromRaw(raw.ui),
+    improvements: improvementsFromRaw(raw.improvements),
   };
+}
+
+function improvementsFromRaw(raw: unknown): EditorWorkflow["improvements"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const every = (raw as { every?: unknown }).every;
+  return typeof every === "number" ? { every } : undefined;
 }

@@ -96,6 +96,11 @@ export interface TrashedWorkflow {
   expires_at: number;
 }
 
+/** `improvements:` — review the workflow's runs every N per project. */
+export interface ImprovementsConfig {
+  every: number;
+}
+
 export interface WorkflowSummary {
   name: string;
   source: AuthoringSource;
@@ -109,6 +114,8 @@ export interface WorkflowSummary {
   overrides_bundled: boolean;
   /** Declarative nav/report surfaces; absent for workflows that opt out. */
   ui?: WorkflowUi | null;
+  /** Present when the workflow has improvement suggestions switched on. */
+  improvements?: ImprovementsConfig | null;
   /** Absent when nobody recorded who wrote it. */
   authorship?: WorkflowAuthorship | null;
   /**
@@ -285,4 +292,7 @@ export interface EditorWorkflow {
   /** Declarative nav/report surfaces — round-tripped so the builder never
    *  silently drops a workflow's left-nav entry or report tab on save. */
   ui?: WorkflowUi | null;
+  /** Improvement suggestions from the workflow's own runs — round-tripped for
+   *  the same reason. */
+  improvements?: ImprovementsConfig | null;
 }

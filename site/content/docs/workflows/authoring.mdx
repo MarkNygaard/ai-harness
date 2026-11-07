@@ -96,6 +96,8 @@ model: kimi-code/kimi-for-coding
 ui:                           # optional — opt into UI surfaces (see below)
   nav: { label: "Security Audit", icon: shield }
   report: { label: "Findings", verdict_node: deep-review, scored: false }
+improvements:                 # optional — suggestions from its own runs (see below)
+  every: 10
 nodes:
   - id: first
     bash: "echo hi"
@@ -132,6 +134,32 @@ The per-item marks a user sets (`build`/`issue`/`ignore` or `checked`/`passed`/
 `failed`) persist per run and are readable back over MCP via `run_findings`
 (each finding's `finding_key` + `action`) — so a downstream agent can see, e.g.,
 which test scenarios a human passed vs failed.
+
+### `improvements:` — suggestions from the workflow's own runs
+
+```yaml
+improvements:
+  every: 10   # finished runs per project between reviews (3–100)
+```
+
+After every `every` finished runs of the workflow **in a project**, the harness
+reviews those runs and suggests what would make the next ones go smoother. It
+reads every step's tool calls, failures and repeated work, and what the review
+passes had to fix, in that project's checkout, so it sees the repo's
+`CLAUDE.md`, `AGENTS.md`, skills, lint config, hooks and CI as they are.
+
+Suggestions mostly target the **project's repo** — a navigation pointer in
+`CLAUDE.md` / `AGENTS.md`, a lint rule or hook for a mistake a tool could catch,
+a rule in a reviewers' standards file, a skill in `.claude/skills/` for a
+procedure agents keep rediscovering, lines to prune. Some target the
+**workflow**, naming the step whose prompt or model is the cause. Each cites the
+runs that show it; nothing without evidence is kept.
+
+Projects are reviewed separately, because the fixes land in one repo. Only real,
+finished runs count: completed or failed, not cancelled, not an A/B arm, and
+one whose agents used a model. Nothing is changed by the review itself — a
+person applies a suggestion (which starts a run that opens a pull request) or
+dismisses it.
 
 ## Node fields
 

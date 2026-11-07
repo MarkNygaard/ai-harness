@@ -179,6 +179,18 @@ it is created; deliveries go to its `url`. Webhooks and schedules are for
 administrators. In the built-in chat, `trigger_save` and `trigger_delete` wait
 for you to confirm.
 
+### Improvements
+
+What a workflow's recent runs suggest changing — see
+[`improvements:`](/docs/workflows/authoring) in the workflow authoring guide.
+
+| Tool | What it does |
+| --- | --- |
+| `improvements_list` | Suggestions, filtered by `workflow`, `project` or `status` (new, applied, dismissed), each with the runs that show it. Also how many runs each project has towards its next review |
+| `improvements_act` | `review` a workflow's latest runs in a project now; `apply` a repo suggestion, which starts a run that opens a pull request; `dismiss`, `reopen`, or `mark_applied` one you made in the editor |
+
+In the built-in chat, `improvements_act` waits for you to confirm.
+
 ### Schedules
 
 The same [schedules](/docs/schedules) as on the Triggers page: workflows that
