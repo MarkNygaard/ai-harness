@@ -1,0 +1,613 @@
+name: task
+description: |
+  Turn a Linear issue into a reviewed pull request, keeping the issue up to date
+  as the run goes. A leaner sibling of `idea-to-pr`, and the reference example of
+  `linear:` steps.
+
+  The issue's lifecycle lives in the graph instead of the binding's status map.
+  `start` moves the issue to In Progress before any tokens are spent, `ack` and
+  `post-plan` comment on it, `report-invalid` explains a failed validation, and
+  `in-review` moves it to In Review once the PR is open. `linear-summary` writes
+  the closing comment (`linear_comment: true`).
+
+  Sonnet explores, Opus plans, Haiku summarises the plan for the issue, Kimi
+  implements, validates and self-reviews, and a final build gate runs last. No
+  cross-family review passes; use `idea-to-pr` when you want those.
+
+  Start it from a trigger on the Triggers page. If you bind it under a project's
+  Linear setup instead, leave the binding's status map empty (no In-progress or
+  Review status), so the poller and these steps do not both move the issue.
+  Started by hand, with no issue, every `linear:` step is a no-op and the run
+  behaves like any other.
+
+  Status names must exist on the issue's team. Rename `In Progress` and
+  `In Review` here if your board calls them something else. `task-merge` is the
+  matching workflow for issues that are ready to merge.
+provider: pi
+model: kimi-code/kimi-for-coding
+nodes:
+  - id: start
+    category: linear
+    linear:
+      move_state: In Progress
+
+  - id: ack
+    category: linear
+    depends_on: [start]
+    linear:
+      comment: Picked up **$TASK_TITLE**. Exploring the codebase and writing a plan; I will post it here before implementing.
+
+  - id: explore
+    category: planning
+    artifact: exploration.md
+    provider: claude
+    model: sonnet
+    context: fresh
+    depends_on: [start]
+    prompt: |
+      You are a codebase explorer. Read the task and gather the context
+      a planner needs. Do NOT propose a solution and do NOT edit anything.
+
+      ## Task
+      $ARGUMENTS
+
+      ## Instructions
+
+      **Multi-repo workspaces:** if `$HARNESS_REPOS` is set, this project spans
+      several repos, each checked out in its own folder at the workspace root
+      (the JSON in `$HARNESS_REPOS` lists `folder`, `url`, `role`). Make NO
+      assumption about any repo's stack — inspect each (its manifest/build
+      files) to learn its language/framework. The task may live in any of them,
+      so explore **across all** and record, per relevant repo, which folder it
+      is and what it is. When `$HARNESS_REPOS` is unset, there's a single repo
+      at the root, as usual.
+
+      Use Read, Grep, Glob (and the Explore subagent if helpful) to map
+      the part of the codebase this task touches. Don't assume `src/` —
+      discover the actual layout. Capture:
+
+      - **Project structure**: where the relevant code lives.
+      - **Relevant files**: paths + a one-line purpose each.
+      - **Patterns to mirror**: existing conventions the implementation
+        must follow (error handling, module layout, test style, naming).
+        Quote short snippets with `file:line`.
+      - **Constraints**: rules from CLAUDE.md / AGENTS.md that apply.
+      - **Risks / edge cases**: prior art, gotchas, things that could break.
+
+      Write your findings to `$ARTIFACTS_DIR/exploration.md`. Be thorough
+      on *facts*, but do NOT design the solution — that's the planner's
+      job in the next node. Target 300–800 words.
+
+      Output a one-line confirmation and: <promise>EXPLORE-DONE</promise>
+
+  - id: create-plan
+    category: planning
+    artifact: plan.md
+    provider: claude
+    model: opus
+    effort: max
+    context: fresh
+    depends_on: [explore]
+    prompt: |
+      You are a planner. Turn the task + exploration into a concrete,
+      one-pass-implementable plan. PLAN ONLY — write no code.
+
+      This plan is the contract the implementer follows verbatim, so its
+      thoroughness sets the ceiling on the result. Design for how the change
+      could FAIL, not just the happy path — a good plan leaves the implementer
+      nothing to re-decide and a reviewer little to add.
+
+      ## Task
+      $ARGUMENTS
+
+      ## Exploration
+      Read `$ARTIFACTS_DIR/exploration.md` — the codebase facts are
+      already gathered there. Do NOT re-explore; trust the exploration
+      and spend your effort on the design. If one critical fact is
+      genuinely missing, do a single targeted read — not a broad sweep.
+
+      If this is a multi-repo workspace (`$HARNESS_REPOS` set, and the
+      exploration spans several repos), make every "Files to change" entry
+      name the **repo folder** it lives in, and design the change so the repos
+      stay consistent at their boundary (e.g. a frontend change that depends on
+      a backend change — call out the contract both sides must agree on).
+
+      ## Write the plan to `$ARTIFACTS_DIR/plan.md`
+
+      Use these sections:
+      - **Summary**: one paragraph — what's being built and the approach.
+      - **Files to change**: bullet list, path + reason per file.
+      - **Patterns to mirror**: the conventions from exploration this
+        change must follow.
+      - **Step-by-step tasks**: a numbered list (`1.`, `2.`, …) — each names
+        the file(s) and the concrete edit. Granular enough that an implementer
+        follows them without re-deciding the approach. The numbering is the
+        contract the implementer reports progress against, so keep one concrete
+        edit per number.
+      - **Robustness & edge cases**: the failure modes and edge cases this
+        must handle — error paths, all relevant inputs/events (not just the
+        obvious one), and any reliability assumption (e.g. how data/flags
+        actually reach the code). Decide these HERE so review doesn't have to.
+      - **Testing strategy**: unit tests to add/update + edge cases.
+      - **Validation commands**: the project's verify chain (from
+        CLAUDE.md / AGENTS.md).
+      - **Not building (scope limits)**: what to leave out — and one line of
+        *why* each cut is safe for THIS task. Do NOT cut something just because
+        the task's wording is literal or it's "extra"; weigh it against the
+        task's intent. If a cut is genuinely uncertain, FLAG it for the human
+        rather than silently dropping it.
+      - **Acceptance criteria**: how we know it's done.
+
+      Prefer minimal, surgical changes that fit existing patterns over
+      new abstractions — but "minimal" means no needless scope, not skipping
+      robustness the task implies. Honor CLAUDE.md / AGENTS.md.
+
+      ## When there's a real fork, optimize for the outcome
+      Some tasks hit a genuine decision point — a quick path that compromises
+      versus a more involved path that's clearly better. ALWAYS choose the path
+      with the best end result: the most correct, robust, and maintainable
+      design, even when it is the larger task. Implementation effort, speed, and
+      token cost are NOT factors in this choice — never pick the weaker approach
+      because the better one is more work. This governs HOW to build what's in
+      scope; it is not licence to expand scope (the "Not building" limits still
+      hold). If the better path is materially larger or riskier, still choose it,
+      but call out the trade-off in the plan so the human sees what was decided.
+
+      After writing plan.md, output a one-line summary and:
+      <promise>PLAN-DONE</promise>
+
+  - id: plan-brief
+    category: planning
+    depends_on: [create-plan]
+    provider: claude
+    model: haiku
+    context: fresh
+    prompt: |-
+      Read `$ARTIFACTS_DIR/plan.md` and summarise it for the Linear issue it
+      was written for. Markdown, at most 8 lines:
+
+      - one sentence on the approach,
+      - the files or areas that will change, as a short bullet list,
+      - anything the plan deliberately leaves out.
+
+      Output ONLY the summary. No preamble, no headings above level 3, no
+      closing remarks.
+
+  - id: post-plan
+    category: linear
+    depends_on: [plan-brief]
+    linear:
+      comment: |-
+        ### Plan
+
+        $plan-brief.output
+
+        Implementing now.
+
+  - id: install-deps
+    category: setup
+    depends_on: [post-plan]
+    timeout: 300000
+    bash: |
+      set -uo pipefail
+      # Generated sources are gitignored, so a fresh worktree never has them —
+      # and the scripts that write them are wired into `build`, not into
+      # `typecheck` / `lint` / `test`. Without this an agent runs a check that
+      # cannot pass in a tree nobody has built, reads the failure as its own,
+      # and starts hand-stubbing generated files. Run whichever of these
+      # conventional script names the project actually defines ($1 = pkg
+      # manager). Non-fatal: a project whose codegen needs credentials this
+      # container lacks should still get a run, with the reason on the record.
+      codegen_in() {
+        [ -f package.json ] || return 0
+        for script in prebuild codegen generate db:generate; do
+          grep -q "\"$script\"[[:space:]]*:" package.json 2>/dev/null || continue
+          echo "  ↳ codegen: $script"
+          case "$1" in
+            # -r reaches a workspace package (the script often lives in the app,
+            # not the root); --if-present keeps the other packages quiet.
+            pnpm) pnpm -r --if-present run "$script" ;;
+            npm)  npm run --if-present "$script" ;;
+            *)    "$1" run "$script" ;;
+          esac
+          if [ $? -ne 0 ]; then
+            echo "  ↳ WARNING: \`$script\` failed. Generated sources are missing,"
+            echo "    so typecheck/lint/test may fail for reasons unrelated to the"
+            echo "    change. Do NOT hand-write or stub generated files — say so."
+          fi
+          return 0
+        done
+      }
+      # Detect the lockfile in $1 and install. Runs in a subshell so the cd is
+      # scoped; returns the install command's exit code. Ordered most- to
+      # least-specific: a repo with several lockfiles gets its primary one.
+      install_in() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          if [ -f pnpm-lock.yaml ]; then
+            echo "[$1] pnpm"
+            pnpm install --frozen-lockfile || exit 1
+            codegen_in pnpm
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+            echo "[$1] bun"; bun install --frozen-lockfile || exit 1; codegen_in bun
+          elif [ -f yarn.lock ]; then
+            echo "[$1] yarn"; yarn install --immutable 2>/dev/null || yarn install --frozen-lockfile || exit 1
+            codegen_in yarn
+          elif [ -f package-lock.json ]; then
+            echo "[$1] npm"; npm ci || exit 1; codegen_in npm
+          elif [ -f Cargo.toml ]; then echo "[$1] cargo"; cargo fetch --locked || exit 1
+          elif [ -f uv.lock ]; then echo "[$1] uv"; uv sync --locked || exit 1
+          elif [ -f poetry.lock ]; then echo "[$1] poetry"; poetry install --no-interaction || exit 1
+          elif [ -f go.mod ]; then echo "[$1] go"; go mod download || exit 1
+          elif [ -f Gemfile.lock ]; then echo "[$1] bundler"; bundle install || exit 1
+          elif [ -f composer.lock ]; then echo "[$1] composer"; composer install --no-interaction || exit 1
+          # .NET pins versions in the project files, so there is no lockfile to
+          # match on — and the solution is as often under `src/` as at the root,
+          # so `dotnet restore` with no argument finds nothing. Locate it.
+          elif proj=$(find . -maxdepth 3 \( -name '*.sln' -o -name '*.slnx' \) -print -quit 2>/dev/null) && [ -n "$proj" ]; then
+            echo "[$1] dotnet ($proj)"; dotnet restore "$proj" || exit 1
+          elif proj=$(find . -maxdepth 3 \( -name '*.csproj' -o -name '*.fsproj' \) -print -quit 2>/dev/null) && [ -n "$proj" ]; then
+            echo "[$1] dotnet ($proj)"; dotnet restore "$proj" || exit 1
+          else
+            echo "[$1] no recognized lockfile — skipping. If this needs setup, \
+            add the command to its CLAUDE.md so downstream agents can run it."
+          fi )
+      }
+      # Multi-repo: install each repo's deps in its folder. Single-repo: root.
+      rc=0
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        while read -r folder; do
+          install_in "$folder" || rc=1
+        done < <(echo "$HARNESS_REPOS" | jq -r '.[].folder')
+      else
+        install_in . || rc=1
+      fi
+      exit $rc
+
+  - id: implement-tasks
+    category: implementation
+    command: implement-tasks
+    depends_on: [install-deps]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+
+  - id: validate
+    category: validation
+    command: validate
+    depends_on: [implement-tasks]
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        passed: { type: boolean }
+        summary: { type: string }
+      required: [passed]
+
+  - id: report-invalid
+    category: linear
+    depends_on: [validate]
+    when: "$validate.output.passed != 'true'"
+    linear:
+      comment: |-
+        Validation did not pass, so no pull request was opened.
+
+        $validate.output.summary
+
+  - id: abort-on-invalid
+    category: validation
+    depends_on: [report-invalid]
+    trigger_rule: all_done
+    when: "$validate.output.passed != 'true'"
+    cancel: "refusing to open a PR — validation did not return a pass. An empty summary below means its verdict could not be read, rather than a check having failed. $validate.output.summary"
+
+  - id: record-verified-head
+    category: validation
+    depends_on: [validate]
+    bash: |
+      set -uo pipefail
+      OUT="$ARTIFACTS_DIR/.verified-heads"
+      : > "$OUT"
+      record() {
+        ( cd "$1" 2>/dev/null || exit 0
+          # Multi-repo roots aren't git repos — skip them cleanly.
+          git rev-parse --is-inside-work-tree >/dev/null 2>&1 || exit 0
+          echo "$1 $(git rev-parse HEAD)" )
+      }
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        while read -r folder; do
+          record "$folder" >> "$OUT"
+        done < <(echo "$HARNESS_REPOS" | jq -r '.[].folder')
+      else
+        record . >> "$OUT"
+      fi
+      cat "$OUT"
+
+  - id: finalize-pr
+    category: delivery
+    command: finalize-pr
+    depends_on: [record-verified-head]
+    when: "$validate.output.passed == 'true'"
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+
+  - id: verify-pr-base
+    category: delivery
+    depends_on: [finalize-pr]
+    bash: |
+      set -uo pipefail
+      # Verify every PR this run opened targets its intended base; re-target if
+      # drifted. `.pr-list` has one entry per PR ({folder, number, url, base,
+      # head}); single-repo is a 1-entry list with folder ".".
+      check_pr_base() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          # Multirepo roots and the "." fallback below aren't git repos —
+          # running gh/git there fails ("not a git repository"). Skip cleanly.
+          git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+            || { echo "[$1] not a git repo — skipping"; exit 0; }
+          info=$(gh pr view --json number,baseRefName 2>/dev/null) \
+            || { echo "[$1] no PR for current branch — skipping"; exit 0; }
+          num=$(echo "$info" | jq -r '.number')
+          actual=$(echo "$info" | jq -r '.baseRefName')
+          if [ "$actual" != "$2" ]; then
+            echo "Base mismatch on PR #$num ($1): expected=$2 actual=$actual — re-targeting" >&2
+            gh pr edit "$num" --base "$2"
+          else
+            echo "PR #$num ($1) base verified: $2"
+          fi )
+      }
+      LIST="$ARTIFACTS_DIR/.pr-list"
+      if [ -s "$LIST" ]; then
+        while read -r entry; do
+          folder=$(echo "$entry" | jq -r '.folder')
+          base=$(echo "$entry" | jq -r '.base')
+          check_pr_base "$folder" "$base"
+        done < <(jq -c '.[]' "$LIST")
+      else
+        # No list (e.g. nothing changed) — verify the current-dir PR if present.
+        check_pr_base "." "$BASE_BRANCH"
+      fi
+
+  - id: in-review
+    category: linear
+    depends_on: [verify-pr-base]
+    linear:
+      move_state: In Review
+
+  - id: pi-review-fix-loop
+    category: validation
+    depends_on: [in-review]
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      max_iterations: 5
+      until: PI_REVIEW_CLEAN
+      prompt: |
+        You are performing a self-review-and-fix pass on a PR that you
+        (or an earlier iteration of you) just implemented. This may be
+        one of up to 5 such passes — look at the commit history to see
+        whether earlier passes have already run. Stop early when you
+        have no more substantive issues to fix.
+
+        ## Read the change set first
+
+        `cat $ARTIFACTS_DIR/.pr-list` — the PR(s) this run opened, as JSON
+        `{folder, number, url, base, head}`. Usually one entry; a multi-repo
+        change has several (one per repo it touched). **Review the whole change
+        as a unit** — a fix may span repos (e.g. a frontend calling a backend
+        endpoint that changed in the same task), so read every repo's diff
+        before judging any of it:
+
+        - For each entry: `cd "$folder"` (single-repo = `.`),
+          `gh pr view --json title,body,baseRefName,headRefName,additions,deletions`,
+          and `git diff origin/<base>...HEAD` (use that entry's `base`).
+        - Hold all the diffs together when you assess correctness — check the
+          repos agree at their boundary (API shapes, payloads, contracts).
+
+        Look at any prior iteration's commits — your previous self has
+        already addressed those issues. Don't re-flag the same thing.
+
+        Also read `$ARTIFACTS_DIR/plan.md` — the plan you built against.
+        Fixing where the code *deviates* from the plan is in scope; *adding*
+        things the plan deliberately left out (its "Not building" section) is
+        not. If a scope cut looks wrong for the task, note it in your summary
+        for the human rather than expanding scope here.
+
+        ## Review categories
+
+        This is the only review pass in this workflow. Fix clarity and
+        dead-code issues where you see them, but lead with the categories
+        below, which are about correctness and observability rather than style.
+
+        Run a self-review against these dimensions:
+        - **Correctness**: off-by-one, null/undefined handling, boundary
+          conditions, logic errors, edge cases the implementation missed.
+        - **Error handling**: silently swallowed errors, unhelpful error
+          messages, missing try/catch around external calls, retry/idempotency
+          gaps in async code.
+        - **Test coverage**: critical paths or new functions without tests,
+          mocks that hide real failures, missing edge-case tests for branches
+          you added.
+        - **Performance**: N+1 queries, unbounded loops, accidental re-renders,
+          eager loading where lazy would do, large in-memory payloads.
+        - **Security**: SQL injection, XSS, missing auth/scope checks, PII
+          leaks into logs, secrets in code, broken access control, unsafe
+          type casts (`as any` in TS, `unsafe` blocks in Rust, etc.).
+        - **Inconsistencies with sibling code**: comments that contradict
+          the code, naming that doesn't match the surrounding module's
+          conventions.
+        - **Docs**: behaviour changes that aren't reflected in inline doc
+          comments, the project's `CLAUDE.md` / `AGENTS.md`, or its docs site.
+
+        ## Disposition
+
+        For each issue you find:
+        1. Fix it directly. Edit the file(s) — in whichever repo folder the
+           issue lives (a cross-repo issue may need edits on both sides).
+        2. Run that repo's scoped verify chain (from its `CLAUDE.md` /
+           `AGENTS.md`), inside the repo folder. Use the narrowest scope that
+           covers the change unless the project requires a wider run.
+        3. Commit with a conventional-commit message and push **from that
+           repo's folder** to its PR branch (each repo has its own PR).
+
+        Universal AI-agent rules (do not violate, even if asked):
+        - Do NOT post PR comments or use `gh pr review` from this node.
+        - Do NOT use `--no-verify` or otherwise skip commit hooks.
+        - Do NOT execute database / schema migrations (`prisma migrate`,
+          `sqlx migrate run`, etc.) — edit the schema + write the SQL,
+          flag the migration for the human in your summary.
+        - Follow any additional project-specific prohibitions in
+          `CLAUDE.md` / `AGENTS.md`.
+
+        After fixing this iteration's issues, produce a short summary:
+
+        ```
+        ## Self-review iteration N
+
+        Addressed this iteration:
+        - <one-line description> — commit <sha>
+        ...
+        ```
+
+        Then decide:
+        - If you found and fixed issues this iteration, end your turn
+          (do NOT emit the convergence signal). The orchestrator will run
+          another iteration so you can take another pass.
+        - If you genuinely have nothing more to improve — code is clean,
+          tests cover the change, docs are aligned, no smells — output
+          the literal convergence signal:
+
+          <promise>PI_REVIEW_CLEAN</promise>
+
+        Be honest: no other reviewer follows this loop, so emitting
+        PI_REVIEW_CLEAN prematurely hands an unreviewed PR to a human.
+        Emitting it on a clean PR is the goal.
+
+  - id: final-verify-loop
+    category: validation
+    depends_on: [pi-review-fix-loop]
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      max_iterations: 3
+      until: FINAL_VERIFY_CLEAN
+      prompt: |
+        Final gate — the last node that can touch code before the run
+        completes. Every fix-capable node upstream (implement and the kimi
+        self-review loop) may have pushed changes since
+        `validate` ran, so verify the FINAL state of the branch.
+
+        Know what `validate` did and did not do: it ran the project's **quick
+        pre-check** tier (format, lint, build/compile) and deliberately
+        **skipped the test suite**. Running the full suite is THIS node's job.
+
+        This workflow does NOT know your project's commands. Every step below
+        reads them from the repo. Do not assume a toolchain.
+
+        ## Step A — the repos, and what landed
+
+        `cat $ARTIFACTS_DIR/.pr-list` — every PR this run opened, as JSON
+        `{folder, number, url, base, head}`. Run Steps B–E **inside each entry's
+        `folder`** (`cd "$folder"`), using that entry's `base` wherever a step
+        says `$BASE_BRANCH`, and that repo's OWN verify chain. One entry is the
+        common case; a multi-repo change has several, each possibly a different
+        stack. Only emit the clean signal once **every** entry is green and you
+        pushed nothing this iteration.
+
+        In each folder, `git log --oneline -8` to see what landed after validate.
+
+        ## Step B — find that repo's verify chain
+
+        The authoritative commands live in the repo's `CLAUDE.md` / `AGENTS.md`
+        (auto-loaded into your context) — look for a "Build & verify" /
+        "Validation commands" section. If it documents two tiers (a quick
+        pre-check vs. a full gate), run the **full gate** tier; that is what this
+        node exists for.
+
+        If the repo documents no chain, infer it from the manifest — format/lint,
+        type-check or compile, and the full test suite:
+        - `Cargo.toml` → clippy over all targets with warnings denied, then the
+          workspace test run
+        - `package.json` → the package manager named by the lockfile
+          (`pnpm-lock.yaml`→pnpm, `bun.lockb`→bun, `yarn.lock`→yarn, else npm),
+          then its type-check, lint, test and build scripts
+        - `pyproject.toml` / `uv.lock` → ruff, the type checker, pytest
+        - `*.sln` / `*.csproj` → `dotnet build`, then `dotnet test`
+        - Mixed → each ecosystem's chain, for the parts the change touched
+
+        **Scope the chain to what the change touched.** Get the changed set with
+        `git diff --name-only origin/$BASE_BRANCH...HEAD` and run the narrowest
+        chain that still covers it — if the repo's docs say how to scope
+        (per-package, per-crate, per-app), follow that. A repo-wide run where a
+        scoped one covers the diff is waste, and it can trip on **pre-existing**
+        drift in files this PR never touched, which is not a failure of this
+        change. Never reformat unrelated files to make a repo-wide check pass. If
+        a repo's diff is empty, there is nothing to gate there — say so, move on.
+
+        **Don't redo what `validate` already proved.**
+        `cat $ARTIFACTS_DIR/.verified-heads` — lines of `<folder> <sha>`, the
+        commit validate certified per repo. If this repo's `git rev-parse HEAD`
+        still equals its recorded sha, nothing was pushed since, so the quick
+        pre-check tier is already green on this exact tree: run only the tier
+        validate skipped, the **test suite**. If HEAD differs, or the file or its
+        entry is missing, run the full gate.
+
+        ## Step C — iteration scoping and convergence
+
+        This loop runs up to 3 iterations.
+
+        - **First pass, or the pass that declares clean** → run the full chain
+          for the scope determined in Step B. This is the authoritative gate.
+        - **A pass that runs only because the previous iteration pushed a fix**
+          → you may narrow to what the fix touched, to check it fast: compute it
+          with `git diff --name-only HEAD~1...HEAD` and run the smallest unit the
+          repo defines (package, crate, app, project) for those paths. If the fix
+          touched a manifest or lockfile with no single owning unit, run the full
+          gate for that iteration instead.
+        - **Convergence rule**: only emit `<promise>FINAL_VERIFY_CLEAN</promise>`
+          after a pass where you ran the FULL chain for the determined scope AND
+          it was clean AND you pushed nothing this iteration. If your last action
+          was a narrowed re-check that passed, do one full pass first.
+
+        ## Step D — on failure
+
+        If anything fails (compile error, lint, format, test):
+        - Fix the root cause. Never disable a check, never use `--no-verify`,
+          never skip hooks, never run DB migrations.
+        - Commit the fix with a conventional-commit message and push to the
+          PR branch.
+        - End your turn WITHOUT the signal — the loop runs again so you
+          re-verify from a clean slate.
+
+        ## Step E — final-iteration failure
+
+        If the chain still fails on the final iteration, do NOT emit the
+        signal. The run will fail — that is the correct outcome: the branch
+        HEAD is broken and a human needs to look. Summarize what's still red.
+
+  - id: linear-summary
+    category: delivery
+    depends_on: [final-verify-loop]
+    provider: claude
+    model: haiku
+    context: fresh
+    linear_comment: true
+    prompt: |-
+      Write the closing comment for the Linear issue this run worked on.
+
+      `cat $ARTIFACTS_DIR/.pr-list` lists the pull request(s) the run opened
+      as JSON `{folder, number, url, base, head}`. For each, from its folder,
+      run `gh pr view <number> --json title,url,additions,deletions` and
+      `git log --oneline origin/<base>..HEAD`.
+
+      Output Markdown, at most 10 lines:
+
+      - the PR link(s) and title(s),
+      - two or three bullets on what changed, in terms a reviewer of the
+        issue understands,
+      - anything left for a human (a flagged scope cut, a migration to run).
+
+      Output ONLY the comment. Do NOT post it yourself; the harness posts
+      this output to the issue when the run completes.

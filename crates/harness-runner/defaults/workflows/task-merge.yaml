@@ -1,0 +1,209 @@
+name: task-merge
+description: |
+  Merge the pull request of a Linear issue that is ready to merge, and keep the
+  issue in step. The companion to `task`: start it from a trigger on your
+  "Ready for merge" status.
+
+  Before merging, `review` asks GitHub whether the PR's review is approved, and
+  the `approval` route reads the answer. With no approval yet (a review still
+  required, or changes requested), nothing merges and the run does not fail:
+  `back-to-review` moves the issue to In Review and `explain` says why on the
+  issue. With approval, or in a repository that requires no review, the PR is
+  brought up to date, conflicts are resolved if there are any, CI is waited on,
+  and the PR is squash-merged. `done` then moves the issue to Done.
+
+  A merge that GitHub refuses for another reason (a red check, a missing
+  required check) is reported on the issue and cancels the run, leaving the
+  issue where it is for a human.
+
+  `$ARGUMENTS` names the PR as a number, a URL, or the Linear issue whose linked
+  PR should be merged. Status names must exist on the issue's team. Rename
+  `In Review` and `Done` here if your board calls them something else. Started
+  by hand, with no issue, every `linear:` step is a no-op.
+provider: pi
+model: kimi-code/kimi-for-coding
+
+nodes:
+  # 1. Which PR, and is it open and mergeable.
+  - id: resolve-pr
+    category: planning
+    provider: claude
+    model: haiku
+    context: fresh
+    prompt: |
+      Identify the GitHub pull request to merge from this input:
+
+      $ARGUMENTS
+
+      The input may be a PR number, a PR URL, or a Linear issue identifier whose
+      linked PR should be merged. Use `gh` to resolve it to a single PR in this
+      repository. If the input is a Linear issue, find its associated PR (e.g.
+      `gh pr list --search "<issue-id>"`, or the PR whose branch/title references
+      it).
+
+      Inspect it:
+        gh pr view <pr> --json number,state,mergeable,mergeStateStatus,baseRefName,headRefName,title
+
+      Then emit ONLY this JSON verdict (no prose). If you cannot find a PR, set
+      `pr` to "" and `state` to "CLOSED".
+    output_format:
+      type: object
+      properties:
+        pr: { type: string, description: "PR number, or \"\" if none found" }
+        base: { type: string, description: "base branch (e.g. main)" }
+        title: { type: string }
+        state: { type: string, enum: ["OPEN", "MERGED", "CLOSED"] }
+        mergeable: { type: string, enum: ["MERGEABLE", "CONFLICTING", "UNKNOWN"] }
+      required: [pr, state, mergeable]
+
+  - id: abort-no-pr
+    category: planning
+    depends_on: [resolve-pr]
+    when: "$resolve-pr.output.state != 'OPEN'"
+    cancel: "No open PR to merge for this input (not found, or already merged/closed)."
+
+  # 2. GitHub's own word on the review. No reviewDecision means the repository
+  #    requires no review, which is as good as approved.
+  - id: review
+    category: validation
+    depends_on: [resolve-pr]
+    when: "$resolve-pr.output.state == 'OPEN'"
+    timeout: 60000
+    bash: |
+      set -euo pipefail
+      decision=$(gh pr view "$resolve-pr.output.pr" --json reviewDecision --jq '.reviewDecision // ""')
+      case "$decision" in
+        APPROVED|"") approved=true ;;
+        *) approved=false ;;
+      esac
+      jq -cn --arg d "$decision" --argjson a "$approved" '{approved: $a, decision: $d}'
+
+  - id: approval
+    category: validation
+    depends_on: [review]
+    route:
+      routes:
+        - name: merge
+          description: The PR is approved, or the repository requires no review.
+          when: "$review.output.approved == 'true'"
+        - name: back-to-review
+          description: A review is still required, or changes were requested.
+      default: back-to-review
+
+  # 3a. Not approved: not a failure, just not ready. Back to review.
+  - id: back-to-review
+    category: linear
+    depends_on: [approval]
+    when: "$approval.output.route == 'back-to-review'"
+    linear:
+      move_state: In Review
+
+  - id: explain
+    category: linear
+    depends_on: [back-to-review]
+    linear:
+      comment: |-
+        Not merged: the pull request has no approved review yet (GitHub says `$review.output.decision`). Moved back to In Review. Move it to ready for merge again once it is approved.
+
+  # 3b. Approved: resolve conflicts if there are any, then merge.
+  - id: resolve-conflicts
+    category: implementation
+    depends_on: [approval]
+    when: "$approval.output.route == 'merge' && $resolve-pr.output.mergeable == 'CONFLICTING'"
+    loop:
+      provider: pi
+      model: kimi-code/kimi-for-coding
+      until: CONFLICTS_RESOLVED
+      max_iterations: 3
+      prompt: |
+        PR #$resolve-pr.output.pr ("$resolve-pr.output.title") has merge
+        conflicts with its base branch `$resolve-pr.output.base`. Resolve them:
+
+        1. Check the PR branch out into this worktree:
+           `gh pr checkout $resolve-pr.output.pr`
+        2. Bring in the latest base — follow the project's convention in
+           CLAUDE.md / AGENTS.md (merge vs rebase); default to
+           `git fetch origin && git merge origin/$resolve-pr.output.base`.
+        3. Resolve EVERY conflict correctly — preserve the intent of both sides.
+           Never delete code or tests just to silence a conflict. Honor the
+           project's prohibitions (no `--no-verify`, no skipped hooks, etc.).
+        4. Run the project's QUICK check (format / lint / build — see CLAUDE.md /
+           AGENTS.md) to confirm the merged branch still compiles. Do NOT run the
+           full test suite here.
+        5. Commit the merge and push to the PR's branch (`git push`).
+
+        When the branch is conflict-free, builds, and is pushed, emit the literal
+        signal:
+        <promise>CONFLICTS_RESOLVED</promise>
+        If you cannot resolve the conflicts safely, end your turn WITHOUT the
+        signal and explain what is blocked — the run then fails rather than
+        merging a broken branch.
+
+  - id: merge
+    category: delivery
+    provider: claude
+    model: haiku
+    depends_on: [approval, resolve-conflicts]
+    trigger_rule: none_failed_min_one_success
+    when: "$approval.output.route == 'merge'"
+    prompt: |
+      Merge PR #$resolve-pr.output.pr into `$resolve-pr.output.base`. Its review
+      is already approved (or not required).
+
+      1. Re-check its state now:
+         `gh pr view $resolve-pr.output.pr --json state,mergeable,mergeStateStatus`
+         - If it is no longer OPEN, report that and stop (already merged).
+         - If it is still CONFLICTING, do NOT merge — report the conflict.
+      2. Bring the branch up to date with its base if it's behind — branch
+         protection may require up-to-date branches, and CI should run against the
+         post-merge state. This is a no-op when the branch is already current:
+           `gh pr update-branch $resolve-pr.output.pr`
+         If it reports a conflict (the base moved in a conflicting way), do NOT
+         merge — report it; a fresh conflict-resolution pass is needed.
+      3. Wait for CI to finish and PASS before merging — never merge on
+         in-progress or red checks:
+           `gh pr checks $resolve-pr.output.pr --watch --fail-fast`
+         - If a check failed or was cancelled: do NOT merge. Report the failing
+           check(s) and stop.
+         - If it reports that **no checks** exist ("no checks reported"), CI may
+           simply not have registered yet after a fresh push. Wait 30 seconds
+           and run `gh pr checks $resolve-pr.output.pr` again, up to 4 times.
+           If checks appear, go back to watching them. If there are still none,
+           the repository has no CI for this PR: continue and say so.
+      4. Squash-merge and delete the branch:
+           `gh pr merge $resolve-pr.output.pr --squash --delete-branch`
+         If GitHub refuses, do NOT merge another way — report what it said.
+      5. Never bypass branch protection, never admin-override, never `--no-verify`,
+         and do not use `--auto`.
+
+      Emit ONLY this JSON verdict:
+    output_format:
+      type: object
+      properties:
+        merged: { type: boolean, description: "true if merged" }
+        summary: { type: string, description: "one line: merged, or why not" }
+      required: [merged, summary]
+
+  - id: done
+    category: linear
+    depends_on: [merge]
+    when: "$merge.output.merged == 'true'"
+    linear:
+      move_state: Done
+
+  # A merge GitHub refused for a reason other than review: say so on the issue
+  # and stop, leaving it where it is for a human or a rerun.
+  - id: report-not-merged
+    category: linear
+    depends_on: [merge]
+    when: "$merge.output.merged != 'true'"
+    linear:
+      comment: |-
+        Not merged: $merge.output.summary
+
+  - id: not-merged
+    category: delivery
+    depends_on: [report-not-merged]
+    trigger_rule: all_done
+    when: "$approval.output.route == 'merge' && $merge.output.merged != 'true'"
+    cancel: "The PR was not merged, so this issue stays where it is. See the merge step for why."

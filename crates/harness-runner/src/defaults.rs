@@ -26,6 +26,11 @@ const WORKFLOWS: &[(&str, &str)] = &[
         "merge-pr",
         include_str!("../defaults/workflows/merge-pr.yaml"),
     ),
+    ("task", include_str!("../defaults/workflows/task.yaml")),
+    (
+        "task-merge",
+        include_str!("../defaults/workflows/task-merge.yaml"),
+    ),
     (
         "revise-pr",
         include_str!("../defaults/workflows/revise-pr.yaml"),
@@ -768,6 +773,132 @@ mod tests {
         assert!(names.contains(&"merge-pr"));
         assert!(names.contains(&"architect"));
         assert!(names.contains(&"revise-pr"));
+        assert!(names.contains(&"task"));
+        assert!(names.contains(&"task-merge"));
+    }
+
+    /// Plays `task-merge` against scripted outputs, as if from a Linear issue.
+    struct Scripted {
+        outputs: std::collections::HashMap<&'static str, &'static str>,
+        calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl Scripted {
+        fn new(outputs: &[(&'static str, &'static str)]) -> Self {
+            Self {
+                outputs: outputs.iter().copied().collect(),
+                calls: Default::default(),
+            }
+        }
+        /// The Linear actions taken, in order.
+        fn linear(&self) -> Vec<String> {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(_, body)| body.starts_with("linear:"))
+                .map(|(_, body)| body.clone())
+                .collect()
+        }
+        fn ran(&self, id: &str) -> bool {
+            self.calls.lock().unwrap().iter().any(|(n, _)| n == id)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl harness_dag::NodeRunner for Scripted {
+        async fn execute(
+            &self,
+            req: harness_dag::NodeRequest<'_>,
+        ) -> Result<harness_dag::NodeOutput, harness_dag::RunnerError> {
+            let body = match &req.body {
+                harness_dag::NodeBody::Linear(a) => format!("linear:{}", a.summary()),
+                other => format!("{other:?}"),
+            };
+            self.calls
+                .lock()
+                .unwrap()
+                .push((req.node_id.to_string(), body));
+            Ok(harness_dag::NodeOutput {
+                text: self
+                    .outputs
+                    .get(req.node_id)
+                    .copied()
+                    .unwrap_or("")
+                    .to_string(),
+                success: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    async fn run_task_merge(
+        outputs: &[(&'static str, &'static str)],
+    ) -> (harness_dag::RunReport, Scripted) {
+        let wf = harness_dag::parse_workflow(default_workflow("task-merge").unwrap()).unwrap();
+        let runner = Scripted::new(outputs);
+        let vars = harness_dag::VarContext::new()
+            .set("ARGUMENTS", "AIH-7")
+            .set("ISSUE_ID", "issue-uuid");
+        let report = harness_dag::run_workflow(&wf, &runner, &vars)
+            .await
+            .unwrap();
+        (report, runner)
+    }
+
+    const OPEN_PR: &str =
+        r#"{"pr":"42","base":"main","title":"t","state":"OPEN","mergeable":"MERGEABLE"}"#;
+
+    /// "Ready for merge" with no approved review is not a failed run: the issue
+    /// goes back to In Review and says why, and nothing is merged.
+    #[tokio::test]
+    async fn task_merge_sends_an_unapproved_pr_back_to_review_without_failing() {
+        let (report, runner) = run_task_merge(&[
+            ("resolve-pr", OPEN_PR),
+            (
+                "review",
+                r#"{"approved":false,"decision":"REVIEW_REQUIRED"}"#,
+            ),
+        ])
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Completed);
+        assert!(!runner.ran("merge"), "an unapproved PR is never merged");
+        let linear = runner.linear();
+        assert_eq!(linear.len(), 2, "{linear:?}");
+        assert!(linear[0].contains("In Review"), "{linear:?}");
+        assert!(linear[1].starts_with("linear:comment"), "{linear:?}");
+    }
+
+    #[tokio::test]
+    async fn task_merge_merges_an_approved_pr_and_moves_the_issue_to_done() {
+        let (report, runner) = run_task_merge(&[
+            ("resolve-pr", OPEN_PR),
+            ("review", r#"{"approved":true,"decision":"APPROVED"}"#),
+            ("merge", r#"{"merged":true,"summary":"merged"}"#),
+        ])
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Completed);
+        assert!(runner.ran("merge"));
+        assert!(!runner.ran("resolve-conflicts"), "no conflicts to resolve");
+        let linear = runner.linear();
+        assert_eq!(linear.len(), 1, "{linear:?}");
+        assert!(linear[0].contains("Done"), "{linear:?}");
+    }
+
+    /// Approved but refused (a red check): reported on the issue, and the run
+    /// cancels so the issue stays where it is.
+    #[tokio::test]
+    async fn task_merge_reports_a_refused_merge_and_cancels() {
+        let (report, runner) = run_task_merge(&[
+            ("resolve-pr", OPEN_PR),
+            ("review", r#"{"approved":true,"decision":"APPROVED"}"#),
+            ("merge", r#"{"merged":false,"summary":"check `ci` failed"}"#),
+        ])
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Cancelled);
+        let linear = runner.linear();
+        assert_eq!(linear.len(), 1, "{linear:?}");
+        assert!(linear[0].starts_with("linear:comment"), "{linear:?}");
     }
 
     /// A node that derives its scope from `origin/$BASE_BRANCH` must also say
