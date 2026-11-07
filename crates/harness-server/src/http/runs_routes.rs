@@ -1952,15 +1952,28 @@ pub async fn rerun_run(
             format!("run `{id}` has no project — cannot rerun"),
         );
     };
+    // The Linear issue the original worked on. It isn't on the run row, but
+    // the claim that started the run names it — the same record
+    // `rearm_linear_claim` re-arms below. Without it the rerun has no
+    // `$ISSUE_ID`, and every `linear:` step quietly does nothing: the issue is
+    // never moved or commented on, though the run is plainly about it.
+    let issue_id = match state.linear_claim_store().await {
+        Ok(claims) => claims
+            .claim_for_run(&id)
+            .await
+            .ok()
+            .flatten()
+            .map(|c| c.issue_id)
+            .filter(|i| !i.trim().is_empty()),
+        Err(_) => None,
+    };
     let req = CreateRunRequest {
         triggered_by: trigger.user_id.clone(),
         trigger_source: trigger.source.clone(),
         trigger_actor: trigger.actor.clone(),
         workflow: detail.run.workflow_name.clone(),
         title: detail.run.title.clone(),
-        // A rerun does not inherit one: the issue a run came from is not kept
-        // on the row, and inventing it here would be a guess.
-        issue_id: None,
+        issue_id,
         description: detail.run.description.clone().unwrap_or_default(),
         args: String::new(),
         real: true,
