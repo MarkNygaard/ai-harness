@@ -155,6 +155,11 @@ procedure agents keep rediscovering, lines to prune. Some target the
 **workflow**, naming the step whose prompt or model is the cause. Each cites the
 runs that show it; nothing without evidence is kept.
 
+A problem that is still open from an earlier review isn't written up again:
+the new runs are added to the existing suggestion, which then shows how many
+reviews have found it. Dismissed suggestions aren't made again, and an applied
+one whose problem still shows is reported as not having worked.
+
 Projects are reviewed separately, because the fixes land in one repo. Only real,
 finished runs count: completed or failed, not cancelled, not an A/B arm, and
 one whose agents used a model. Nothing is changed by the review itself — a

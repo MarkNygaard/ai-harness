@@ -44,6 +44,11 @@ nodes:
           items:
             type: object
             properties:
+              same_as:
+                type: string
+                description: >-
+                  The id of an open earlier suggestion this is the same problem
+                  as. Then only `evidence` is needed.
               title: { type: string }
               target: { type: string, enum: [repo, workflow] }
               category:
@@ -143,10 +148,22 @@ nodes:
         what its steps are.
       - `evidence`: one entry per run that shows it.
 
-      Do not repeat a suggestion `evidence.md` lists as dismissed. If one
-      listed as applied didn't help — the same problem still shows — say so in
-      `problem` and suggest something different.
+      ## What was suggested before
 
-      At most five suggestions, most valuable first. Fewer is better than
-      padding; none is the right answer when the runs went smoothly. Say how
-      the runs went in `summary` either way.
+      `evidence.md` lists earlier suggestions by what became of them.
+
+      - **Open** ones nobody has acted on yet. If one still happens in these
+        runs, don't write it up again: answer with its id in `same_as` and
+        only the new `evidence` (`title`, `problem` and `change` may be left
+        empty). That adds these runs to it, and tells the person it keeps
+        happening — the strongest reason to act on it.
+      - **Dismissed** ones a person decided against. Don't suggest them again,
+        in any wording.
+      - **Applied** ones were acted on. If the problem still shows, the change
+        didn't work: say so in a new suggestion's `problem` and suggest
+        something different.
+
+      At most five new suggestions, most valuable first; `same_as` answers
+      don't count towards that. Fewer is better than padding; none is the right
+      answer when the runs went smoothly. Say how the runs went in `summary`
+      either way.

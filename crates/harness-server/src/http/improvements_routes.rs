@@ -335,7 +335,18 @@ async fn finish_review_run(state: &Arc<RunsState>, detail: &RunDetail) {
                 .find(|n| n.node_id == "suggest")
                 .map(|n| n.output.as_str())
                 .unwrap_or_default();
-            parse_suggestions(output, &review.run_ids)
+            let open: Vec<String> = improvements
+                .list_suggestions(&SuggestionFilter {
+                    workflow: Some(review.workflow.clone()),
+                    project: Some(review.project.clone()),
+                    status: Some(SUGGESTION_NEW.to_string()),
+                })
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| s.id)
+                .collect();
+            parse_suggestions(output, &review.run_ids, &open)
         }
         other => Err(format!("the review run {other}")),
     };
@@ -377,6 +388,9 @@ struct RawAnswer {
 
 #[derive(Debug, Deserialize)]
 struct RawSuggestion {
+    /// An open suggestion this is the same problem as.
+    #[serde(default)]
+    same_as: Option<String>,
     #[serde(default)]
     title: String,
     #[serde(default)]
@@ -424,9 +438,14 @@ fn extract_json(text: &str) -> Option<Value> {
 /// with no evidence from the runs it read is dropped, as the reviewer was told
 /// it would be. Unknown targets and categories are normalised rather than
 /// rejected — a slightly-off label shouldn't lose a good suggestion.
+///
+/// `same_as` is honoured only for one of `open` — a suggestion of this
+/// workflow and project nobody has acted on yet. An answer pointing anywhere
+/// else is read as a new suggestion, and needs a title and change like one.
 pub(crate) fn parse_suggestions(
     output: &str,
     run_ids: &[String],
+    open: &[String],
 ) -> Result<(Option<String>, Vec<NewSuggestion>), String> {
     let value = extract_json(output).ok_or("the review's answer held no JSON")?;
     let answer: RawAnswer =
@@ -440,7 +459,11 @@ pub(crate) fn parse_suggestions(
             .collect();
         let title = s.title.trim().to_string();
         let change = s.change.trim().to_string();
-        if evidence.is_empty() || title.is_empty() || change.is_empty() {
+        let same_as = s
+            .same_as
+            .map(|id| id.trim().to_string())
+            .filter(|id| open.contains(id));
+        if evidence.is_empty() || (same_as.is_none() && (title.is_empty() || change.is_empty())) {
             continue;
         }
         let category = s.category.trim().to_ascii_lowercase();
@@ -460,6 +483,7 @@ pub(crate) fn parse_suggestions(
         };
         debug_assert!(TARGETS.contains(&target.as_str()));
         out.push(NewSuggestion {
+            same_as,
             target,
             category,
             node: s
@@ -615,6 +639,70 @@ pub(crate) fn run_digest(detail: &RunDetail, activity: &[ActivityEvent]) -> Stri
     out
 }
 
+/// What was suggested before, by what became of it. Open ones carry their id:
+/// a review that sees one again answers with `same_as` instead of writing it
+/// up a second time.
+pub(crate) fn earlier_suggestions(earlier: &[ImprovementSuggestion]) -> String {
+    if earlier.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("## Earlier suggestions\n\n");
+
+    let open: Vec<_> = earlier
+        .iter()
+        .filter(|s| s.status == SUGGESTION_NEW)
+        .take(30)
+        .collect();
+    if !open.is_empty() {
+        out.push_str(
+            "### Open — not acted on yet\n\nIf one of these still happens in the runs below, \
+             don't write it up again: answer with its id in `same_as` and only the new \
+             evidence.\n\n",
+        );
+        for s in open {
+            out.push_str(&format!(
+                "- `{}` — {} (seen in {} review{}) — {}\n",
+                s.id,
+                s.title,
+                s.seen_count,
+                if s.seen_count == 1 { "" } else { "s" },
+                clip(&s.problem, 200)
+            ));
+        }
+        out.push('\n');
+    }
+    let dismissed: Vec<_> = earlier
+        .iter()
+        .filter(|s| s.status == SUGGESTION_DISMISSED)
+        .take(15)
+        .collect();
+    if !dismissed.is_empty() {
+        out.push_str(
+            "### Dismissed — a person decided against these; don't suggest them again\n\n",
+        );
+        for s in dismissed {
+            out.push_str(&format!("- {} — {}\n", s.title, clip(&s.problem, 200)));
+        }
+        out.push('\n');
+    }
+    let applied: Vec<_> = earlier
+        .iter()
+        .filter(|s| s.status == SUGGESTION_APPLIED)
+        .take(15)
+        .collect();
+    if !applied.is_empty() {
+        out.push_str(
+            "### Applied — a change was made for these; if the problem still shows, it \
+             didn't work\n\n",
+        );
+        for s in applied {
+            out.push_str(&format!("- {} — {}\n", s.title, clip(&s.problem, 200)));
+        }
+        out.push('\n');
+    }
+    out
+}
+
 /// Everything a review reads, as Markdown.
 async fn evidence(state: &Arc<RunsState>, review: &ImprovementReview) -> Result<String, Refusal> {
     let runs = state
@@ -652,18 +740,7 @@ async fn evidence(state: &Arc<RunsState>, review: &ImprovementReview) -> Result<
         })
         .await
         .map_err(internal)?;
-    if !earlier.is_empty() {
-        out.push_str("## Earlier suggestions\n\n");
-        for s in earlier.iter().take(25) {
-            out.push_str(&format!(
-                "- [{}] {} — {}\n",
-                s.status,
-                s.title,
-                clip(&s.problem, 200)
-            ));
-        }
-        out.push('\n');
-    }
+    out.push_str(&earlier_suggestions(&earlier));
 
     for id in &review.run_ids {
         if out.len() >= EVIDENCE_TOTAL {
@@ -1071,10 +1148,59 @@ mod tests {
                   "evidence": [{ "run_id": "run-zzz", "note": "?" }] }
             ]
         });
-        let (summary, s) = parse_suggestions(&answer.to_string(), &ids()).unwrap();
+        let (summary, s) = parse_suggestions(&answer.to_string(), &ids(), &[]).unwrap();
         assert_eq!(summary.as_deref(), Some("Mostly smooth."));
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].title, "Point at migrations");
+    }
+
+    #[test]
+    fn same_as_is_kept_only_for_an_open_suggestion() {
+        let answer = json!({ "suggestions": [
+            { "same_as": "open-1", "evidence": [{ "run_id": "run-a", "note": "again" }] },
+            { "same_as": "someone-elses", "evidence": [{ "run_id": "run-a", "note": "n" }] },
+            { "same_as": "gone", "title": "t", "target": "repo", "category": "check",
+              "problem": "p", "change": "c", "evidence": [{ "run_id": "run-b", "note": "n" }] }
+        ]});
+        let open = vec!["open-1".to_string()];
+        let (_, s) = parse_suggestions(&answer.to_string(), &ids(), &open).unwrap();
+        assert_eq!(
+            s.len(),
+            2,
+            "a bare same_as for an unknown id has nothing to store"
+        );
+        assert_eq!(s[0].same_as.as_deref(), Some("open-1"));
+        assert_eq!(s[1].same_as, None, "an unknown id is read as new");
+        assert_eq!(s[1].title, "t");
+    }
+
+    #[test]
+    fn earlier_suggestions_show_open_ids_and_group_by_status() {
+        let make = |id: &str, status: &str, seen: i32| -> ImprovementSuggestion {
+            serde_json::from_value(json!({
+                "id": id, "review_id": "r", "workflow": "w", "project": "p",
+                "target": "repo", "category": "check", "node": null,
+                "title": format!("title {id}"), "problem": "p", "change": "c",
+                "evidence": [], "status": status, "applied_run_id": null,
+                "seen_count": seen, "last_seen_at": "2026-11-07T00:00:00Z",
+                "created_at": "2026-11-07T00:00:00Z", "updated_at": "2026-11-07T00:00:00Z"
+            }))
+            .unwrap()
+        };
+        let text = earlier_suggestions(&[
+            make("s-open", "new", 3),
+            make("s-no", "dismissed", 1),
+            make("s-done", "applied", 1),
+        ]);
+        assert!(
+            text.contains("`s-open` — title s-open (seen in 3 reviews)"),
+            "{text}"
+        );
+        assert!(text.contains("same_as"));
+        assert!(text.contains("### Dismissed") && text.contains("title s-no"));
+        assert!(!text.contains("`s-no`"), "only open ones need an id");
+        assert!(text.contains("### Applied") && text.contains("title s-done"));
+        assert!(earlier_suggestions(&[]).is_empty());
     }
 
     #[test]
@@ -1084,10 +1210,10 @@ mod tests {
             format!("```json\n{body}\n```"),
             format!("Here you go:\n{body}\nThanks."),
         ] {
-            let (_, s) = parse_suggestions(&text, &ids()).unwrap();
+            let (_, s) = parse_suggestions(&text, &ids(), &[]).unwrap();
             assert_eq!(s.len(), 1, "{text}");
         }
-        assert!(parse_suggestions("no json here", &ids()).is_err());
+        assert!(parse_suggestions("no json here", &ids(), &[]).is_err());
     }
 
     #[test]
@@ -1100,7 +1226,7 @@ mod tests {
             { "title": "c", "target": "workflow", "category": "check",
               "problem": "p", "change": "c", "evidence": [{ "run_id": "run-a", "note": "n" }] }
         ]});
-        let (_, s) = parse_suggestions(&answer.to_string(), &ids()).unwrap();
+        let (_, s) = parse_suggestions(&answer.to_string(), &ids(), &[]).unwrap();
         assert_eq!(
             (s[0].target.as_str(), s[0].node.as_deref()),
             ("workflow", Some("implement"))
@@ -1173,7 +1299,8 @@ mod tests {
             "title": "Point at migrations", "problem": "4 of 10 runs searched for them",
             "change": "Add `db/migrations` to AGENTS.md under Layout.",
             "evidence": [{ "run_id": "run-a", "note": "n" }],
-            "status": "new", "applied_run_id": null,
+            "status": "new", "applied_run_id": null, "seen_count": 1,
+            "last_seen_at": "2026-11-07T00:00:00Z",
             "created_at": "2026-11-07T00:00:00Z", "updated_at": "2026-11-07T00:00:00Z"
         }))
         .expect("suggestion");

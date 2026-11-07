@@ -10,7 +10,10 @@
 //!   the analysis run, and how it ended. At most one is `running` per
 //!   (workflow, project), enforced by a partial unique index, so a burst of
 //!   finishing runs can't start two.
-//! - `harness_improvement_suggestions` — what a review found.
+//! - `harness_improvement_suggestions` — what a review found. A later review
+//!   that sees an open suggestion's problem again doesn't add a second row:
+//!   it adds its runs to that suggestion's evidence and counts it as seen
+//!   again. A suggestion that keeps coming back is the one most worth doing.
 
 use chrono::{DateTime, Utc};
 use serde::Serialize;
@@ -65,6 +68,8 @@ CREATE TABLE IF NOT EXISTS harness_improvement_suggestions (
     evidence       jsonb NOT NULL DEFAULT '[]'::jsonb,
     status         text NOT NULL DEFAULT 'new',
     applied_run_id text,
+    seen_count     integer NOT NULL DEFAULT 1,
+    last_seen_at   timestamptz NOT NULL DEFAULT now(),
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now()
 )";
@@ -77,7 +82,8 @@ const REVIEW_COLUMNS: &str =
     "id, workflow, project, run_ids, run_id, status, summary, error, created_at, finished_at";
 
 const SUGGESTION_COLUMNS: &str = "id, review_id, workflow, project, target, category, node, \
-     title, problem, change, evidence, status, applied_run_id, created_at, updated_at";
+     title, problem, change, evidence, status, applied_run_id, seen_count, last_seen_at, \
+     created_at, updated_at";
 
 /// One review of a workflow's runs in a project.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -121,6 +127,11 @@ pub struct ImprovementSuggestion {
     pub status: String,
     /// The run started to carry it out, when one was.
     pub applied_run_id: Option<String>,
+    /// How many reviews found this problem: 1 when first suggested, one more
+    /// each time a later review saw it again while it was still open.
+    pub seen_count: i32,
+    /// When a review last found it.
+    pub last_seen_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -128,6 +139,11 @@ pub struct ImprovementSuggestion {
 /// A suggestion as a review produces it.
 #[derive(Debug, Clone)]
 pub struct NewSuggestion {
+    /// An open suggestion this is the same problem as. Its evidence is added
+    /// there instead of a new row being written — unless that suggestion is
+    /// no longer open (or never belonged to this workflow and project), in
+    /// which case this is stored as new after all.
+    pub same_as: Option<String>,
     pub target: String,
     pub category: String,
     pub node: Option<String>,
@@ -231,6 +247,29 @@ impl ImprovementStore {
             return Ok(false);
         };
         for s in suggestions {
+            if let Some(existing) = &s.same_as {
+                let merged = sqlx::query(
+                    "UPDATE harness_improvement_suggestions
+                     SET evidence = evidence || $4::jsonb,
+                         seen_count = seen_count + 1,
+                         last_seen_at = now(),
+                         updated_at = now()
+                     WHERE id = $1 AND workflow = $2 AND project = $3 AND status = 'new'",
+                )
+                .bind(existing)
+                .bind(&review.workflow)
+                .bind(&review.project)
+                .bind(Json(&s.evidence))
+                .execute(&mut *tx)
+                .await?;
+                if merged.rows_affected() > 0 {
+                    continue;
+                }
+                // No longer open, or not one of ours: it's new after all.
+                if s.title.trim().is_empty() || s.change.trim().is_empty() {
+                    continue;
+                }
+            }
             sqlx::query(
                 "INSERT INTO harness_improvement_suggestions
                     (id, review_id, workflow, project, target, category, node, title,
@@ -350,7 +389,7 @@ impl ImprovementStore {
              WHERE ($1::text IS NULL OR workflow = $1)
                AND ($2::text IS NULL OR project = $2)
                AND ($3::text IS NULL OR status = $3)
-             ORDER BY created_at DESC, id"
+             ORDER BY last_seen_at DESC, created_at DESC, id"
         ))
         .bind(&filter.workflow)
         .bind(&filter.project)
@@ -414,6 +453,7 @@ mod tests {
 
     fn suggestion(title: &str) -> NewSuggestion {
         NewSuggestion {
+            same_as: None,
             target: "repo".into(),
             category: "navigation".into(),
             node: None,
@@ -534,5 +574,74 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(store.list_suggestions(&new_only).await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn a_problem_seen_again_grows_its_suggestion_instead_of_duplicating_it() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = ImprovementStore::connect(&url).await.expect("connect");
+        let wf = unique("wf");
+        let first = store
+            .begin_review(&unique("rev"), &wf, "p", &["r1".to_string()])
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .finish_review(&first.id, REVIEW_DONE, None, None, &[suggestion("a")])
+            .await
+            .unwrap();
+        let filter = SuggestionFilter {
+            workflow: Some(wf.clone()),
+            ..Default::default()
+        };
+        let original = store.list_suggestions(&filter).await.unwrap().remove(0);
+
+        let second = store
+            .begin_review(&unique("rev"), &wf, "p", &["r2".to_string()])
+            .await
+            .unwrap()
+            .unwrap();
+        let again = NewSuggestion {
+            same_as: Some(original.id.clone()),
+            title: String::new(),
+            change: String::new(),
+            evidence: serde_json::json!([{ "run_id": "r2", "note": "again" }]),
+            ..suggestion("ignored")
+        };
+        store
+            .finish_review(&second.id, REVIEW_DONE, None, None, &[again])
+            .await
+            .unwrap();
+        let listed = store.list_suggestions(&filter).await.unwrap();
+        assert_eq!(listed.len(), 1, "no second row");
+        assert_eq!(listed[0].seen_count, 2);
+        assert_eq!(listed[0].evidence.0.as_array().map(Vec::len), Some(2));
+
+        // Once dismissed it's no longer open: a same_as with nothing to say
+        // stores nothing, rather than resurrecting it as a blank row.
+        store
+            .set_suggestion_status(&original.id, SUGGESTION_DISMISSED, None)
+            .await
+            .unwrap();
+        let third = store
+            .begin_review(&unique("rev"), &wf, "p", &["r3".to_string()])
+            .await
+            .unwrap()
+            .unwrap();
+        let stale = NewSuggestion {
+            same_as: Some(original.id.clone()),
+            title: String::new(),
+            change: String::new(),
+            ..suggestion("ignored")
+        };
+        store
+            .finish_review(&third.id, REVIEW_DONE, None, None, &[stale])
+            .await
+            .unwrap();
+        assert_eq!(store.list_suggestions(&filter).await.unwrap().len(), 1);
     }
 }
