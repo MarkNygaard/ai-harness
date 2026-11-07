@@ -305,7 +305,8 @@ export function useSaveLinearSource(project: string | null) {
       qc.invalidateQueries({
         queryKey: ["linear", "source", project, variables.workflow],
       });
-      qc.invalidateQueries({ queryKey: ["linear", "sources", project] });
+      // The prefix, so the Triggers page's every-project list refreshes too.
+      qc.invalidateQueries({ queryKey: ["linear", "sources"] });
       qc.invalidateQueries({ queryKey: ["linear", "check", project] });
     },
   });
@@ -327,7 +328,8 @@ export function useDeleteLinearSource(project: string | null) {
       qc.invalidateQueries({
         queryKey: ["linear", "source", project, workflow],
       });
-      qc.invalidateQueries({ queryKey: ["linear", "sources", project] });
+      // The prefix, so the Triggers page's every-project list refreshes too.
+      qc.invalidateQueries({ queryKey: ["linear", "sources"] });
       qc.invalidateQueries({ queryKey: ["linear", "check", project] });
       // It went to the bin, so the bin changed too.
       qc.invalidateQueries({ queryKey: ["trash"] });

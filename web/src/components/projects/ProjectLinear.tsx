@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  setLinearTriggerHome,
+  useLinearTriggerHome,
+} from "@/lib/trigger-prefs";
+import {
   IconChevronRight,
   IconHierarchy2,
   IconPlus,
@@ -174,6 +178,7 @@ function StateSelect({
  * connect one instead.
  */
 export function ProjectLinearPanel({ project }: { project: string }) {
+  const home = useLinearTriggerHome();
   // Gate on an account that can actually authenticate (an app install or a
   // legacy key) — one holding only OAuth client details isn't one yet. Any
   // usable account is enough: which one this project uses is chosen inside.
@@ -194,6 +199,41 @@ export function ProjectLinearPanel({ project }: { project: string }) {
           Connect one under Integrations
         </Link>{" "}
         to start this project&rsquo;s runs from Linear issues.
+      </div>
+    );
+  }
+
+  if (home === "triggers") {
+    return (
+      <div className="flex flex-col gap-3">
+        <p className="text-sm text-muted-foreground">
+          This project&rsquo;s Linear triggers are managed on the Triggers page,
+          alongside schedules and every other way a run starts.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            render={
+              <Link
+                to={`/triggers?project=${encodeURIComponent(project)}&kind=linear`}
+              />
+            }
+          >
+            Open this project&rsquo;s triggers
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setLinearTriggerHome("project")}
+          >
+            Manage them here instead
+          </Button>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Which one you use is a per-browser choice, under Settings →
+          Preferences.
+        </p>
       </div>
     );
   }
@@ -220,7 +260,7 @@ export function ProjectLinearPanel({ project }: { project: string }) {
  * Hidden while there is only one account — there is nothing to choose, and the
  * harness resolves to it automatically.
  */
-function AccountSelect({
+export function AccountSelect({
   project,
   accounts,
 }: {
@@ -398,7 +438,8 @@ export function ProjectLinearBindings({
                     {/* Team moved to the heading above, so this is the status it
                         triggers from — the other thing that identifies a binding. */}
                     <span className="truncate text-[11px] text-muted-foreground">
-                      starts from {resolveStateName(s.team_id, s.source_state_id)}
+                      starts from{" "}
+                      {resolveStateName(s.team_id, s.source_state_id)}
                       {s.linear_project_id &&
                         ` · only ${s.linear_project_name ?? "one Linear project"}`}
                       {s.trigger_label && ` · labelled ${s.trigger_label}`}
@@ -521,7 +562,7 @@ export function ProjectLinearBindings({
   );
 }
 
-function BindingForm({
+export function BindingForm({
   project,
   workflow,
   fixedWorkflow,

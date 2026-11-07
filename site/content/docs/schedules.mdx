@@ -8,13 +8,15 @@ Monday sweep of new Sentry errors, a monthly dependency check: you want these
 to happen on time, not because someone remembered to ask. A **schedule** runs a
 workflow against a project at the times you set.
 
-**Schedules** in the sidebar lists them, with when each one runs next and a
-link to the run it last started. Anyone signed in can see the list.
-Administrators create, change, pause and delete schedules.
+A schedule is one kind of [trigger](/docs/triggers#the-triggers-page), so
+schedules live on the **Triggers** page in the sidebar, beside Linear triggers.
+Filter it to **Schedule** to see only these, each with when it runs next. Anyone
+signed in can see them. Administrators create, change, pause and delete
+schedules.
 
 ## Creating one
 
-Choose **New schedule** and fill in:
+Choose **New trigger**, then **Schedule**, and fill in:
 
 - **Name**, which also titles each run, followed by the date: "Weekly INP
   report — 2026-10-26".
@@ -29,8 +31,9 @@ Choose **New schedule** and fill in:
 - **Task**, the text the run gets as `$ARGUMENTS`, the same as a task typed
   into the dashboard. Say what the run should produce, and for what period.
 
-**Run now** starts a run straight away without moving the schedule. Use it to
-try a new schedule out instead of waiting for Monday.
+**Run now**, on a schedule's own page, starts a run straight away without
+moving the schedule. Use it to try a new schedule out instead of waiting for
+Monday.
 
 You can also manage schedules from the [built-in chat](/docs/chat) ("run the
 INP report every Monday at 08:00") or an editor connected over

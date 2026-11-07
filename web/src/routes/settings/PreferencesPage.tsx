@@ -7,6 +7,11 @@ import { useOperationsNav } from "@/components/AppSidebar";
 import { LinearAccountSection } from "@/components/settings/LinearAccountSection";
 import { useAuthStatus } from "@/lib/auth";
 import { resetNavHidden, toggleNavHidden, useHiddenNav } from "@/lib/nav-prefs";
+import {
+  type LinearTriggerHome,
+  setLinearTriggerHome,
+  useLinearTriggerHome,
+} from "@/lib/trigger-prefs";
 import { useTheme } from "@/lib/theme";
 import type { ThemePreference } from "@/lib/theme";
 
@@ -62,27 +67,57 @@ const THEMES: { value: ThemePreference; label: string }[] = [
   { value: "dark", label: "Dark" },
 ];
 
-/** Segmented control — three options, all worth seeing at once. */
-function ThemeChoice() {
-  const { preference, setPreference } = useTheme();
+/** Segmented control — a few options, all worth seeing at once. */
+function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
   return (
     <div className="flex rounded-md border border-input p-0.5">
-      {THEMES.map((t) => (
+      {options.map((o) => (
         <button
-          key={t.value}
+          key={o.value}
           type="button"
-          onClick={() => setPreference(t.value)}
-          aria-pressed={preference === t.value}
+          onClick={() => onChange(o.value)}
+          aria-pressed={value === o.value}
           className={
-            preference === t.value
+            value === o.value
               ? "rounded-sm bg-secondary px-3 py-1 text-[12px] font-medium"
               : "rounded-sm px-3 py-1 text-[12px] text-muted-foreground hover:text-foreground"
           }
         >
-          {t.label}
+          {o.label}
         </button>
       ))}
     </div>
+  );
+}
+
+function ThemeChoice() {
+  const { preference, setPreference } = useTheme();
+  return (
+    <Segmented options={THEMES} value={preference} onChange={setPreference} />
+  );
+}
+
+const LINEAR_HOMES: { value: LinearTriggerHome; label: string }[] = [
+  { value: "triggers", label: "Triggers page" },
+  { value: "project", label: "Project tab" },
+];
+
+function LinearTriggerHomeChoice() {
+  const home = useLinearTriggerHome();
+  return (
+    <Segmented
+      options={LINEAR_HOMES}
+      value={home}
+      onChange={setLinearTriggerHome}
+    />
   );
 }
 
@@ -157,6 +192,15 @@ export function PreferencesPage() {
             description="System follows your operating system, and keeps following it as it changes."
           >
             <ThemeChoice />
+          </Row>
+        </Section>
+
+        <Section title="Triggers">
+          <Row
+            title="Manage Linear triggers on"
+            description="The Triggers page lists them with every other kind. The project tab is the older home, on each project's own page. Both edit the same triggers."
+          >
+            <LinearTriggerHomeChoice />
           </Row>
         </Section>
 

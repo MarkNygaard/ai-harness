@@ -1,9 +1,23 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
-import { IconPlus } from "@tabler/icons-react";
+import { useState } from "react";
+import {
+  Link,
+  useLocation,
+  useNavigate,
+  useSearchParams,
+} from "react-router-dom";
+import { IconChevronRight, IconPlus, IconX } from "@tabler/icons-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -11,149 +25,348 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ProjectLinearBindings } from "@/components/projects/ProjectLinear";
-import { useAllLinearSources, useLinearConnections } from "@/lib/linear";
-import { useProjects } from "@/lib/projects";
+import { TriggerKindIcon } from "@/components/triggers/TriggerKindIcon";
+import { formatWhen } from "@/components/triggers/ScheduleForm";
+import { useLinearDiscovery } from "@/lib/linear";
+import { useRestoreTrash } from "@/lib/projects";
+import { useLinearTriggerHome } from "@/lib/trigger-prefs";
+import {
+  TRIGGER_KINDS,
+  type Trigger,
+  type TriggerKind,
+  type TriggerState,
+  describeLinearWhen,
+  describeScheduleWhen,
+  filterTriggers,
+  kindMeta,
+  triggerHref,
+  useTriggers,
+} from "@/lib/triggers";
+import type { LinearSource } from "@/types/linear";
+
+/** Base UI's Select needs a concrete value for "no filter". */
+const ALL = "__all__";
+
+/** Set by a trigger's page after a delete, so the list can offer Undo. */
+export interface DeletedState {
+  deleted?: { label: string; trashId: string | null };
+}
 
 /**
- * Every Linear trigger in one place, grouped by project.
+ * Every trigger, of every kind, in one flat list.
  *
- * The bindings themselves stay keyed by `(project, workflow)` — this is a
- * different way into the same rows, not a different model. Each group renders
- * the project tab's own editor rather than a second copy of the form: the
- * binding has eighteen fields and two places to maintain them is one too many.
- *
- * Project-first, unlike Schedules, because a binding's team and status options
- * come from *that project's* Linear connection. There is no team list to show
- * until a project is chosen.
+ * Not grouped by project: a project is one column and one filter among
+ * several. The filters live in the URL, so `/schedules` can redirect to
+ * `?kind=schedule` and a project page can link to its own triggers.
  */
 export function TriggersPage() {
-  const sources = useAllLinearSources();
-  const projects = useProjects();
-  const connections = useLinearConnections();
-  const accounts = connections.data ?? [];
-  const [adding, setAdding] = useState<string | null>(null);
+  const triggers = useTriggers();
+  const home = useLinearTriggerHome();
+  const [params, setParams] = useSearchParams();
+  const [picking, setPicking] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const deleted = (location.state as DeletedState | null)?.deleted;
 
-  // Projects that already have a binding, in the order the server returned
-  // them (project, then workflow), so the page reads the same every visit.
-  const withBindings = useMemo(() => {
-    const seen: string[] = [];
-    for (const s of sources.data ?? []) {
-      if (!seen.includes(s.project)) seen.push(s.project);
-    }
-    return seen;
-  }, [sources.data]);
+  const kind = (params.get("kind") as TriggerKind | null) ?? null;
+  const project = params.get("project");
+  const workflow = params.get("workflow");
+  const q = params.get("q") ?? "";
+  const setParam = (key: string, value: string | null) => {
+    const next = new URLSearchParams(params);
+    if (value) next.set(key, value);
+    else next.delete(key);
+    setParams(next, { replace: true });
+  };
 
-  const unbound = (projects.data ?? [])
-    .map((p) => p.name)
-    .filter((n) => !withBindings.includes(n));
-
-  const usable = accounts.some((c) => c.mode !== "none");
+  const all = triggers.data ?? [];
+  const rows = filterTriggers(all, { kind, project, workflow, q });
+  const projects = [...new Set(all.map((t) => t.project))].sort();
+  const workflows = [...new Set(all.map((t) => t.workflow))].sort();
+  const filtered = !!(kind || project || workflow || q);
 
   return (
-    <AppShell title="Triggers">
-      <div className="flex flex-col gap-6 p-4">
-        <p className="max-w-3xl text-sm text-muted-foreground">
-          Which Linear teams start runs, and what they start. A trigger maps one
-          team to one workflow in one project: the source status that fires it,
-          the rest of the status map, and the base branch. Work begins when an
-          issue is both <strong>delegated to the harness in Linear</strong> and
-          sitting in that source status.
-        </p>
+    <AppShell
+      title="Triggers"
+      viewActions={
+        <Button size="sm" onClick={() => setPicking(true)}>
+          <IconPlus /> New trigger
+        </Button>
+      }
+    >
+      <div className="mx-auto flex max-w-5xl flex-col gap-5 p-6">
+        <div className="sm:pr-64">
+          <h1 className="text-lg font-semibold">Triggers</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            What starts runs: Linear issues and schedules. Each trigger starts
+            one workflow in one project.
+          </p>
+        </div>
 
-        {connections.isLoading || sources.isLoading ? (
-          <p className="text-xs text-muted-foreground">Loading…</p>
-        ) : !usable ? (
-          <div className="rounded-md border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-            No Linear account is connected.{" "}
-            <Link
-              to="/settings/integrations"
-              className="text-foreground underline underline-offset-2"
-            >
-              Connect one under Integrations
-            </Link>{" "}
-            to start runs from Linear issues.
-          </div>
-        ) : (
-          <>
-            {sources.isError && (
-              <p className="text-xs text-destructive">
-                {sources.error.message}
-              </p>
-            )}
-
-            {withBindings.length === 0 && adding === null && (
-              <p className="text-sm text-muted-foreground">
-                No triggers yet. Pick a project below to add the first one.
-              </p>
-            )}
-
-            {withBindings.map((project) => (
-              <section key={project} className="flex flex-col gap-2">
-                <div className="flex items-center gap-2">
-                  <h2 className="text-sm font-semibold">{project}</h2>
-                  <Badge variant="outline" className="text-[10px]">
-                    {
-                      (sources.data ?? []).filter((s) => s.project === project)
-                        .length
-                    }{" "}
-                    {(sources.data ?? []).filter((s) => s.project === project)
-                      .length === 1
-                      ? "trigger"
-                      : "triggers"}
-                  </Badge>
-                </div>
-                <ProjectLinearBindings project={project} accounts={accounts} />
-              </section>
-            ))}
-
-            {/* A project with no binding has nothing for the loop above to
-                render, so adding one needs its own way in. */}
-            {adding !== null && (
-              <section className="flex flex-col gap-2">
-                <h2 className="text-sm font-semibold">{adding}</h2>
-                <ProjectLinearBindings project={adding} accounts={accounts} />
-              </section>
-            )}
-
-            {unbound.length > 0 && (
-              <div className="flex items-center gap-2">
-                <Select
-                  value={adding ?? ""}
-                  onValueChange={(v) => setAdding(v || null)}
-                >
-                  <SelectTrigger className="w-64">
-                    <SelectValue placeholder="Add a trigger for…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {unbound.map((n) => (
-                      <SelectItem key={n} value={n}>
-                        {n}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                {adding !== null && (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setAdding(null)}
-                  >
-                    Done
-                  </Button>
-                )}
-              </div>
-            )}
-
-            {unbound.length === 0 && withBindings.length > 0 && (
-              <p className="text-[11px] text-muted-foreground">
-                <IconPlus className="inline size-3" /> Every project has at
-                least one trigger. Add more inside a project above.
-              </p>
-            )}
-          </>
+        {deleted && (
+          <UndoDelete
+            deleted={deleted}
+            onDone={() => navigate(".", { replace: true, state: null })}
+          />
         )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterSelect
+            value={kind}
+            placeholder="All kinds"
+            options={TRIGGER_KINDS.map((k) => ({
+              value: k.kind,
+              label: k.label,
+            }))}
+            onChange={(v) => setParam("kind", v)}
+          />
+          <FilterSelect
+            value={project}
+            placeholder="All projects"
+            options={projects.map((p) => ({ value: p, label: p }))}
+            onChange={(v) => setParam("project", v)}
+          />
+          <FilterSelect
+            value={workflow}
+            placeholder="All workflows"
+            options={workflows.map((w) => ({ value: w, label: w }))}
+            onChange={(v) => setParam("workflow", v)}
+          />
+          <Input
+            value={q}
+            onChange={(e) => setParam("q", e.target.value || null)}
+            placeholder="Search"
+            className="w-48"
+          />
+          {filtered && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                setParams(new URLSearchParams(), { replace: true })
+              }
+            >
+              <IconX /> Clear
+            </Button>
+          )}
+        </div>
+
+        {triggers.errors.map((e) => (
+          <p key={e.message} className="text-sm text-destructive">
+            {e.message}
+          </p>
+        ))}
+        {triggers.isLoading && (
+          <p className="text-sm text-muted-foreground">Loading…</p>
+        )}
+        {triggers.data && rows.length === 0 && (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              {filtered
+                ? "No trigger matches these filters."
+                : "No triggers yet. Add one to start runs from Linear or on a schedule."}
+            </CardContent>
+          </Card>
+        )}
+
+        <div className="flex flex-col gap-2">
+          {rows.map((t) => (
+            <TriggerRow key={t.key} trigger={t} href={triggerHref(t, home)} />
+          ))}
+        </div>
       </div>
+
+      <KindPicker open={picking} onOpenChange={setPicking} project={project} />
     </AppShell>
+  );
+}
+
+function FilterSelect({
+  value,
+  placeholder,
+  options,
+  onChange,
+}: {
+  value: string | null;
+  placeholder: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string | null) => void;
+}) {
+  return (
+    <Select
+      value={value ?? ALL}
+      onValueChange={(v) => onChange(v == null || v === ALL ? null : v)}
+    >
+      <SelectTrigger className="w-44">
+        <SelectValue>
+          {(v: string | null) =>
+            !v || v === ALL
+              ? placeholder
+              : (options.find((o) => o.value === v)?.label ?? v)
+          }
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        <SelectItem value={ALL}>{placeholder}</SelectItem>
+        {options.map((o) => (
+          <SelectItem key={o.value} value={o.value}>
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
+const STATE_BADGE: Record<
+  TriggerState,
+  { label: string; variant: "success" | "outline" | "secondary" }
+> = {
+  on: { label: "on", variant: "success" },
+  "dry-run": { label: "dry-run", variant: "secondary" },
+  off: { label: "off", variant: "outline" },
+};
+
+function TriggerRow({ trigger: t, href }: { trigger: Trigger; href: string }) {
+  const state = STATE_BADGE[t.state];
+  return (
+    <Link
+      to={href}
+      className="group rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+    >
+      <Card size="sm" className="transition-colors group-hover:bg-muted/40">
+        <CardContent className="flex items-center gap-3 px-4 py-3">
+          <span title={kindMeta(t.kind).label}>
+            <TriggerKindIcon kind={t.kind} className="size-5" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2">
+              <span className="truncate text-sm font-medium">
+                {t.kind === "schedule" ? (
+                  t.schedule.name
+                ) : (
+                  <LinearWhen binding={t.binding} />
+                )}
+              </span>
+              <Badge variant={state.variant} className="shrink-0 text-[10px]">
+                {state.label}
+              </Badge>
+            </div>
+            <div className="truncate text-[12px] text-muted-foreground">
+              starts <span className="font-mono">{t.workflow}</span> in{" "}
+              <span className="font-mono">{t.project}</span>
+              {t.kind === "schedule" && (
+                <> · {describeScheduleWhen(t.schedule)}</>
+              )}
+            </div>
+          </div>
+          <div className="hidden shrink-0 text-right text-[11px] text-muted-foreground sm:block">
+            {t.kind === "schedule" ? (
+              t.schedule.enabled ? (
+                <>Next {formatWhen(t.schedule.next_run_at)}</>
+              ) : (
+                "paused"
+              )
+            ) : (
+              <>polls every {t.binding.poll_interval_secs}s</>
+            )}
+          </div>
+          <IconChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+/**
+ * A Linear trigger's "when", with its status named. One discovery per
+ * project, shared by every row of it through the query cache, and not polled.
+ */
+function LinearWhen({ binding }: { binding: LinearSource }) {
+  const discovery = useLinearDiscovery(binding.project);
+  return <>{describeLinearWhen(binding, discovery.data?.teams)}</>;
+}
+
+/** Choose what kind of trigger to add. Each kind's own page does the rest. */
+function KindPicker({
+  open,
+  onOpenChange,
+  project,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  project: string | null;
+}) {
+  const navigate = useNavigate();
+  const suffix = project ? `?project=${encodeURIComponent(project)}` : "";
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>New trigger</DialogTitle>
+          <DialogDescription>What should start the run?</DialogDescription>
+        </DialogHeader>
+        <div className="flex flex-col gap-2">
+          {TRIGGER_KINDS.map((k) => (
+            <button
+              key={k.kind}
+              type="button"
+              onClick={() => {
+                onOpenChange(false);
+                navigate(`/triggers/new/${k.kind}${suffix}`);
+              }}
+              className="flex items-start gap-3 rounded-lg border border-border p-3 text-left transition-colors outline-none hover:bg-muted/50 focus-visible:ring-3 focus-visible:ring-ring/50"
+            >
+              <TriggerKindIcon kind={k.kind} className="mt-0.5 size-5" />
+              <span className="flex flex-col gap-0.5">
+                <span className="text-sm font-medium">{k.label}</span>
+                <span className="text-[12px] text-muted-foreground">
+                  {k.description}
+                </span>
+              </span>
+            </button>
+          ))}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/** The trigger just deleted, with an Undo while it is still in the bin. */
+function UndoDelete({
+  deleted,
+  onDone,
+}: {
+  deleted: NonNullable<DeletedState["deleted"]>;
+  onDone: () => void;
+}) {
+  const restore = useRestoreTrash();
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-[12px]">
+      <span className="min-w-0 flex-1">Deleted {deleted.label}.</span>
+      {deleted.trashId && (
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={restore.isPending}
+          onClick={() =>
+            restore.mutate(deleted.trashId!, { onSuccess: onDone })
+          }
+        >
+          Undo
+        </Button>
+      )}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label="Dismiss"
+        onClick={onDone}
+      >
+        <IconX />
+      </Button>
+      {restore.isError && (
+        <span className="text-destructive">{restore.error.message}</span>
+      )}
+    </div>
   );
 }

@@ -60,6 +60,31 @@ const TINT: Record<string, string> = {
   linear: "text-[#5E6AD2]",
 };
 
+/**
+ * A brand's mark on its own, without the status dot — for naming a thing as
+ * belonging to a service (a Linear trigger) rather than reporting on it.
+ */
+export function BrandMark({
+  brand,
+  className = "size-4",
+}: {
+  brand: string;
+  className?: string;
+}) {
+  const mark = PATHS[brand];
+  if (!mark) return null;
+  return (
+    <svg
+      aria-hidden="true"
+      className={`shrink-0 ${TINT[brand] ?? "text-foreground"} ${className}`}
+      viewBox={mark.viewBox ?? "0 0 24 24"}
+      fill="currentColor"
+    >
+      <path d={mark.d} fillRule={mark.fillRule} />
+    </svg>
+  );
+}
+
 export type ProviderStatus = "ok" | "warn" | "bad" | "off";
 
 const DOT: Record<ProviderStatus, string> = {

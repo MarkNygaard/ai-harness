@@ -478,6 +478,13 @@ pub(crate) async fn call_tool(
                 Err(e) => tool_error(e.0),
             }
         }
+        // ── Triggers: every kind, one interface ─────────────────────────────
+        "trigger_list" | "trigger_save" | "trigger_delete" => {
+            match super::trigger_tools::call(state, actor, name, args).await {
+                Ok((summary, body)) => to_result(summary, &body),
+                Err(e) => tool_error(e),
+            }
+        }
         // ── Schedules ───────────────────────────────────────────────────────
         "schedule_list" => match super::schedules_routes::list(state).await {
             Ok(rows) => to_result(
@@ -1340,6 +1347,9 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
     ]
+    .into_iter()
+    .chain(super::trigger_tools::tool_defs())
+    .collect()
 }
 
 // ── JSON-RPC / MCP result helpers ────────────────────────────────────────────
@@ -1436,6 +1446,9 @@ pub(crate) const NEEDS_CONFIRMATION: &[&str] = &[
     "schedule_update",
     "schedule_delete",
     "schedule_run_now",
+    // A trigger starts runs by itself from then on, the same as a schedule.
+    "trigger_save",
+    "trigger_delete",
 ];
 
 /// Changing schedules is for administrators, as on the Schedules page.
@@ -1444,7 +1457,7 @@ pub(crate) const NEEDS_CONFIRMATION: &[&str] = &[
 /// turn must belong to an administrator. The shared MCP key belongs to nobody
 /// in particular; an administrator issued it, and it already starts runs and
 /// deletes workflows, so it may change schedules too.
-async fn may_change_schedules(
+pub(crate) async fn may_change_schedules(
     state: &Arc<RunsState>,
     actor: &super::runs_routes::TriggerInfo,
 ) -> Result<(), String> {
@@ -1463,7 +1476,7 @@ async fn may_change_schedules(
 
 /// Fields of a schedule an MCP call sets, onto `base`. Absent fields keep
 /// their value, so `schedule_update` can change just the time.
-fn schedule_request(
+pub(crate) fn schedule_request(
     base: super::schedules_routes::ScheduleRequest,
     args: &Value,
 ) -> super::schedules_routes::ScheduleRequest {
@@ -1742,6 +1755,10 @@ mod tests {
             "schedule_update",
             "schedule_delete",
             "schedule_run_now",
+            // Every kind of trigger, as the Triggers page shows them.
+            "trigger_list",
+            "trigger_save",
+            "trigger_delete",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
@@ -1924,6 +1941,7 @@ fn connection_body(state: &Arc<RunsState>, token: Option<String>) -> Value {
         "run_tools": RUN_TOOLS,
         "linear_tools": LINEAR_TOOLS,
         "schedule_tools": SCHEDULE_TOOLS,
+        "trigger_tools": super::trigger_tools::TRIGGER_TOOLS,
         "authoring_tools": AUTHORING_TOOLS,
     })
 }

@@ -2,7 +2,6 @@ import { Link, useLocation } from "react-router-dom";
 import {
   IconBolt,
   IconClipboardCheck,
-  IconClockPlay,
   IconGitCompare,
   IconHexagonalPrism,
   IconLayoutDashboard,
@@ -92,8 +91,14 @@ export function useOperationsNav(): NavItem[] {
     // Hideable like the rest (sidebar edit mode, Settings → Preferences); the
     // header's Ask button opens the same conversations in a side panel.
     { href: "/chat", label: "Chat", icon: IconMessageCircle },
-    { href: "/schedules", label: "Schedules", icon: IconClockPlay },
-    { href: "/triggers", label: "Triggers", icon: IconBolt },
+    // Linear triggers and schedules, together: everything that starts a run
+    // by itself.
+    {
+      href: "/triggers",
+      label: "Triggers",
+      icon: IconBolt,
+      match: "/triggers",
+    },
     ...declaredNav,
   ];
 }
