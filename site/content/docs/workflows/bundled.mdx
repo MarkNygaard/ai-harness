@@ -30,6 +30,29 @@ diff and a commit breakdown across the three review-fix passes.
 
 19 nodes. Mixing the models is the point. The reviewer never wrote the code.
 
+### `task`
+
+A leaner `idea-to-pr` for a Linear issue, which keeps the issue up to date as
+the run goes. Start it from a [trigger](/docs/triggers) on your "Todo" or
+"Ready" status.
+
+The issue's lifecycle is in the workflow itself, as
+[`linear:` steps](/docs/triggers#a-trigger-only-starts-the-run):
+
+- The issue moves to In Progress before any tokens are spent.
+- The run comments when it picks the issue up, and again with a short plan.
+- If validation fails, it says why on the issue.
+- The issue moves to In Review once the pull request is open.
+- A closing comment links the PR.
+
+Claude explores and plans, and Kimi implements, validates and reviews its own
+work, followed by a final build gate. There are no review passes by other
+vendors. Use `idea-to-pr` when you want those.
+
+Started by hand, with no issue, every `linear:` step does nothing and the run
+behaves like any other. Status names must exist on the issue's team, so rename
+`In Progress` and `In Review` in a fork if your board uses other names.
+
 ## Working on an existing PR
 
 ### `revise-pr`
@@ -86,6 +109,26 @@ issue stays where it is instead of moving on to its ready column.
 Project rules about merge strategy and verification live in the project's
 `CLAUDE.md` / `AGENTS.md` and are loaded into every agent's context
 automatically.
+
+### `task-merge`
+
+Merge the pull request of a Linear issue that is ready to merge. It is the
+companion to `task`: start it from a trigger on your "Ready for merge" status.
+
+It checks the PR's review before anything else:
+
+- **No approved review yet** (a review is still required, or changes were
+  requested): nothing is merged and the run does not fail. The issue moves back
+  to In Review, with a comment saying why.
+- **Approved, or the repository requires no review:** the PR is brought up to
+  date, conflicts are resolved if there are any, CI is waited on, and the PR is
+  squash-merged. The issue then moves to Done.
+
+If GitHub refuses the merge for another reason, such as a red check, the run
+says so on the issue and ends cancelled, leaving the issue where it is. The
+review check is a [route node](/docs/workflows/authoring#node-bodies), so the
+decision is a rule rather than a model's judgement. Rename `In Review` and
+`Done` in a fork if your board uses other names.
 
 ## Review and analysis
 

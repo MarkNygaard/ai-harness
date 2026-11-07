@@ -83,6 +83,11 @@ nodes:
     linear: { move_state: In Review }
 ```
 
+The bundled [`task`](/docs/workflows/bundled#task) and
+[`task-merge`](/docs/workflows/bundled#task-merge) workflows are written this
+way. Trigger `task` on your ready-to-start status and `task-merge` on your
+ready-to-merge status.
+
 There is no failed label on the trigger either. A workflow that should label
 its issue when a run fails ends with a `linear:` step using
 `trigger_rule: one_failed`, which runs only when a step before it failed — see
