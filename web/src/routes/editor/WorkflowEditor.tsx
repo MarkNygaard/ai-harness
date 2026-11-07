@@ -61,11 +61,14 @@ import { WorkflowDescriptionDrawer } from "@/components/editor/WorkflowDescripti
 import { WorkflowSettingsDrawer } from "@/components/editor/WorkflowSettingsDrawer";
 import {
   type EditorNodeData,
+  type Exit,
+  edgeId,
+  exitsOfWhen,
   fromGraph,
   layout,
   makeNode,
-  routeWhen,
   syncRouteExits,
+  whenOfExits,
   toGraph,
 } from "@/components/editor/graph";
 import { emptyNode, prebuiltNode } from "@/lib/workflow-yaml";
@@ -164,57 +167,78 @@ function Editor() {
         addEdge(
           {
             ...c,
-            id: `${source}->${target}`,
+            id: edgeId(source, target, sourceHandle),
             style: {
               stroke: "var(--muted-foreground)",
               strokeWidth: 1.5,
               opacity: 0.5,
             },
           },
-          // One edge per pair: reconnecting from another exit replaces it.
-          eds.filter((e) => !(e.source === source && e.target === target)),
+          // A plain edge is one per pair. A route's exits add up: a step can
+          // be reached through `task` and through `piece`, but not also
+          // unconditionally.
+          eds.filter(
+            (e) =>
+              !(
+                e.source === source &&
+                e.target === target &&
+                (sourceHandle == null ||
+                  e.sourceHandle == null ||
+                  e.sourceHandle === sourceHandle)
+              ),
+          ),
         ),
       );
       // Leaving a route through an exit is what puts the step on that route.
+      // Another exit of a step already on a route widens it; a hand-written
+      // condition is replaced, as before.
       if (sourceHandle != null) {
         setNodes((nds) =>
-          nds.map((n) =>
-            n.id === target
-              ? {
-                  ...n,
-                  data: {
-                    node: {
-                      ...n.data.node,
-                      when: routeWhen(source, sourceHandle),
-                    },
-                  },
-                }
-              : n,
-          ),
+          nds.map((n) => {
+            if (n.id !== target) return n;
+            const exits = exitsOfWhen(n.data.node.when) ?? [];
+            const has = exits.some(
+              ([s, r]) => s === source && r === sourceHandle,
+            );
+            const when = whenOfExits(
+              has ? exits : [...exits, [source, sourceHandle]],
+            );
+            return { ...n, data: { node: { ...n.data.node, when } } };
+          }),
         );
       }
     },
     [setEdges, setNodes],
   );
 
-  // Removing an edge that left a route through an exit also removes the
-  // `when:` the exit wrote; a hand-written condition stays.
+  // Removing an edge that left a route through an exit also removes that
+  // exit's clause from the step's `when:`; a hand-written condition stays.
   const onEdgesChangeWithRoutes = useCallback(
     (changes: EdgeChange<Edge>[]) => {
-      const cleared = new Map<string, string>();
+      // target -> the exits removed from it
+      const removed = new Map<string, Exit[]>();
       for (const ch of changes) {
         if (ch.type !== "remove") continue;
         const e = edges.find((x) => x.id === ch.id);
         if (e?.sourceHandle != null)
-          cleared.set(e.target, routeWhen(e.source, e.sourceHandle));
+          removed.set(e.target, [
+            ...(removed.get(e.target) ?? []),
+            [e.source, e.sourceHandle],
+          ]);
       }
-      if (cleared.size)
+      if (removed.size)
         setNodes((nds) =>
-          nds.map((n) =>
-            cleared.get(n.id) === n.data.node.when
-              ? { ...n, data: { node: { ...n.data.node, when: undefined } } }
-              : n,
-          ),
+          nds.map((n) => {
+            const gone = removed.get(n.id);
+            const exits = gone && exitsOfWhen(n.data.node.when);
+            if (!gone || !exits) return n;
+            const when = whenOfExits(
+              exits.filter(
+                ([s, r]) => !gone.some(([gs, gr]) => gs === s && gr === r),
+              ),
+            );
+            return { ...n, data: { node: { ...n.data.node, when } } };
+          }),
         );
       onEdgesChange(changes);
     },
@@ -312,12 +336,16 @@ function Editor() {
           ),
         );
         setEdges((eds) =>
-          eds.map((e) => ({
-            ...e,
-            source: e.source === oldId ? next.id : e.source,
-            target: e.target === oldId ? next.id : e.target,
-            id: `${e.source === oldId ? next.id : e.source}->${e.target === oldId ? next.id : e.target}`,
-          })),
+          eds.map((e) => {
+            const source = e.source === oldId ? next.id : e.source;
+            const target = e.target === oldId ? next.id : e.target;
+            return {
+              ...e,
+              source,
+              target,
+              id: edgeId(source, target, e.sourceHandle),
+            };
+          }),
         );
         setSelectedId(next.id);
       } else {

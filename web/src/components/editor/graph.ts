@@ -51,14 +51,56 @@ export function routeWhen(source: string, route: string): string {
   return `$${source}.output.route == '${route}'`;
 }
 
-/** The route of `source` that `when` selects, if it is exactly a route's `when`. */
-export function routeOfWhen(
+/** A route exit a step is reached through: the route node, and the route. */
+export type Exit = [source: string, route: string];
+
+const ROUTE_CLAUSE = /^\$([\w-]+)\.output\.route == '([^']*)'$/;
+
+/**
+ * The exits a `when:` names, if it is nothing but route clauses joined by
+ * `||` — what the editor writes when a step is reached through one exit or
+ * several (`task` or `piece`). Anything else is a hand-written condition, and
+ * `undefined` says the editor doesn't own it.
+ */
+export function exitsOfWhen(when: string | undefined): Exit[] | undefined {
+  if (!when?.trim()) return undefined;
+  const exits: Exit[] = [];
+  for (const clause of when.split("||")) {
+    const m = ROUTE_CLAUSE.exec(clause.trim());
+    if (!m) return undefined;
+    exits.push([m[1], m[2]]);
+  }
+  return exits;
+}
+
+/** The `when:` for a step reached through `exits`; none for no exits. */
+export function whenOfExits(exits: Exit[]): string | undefined {
+  return exits.length
+    ? exits.map(([s, r]) => routeWhen(s, r)).join(" || ")
+    : undefined;
+}
+
+/** The routes of `source` that `when` reaches a step through. */
+export function routesOfWhen(
   source: EditorNode,
   when: string | undefined,
-): string | undefined {
-  if (!source.route || !when) return undefined;
-  return source.route.routes.find((r) => routeWhen(source.id, r.name) === when)
-    ?.name;
+): string[] {
+  if (!source.route) return [];
+  const names = new Set(source.route.routes.map((r) => r.name));
+  return (exitsOfWhen(when) ?? [])
+    .filter(([s, r]) => s === source.id && names.has(r))
+    .map(([, r]) => r);
+}
+
+/** An edge's id: one per source, target and exit. */
+export function edgeId(
+  source: string,
+  target: string,
+  sourceHandle?: string | null,
+): string {
+  return sourceHandle == null
+    ? `${source}->${target}`
+    : `${source}.${sourceHandle}->${target}`;
 }
 
 export function edgeOf(
@@ -67,7 +109,7 @@ export function edgeOf(
   sourceHandle?: string,
 ): Edge {
   return {
-    id: `${source}->${target}`,
+    id: edgeId(source, target, sourceHandle),
     source,
     target,
     sourceHandle,
@@ -103,7 +145,13 @@ export function toGraph(wf: EditorWorkflow): {
   for (const n of wf.nodes) {
     for (const dep of n.depends_on ?? []) {
       const source = byId.get(dep);
-      if (source) edges.push(edgeOf(dep, n.id, routeOfWhen(source, n.when)));
+      if (!source) continue;
+      // One edge per exit: a step reached through `task` or `piece` leaves
+      // the route twice, not once from whichever exit comes first.
+      const routes = routesOfWhen(source, n.when);
+      if (routes.length)
+        for (const r of routes) edges.push(edgeOf(dep, n.id, r));
+      else edges.push(edgeOf(dep, n.id));
     }
   }
   return { nodes: layout(nodes, edges), edges };
@@ -163,28 +211,39 @@ export function syncRouteExits(
       : newNames.includes(old)
         ? old
         : undefined;
-  // target -> [the `when:` its exit wrote, the one it should now carry]
-  const whens = new Map<string, [string, string | undefined]>();
+  const touched = new Set<string>();
   const kept: Edge[] = [];
   for (const e of edges) {
     if (e.source !== prev.id || e.sourceHandle == null) {
       kept.push(e);
       continue;
     }
+    touched.add(e.target);
     const to = renamed(e.sourceHandle);
-    whens.set(e.target, [
-      routeWhen(prev.id, e.sourceHandle),
-      to ? routeWhen(next.id, to) : undefined,
-    ]);
-    if (to !== undefined) kept.push({ ...e, sourceHandle: to });
+    if (to !== undefined)
+      kept.push({
+        ...e,
+        id: edgeId(e.source, e.target, to),
+        sourceHandle: to,
+      });
   }
   return {
     edges: kept,
     nodes: nodes.map((n) => {
-      const w = whens.get(n.id);
-      // Only a `when:` the exit wrote is the editor's to change.
-      if (!w || n.data.node.when !== w[0]) return n;
-      return { ...n, data: { node: { ...n.data.node, when: w[1] } } };
+      // Only a `when:` made of exits is the editor's to change.
+      const exits = touched.has(n.id)
+        ? exitsOfWhen(n.data.node.when)
+        : undefined;
+      if (!exits) return n;
+      const now = exits.flatMap(([s, r]): Exit[] => {
+        if (s !== prev.id) return [[s, r]];
+        const to = renamed(r);
+        return to === undefined ? [] : [[next.id, to]];
+      });
+      return {
+        ...n,
+        data: { node: { ...n.data.node, when: whenOfExits(now) } },
+      };
     }),
   };
 }
