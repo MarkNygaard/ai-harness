@@ -433,6 +433,12 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/projects/{project}/linear-sources",
             get(linear_source_routes::list_sources),
         )
+        // Every project's bindings in one response, for the Triggers page.
+        // Not under `/api/projects/…` because it is not scoped to one.
+        .route(
+            "/api/linear-sources",
+            get(linear_source_routes::list_all_sources),
+        )
         .route(
             "/api/projects/{project}/linear-check",
             get(linear_source_routes::check_sources),

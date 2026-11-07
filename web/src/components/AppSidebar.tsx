@@ -1,5 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import {
+  IconBolt,
   IconClipboardCheck,
   IconClockPlay,
   IconGitCompare,
@@ -92,6 +93,7 @@ export function useOperationsNav(): NavItem[] {
     // header's Ask button opens the same conversations in a side panel.
     { href: "/chat", label: "Chat", icon: IconMessageCircle },
     { href: "/schedules", label: "Schedules", icon: IconClockPlay },
+    { href: "/triggers", label: "Triggers", icon: IconBolt },
     ...declaredNav,
   ];
 }
