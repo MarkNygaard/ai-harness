@@ -71,7 +71,7 @@ function SubscriptionCard({ sub }: { sub: SubscriptionUsage }) {
   );
   return (
     <Card>
-      <CardContent className="flex flex-col gap-3 p-4">
+      <CardContent className="flex flex-col gap-3">
         <div className="text-sm font-medium">{sub.label}</div>
         {sub.available && windows.length > 0 ? (
           <div className="flex flex-col gap-3">

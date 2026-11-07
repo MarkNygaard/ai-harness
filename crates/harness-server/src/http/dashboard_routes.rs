@@ -92,12 +92,18 @@ pub(crate) struct Totals {
 pub(crate) struct PrTotals {
     pub prs_opened: u32,
     pub prs_merged: u32,
-    /// Median from a run starting to its PR opening, over the PRs opened in
-    /// the period that the run itself opened.
+    /// The cycle, as medians. Kickoff is a run starting, so the kickoff
+    /// times only count PRs the run itself opened.
+    ///
+    /// Kickoff to merge, over the PRs merged in the period.
+    pub median_kickoff_to_merge_secs: Option<f64>,
+    /// Kickoff to the PR opening, over the PRs opened in the period.
     pub median_to_pr_secs: Option<f64>,
-    /// Median from a PR opening to it merging, over the PRs merged in the
-    /// period.
-    pub median_to_merge_secs: Option<f64>,
+    /// The PR opening to someone other than its author first reviewing it,
+    /// over the PRs first reviewed in the period.
+    pub median_to_review_secs: Option<f64>,
+    /// That first review to the merge, over the PRs merged in the period.
+    pub median_review_to_merge_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -176,35 +182,48 @@ fn totals(runs: &[&DashboardRun], costs: &HashMap<&str, f64>) -> Totals {
 }
 
 /// Pull requests opened and merged in `[from, to)` (UTC days), with the
-/// medians. A PR opened before its run started was opened by someone else
-/// and only worked on by the run, so it has no kickoff-to-PR time.
+/// cycle medians. A PR opened before its run started was opened by someone
+/// else and only worked on by the run, so it has no kickoff times.
 fn pr_totals(prs: &[RunPr], from: NaiveDate, to: NaiveDate) -> PrTotals {
     let within = |t: &Option<DateTime<Utc>>| {
         t.map(|t| t.date_naive())
             .is_some_and(|d| d >= from && d < to)
     };
+    let secs = |a: DateTime<Utc>, b: DateTime<Utc>| (b - a).num_seconds().max(0) as f64;
     let mut t = PrTotals::default();
-    let mut to_pr = Vec::new();
-    let mut to_merge = Vec::new();
+    let (mut to_merge, mut to_pr, mut to_review, mut review_to_merge) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for pr in prs {
+        let kickoff = pr
+            .opened_at
+            .filter(|opened| *opened >= pr.run_started_at)
+            .map(|_| pr.run_started_at);
         if within(&pr.opened_at) {
             t.prs_opened += 1;
-            if let Some(opened) = pr.opened_at {
-                let secs = (opened - pr.run_started_at).num_seconds();
-                if secs >= 0 {
-                    to_pr.push(secs as f64);
-                }
+            if let (Some(k), Some(opened)) = (kickoff, pr.opened_at) {
+                to_pr.push(secs(k, opened));
+            }
+        }
+        if within(&pr.first_review_at) {
+            if let (Some(opened), Some(review)) = (pr.opened_at, pr.first_review_at) {
+                to_review.push(secs(opened, review));
             }
         }
         if within(&pr.merged_at) {
             t.prs_merged += 1;
-            if let (Some(opened), Some(merged)) = (pr.opened_at, pr.merged_at) {
-                to_merge.push((merged - opened).num_seconds().max(0) as f64);
+            let merged = pr.merged_at.expect("within");
+            if let Some(k) = kickoff {
+                to_merge.push(secs(k, merged));
+            }
+            if let Some(review) = pr.first_review_at {
+                review_to_merge.push(secs(review, merged));
             }
         }
     }
+    t.median_kickoff_to_merge_secs = median(to_merge);
     t.median_to_pr_secs = median(to_pr);
-    t.median_to_merge_secs = median(to_merge);
+    t.median_to_review_secs = median(to_review);
+    t.median_review_to_merge_secs = median(review_to_merge);
     t
 }
 
@@ -510,6 +529,15 @@ mod tests {
         opened_hours_ago: Option<i64>,
         merged_hours_ago: Option<i64>,
     ) -> RunPr {
+        reviewed_pr(run_hours_ago, opened_hours_ago, None, merged_hours_ago)
+    }
+
+    fn reviewed_pr(
+        run_hours_ago: i64,
+        opened_hours_ago: Option<i64>,
+        review_hours_ago: Option<i64>,
+        merged_hours_ago: Option<i64>,
+    ) -> RunPr {
         let at = |h: i64| now() - Duration::hours(h);
         RunPr {
             url: format!("https://github.com/o/r/pull/{run_hours_ago}"),
@@ -525,6 +553,7 @@ mod tests {
             .into(),
             opened_at: opened_hours_ago.map(at),
             merged_at: merged_hours_ago.map(at),
+            first_review_at: review_hours_ago.map(at),
             checked_at: None,
         }
     }
@@ -550,13 +579,26 @@ mod tests {
             "1h and 3h; the person's PR is left out"
         );
         assert_eq!(
-            m.totals.prs.median_to_merge_secs,
-            Some((3600.0 + 6.0 * 86400.0) / 2.0)
+            m.totals.prs.median_kickoff_to_merge_secs,
+            Some((2.0 * 3600.0 + 7.0 * 86400.0) / 2.0),
+            "3h-ago kickoff merged 1h ago (2h), 9-days-ago kickoff merged 2 days ago (7d)"
         );
         assert_eq!(m.previous.prs.prs_opened, 1);
         assert_eq!(m.previous.prs.prs_merged, 0);
         let today = m.daily.last().unwrap();
         assert_eq!((today.prs_opened, today.prs_merged), (1, 1));
+    }
+
+    #[test]
+    fn the_review_splits_the_wait_between_pr_and_merge() {
+        // Kickoff 10h ago, PR 8h ago, first review 5h ago, merged 1h ago.
+        let prs = [reviewed_pr(10, Some(8), Some(5), Some(1))];
+        let m = aggregate(&[], &[], &prs, 7, now());
+        let t = &m.totals.prs;
+        assert_eq!(t.median_to_pr_secs, Some(2.0 * 3600.0));
+        assert_eq!(t.median_to_review_secs, Some(3.0 * 3600.0));
+        assert_eq!(t.median_review_to_merge_secs, Some(4.0 * 3600.0));
+        assert_eq!(t.median_kickoff_to_merge_secs, Some(9.0 * 3600.0));
     }
 
     #[test]

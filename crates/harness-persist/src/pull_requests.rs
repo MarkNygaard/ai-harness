@@ -37,12 +37,16 @@ CREATE TABLE IF NOT EXISTS harness_run_prs (
     created_at     timestamptz NOT NULL DEFAULT now()
 )";
 
+// Added after the table first shipped, so existing installs gain it too.
+const ADD_FIRST_REVIEW: &str =
+    "ALTER TABLE harness_run_prs ADD COLUMN IF NOT EXISTS first_review_at timestamptz";
+
 const INDEX_OPEN: &str = "
 CREATE INDEX IF NOT EXISTS harness_run_prs_open
     ON harness_run_prs (checked_at NULLS FIRST) WHERE state = 'open'";
 
-const COLUMNS: &str =
-    "url, run_id, project, workflow, run_started_at, state, opened_at, merged_at, checked_at";
+const COLUMNS: &str = "url, run_id, project, workflow, run_started_at, state, opened_at, \
+     merged_at, first_review_at, checked_at";
 
 /// One pull request a run produced.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -58,6 +62,8 @@ pub struct RunPr {
     /// GitHub's `created_at`; `None` until the poller has read it.
     pub opened_at: Option<DateTime<Utc>>,
     pub merged_at: Option<DateTime<Utc>>,
+    /// When someone other than its author first reviewed it.
+    pub first_review_at: Option<DateTime<Utc>>,
     /// When the poller last asked GitHub; `None` before the first time.
     pub checked_at: Option<DateTime<Utc>>,
 }
@@ -77,6 +83,7 @@ impl PrStore {
 
     pub async fn from_pool(pool: PgPool) -> Result<Self, PersistError> {
         sqlx::query(CREATE).execute(&pool).await?;
+        sqlx::query(ADD_FIRST_REVIEW).execute(&pool).await?;
         sqlx::query(INDEX_OPEN).execute(&pool).await?;
         Ok(Self { pool })
     }
@@ -120,13 +127,15 @@ impl PrStore {
     }
 
     /// What GitHub said about a PR. `state` is [`PR_OPEN`], [`PR_MERGED`] or
-    /// [`PR_CLOSED`]; anything else is stored as open, to be asked again.
+    /// [`PR_CLOSED`]; anything else is stored as open, to be asked again. A
+    /// time that is `None` leaves what was stored.
     pub async fn update(
         &self,
         url: &str,
         state: &str,
         opened_at: Option<DateTime<Utc>>,
         merged_at: Option<DateTime<Utc>>,
+        first_review_at: Option<DateTime<Utc>>,
     ) -> Result<(), PersistError> {
         let state = match state {
             PR_MERGED | PR_CLOSED => state,
@@ -137,6 +146,7 @@ impl PrStore {
              SET state = $2,
                  opened_at = COALESCE($3, opened_at),
                  merged_at = COALESCE($4, merged_at),
+                 first_review_at = COALESCE($5, first_review_at),
                  checked_at = now()
              WHERE url = $1",
         )
@@ -144,6 +154,7 @@ impl PrStore {
         .bind(state)
         .bind(opened_at)
         .bind(merged_at)
+        .bind(first_review_at)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -159,8 +170,8 @@ impl PrStore {
         Ok(())
     }
 
-    /// PRs opened or merged since `since` (or recorded since then, before the
-    /// poller has read them), optionally one project's.
+    /// PRs opened, first reviewed or merged since `since` (or recorded since
+    /// then, before the poller has read them), optionally one project's.
     pub async fn dashboard_prs(
         &self,
         since: DateTime<Utc>,
@@ -168,7 +179,9 @@ impl PrStore {
     ) -> Result<Vec<RunPr>, PersistError> {
         Ok(sqlx::query_as::<_, RunPr>(&format!(
             "SELECT {COLUMNS} FROM harness_run_prs
-             WHERE (COALESCE(opened_at, created_at) >= $1 OR merged_at >= $1)
+             WHERE (COALESCE(opened_at, created_at) >= $1
+                    OR merged_at >= $1
+                    OR first_review_at >= $1)
                AND ($2::text IS NULL OR project = $2)"
         ))
         .bind(since)
