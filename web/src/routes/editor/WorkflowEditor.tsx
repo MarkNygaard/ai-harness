@@ -12,6 +12,7 @@ import {
   useReactFlow,
   type Connection,
   type Edge,
+  type EdgeChange,
   type Node,
   type NodeTypes,
 } from "@xyflow/react";
@@ -62,6 +63,8 @@ import {
   fromGraph,
   layout,
   makeNode,
+  routeWhen,
+  syncRouteExits,
   toGraph,
 } from "@/components/editor/graph";
 import { emptyNode, prebuiltNode } from "@/lib/workflow-yaml";
@@ -150,22 +153,66 @@ function Editor() {
   const onConnect = useCallback(
     (c: Connection) => {
       if (c.source === c.target || !c.source || !c.target) return;
+      const { source, target, sourceHandle } = c;
       setEdges((eds) =>
         addEdge(
           {
             ...c,
-            id: `${c.source}->${c.target}`,
+            id: `${source}->${target}`,
             style: {
               stroke: "var(--muted-foreground)",
               strokeWidth: 1.5,
               opacity: 0.5,
             },
           },
-          eds,
+          // One edge per pair: reconnecting from another exit replaces it.
+          eds.filter((e) => !(e.source === source && e.target === target)),
         ),
       );
+      // Leaving a route through an exit is what puts the step on that route.
+      if (sourceHandle != null) {
+        setNodes((nds) =>
+          nds.map((n) =>
+            n.id === target
+              ? {
+                  ...n,
+                  data: {
+                    node: {
+                      ...n.data.node,
+                      when: routeWhen(source, sourceHandle),
+                    },
+                  },
+                }
+              : n,
+          ),
+        );
+      }
     },
-    [setEdges],
+    [setEdges, setNodes],
+  );
+
+  // Removing an edge that left a route through an exit also removes the
+  // `when:` the exit wrote; a hand-written condition stays.
+  const onEdgesChangeWithRoutes = useCallback(
+    (changes: EdgeChange<Edge>[]) => {
+      const cleared = new Map<string, string>();
+      for (const ch of changes) {
+        if (ch.type !== "remove") continue;
+        const e = edges.find((x) => x.id === ch.id);
+        if (e?.sourceHandle != null)
+          cleared.set(e.target, routeWhen(e.source, e.sourceHandle));
+      }
+      if (cleared.size)
+        setNodes((nds) =>
+          nds.map((n) =>
+            cleared.get(n.id) === n.data.node.when
+              ? { ...n, data: { node: { ...n.data.node, when: undefined } } }
+              : n,
+          ),
+        );
+      onEdgesChange(changes);
+    },
+    [edges, onEdgesChange, setNodes],
   );
 
   const uniqueId = useCallback(
@@ -246,6 +293,12 @@ function Editor() {
     (next: EditorNode) => {
       const oldId = selectedId;
       if (!oldId) return;
+      const prev = nodes.find((n) => n.id === oldId)?.data.node;
+      if (prev?.route) {
+        const synced = syncRouteExits(prev, next, nodes, edges);
+        setNodes(synced.nodes);
+        setEdges(synced.edges);
+      }
       if (next.id !== oldId) {
         setNodes((nds) =>
           nds.map((n) =>
@@ -267,7 +320,7 @@ function Editor() {
         );
       }
     },
-    [selectedId, setNodes, setEdges],
+    [selectedId, nodes, edges, setNodes, setEdges],
   );
 
   const tidy = useCallback(() => {
@@ -536,7 +589,7 @@ function Editor() {
                 edges={edges}
                 nodeTypes={nodeTypes}
                 onNodesChange={onNodesChange}
-                onEdgesChange={onEdgesChange}
+                onEdgesChange={onEdgesChangeWithRoutes}
                 onConnect={onConnect}
                 onNodeClick={(_e, n) => {
                   setSettingsOpen(false);

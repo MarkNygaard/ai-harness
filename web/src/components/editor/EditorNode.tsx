@@ -7,6 +7,7 @@ import {
   Hand,
   Repeat,
   Settings2,
+  Split,
   SquareTerminal,
   Terminal,
   Trash2,
@@ -27,6 +28,7 @@ const KIND_ICON: Record<NodeKindId, typeof Bot> = {
   approval: Hand,
   cancel: CircleSlash,
   linear: Zap,
+  route: Split,
 };
 
 const KIND_LABEL: Record<NodeKindId, string> = {
@@ -38,6 +40,7 @@ const KIND_LABEL: Record<NodeKindId, string> = {
   approval: "Approval",
   cancel: "Cancel",
   linear: "Linear",
+  route: "Route",
 };
 
 /** A draggable, connectable workflow step on the editor canvas. */
@@ -131,11 +134,59 @@ export function EditorNode({ id, data }: NodeProps) {
           <span className="truncate font-mono">{node.artifact}</span>
         </div>
       )}
-      <Handle
-        type="source"
-        position={Position.Bottom}
-        className="!h-2 !w-2 !border-0 !bg-border"
-      />
+      {node.route ? (
+        <RouteExits
+          routes={node.route.routes.map((r) => r.name)}
+          fallback={node.route.default}
+        />
+      ) : (
+        <Handle
+          type="source"
+          position={Position.Bottom}
+          className="!h-2 !w-2 !border-0 !bg-border"
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One exit per route, each its own source handle (id = the route's name), so
+ * connecting from an exit says which route the next step belongs to.
+ */
+function RouteExits({
+  routes,
+  fallback,
+}: {
+  routes: string[];
+  fallback?: string;
+}) {
+  return (
+    <div className="flex border-t border-border">
+      {routes.map((name, i) => (
+        <div
+          key={`${i}-${name}`}
+          className="relative min-w-0 flex-1 px-1 pt-1 pb-2 text-center"
+          title={name === fallback ? `${name} (default)` : name}
+        >
+          <span
+            className={cn(
+              "block truncate font-mono text-[10px]",
+              name === fallback
+                ? "text-card-foreground"
+                : "text-muted-foreground",
+            )}
+          >
+            {name || "?"}
+          </span>
+          <Handle
+            type="source"
+            id={name}
+            position={Position.Bottom}
+            className="!h-2 !w-2 !border-0 !bg-accent-orange"
+          />
+        </div>
+      ))}
     </div>
   );
 }

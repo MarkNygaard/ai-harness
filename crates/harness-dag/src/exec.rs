@@ -656,10 +656,7 @@ async fn execute_node<R: NodeRunner>(
     // Only agent-dispatching nodes carry a provider/model. bash/script/cancel/
     // approval nodes run no agent, so they show none — they don't inherit the
     // workflow default just for display.
-    let is_agent = matches!(
-        node.kind,
-        NodeKind::Prompt(_) | NodeKind::Command(_) | NodeKind::Loop(_)
-    );
+    let is_agent = node.kind.is_ai();
     let provider = if is_agent {
         node.provider.as_deref().or(wf_provider)
     } else {
@@ -794,6 +791,9 @@ async fn dispatch_node_body<R: NodeRunner>(
             cancel: None,
         },
 
+        NodeKind::Route(cfg) => {
+            run_route(runner, node, provider, model, vars, session, progress, cfg).await
+        }
         NodeKind::Prompt(text) => {
             run_single_body(
                 runner,
@@ -970,6 +970,121 @@ where
         make_body(rendered),
     )
     .await
+}
+
+/// A route node's output: which route, why, and what decided it.
+fn route_output(route: &str, reason: &str, by: &str) -> String {
+    serde_json::json!({ "route": route, "reason": reason, "by": by }).to_string()
+}
+
+/// Decide a route node: rules in order, then the model, then the default.
+#[allow(clippy::too_many_arguments)]
+async fn run_route<R: NodeRunner>(
+    runner: &R,
+    node: &Node,
+    provider: Option<&str>,
+    model: Option<&str>,
+    vars: &VarContext,
+    session: Option<String>,
+    progress: Option<ProgressSink>,
+    cfg: &crate::model::RouteConfig,
+) -> NodeRunResult {
+    let decided = |route: &str, reason: String, by: &str, run_model: bool| NodeRunResult {
+        run: NodeRun {
+            id: node.id.clone(),
+            status: NodeStatus::Success,
+            provider: run_model.then(|| provider.map(str::to_string)).flatten(),
+            model: run_model.then(|| model.map(str::to_string)).flatten(),
+            output: route_output(route, &reason, by),
+            usage: Usage::default(),
+            iterations: 1,
+            converged: None,
+            note: Some(format!("route: {route}")),
+            artifact_content: None,
+            started_at: None,
+            ended_at: None,
+        },
+        session: None,
+        cancel: None,
+    };
+
+    // 1. Rules, in order: certain, and no model call.
+    for r in &cfg.routes {
+        let Some(expr) = &r.when else { continue };
+        match crate::cond::eval_when(expr, vars) {
+            Ok(true) => return decided(&r.name, format!("`{expr}` held"), "rule", false),
+            Ok(false) => {}
+            Err(e) => {
+                return NodeRunResult {
+                    run: failed_run(node, provider, model, format!("route `{}`: {e}", r.name)),
+                    session: None,
+                    cancel: None,
+                }
+            }
+        }
+    }
+
+    // 2. A model chooses from the descriptions.
+    if let Some(prompt) = &cfg.prompt {
+        // Only the author's prompt substitutes; the routes are appended after,
+        // so a `$` in a description can't break it.
+        let rendered = match substitute(prompt, vars) {
+            Ok(r) => r,
+            Err(e) => {
+                return NodeRunResult {
+                    run: failed_run(node, provider, model, e.to_string()),
+                    session: None,
+                    cancel: None,
+                }
+            }
+        };
+        let mut result = execute_body(
+            runner,
+            node,
+            provider,
+            model,
+            vars,
+            session,
+            progress,
+            1,
+            NodeBody::Prompt(format!("{rendered}{}", cfg.choices())),
+        )
+        .await;
+        if result.run.status != NodeStatus::Success {
+            return result;
+        }
+        match cfg.read_choice(&result.run.output) {
+            Some((route, reason)) => {
+                result.run.output = route_output(&route, &reason, "model");
+                result.run.note = Some(format!("route: {route}"));
+            }
+            None => match &cfg.default {
+                Some(d) => {
+                    result.run.output =
+                        route_output(d, "the model's answer named no route", "default");
+                    result.run.note = Some(format!("route: {d} (the model named none)"));
+                }
+                None => {
+                    result.run.status = NodeStatus::Failed;
+                    result.run.note = Some(format!(
+                        "the model's answer named none of: {}",
+                        cfg.names().join(", ")
+                    ));
+                }
+            },
+        }
+        return result;
+    }
+
+    // 3. The default.
+    match &cfg.default {
+        Some(d) => decided(d, "no rule matched".into(), "default", false),
+        None => NodeRunResult {
+            run: failed_run(node, provider, model, "no route's rule matched".into()),
+            session: None,
+            cancel: None,
+        },
+    }
 }
 
 /// Invoke the runner once and map its result into a [`NodeRunResult`].

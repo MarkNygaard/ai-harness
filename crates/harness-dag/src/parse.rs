@@ -89,6 +89,8 @@ struct RawNode {
     cancel: Option<String>,
     #[serde(default)]
     linear: Option<RawLinear>,
+    #[serde(default)]
+    route: Option<crate::model::RouteConfig>,
 }
 
 /// The `linear:` body's own mutually exclusive keys.
@@ -163,6 +165,7 @@ impl RawNode {
             approval,
             cancel,
             linear,
+            route,
             depends_on,
             when,
             trigger_rule,
@@ -205,6 +208,9 @@ impl RawNode {
         if linear.is_some() {
             found.push("linear");
         }
+        if route.is_some() {
+            found.push("route");
+        }
 
         let kind = match found.as_slice() {
             [] => return Err(DagError::NoNodeKind(id)),
@@ -231,11 +237,21 @@ impl RawNode {
                     NodeKind::Cancel(c)
                 } else if let Some(l) = linear {
                     NodeKind::Linear(l.into_action(&id)?)
+                } else if let Some(r) = route {
+                    validate_route(&id, &r)?;
+                    NodeKind::Route(r)
                 } else {
                     unreachable!("found exactly one discriminator")
                 }
             }
             _ => return Err(DagError::MultipleNodeKinds { node: id, found }),
+        };
+
+        // A route that asks a model needs its answer as JSON naming a route;
+        // spelled out here from the routes, so the author never has to.
+        let output_format = match (&kind, output_format) {
+            (NodeKind::Route(r), None) if r.prompt.is_some() => Some(r.output_schema()),
+            (_, of) => of,
         };
 
         Ok((
@@ -371,6 +387,12 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
         if let Some(expr) = &node.when {
             crate::cond::validate_syntax(expr)?;
         }
+        // So must every route's rule.
+        if let NodeKind::Route(cfg) = &node.kind {
+            for expr in cfg.routes.iter().filter_map(|r| r.when.as_deref()) {
+                crate::cond::validate_syntax(expr)?;
+            }
+        }
     }
 
     // A report's `verdict_node`, when named, must resolve to a declared node.
@@ -401,4 +423,47 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
         internal: raw.internal,
         nodes,
     })
+}
+
+/// A route node must always end on a route, and name its routes so a `when:`
+/// can compare against them.
+fn validate_route(node: &str, cfg: &crate::model::RouteConfig) -> Result<(), DagError> {
+    let bad = |reason: String| DagError::InvalidRoute {
+        node: node.to_string(),
+        reason,
+    };
+    if cfg.routes.len() < 2 {
+        return Err(bad("it needs at least two routes to choose between".into()));
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for r in &cfg.routes {
+        let name = r.name.as_str();
+        let ok = !name.is_empty()
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-');
+        if !ok {
+            return Err(bad(format!(
+                "route name `{name}` must be letters, digits, `-` or `_`"
+            )));
+        }
+        if seen.contains(&name) {
+            return Err(bad(format!("route `{name}` is named twice")));
+        }
+        seen.push(name);
+    }
+    if let Some(d) = &cfg.default {
+        if !seen.contains(&d.as_str()) {
+            return Err(bad(format!("its default `{d}` isn't one of its routes")));
+        }
+    }
+    // Rules alone can all be false. Without a model to ask or a default to
+    // fall back on, a run could reach this step and have nowhere to go.
+    if cfg.prompt.is_none() && cfg.default.is_none() {
+        return Err(bad(
+            "it needs a `prompt` (a model chooses) or a `default`, so every run ends on a route"
+                .into(),
+        ));
+    }
+    Ok(())
 }

@@ -27,6 +27,7 @@ export function nodeKind(node: EditorNode): NodeKindId {
   if (node.approval !== undefined) return "approval";
   if (node.cancel !== undefined) return "cancel";
   if (node.linear !== undefined) return "linear";
+  if (node.route !== undefined) return "route";
   return "prompt";
 }
 
@@ -54,6 +55,17 @@ export function emptyNode(kind: NodeKindId, id: string): EditorNode {
     // there rather than making you pick an action before you can type.
     case "linear":
       return { ...base, linear: { move_state: "" } };
+    // Two routes is the least a route can have; the second is the default so
+    // the step leads somewhere before any rule or prompt is written.
+    case "route":
+      return {
+        ...base,
+        route: {
+          prompt: "",
+          routes: [{ name: "a" }, { name: "b" }],
+          default: "b",
+        },
+      };
     default:
       return { ...base, prompt: "" };
   }
@@ -150,6 +162,7 @@ export function nodeToDoc(n: EditorNode): Record<string, unknown> {
   const linear = n.linear
     ? (n.linear as unknown as Record<string, unknown>)
     : undefined;
+  const route = n.route ? routeToDoc(n.route) : undefined;
   return clean({
     id: n.id,
     depends_on: n.depends_on,
@@ -180,7 +193,22 @@ export function nodeToDoc(n: EditorNode): Record<string, unknown> {
     approval,
     cancel: n.cancel,
     linear,
+    route,
   });
+}
+
+/** The `route:` body, terse: each route keeps its name even while blank. */
+function routeToDoc(
+  r: NonNullable<EditorNode["route"]>,
+): Record<string, unknown> {
+  return {
+    ...clean({ prompt: r.prompt }),
+    routes: r.routes.map((o) => ({
+      name: o.name,
+      ...clean({ description: o.description, when: o.when }),
+    })),
+    ...clean({ default: r.default }),
+  };
 }
 
 /** Serialize a workflow to YAML, keeping each node's single body + set options. */
@@ -232,6 +260,7 @@ export function fromYaml(text: string): EditorWorkflow {
     approval: n.approval as EditorNode["approval"],
     cancel: n.cancel as string | undefined,
     linear: n.linear as EditorNode["linear"],
+    route: n.route as EditorNode["route"],
   }));
   return {
     name: String(raw.name ?? "untitled"),

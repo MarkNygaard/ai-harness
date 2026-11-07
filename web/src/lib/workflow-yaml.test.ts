@@ -317,6 +317,52 @@ describe("nodeToDoc", () => {
   });
 });
 
+describe("route steps", () => {
+  it("detects the kind and starts with two routes and a default", () => {
+    const fresh = emptyNode("route", "kind");
+    expect(nodeKind(fresh)).toBe("route");
+    expect(fresh.route?.routes.map((r) => r.name)).toEqual(["a", "b"]);
+    expect(fresh.route?.default).toBe("b");
+  });
+
+  it("round-trips through YAML, keeping only what is set", () => {
+    const wf: EditorWorkflow = {
+      name: "demo",
+      nodes: [
+        {
+          id: "kind",
+          route: {
+            prompt: "epic or task?",
+            routes: [
+              {
+                name: "epic",
+                description: "has sub-issues",
+                when: "$fetch.output.children > 0",
+              },
+              { name: "task", description: "", when: undefined },
+            ],
+            default: "task",
+          },
+        },
+      ],
+    };
+    const text = toYaml(wf);
+    expect(text).not.toContain("description: ''");
+    expect(fromYaml(text).nodes[0].route).toEqual({
+      prompt: "epic or task?",
+      routes: [
+        {
+          name: "epic",
+          description: "has sub-issues",
+          when: "$fetch.output.children > 0",
+        },
+        { name: "task" },
+      ],
+      default: "task",
+    });
+  });
+});
+
 describe("linear steps", () => {
   it("detects the kind and starts on move_state", () => {
     expect(nodeKind({ id: "a", linear: { move_state: "In Review" } })).toBe(

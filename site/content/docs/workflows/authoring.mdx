@@ -239,6 +239,47 @@ The previous iteration's output is available as `$LOOP_PREV_OUTPUT`.
   cancel: "refusing to proceed: input flagged unsafe"
 ```
 
+**`route`** sends the run down one of several routes: one step in, as many
+ways out as you declare. Steps after it choose a route with `when:`.
+```yaml
+- id: kind
+  depends_on: [fetch]
+  route:
+    prompt: "Is this Linear issue an epic or a single task? $ARGUMENTS"  # optional
+    routes:
+      - name: epic
+        description: The issue has sub-issues.        # read by the model
+        when: "$fetch.output.children > 0"            # optional rule
+      - name: task
+        description: A single piece of work.
+    default: task                                     # optional
+- id: supervise
+  depends_on: [kind]
+  when: "$kind.output.route == 'epic'"
+  prompt: "Split the epic into its sub-issues and plan their order."
+- id: build
+  depends_on: [kind]
+  when: "$kind.output.route == 'task'"
+  command: implement-tasks
+```
+The route is chosen in three steps:
+
+1. **Rules.** Each route's `when:` is checked in order, and the first that
+   holds wins. No model is called.
+2. **Model.** If no rule holds and there is a `prompt`, a model picks a route
+   by name from the descriptions. The node's `provider`, `model` and `effort`
+   apply to this call.
+3. **Default.** If no rule holds and there is no prompt, or the model's answer
+   names no route, the run takes `default`. With no default, the step fails.
+
+A route needs at least two routes. Names may use letters, digits, `-` and `_`.
+You need a `prompt` or a `default`, so a route always ends somewhere. The
+node's output is `{"route": "<name>", "reason": "…", "by": "rule" | "model" |
+"default"}`. A step that joins the routes back together needs
+`trigger_rule: none_failed_min_one_success`, because the routes not taken are
+skipped. In the editor, a route node shows one exit per route. Connecting a
+step from an exit writes its `when:` for you.
+
 **`approval`** — human gate. **Partially implemented:** the executor currently
 records an approval node as *skipped* with a "not yet supported" note (no input
 channel yet). Don't rely on it to actually pause a run.
@@ -387,12 +428,15 @@ field of it with `$id.output.field[.field…]`:
 expr  := or
 or    := and ('||' and)*
 and   := cmp ('&&' cmp)*
-cmp   := value (('=='|'!=') value)?
+cmp   := value (('=='|'!='|'>'|'>='|'<'|'<=') value)?
 value := $node.output[.field…] | $HARNESS_VAR | 'literal' | "literal" | bareword
 ```
 
-- Comparisons are string equality after resolution. A lone `value` is **truthy**
-  unless it resolves to `""`, `false`, `0`, or `null`.
+- `==` and `!=` compare the resolved values as strings. `>`, `>=`, `<` and `<=`
+  compare them as numbers, and are false when either side isn't a number, so a
+  missing field never passes `> 0`.
+- A lone `value` is **truthy** unless it resolves to `""`, `false`, `0`, or
+  `null`.
 - A `false` `when` skips the node; a **malformed** `when` fails it (and is also
   caught at parse time as `InvalidCondition`).
 - Make the upstream node `output_format` a stable shape so field access is

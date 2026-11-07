@@ -211,15 +211,121 @@ pub enum NodeKind {
     /// when the run has no issue or the project has no Linear connection — so a
     /// prebuilt workflow can carry these steps and stay usable without Linear.
     Linear(LinearAction),
+    /// Choose one of several named routes. Downstream steps follow a route
+    /// with `when: "$<id>.output.route == '<name>'"`.
+    Route(RouteConfig),
 }
 
 impl NodeKind {
     /// Whether this body is executed by an AI provider (vs. deterministic).
+    /// A route is, when it may ask a model to choose.
     pub fn is_ai(&self) -> bool {
-        matches!(
-            self,
-            NodeKind::Prompt(_) | NodeKind::Command(_) | NodeKind::Loop(_)
-        )
+        match self {
+            NodeKind::Prompt(_) | NodeKind::Command(_) | NodeKind::Loop(_) => true,
+            NodeKind::Route(cfg) => cfg.prompt.is_some(),
+            _ => false,
+        }
+    }
+}
+
+/// One exit of a [`NodeKind::Route`] node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteOption {
+    /// What downstream steps compare against: `$<id>.output.route == '<name>'`.
+    pub name: String,
+    /// What this route means — for a person reading the workflow, and for the
+    /// model when it chooses.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// A rule that takes this route without asking a model, over earlier
+    /// steps' outputs. Checked in declaration order; the first true one wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
+}
+
+/// A route node: one input, a named exit per outcome.
+///
+/// It decides in three steps, stopping at the first that answers:
+/// 1. each route's `when:` rule, in order — certain and free;
+/// 2. the `prompt`, when given — a model picks a route from their
+///    descriptions, for what no field can answer;
+/// 3. the `default`.
+///
+/// Its output is `{"route": "<name>", "reason": "…", "by": "rule" | "model" |
+/// "default"}`, so a downstream step reads `$<id>.output.route`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+    pub routes: Vec<RouteOption>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+}
+
+impl RouteConfig {
+    pub fn names(&self) -> Vec<&str> {
+        self.routes.iter().map(|r| r.name.as_str()).collect()
+    }
+
+    /// The JSON a model must answer with: one of the route names.
+    pub fn output_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "route": { "type": "string", "enum": self.names() },
+                "reason": { "type": "string" }
+            },
+            "required": ["route"]
+        })
+    }
+
+    /// Appended to the prompt: the routes to choose between.
+    pub fn choices(&self) -> String {
+        let mut out =
+            String::from("\n\n## Choose a route\n\nPick exactly one of these, by name:\n\n");
+        for r in &self.routes {
+            if r.description.trim().is_empty() {
+                out.push_str(&format!("- `{}`\n", r.name));
+            } else {
+                out.push_str(&format!("- `{}` — {}\n", r.name, r.description.trim()));
+            }
+        }
+        out.push_str(
+            "\nAnswer with the route's name in `route`, and in `reason` one sentence on why.",
+        );
+        out
+    }
+
+    /// The route a model's answer names, with its reason — `None` when the
+    /// answer names none of them.
+    pub fn read_choice(&self, answer: &str) -> Option<(String, String)> {
+        let t = answer.trim();
+        let t = t
+            .strip_prefix("```json")
+            .or_else(|| t.strip_prefix("```"))
+            .map(|s| s.trim_end().trim_end_matches("```"))
+            .unwrap_or(t)
+            .trim();
+        let value: serde_json::Value = serde_json::from_str(t).ok().or_else(|| {
+            let (a, b) = (t.find('{')?, t.rfind('}')?);
+            serde_json::from_str(&t[a..=b]).ok()
+        })?;
+        let route = value.get("route")?.as_str()?.trim();
+        let name = self
+            .routes
+            .iter()
+            .find(|r| r.name.eq_ignore_ascii_case(route))?
+            .name
+            .clone();
+        let reason = value
+            .get("reason")
+            .and_then(|r| r.as_str())
+            .unwrap_or_default()
+            .trim()
+            .to_string();
+        Some((name, reason))
     }
 }
 
@@ -320,6 +426,13 @@ impl Node {
                     texts.extend(l.iter().map(String::as_str))
                 }
             },
+            // The prompt substitutes like any other; each rule is a `when:`.
+            NodeKind::Route(cfg) => {
+                if let Some(p) = &cfg.prompt {
+                    texts.push(p);
+                }
+                texts.extend(cfg.routes.iter().filter_map(|r| r.when.as_deref()));
+            }
             // `command` is a file reference (resolved by the runner); `approval`
             // carries a human message, not substitutable node refs.
             NodeKind::Command(_) | NodeKind::Approval(_) => {}

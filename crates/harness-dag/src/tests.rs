@@ -754,3 +754,62 @@ fn linear_text_is_substitutable_so_a_comment_can_carry_vars() {
     };
     assert_eq!(node.substitutable_text(), vec!["see $plan.output"]);
 }
+
+#[test]
+fn a_route_with_a_prompt_gets_an_answer_schema_naming_its_routes() {
+    let yaml = r#"
+name: w
+nodes:
+  - id: kind
+    route:
+      prompt: "classify"
+      routes:
+        - { name: epic, description: has sub-issues }
+        - { name: task }
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let node = wf.node("kind").unwrap();
+    assert!(node.kind.is_ai());
+    let schema = node.output_format.as_ref().expect("schema filled in");
+    assert_eq!(
+        schema["properties"]["route"]["enum"],
+        serde_json::json!(["epic", "task"])
+    );
+}
+
+#[test]
+fn a_route_must_always_end_somewhere_and_name_its_routes_well() {
+    let route = |body: &str| format!("name: w\nnodes:\n  - id: r\n    route:\n{body}");
+    let bad = [
+        // Rules only, no default: every rule can be false.
+        "      routes:\n        - { name: a, when: \"$r.output.x == 'y'\" }\n        - { name: b, when: \"$r.output.x == 'z'\" }\n",
+        // One route is no choice.
+        "      prompt: p\n      routes:\n        - { name: a }\n",
+        // A name a `when:` can't compare cleanly.
+        "      prompt: p\n      routes:\n        - { name: \"needs review\" }\n        - { name: ok }\n",
+        // Twice.
+        "      prompt: p\n      routes:\n        - { name: a }\n        - { name: a }\n",
+        // A default that isn't a route.
+        "      prompt: p\n      routes:\n        - { name: a }\n        - { name: b }\n      default: c\n",
+        // A misspelt key.
+        "      prompt: p\n      routes:\n        - { name: a, desc: x }\n        - { name: b }\n",
+    ];
+    for body in bad {
+        assert!(
+            parse_workflow(&route(body)).is_err(),
+            "should refuse:\n{body}"
+        );
+    }
+    let good = "      routes:\n        - { name: a, when: \"$r.output.x == 'y'\" }\n        - { name: b }\n      default: b\n";
+    let wf = parse_workflow(&route(good)).unwrap();
+    assert!(!wf.node("r").unwrap().kind.is_ai(), "rules only: no model");
+}
+
+#[test]
+fn a_route_rule_must_reference_real_nodes() {
+    let yaml = "name: w\nnodes:\n  - id: r\n    route:\n      routes:\n        - { name: a, when: \"$ghost.output.x == 'y'\" }\n        - { name: b }\n      default: b\n";
+    assert!(matches!(
+        parse_workflow(yaml),
+        Err(crate::DagError::UnknownNodeReference { .. })
+    ));
+}

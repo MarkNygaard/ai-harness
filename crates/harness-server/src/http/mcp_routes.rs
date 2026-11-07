@@ -1274,7 +1274,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_set_node",
-            "description": "Add or replace (by id) one node — no YAML. `node` has `id` and exactly one body field (prompt | bash | command | script | loop | approval | cancel) plus optional depends_on, when, category, provider, model, context, trigger_rule, timeout, output_format. Validates the whole DAG.",
+            "description": "Add or replace (by id) one node — no YAML. `node` has `id` and exactly one body field (prompt | bash | command | script | loop | approval | cancel | linear | route) plus optional depends_on, when, category, provider, model, context, trigger_rule, timeout, output_format. Validates the whole DAG. A `route` node ({\"routes\":[{\"name\",\"description\",\"when\"}],\"prompt\",\"default\"}) picks one route: rules first, then the prompt asks a model, then the default; a downstream step runs on route X with when: \"$<id>.output.route == 'X'\".",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
