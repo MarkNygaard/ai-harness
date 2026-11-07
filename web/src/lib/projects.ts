@@ -159,9 +159,8 @@ export function useRestoreTrash() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ["trash"] });
       qc.invalidateQueries({ queryKey: ["projects"] });
-      qc.invalidateQueries({
-        queryKey: ["linear", "sources", data.entry.project],
-      });
+      // The prefix, so the Triggers page's every-project list refreshes too.
+      qc.invalidateQueries({ queryKey: ["linear", "sources"] });
       qc.invalidateQueries({
         queryKey: ["linear", "check", data.entry.project],
       });

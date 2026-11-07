@@ -161,10 +161,31 @@ Useful if you are not using Linear, or for the A/B case below.
 | `run_trigger_pair` | Start the **same task twice** on different models |
 | `run_linear_claim` | Claim a Linear issue for a run |
 
+### Triggers
+
+The same triggers as the [Triggers page](/docs/triggers#the-triggers-page):
+everything that starts a run by itself, Linear triggers and schedules alike,
+through one set of tools.
+
+| Tool | What it does |
+| --- | --- |
+| `trigger_list` | Every trigger of every kind: what sets it off, what it starts, and whether it is on, dry-run or off. Filter by `kind`, `project` or `workflow` |
+| `trigger_save` | Create or change a trigger. `kind: linear` is keyed by project + workflow and takes teams and statuses by name; `kind: schedule` takes an `id` to change one. Only the fields you give change |
+| `trigger_delete` | Delete a trigger. A Linear trigger goes to the bin for 14 days; a schedule is gone, though the runs it started are kept |
+
+A new Linear trigger needs a `team` and the status it claims from
+(`claims_from`), and starts **disabled and dry-run**, so nothing runs until you
+turn it on with `enabled` and `live`. The status map (`in_progress`, `review`,
+`ready`, …) is optional: a workflow can move its issue itself with `linear:`
+steps instead. Schedules keep their
+rule: only administrators change them. In the built-in chat, `trigger_save` and
+`trigger_delete` wait for you to confirm.
+
 ### Schedules
 
-The same [schedules](/docs/schedules) as the Schedules page: workflows that
-run at set times with no Linear issue behind them.
+The same [schedules](/docs/schedules) as on the Triggers page: workflows that
+run at set times with no Linear issue behind them. The trigger tools above
+cover these too; these stay for clients that already use them.
 
 | Tool | What it does |
 | --- | --- |

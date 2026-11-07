@@ -49,6 +49,26 @@ runs actually did, which is a developer's job rather than a requester's. See
 A weekly report or a nightly check has nobody to ask for it.
 [Schedules](/docs/schedules) start a workflow at times you set.
 
+## The Triggers page
+
+Everything that starts a run *by itself* is a **trigger**: a Linear trigger
+(an issue in a team's status, delegated to the harness or carrying a label) or
+a schedule. **Triggers** in the sidebar lists every one of them, of every kind,
+in one list. Each row says what sets it off, which workflow it starts in which
+project, and whether it is **on**, **dry-run** (a Linear trigger that logs what
+it would claim and starts nothing) or **off**.
+
+Filter by kind, project or workflow, or search. Click a trigger to open its own
+page and change it; **New trigger** asks which kind first.
+
+Linear triggers used to live on each project's **Linear** tab, and still can:
+**Settings → Preferences → Triggers** chooses which of the two you manage them
+on, per browser. Both edit the same triggers.
+
+An assistant connected over [MCP](/docs/mcp#triggers) can list, create, change
+and delete triggers of every kind, with `trigger_list`, `trigger_save` and
+`trigger_delete`.
+
 ## What a trigger supplies
 
 Whichever route it takes, a trigger names the same things:

@@ -10,7 +10,7 @@ use axum::extract::{Extension, Query};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use harness_persist::LinearSourceInput;
+use harness_persist::{LinearSource, LinearSourceInput};
 use serde::Deserialize;
 
 use super::linear_connections::resolve_for_project;
@@ -27,27 +27,37 @@ fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg }))).into_response()
 }
 
-/// Verify the project exists, or return a 4xx/5xx response.
+/// Verify the project exists, or say why not.
+pub(crate) async fn project_exists(
+    state: &Arc<RunsState>,
+    project: &str,
+) -> Result<(), (StatusCode, String)> {
+    let store = state
+        .project_store()
+        .await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    match store.get(project).await {
+        Ok(Some(_)) => Ok(()),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            format!("project `{project}` not found"),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("database error looking up project: {e}"),
+        )),
+    }
+}
+
+/// [`project_exists`], as the finished HTTP response a route hands back.
 // The `Err` here IS the finished HTTP response, handed straight back to axum.
 // Boxing it to satisfy `result_large_err` would add an allocation, plus an
 // unwrap at every call site, to avoid a move axum makes anyway.
 #[allow(clippy::result_large_err)]
 async fn ensure_project(state: &Arc<RunsState>, project: &str) -> Result<(), Response> {
-    let store = state
-        .project_store()
+    project_exists(state, project)
         .await
-        .map_err(|e| err(StatusCode::SERVICE_UNAVAILABLE, e))?;
-    match store.get(project).await {
-        Ok(Some(_)) => Ok(()),
-        Ok(None) => Err(err(
-            StatusCode::NOT_FOUND,
-            format!("project `{project}` not found"),
-        )),
-        Err(e) => Err(err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("database error looking up project: {e}"),
-        )),
-    }
+        .map_err(|(status, msg)| err(status, msg))
 }
 
 #[derive(Debug, Deserialize)]
@@ -55,7 +65,7 @@ pub struct WorkflowQuery {
     pub workflow: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct PutSourceBody {
     pub workflow: String,
     pub team_id: String,
@@ -288,36 +298,35 @@ pub async fn put_source(
     axum::extract::Path(project): axum::extract::Path<String>,
     Json(body): Json<PutSourceBody>,
 ) -> Response {
-    // Validation.
-    let Some(workflow) = trimmed_non_empty(body.workflow) else {
-        return err(StatusCode::BAD_REQUEST, "`workflow` is required");
-    };
-    let Some(team_id) = trimmed_non_empty(body.team_id) else {
-        return err(StatusCode::BAD_REQUEST, "`team_id` is required");
-    };
-    let Some(team_name) = trimmed_non_empty(body.team_name) else {
-        return err(StatusCode::BAD_REQUEST, "`team_name` is required");
-    };
-    let Some(source_state_id) = trimmed_non_empty(body.source_state_id) else {
-        return err(StatusCode::BAD_REQUEST, "`source_state_id` is required");
-    };
+    match save_binding(&state, &project, body).await {
+        Ok(row) => Json(row).into_response(),
+        Err((status, msg)) => err(status, msg),
+    }
+}
+
+/// Validate and store a binding. The one way a binding is written, shared by
+/// the HTTP route and the MCP `trigger_save` tool, so both hold to the same
+/// rules.
+pub(crate) async fn save_binding(
+    state: &Arc<RunsState>,
+    project: &str,
+    body: PutSourceBody,
+) -> Result<LinearSource, (StatusCode, String)> {
+    let bad = |m: &str| (StatusCode::BAD_REQUEST, m.to_string());
+    let workflow = trimmed_non_empty(body.workflow).ok_or_else(|| bad("`workflow` is required"))?;
+    let team_id = trimmed_non_empty(body.team_id).ok_or_else(|| bad("`team_id` is required"))?;
+    let team_name =
+        trimmed_non_empty(body.team_name).ok_or_else(|| bad("`team_name` is required"))?;
+    let source_state_id = trimmed_non_empty(body.source_state_id)
+        .ok_or_else(|| bad("`source_state_id` is required"))?;
     if body.poll_interval_secs < 1 || body.poll_interval_secs > 86_400 {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "`poll_interval_secs` must be between 1 and 86400",
-        );
+        return Err(bad("`poll_interval_secs` must be between 1 and 86400"));
     }
     if body.max_concurrent_runs < 1 || body.max_concurrent_runs > 20 {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "`max_concurrent_runs` must be between 1 and 20",
-        );
+        return Err(bad("`max_concurrent_runs` must be between 1 and 20"));
     }
     if body.max_attempts < 1 || body.max_attempts > 10 {
-        return err(
-            StatusCode::BAD_REQUEST,
-            "`max_attempts` must be between 1 and 10",
-        );
+        return Err(bad("`max_attempts` must be between 1 and 10"));
     }
     // The source (pickup) status is exclusive: claiming an issue MOVES it out of
     // that column, so reusing it as a status-map target (in-progress/review/ready)
@@ -331,33 +340,25 @@ pub async fn put_source(
         ("epic_review_state_id", &body.epic_review_state_id),
     ] {
         if st.as_deref().map(str::trim) == Some(source_state_id.as_str()) {
-            return err(
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "`{slot}` must differ from the source status — the pickup column can't also be a status-map target"
-                ),
-            );
+            return Err(bad(&format!(
+                "`{slot}` must differ from the source status — the pickup column can't also be a status-map target"
+            )));
         }
     }
 
-    if let Err(r) = ensure_project(&state, &project).await {
-        return r;
-    }
+    project_exists(state, project).await?;
 
-    let store = match state.linear_source_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
+    let store = state
+        .linear_source_store()
+        .await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
 
     let trigger_label = optional_trimmed_non_empty(body.trigger_label);
     // The failed-label keeps an issue out of pickup; the trigger label pulls it
     // in. One label can't do both.
     if let (Some(t), Some(f)) = (trigger_label.as_deref(), body.failed_label.as_deref()) {
         if t.eq_ignore_ascii_case(f.trim()) {
-            return err(
-                StatusCode::BAD_REQUEST,
-                "the trigger label can't also be the failed label",
-            );
+            return Err(bad("the trigger label can't also be the failed label"));
         }
     }
     let linear_project_id = optional_trimmed_non_empty(body.linear_project_id);
@@ -385,10 +386,86 @@ pub async fn put_source(
         linear_project_id,
     };
 
-    match store.upsert(&project, &workflow, &input).await {
-        Ok(row) => Json(row).into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    store
+        .upsert(project, &workflow, &input)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+}
+
+impl PutSourceBody {
+    /// The body that would save `b` unchanged — the starting point for an
+    /// update that names only the fields it changes.
+    pub(crate) fn from_binding(b: &LinearSource) -> Self {
+        Self {
+            workflow: b.workflow.clone(),
+            team_id: b.team_id.clone(),
+            team_name: b.team_name.clone(),
+            source_state_id: b.source_state_id.clone(),
+            failed_label: b.failed_label.clone(),
+            in_progress_state_id: b.in_progress_state_id.clone(),
+            review_state_id: b.review_state_id.clone(),
+            ready_state_id: b.ready_state_id.clone(),
+            epic_review_state_id: b.epic_review_state_id.clone(),
+            piece_ready_state_id: b.piece_ready_state_id.clone(),
+            base_branch: b.base_branch.clone(),
+            poll_interval_secs: b.poll_interval_secs,
+            max_concurrent_runs: b.max_concurrent_runs,
+            max_attempts: b.max_attempts,
+            enabled: b.enabled,
+            live: b.live,
+            linear_project_id: b.linear_project_id.clone(),
+            linear_project_name: b.linear_project_name.clone(),
+            trigger_label: b.trigger_label.clone(),
+        }
     }
+
+    /// A new binding's body: everything optional unset, the numeric limits at
+    /// their defaults, and — like the form — created disabled and dry-run, so
+    /// nothing starts until someone turns it on.
+    pub(crate) fn new(workflow: &str) -> Self {
+        Self {
+            workflow: workflow.to_string(),
+            team_id: String::new(),
+            team_name: String::new(),
+            source_state_id: String::new(),
+            failed_label: None,
+            in_progress_state_id: None,
+            review_state_id: None,
+            ready_state_id: None,
+            epic_review_state_id: None,
+            piece_ready_state_id: None,
+            base_branch: None,
+            poll_interval_secs: default_poll(),
+            max_concurrent_runs: default_max_concurrent_runs(),
+            max_attempts: default_max_attempts(),
+            enabled: false,
+            live: false,
+            linear_project_id: None,
+            linear_project_name: None,
+            trigger_label: None,
+        }
+    }
+}
+
+/// Move a binding to the bin. `Ok(None)` when there was no such binding.
+pub(crate) async fn trash_binding(
+    state: &Arc<RunsState>,
+    project: &str,
+    workflow: &str,
+    actor: Option<&str>,
+) -> Result<Option<String>, (StatusCode, String)> {
+    project_exists(state, project).await?;
+    // Into the bin, not gone: a binding's columns are the part of the setup
+    // that is hard to get right, and one missing stops a whole relay.
+    let trash = state
+        .trash_store()
+        .await
+        .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e.to_string()))?;
+    trash
+        .trash_linear_binding(project, workflow, actor)
+        .await
+        .map(|entry| entry.map(|e| e.id))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 /// `DELETE /api/projects/{project}/linear-source?workflow=` — remove a binding.
@@ -401,26 +478,14 @@ pub async fn delete_source(
     let Some(workflow) = trimmed_non_empty(q.workflow) else {
         return err(StatusCode::BAD_REQUEST, "`workflow` is required");
     };
-    if let Err(r) = ensure_project(&state, &project).await {
-        return r;
-    }
-    // Into the bin, not gone: a binding's columns are the part of the setup
-    // that is hard to get right, and one missing stops a whole relay.
-    let trash = match state.trash_store().await {
-        Ok(s) => s,
-        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
-    };
     let (_, actor) = super::accounts::caller_trigger(&state, &headers).await;
-    match trash
-        .trash_linear_binding(&project, &workflow, actor.as_deref())
-        .await
-    {
-        Ok(entry) => Json(serde_json::json!({
-            "deleted": entry.is_some(),
+    match trash_binding(&state, &project, &workflow, actor.as_deref()).await {
+        Ok(trash_id) => Json(serde_json::json!({
+            "deleted": trash_id.is_some(),
             "workflow": workflow,
-            "trash_id": entry.map(|e| e.id),
+            "trash_id": trash_id,
         }))
         .into_response(),
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        Err((status, msg)) => err(status, msg),
     }
 }

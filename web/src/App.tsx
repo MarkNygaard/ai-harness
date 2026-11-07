@@ -32,8 +32,12 @@ import { ChatPanel } from "./components/chat/ChatPanel";
 import { ChatProvider } from "./components/chat/ChatProvider";
 import { ChatSettingsPage } from "./routes/settings/ChatSettingsPage";
 import { ChatPage } from "./routes/chat/ChatPage";
-import { SchedulesPage } from "./routes/schedules/SchedulesPage";
 import { TriggersPage } from "./routes/triggers/TriggersPage";
+import {
+  LinearTriggerPage,
+  NewTriggerPage,
+  ScheduleTriggerPage,
+} from "./routes/triggers/TriggerPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -59,8 +63,22 @@ export function App() {
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/ab" element={<AbTestsPage />} />
             <Route path="/chat" element={<ChatPage />} />
-            <Route path="/schedules" element={<SchedulesPage />} />
             <Route path="/triggers" element={<TriggersPage />} />
+            <Route path="/triggers/new/:kind" element={<NewTriggerPage />} />
+            <Route
+              path="/triggers/linear/:project/:workflow"
+              element={<LinearTriggerPage />}
+            />
+            <Route
+              path="/triggers/schedule/:id"
+              element={<ScheduleTriggerPage />}
+            />
+            {/* Schedules became a kind of trigger. Bookmarks and the docs
+              still point here. */}
+            <Route
+              path="/schedules"
+              element={<Navigate to="/triggers?kind=schedule" replace />}
+            />
             <Route
               path="/reports/:workflow"
               element={<WorkflowReportsPage />}

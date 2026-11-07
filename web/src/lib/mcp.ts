@@ -14,6 +14,8 @@ export interface McpConnection {
   run_tools: string[];
   /** Absent from a server older than scheduled-run tools. */
   schedule_tools?: string[];
+  /** Absent from a server older than the unified trigger tools. */
+  trigger_tools?: string[];
   authoring_tools: string[];
 }
 

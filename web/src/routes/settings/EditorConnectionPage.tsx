@@ -241,6 +241,14 @@ export function EditorConnectionPage() {
                       {data?.run_tools.join(" · ")}
                     </div>
                   </div>
+                  {!!data?.trigger_tools?.length && (
+                    <div>
+                      <div className="mb-1 font-medium">Triggers</div>
+                      <div className="font-mono text-muted-foreground">
+                        {data.trigger_tools.join(" · ")}
+                      </div>
+                    </div>
+                  )}
                   {!!data?.schedule_tools?.length && (
                     <div>
                       <div className="mb-1 font-medium">Schedules</div>

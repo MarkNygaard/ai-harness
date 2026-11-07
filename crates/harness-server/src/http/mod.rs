@@ -46,6 +46,7 @@ pub(crate) mod sso_flow;
 pub(crate) mod state;
 pub(crate) mod system_routes;
 pub(crate) mod tokens_routes;
+pub(crate) mod trigger_tools;
 pub(crate) mod usage_routes;
 pub(crate) mod users_routes;
 pub(crate) mod workflows_routes;
