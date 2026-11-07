@@ -819,14 +819,15 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((req.node_id.to_string(), body));
+            // `FAIL:` scripts a step that fails, with the rest as its output.
+            let out = self.outputs.get(req.node_id).copied().unwrap_or("");
+            let (success, text) = match out.strip_prefix("FAIL:") {
+                Some(rest) => (false, rest),
+                None => (true, out),
+            };
             Ok(harness_dag::NodeOutput {
-                text: self
-                    .outputs
-                    .get(req.node_id)
-                    .copied()
-                    .unwrap_or("")
-                    .to_string(),
-                success: true,
+                text: text.to_string(),
+                success,
                 ..Default::default()
             })
         }
@@ -844,6 +845,76 @@ mod tests {
             .await
             .unwrap();
         (report, runner)
+    }
+
+    async fn run_bundled(
+        name: &str,
+        outputs: &[(&'static str, &'static str)],
+    ) -> (harness_dag::RunReport, Scripted) {
+        let wf = harness_dag::parse_workflow(default_workflow(name).unwrap()).unwrap();
+        let runner = Scripted::new(outputs);
+        let vars = harness_dag::VarContext::new()
+            .set("ARGUMENTS", "NIL-10")
+            .set("ISSUE_ID", "issue-uuid")
+            .set("TASK_TITLE", "NIL-10")
+            .set("ARTIFACTS_DIR", "/tmp/artifacts")
+            .set("BASE_BRANCH", "main")
+            .set("HARNESS_REPOS", "");
+        let report = harness_dag::run_workflow(&wf, &runner, &vars)
+            .await
+            .unwrap();
+        (report, runner)
+    }
+
+    /// A step that fails before `validate` ends the run *failed*, on that
+    /// step. `task-1794075518503` instead ended cancelled with "validation did
+    /// not return a pass": its first step failed, `validate` was skipped, and
+    /// the `all_done` gate read the skipped step's empty output as a failed
+    /// verdict — hiding the real cause.
+    #[tokio::test]
+    async fn a_failure_before_validation_is_not_reported_as_a_failed_validation() {
+        for name in ["task", "idea-to-pr"] {
+            let wf = harness_dag::parse_workflow(default_workflow(name).unwrap()).unwrap();
+            let roots: Vec<&'static str> = wf
+                .nodes
+                .iter()
+                .filter(|n| n.depends_on.is_empty())
+                .map(|n| &*Box::leak(n.id.clone().into_boxed_str()))
+                .collect();
+            let fails: Vec<(&'static str, &'static str)> =
+                roots.iter().map(|id| (*id, "FAIL:boom")).collect();
+            let (report, runner) = run_bundled(name, &fails).await;
+            assert_eq!(report.status, harness_dag::RunStatus::Failed, "{name}");
+            assert!(!runner.ran("validate"), "{name}");
+            let gate = report.node("abort-on-invalid").expect("gate");
+            assert_eq!(gate.status, harness_dag::NodeStatus::Skipped, "{name}");
+        }
+    }
+
+    /// The gate still does its job once `validate` has run: a failed verdict
+    /// cancels, and so does one that can't be read.
+    #[tokio::test]
+    async fn task_still_cancels_on_a_failed_or_unreadable_verdict() {
+        for verdict in [r#"{"passed":false,"summary":"tests red"}"#, "no json here"] {
+            let (report, runner) = run_bundled("task", &[("validate", verdict)]).await;
+            assert_eq!(
+                report.status,
+                harness_dag::RunStatus::Cancelled,
+                "{verdict}"
+            );
+            assert!(!runner.ran("finalize-pr"), "{verdict}");
+        }
+        let (report, runner) = run_bundled(
+            "task",
+            &[
+                ("validate", r#"{"passed":true}"#),
+                ("pi-review-fix-loop", "<promise>PI_REVIEW_CLEAN</promise>"),
+                ("final-verify-loop", "<promise>FINAL_VERIFY_CLEAN</promise>"),
+            ],
+        )
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Completed);
+        assert!(runner.ran("finalize-pr"));
     }
 
     const OPEN_PR: &str =
