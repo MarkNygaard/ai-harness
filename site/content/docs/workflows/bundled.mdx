@@ -53,6 +53,26 @@ Started by hand, with no issue, every `linear:` step does nothing and the run
 behaves like any other. Status names must exist on the issue's team, so rename
 `In Progress` and `In Review` in a fork if your board uses other names.
 
+**It also runs epics.** Its first step reads the issue, and a route sends it
+one of four ways:
+
+- **An ordinary issue** goes through the pipeline above.
+- **An epic** (an issue with sub-issues) is started, not built. The run creates
+  the branch `epic/<ID>` and moves the first sub-issue to Todo, where it starts
+  its own run.
+- **A piece** (a sub-issue of a started epic) is built on the epic's branch,
+  then graded against its own description, with fresh context. If it falls
+  short, it gets one round of fixes and a second grade. When it passes, its
+  pull request merges into the epic branch, the piece moves to Done, and the
+  next piece starts. After the last piece, the epic branch becomes one pull
+  request against the default branch, and the epic moves to In Review.
+- **An epic whose pieces have all begun** is left alone: there is nothing to
+  start.
+
+A piece that fails its grade twice stops. Its pull request stays open, and it
+moves to In Review for a person to look at. One Todo trigger runs the whole
+thing; see [Linear epics](/docs/setup/linear-epics).
+
 ## Working on an existing PR
 
 ### `revise-pr`

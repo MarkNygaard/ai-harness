@@ -43,6 +43,7 @@ import {
 import { fromYaml, toYaml } from "@/lib/workflow-yaml";
 import type {
   EditorNode,
+  EditorWorkflow,
   NodeKindId,
   PrebuiltStep,
   WorkflowUi,
@@ -78,6 +79,9 @@ interface Meta {
   provider?: string;
   model?: string;
   ui?: WorkflowUi | null;
+  // No controls for these yet; carried so a save from the canvas keeps them.
+  improvements?: EditorWorkflow["improvements"];
+  handles_epics?: boolean;
 }
 
 function Editor() {
@@ -123,6 +127,8 @@ function Editor() {
       provider: wf.provider,
       model: wf.model,
       ui: wf.ui,
+      improvements: wf.improvements,
+      handles_epics: wf.handles_epics,
     });
     loadedFor.current = source.data.name;
   }, [source.data, setNodes, setEdges]);

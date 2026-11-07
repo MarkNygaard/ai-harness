@@ -317,6 +317,21 @@ describe("nodeToDoc", () => {
   });
 });
 
+describe("handles_epics", () => {
+  it("survives a round-trip, and is left out when off", () => {
+    const on = fromYaml(
+      toYaml({
+        name: "t",
+        handles_epics: true,
+        nodes: [{ id: "a", bash: "x" }],
+      }),
+    );
+    expect(on.handles_epics).toBe(true);
+    const off = toYaml({ name: "t", nodes: [{ id: "a", bash: "x" }] });
+    expect(off).not.toContain("handles_epics");
+  });
+});
+
 describe("route steps", () => {
   it("detects the kind and starts with two routes and a default", () => {
     const fresh = emptyNode("route", "kind");

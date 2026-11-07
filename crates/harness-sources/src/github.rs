@@ -412,6 +412,28 @@ impl GithubClient {
         )
     }
 
+    /// Whether `branch` exists in `owner/repo`. A 404 is `false`; anything
+    /// else that fails is an error, so a caller can tell "no such branch" from
+    /// "couldn't ask".
+    pub async fn branch_exists(
+        &self,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Result<bool, GithubError> {
+        // `git/ref/heads/<name>` takes a name with slashes in it as-is, which
+        // `branches/<name>` does not reliably do.
+        match self
+            .get(&format!("/repos/{owner}/{repo}/git/ref/heads/{branch}"))
+            .await
+        {
+            Ok(_) => Ok(true),
+            // The status, not the path: an epic named `AIH-404` is in the path.
+            Err(e) if e.0.contains("→ 404") => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
     /// When a person other than `author` first reviewed the PR, if anyone has.
     /// The first 100 reviews are enough to find the earliest.
     pub async fn first_review(

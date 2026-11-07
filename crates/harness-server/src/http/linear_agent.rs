@@ -1289,12 +1289,95 @@ pub(crate) async fn linear_trigger(
     trigger
 }
 
+/// Whether `workflow` runs Linear epics itself (`handles_epics: true`).
+fn runs_epics_itself(state: &Arc<RunsState>, workflow: &str) -> bool {
+    harness_runner::resolve_workflow_source(workflow, &state.project_root)
+        .ok()
+        .and_then(|(yaml, _)| harness_dag::parse_workflow(&yaml).ok())
+        .is_some_and(|wf| wf.handles_epics)
+}
+
+/// Route for a workflow that runs epics itself. It is handed every issue,
+/// epics included — telling an epic from a task is its own first step — so
+/// the only decision left here is the base branch, which has to be settled
+/// before the worktree is cut.
+///
+/// A sub-issue is a piece only once its epic has been started, which is when
+/// the epic's branch exists. Linear sub-issues are common outside epics, and
+/// basing one on a branch nobody created would fail the run before its first
+/// step. So: on `epic/<PARENT>` when that branch is there, and an ordinary
+/// task otherwise.
+pub(crate) fn self_run_route(parent_identifier: Option<&str>, epic_branch_exists: bool) -> Route {
+    match parent_identifier.and_then(epic_branch) {
+        Some(branch) if epic_branch_exists => Route::BuildOnEpic(branch),
+        _ => Route::Build,
+    }
+}
+
+/// [`self_run_route`], with the branch looked up on GitHub.
+async fn route_self_run(
+    state: &Arc<RunsState>,
+    client: &LinearClient,
+    binding: &LinearSource,
+    issue_id: &str,
+) -> Route {
+    let parent = match client.issue_context(issue_id).await {
+        Ok(ctx) => ctx.parent_identifier,
+        Err(e) => {
+            tracing::warn!(
+                "linear: could not read {issue_id} ({}) — building it as a task",
+                e.0
+            );
+            return Route::Build;
+        }
+    };
+    let Some(branch) = parent.as_deref().and_then(epic_branch) else {
+        return Route::Build;
+    };
+    let slug = match state.project_store().await {
+        Ok(store) => store
+            .get(&binding.project)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|p| super::linear_chat::github_slug(&p.git_url)),
+        Err(_) => None,
+    };
+    let exists = match slug.as_deref().and_then(|s| s.split_once('/')) {
+        Some((owner, repo)) => {
+            let token = state.github_token_for_project(&binding.project).await;
+            match harness_sources::github::GithubClient::new(token)
+                .branch_exists(owner, repo, &branch)
+                .await
+            {
+                Ok(exists) => exists,
+                Err(e) => {
+                    tracing::warn!(
+                        "linear: could not check for {branch} ({}) — building {issue_id} as a task",
+                        e.0
+                    );
+                    false
+                }
+            }
+        }
+        None => false,
+    };
+    let route = self_run_route(parent.as_deref(), exists);
+    if let Route::BuildOnEpic(b) = &route {
+        tracing::info!("linear: {issue_id} is a piece of an epic — building on {b}");
+    }
+    route
+}
+
 pub(crate) async fn route_issue(
     state: &Arc<RunsState>,
     client: &LinearClient,
     binding: &LinearSource,
     issue_id: &str,
 ) -> Route {
+    if runs_epics_itself(state, &binding.workflow) {
+        return route_self_run(state, client, binding, issue_id).await;
+    }
     let Ok(store) = state.linear_source_store().await else {
         return Route::Build;
     };
@@ -1553,6 +1636,24 @@ async fn issue_context(
 mod tests {
     use super::*;
     use harness_sources::linear::parse_agent_session_event;
+
+    #[test]
+    fn a_workflow_that_runs_epics_bases_a_piece_on_its_epic_only_once_started() {
+        // A piece of a started epic: its branch.
+        assert!(matches!(
+            self_run_route(Some("NIL-10"), true),
+            Route::BuildOnEpic(b) if b == "epic/NIL-10"
+        ));
+        // A sub-issue of something never started as an epic is a plain task,
+        // not a run that fails for want of a branch.
+        assert!(matches!(
+            self_run_route(Some("NIL-10"), false),
+            Route::Build
+        ));
+        // No parent: a task, or an epic the workflow will recognise itself.
+        // Never handed to the supervisor.
+        assert!(matches!(self_run_route(None, true), Route::Build));
+    }
 
     // ── Not starting two runs for one issue ──────────────────────────────────
 

@@ -141,7 +141,7 @@ async fn issue_project(
 }
 
 /// `owner/repo` of a GitHub URL — https, ssh, with or without `.git`.
-fn github_slug(url: &str) -> Option<String> {
+pub(crate) fn github_slug(url: &str) -> Option<String> {
     let rest = url
         .trim()
         .strip_prefix("https://github.com/")

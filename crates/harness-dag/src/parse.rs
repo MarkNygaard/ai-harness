@@ -31,6 +31,8 @@ struct RawWorkflow {
     #[serde(default)]
     internal: bool,
     #[serde(default)]
+    handles_epics: bool,
+    #[serde(default)]
     nodes: Vec<RawNode>,
 }
 
@@ -421,6 +423,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
         ui: raw.ui,
         improvements: raw.improvements,
         internal: raw.internal,
+        handles_epics: raw.handles_epics,
         nodes,
     })
 }
