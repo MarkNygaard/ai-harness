@@ -1,20 +1,8 @@
 import { useEffect, useState } from "react";
-import {
-  IconBolt,
-  IconHierarchy2,
-  IconPlus,
-  IconTrash,
-} from "@tabler/icons-react";
+import { Link } from "react-router-dom";
+import { IconHierarchy2, IconPlus, IconTrash } from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -47,7 +35,7 @@ import { EpicSetupForm, WiringCheck } from "./EpicSetup";
 
 // `w-full min-w-0` is load-bearing: a bare `<select>` sizes itself to its
 // widest option, so three status dropdowns in one grid row refuse to shrink and
-// push their way out of the dialog rather than fitting inside it.
+// push their way out of the panel rather than fitting inside it.
 const inputCls =
   "h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2 text-[13px] outline-none focus:ring-2 focus:ring-ring";
 
@@ -170,44 +158,49 @@ function StateSelect({
 }
 
 /**
- * A per-project "Linear" dialog: lists existing Linear trigger bindings (one
- * per workflow) and lets the user add/edit/delete them. Renders nothing unless
- * the project has a Linear credential configured.
+ * A project's Linear tab: lists its Linear trigger bindings (one per workflow)
+ * and lets the user add/edit/delete them. Until a Linear account that can
+ * authenticate is connected there is nothing to bind to, so it says where to
+ * connect one instead.
  */
-export function ProjectLinearDialog({ project }: { project: string }) {
+export function ProjectLinearPanel({ project }: { project: string }) {
   // Gate on an account that can actually authenticate (an app install or a
   // legacy key) — one holding only OAuth client details isn't one yet. Any
-  // usable account is enough to open this: which one this project uses is
-  // chosen inside.
+  // usable account is enough: which one this project uses is chosen inside.
   const connections = useLinearConnections();
   const accounts = connections.data ?? [];
-  if (!accounts.some((c) => c.mode !== "none")) return null;
+
+  if (connections.isLoading) {
+    return <p className="text-xs text-muted-foreground">Loading…</p>;
+  }
+  if (!accounts.some((c) => c.mode !== "none")) {
+    return (
+      <div className="rounded-md border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
+        No Linear account is connected.{" "}
+        <Link
+          to="/settings/integrations"
+          className="text-foreground underline underline-offset-2"
+        >
+          Connect one under Integrations
+        </Link>{" "}
+        to start this project&rsquo;s runs from Linear issues.
+      </div>
+    );
+  }
 
   return (
-    <Dialog>
-      <DialogTrigger
-        render={
-          <Button variant="ghost" size="icon-sm" title="Linear triggers" />
-        }
-      >
-        <IconBolt className="size-3.5" />
-      </DialogTrigger>
-      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
-        <DialogHeader>
-          <DialogTitle className="font-mono text-base">{project}</DialogTitle>
-          <DialogDescription>
-            Maps a Linear team to this project: which workflow runs, the source
-            status that triggers it, the rest of the status map, and the base
-            branch. Work starts only when an issue is both{" "}
-            <strong>delegated to the harness in Linear</strong> and sitting in
-            that source status. Delegating is the fast path; enabling{" "}
-            <em>live</em> also lets the poller catch delegated issues it missed.
-            One binding per workflow.
-          </DialogDescription>
-        </DialogHeader>
-        <DialogBody project={project} accounts={accounts} />
-      </DialogContent>
-    </Dialog>
+    <div className="flex flex-col gap-4">
+      <p className="text-sm text-muted-foreground">
+        Maps a Linear team to this project: which workflow runs, the source
+        status that triggers it, the rest of the status map, and the base
+        branch. Work starts only when an issue is both{" "}
+        <strong>delegated to the harness in Linear</strong> and sitting in that
+        source status. Delegating is the fast path; enabling <em>live</em> also
+        lets the poller catch delegated issues it missed. One binding per
+        workflow.
+      </p>
+      <LinearBody project={project} accounts={accounts} />
+    </div>
   );
 }
 
@@ -262,7 +255,7 @@ function AccountSelect({
   );
 }
 
-function DialogBody({
+function LinearBody({
   project,
   accounts,
 }: {
@@ -348,8 +341,6 @@ function DialogBody({
   }
 
   return (
-    // `min-w-0`: this is a grid item of the dialog, whose track would otherwise
-    // stretch to the widest thing inside and spill past the panel.
     <div className="flex min-w-0 flex-col gap-3">
       <AccountSelect project={project} accounts={accounts} />
       {sources.isLoading && (
@@ -616,8 +607,6 @@ function BindingForm({
   };
 
   return (
-    // `min-w-0`: a grid item of the dialog panel, which would otherwise stretch
-    // its track to the widest control inside and spill past the edge.
     <div className="flex min-w-0 flex-col gap-3">
       {/* Workflow */}
       {fixedWorkflow ? (

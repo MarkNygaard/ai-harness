@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
 import { SettingsSidebar } from "@/components/SettingsSidebar";
@@ -22,11 +23,17 @@ import {
  * under you — and a lone "Categories" says nothing about where that is. Pages
  * still pass their own name; the trail is added here so no section has to
  * remember to.
+ *
+ * `parents` are the crumbs between Settings and the page, for a page that sits
+ * under a section rather than being one (a single project under Projects).
  */
 export function SettingsShell({
   title,
+  parents = [],
   ...props
-}: Omit<React.ComponentProps<typeof AppShell>, "sidebar">) {
+}: Omit<React.ComponentProps<typeof AppShell>, "sidebar"> & {
+  parents?: { label: string; to: string }[];
+}) {
   return (
     <AppShell
       {...props}
@@ -39,6 +46,16 @@ export function SettingsShell({
               </BreadcrumbLink>
             </BreadcrumbItem>
             <BreadcrumbSeparator />
+            {parents.map((p) => (
+              <Fragment key={p.to}>
+                <BreadcrumbItem>
+                  <BreadcrumbLink render={<Link to={p.to} />}>
+                    {p.label}
+                  </BreadcrumbLink>
+                </BreadcrumbItem>
+                <BreadcrumbSeparator />
+              </Fragment>
+            ))}
             <BreadcrumbItem className="min-w-0">
               <BreadcrumbPage className="truncate font-medium text-foreground">
                 {title}
