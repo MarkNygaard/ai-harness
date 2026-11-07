@@ -363,8 +363,69 @@ pub async fn move_state(
         Ok(c) => c,
         Err((s, m)) => return err(s, m),
     };
-    match c.set_issue_state(&req.issue, &req.state).await {
-        Ok(()) => Json(serde_json::json!({ "moved": req.issue })).into_response(),
+    // Resolve the status *name* to an id before the mutation.
+    //
+    // `issueUpdate` takes `stateId` and nothing else: handed "In Progress" it
+    // answers `Argument Validation Error`, which reads like a bad request
+    // rather than "that was a name, not an id". The `linear:` step kind is
+    // written in names -- that is the whole point of it -- so this is where the
+    // two have to meet. Matching is by id, or name ignoring case, the same as
+    // `resolve_placement` does for a created issue.
+    //
+    // Against the issue's **own team**, not the workspace: a state id from
+    // another team is a valid uuid that Linear still refuses, and two teams
+    // routinely share status names.
+    let issue = match c.issue_labels(&req.issue).await {
+        Ok(i) => i,
+        Err(e) => return err(StatusCode::NOT_FOUND, e.0),
+    };
+    let discovery = match c.discover().await {
+        Ok(d) => d,
+        Err(e) => return err(UPSTREAM_FAILED, e.0),
+    };
+    let team = match issue
+        .team_id
+        .as_deref()
+        .and_then(|id| discovery.teams.iter().find(|t| t.id == id))
+    {
+        Some(t) => t,
+        None => {
+            return err(
+                UPSTREAM_FAILED,
+                format!(
+                    "could not read {}'s team, so `{}` cannot be resolved to a status",
+                    issue.identifier,
+                    req.state.trim()
+                ),
+            )
+        }
+    };
+    let Some(target) = team
+        .states
+        .iter()
+        .find(|st| matches(&req.state, &st.id, &[&st.name]))
+    else {
+        // Name what is there: the message is read in a failed run's log by
+        // whoever wrote the workflow, and the fix is nearly always a typo.
+        let known: Vec<&str> = team.states.iter().map(|st| st.name.as_str()).collect();
+        return err(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "no status `{}` in team {} ({}); statuses: {}",
+                req.state.trim(),
+                team.key,
+                team.name,
+                known.join(", ")
+            ),
+        );
+    };
+
+    match c.set_issue_state(&issue.id, &target.id).await {
+        Ok(()) => Json(serde_json::json!({
+            "moved": issue.identifier,
+            "state": target.name,
+        }))
+        .into_response(),
         Err(e) => err(UPSTREAM_FAILED, e.0),
     }
 }
@@ -862,5 +923,27 @@ mod tests {
             with_run_link("", "r1", None),
             "Filed by ai-harness run `r1`."
         );
+    }
+    /// `move_state` is written in status *names* by the `linear:` step kind,
+    /// but `issueUpdate` takes only `stateId`. Handing Linear a name answers
+    /// `Argument Validation Error`, which is how a `task` run died on its very
+    /// first node on 2026-11-07. Resolution has to happen before the mutation,
+    /// and against the issue's own team.
+    #[test]
+    fn a_status_resolves_by_name_or_id_within_one_team() {
+        let team = &workspace().teams[0];
+        let find = |wanted: &str| {
+            team.states
+                .iter()
+                .find(|st| matches(wanted, &st.id, &[&st.name]))
+                .map(|st| st.id.as_str())
+        };
+        assert_eq!(find("Todo"), Some("s-todo"));
+        assert_eq!(find("todo"), Some("s-todo"), "case is ignored");
+        assert_eq!(find("  Todo "), Some("s-todo"), "padding is trimmed");
+        assert_eq!(find("s-todo"), Some("s-todo"), "an id still works");
+        // The failure mode that mattered: a name nobody has is a refusal here,
+        // not a uuid-shaped string posted to Linear.
+        assert_eq!(find("In Progress"), None);
     }
 }
