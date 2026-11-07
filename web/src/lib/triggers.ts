@@ -90,6 +90,11 @@ interface RunTriggerBase {
   last_run_id: string | null;
   /** Why the last attempt didn't start a run, until one does. */
   last_error: string | null;
+  /**
+   * An older Linear trigger on the same status, which fires instead of this
+   * one. Only a pair saved before overlaps were refused can be in this state.
+   */
+  shadowed_by?: { id: string; name: string } | null;
   created_by: string | null;
   created_at: string;
   updated_at: string;

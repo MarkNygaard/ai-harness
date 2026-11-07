@@ -17,6 +17,7 @@
 //! claims, progress reporting and completion are the same code for both.
 
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -296,6 +297,102 @@ pub(crate) fn validate(req: TriggerRequest) -> Result<TriggerInput, String> {
     })
 }
 
+// ── One source, one trigger ─────────────────────────────────────────────────
+
+/// A Linear trigger's config, when it is one and it parses.
+fn linear_config(t: &RunTrigger) -> Option<LinearConfig> {
+    (t.kind == KIND_LINEAR)
+        .then(|| serde_json::from_value(t.config.0.clone()).ok())
+        .flatten()
+}
+
+/// Whether one issue can match both triggers: the same team and status, and
+/// Linear-project scopes that meet (either is the whole team, or both name
+/// the same project). Two triggers like that both start a run on the same
+/// issue, and whichever workflow moves the issue first decides what the other
+/// one finds.
+///
+/// The label doesn't keep them apart. It only *adds* issues nobody
+/// delegated; an issue delegated to the harness matches both regardless. Nor
+/// does the harness project: a Linear trigger matches issues by their place
+/// in Linear, not by which repository the run will work in.
+pub(crate) fn same_source(a: &LinearConfig, b: &LinearConfig) -> bool {
+    a.team_id == b.team_id
+        && a.state_id == b.state_id
+        && match (&a.linear_project_id, &b.linear_project_id) {
+            (Some(x), Some(y)) => x == y,
+            _ => true,
+        }
+}
+
+/// The trigger among `existing` (other than `own_id`) whose source a Linear
+/// trigger with `config` would share.
+pub(crate) fn clash<'a>(
+    config: &LinearConfig,
+    own_id: Option<&str>,
+    existing: &'a [RunTrigger],
+) -> Option<&'a RunTrigger> {
+    existing.iter().find(|t| {
+        Some(t.id.as_str()) != own_id && linear_config(t).is_some_and(|c| same_source(config, &c))
+    })
+}
+
+/// Why a second trigger on a source is refused, and what to do instead.
+fn clash_message(config: &LinearConfig, other: &RunTrigger) -> String {
+    let scope = config
+        .linear_project_name
+        .as_deref()
+        .map(|p| format!(" ({p})"))
+        .unwrap_or_default();
+    format!(
+        "\"{}\" already starts `{}` in {} when an issue reaches {} in {}{scope}. \
+         One status starts one workflow, or both would run on the same issue. \
+         To do different things for different issues, edit that trigger's \
+         workflow and let a route node choose.",
+        other.name, other.workflow, other.project, config.state_name, config.team_name
+    )
+}
+
+/// Enabled Linear triggers that share a source with an *older* enabled one,
+/// mapped to it. The older one fires and these don't: a pair saved before
+/// overlaps were refused shouldn't keep fighting over issues.
+pub(crate) fn shadowed(triggers: &[RunTrigger]) -> HashMap<String, (String, String)> {
+    let mut live: Vec<(&RunTrigger, LinearConfig)> = triggers
+        .iter()
+        .filter(|t| t.enabled)
+        .filter_map(|t| linear_config(t).map(|c| (t, c)))
+        .collect();
+    live.sort_by(|(a, _), (b, _)| a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)));
+    let mut out = HashMap::new();
+    for (i, (t, c)) in live.iter().enumerate() {
+        if let Some((older, _)) = live[..i]
+            .iter()
+            .find(|(o, oc)| !out.contains_key(&o.id) && same_source(c, oc))
+        {
+            out.insert(t.id.clone(), (older.id.clone(), older.name.clone()));
+        }
+    }
+    out
+}
+
+/// Refuse a Linear trigger whose source another trigger already has.
+async fn refuse_clash(
+    state: &Arc<RunsState>,
+    input: &TriggerInput,
+    own_id: Option<&str>,
+) -> Result<(), Refusal> {
+    if input.kind != KIND_LINEAR {
+        return Ok(());
+    }
+    let config: LinearConfig = serde_json::from_value(input.config.clone())
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+    let existing = list(state).await?;
+    match clash(&config, own_id, &existing) {
+        Some(other) => Err((StatusCode::CONFLICT, clash_message(&config, other))),
+        None => Ok(()),
+    }
+}
+
 /// A Linear trigger as the poller and delegation see it: a binding with no
 /// status map, one attempt, always live. `None` when the stored config doesn't
 /// parse (a row written by a newer server, say).
@@ -330,16 +427,25 @@ pub(crate) fn as_binding(t: &RunTrigger) -> Option<LinearSource> {
     })
 }
 
-/// Every Linear trigger, as bindings, paired with its id.
+/// Every Linear trigger, as bindings, paired with its id — less any that
+/// share a source with an older one (see [`shadowed`]).
 pub(crate) async fn linear_bindings(state: &Arc<RunsState>) -> Vec<(String, LinearSource)> {
     let Ok(store) = state.trigger_store().await else {
         return Vec::new();
     };
-    store
-        .list()
-        .await
-        .unwrap_or_default()
-        .iter()
+    let rows = store.list().await.unwrap_or_default();
+    let shadowed = shadowed(&rows);
+    rows.iter()
+        .filter(|t| match shadowed.get(&t.id) {
+            Some((_, older)) => {
+                tracing::warn!(
+                    "trigger \"{}\" shares its Linear status with \"{older}\", which fires instead",
+                    t.name
+                );
+                false
+            }
+            None => true,
+        })
         .filter_map(|t| as_binding(t).map(|b| (t.id.clone(), b)))
         .collect()
 }
@@ -442,6 +548,7 @@ pub(crate) async fn create(
     let input = validate(req).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     may_change(&input.kind, admin)?;
     super::linear_source_routes::project_exists(state, &input.project).await?;
+    refuse_clash(state, &input, None).await?;
     let store = state
         .trigger_store()
         .await
@@ -472,6 +579,7 @@ pub(crate) async fn update(
     let input = validate(req).map_err(|e| (StatusCode::BAD_REQUEST, e))?;
     may_change(&input.kind, admin)?;
     super::linear_source_routes::project_exists(state, &input.project).await?;
+    refuse_clash(state, &input, Some(id)).await?;
     let store = state
         .trigger_store()
         .await
@@ -534,12 +642,29 @@ async fn caller_is_admin(state: &Arc<RunsState>, headers: &HeaderMap) -> bool {
 /// `GET /api/triggers`
 pub async fn list_triggers(Extension(state): Extension<Arc<RunsState>>) -> Response {
     match list(&state).await {
-        Ok(rows) => Json(json!({
-            "triggers": rows.iter().map(|t| view(&state, t)).collect::<Vec<_>>(),
-        }))
-        .into_response(),
+        Ok(rows) => {
+            let shadowed = shadowed(&rows);
+            let views: Vec<Value> = rows
+                .iter()
+                .map(|t| with_shadow(view(&state, t), &shadowed, &t.id))
+                .collect();
+            Json(json!({ "triggers": views })).into_response()
+        }
         Err((s, m)) => err(s, m),
     }
+}
+
+/// Add `shadowed_by: {id, name}` to a trigger that an older one on the same
+/// source keeps from firing.
+pub(crate) fn with_shadow(
+    mut v: Value,
+    shadowed: &HashMap<String, (String, String)>,
+    id: &str,
+) -> Value {
+    if let Some((older_id, older_name)) = shadowed.get(id) {
+        v["shadowed_by"] = json!({ "id": older_id, "name": older_name });
+    }
+    v
 }
 
 /// `GET /api/triggers/{id}`
@@ -548,7 +673,10 @@ pub async fn get_trigger(
     AxumPath(id): AxumPath<String>,
 ) -> Response {
     match get(&state, &id).await {
-        Ok(t) => Json(view(&state, &t)).into_response(),
+        Ok(t) => {
+            let all = list(&state).await.unwrap_or_default();
+            Json(with_shadow(view(&state, &t), &shadowed(&all), &t.id)).into_response()
+        }
         Err((s, m)) => err(s, m),
     }
 }
@@ -899,6 +1027,82 @@ mod tests {
             enabled: true,
             config,
         }
+    }
+
+    fn linear_row(id: &str, age_mins: i64, enabled: bool, config: Value) -> RunTrigger {
+        let at = chrono::Utc::now() - chrono::Duration::minutes(age_mins);
+        RunTrigger {
+            id: id.into(),
+            name: format!("trigger {id}"),
+            kind: KIND_LINEAR.into(),
+            project: "niles".into(),
+            workflow: "task".into(),
+            enabled,
+            config: sqlx::types::Json(config),
+            last_fired_at: None,
+            last_run_id: None,
+            last_error: None,
+            created_by: None,
+            created_at: at,
+            updated_at: at,
+        }
+    }
+
+    fn todo(project: Option<&str>) -> LinearConfig {
+        let mut c: LinearConfig = serde_json::from_value(linear_config()).unwrap();
+        c.linear_project_id = project.map(str::to_string);
+        c.label = None;
+        c
+    }
+
+    #[test]
+    fn one_status_has_one_trigger_unless_their_linear_projects_differ() {
+        let existing = [linear_row(
+            "a",
+            10,
+            true,
+            serde_json::to_value(todo(None)).unwrap(),
+        )];
+        // Same team and status: refused, whatever the harness project or label.
+        let mut labelled = todo(None);
+        labelled.label = Some("harness".into());
+        assert_eq!(
+            clash(&labelled, None, &existing).map(|t| t.id.as_str()),
+            Some("a")
+        );
+        // A narrower scope still meets an unscoped one.
+        assert!(clash(&todo(Some("p1")), None, &existing).is_some());
+        // Editing the trigger itself isn't a clash with itself.
+        assert!(clash(&todo(None), Some("a"), &existing).is_none());
+        // Another status is another source.
+        let mut review = todo(None);
+        review.state_id = "s2".into();
+        assert!(clash(&review, None, &existing).is_none());
+        // Two different Linear projects of one team never see the same issue.
+        let scoped = [linear_row(
+            "b",
+            10,
+            true,
+            serde_json::to_value(todo(Some("p1"))).unwrap(),
+        )];
+        assert!(clash(&todo(Some("p2")), None, &scoped).is_none());
+        assert!(clash(&todo(Some("p1")), None, &scoped).is_some());
+    }
+
+    #[test]
+    fn of_two_triggers_already_sharing_a_source_the_older_enabled_one_fires() {
+        let cfg = serde_json::to_value(todo(None)).unwrap();
+        let rows = [
+            linear_row("new", 1, true, cfg.clone()),
+            linear_row("old", 60, true, cfg.clone()),
+            linear_row("off", 120, false, cfg.clone()),
+        ];
+        let s = shadowed(&rows);
+        assert_eq!(s.len(), 1);
+        assert_eq!(
+            s["new"].0, "old",
+            "a disabled one doesn't hold anything back"
+        );
     }
 
     fn linear_config() -> Value {

@@ -213,12 +213,14 @@ async fn list(state: &Arc<RunsState>, args: &Value) -> Result<(String, Value), S
     };
 
     let mut rows: Vec<Value> = Vec::new();
-    for t in triggers::list(state).await.map_err(|(_, m)| m)? {
+    let all = triggers::list(state).await.map_err(|(_, m)| m)?;
+    let shadowed = triggers::shadowed(&all);
+    for t in &all {
         if !keep(&t.kind, &t.project, &t.workflow) {
             continue;
         }
-        let mut v = triggers::view(state, &t);
-        v["when"] = json!(when(&t));
+        let mut v = triggers::with_shadow(triggers::view(state, t), &shadowed, &t.id);
+        v["when"] = json!(when(t));
         rows.push(v);
     }
     for s in sched::list(state).await.map_err(|(_, m)| m)? {

@@ -93,6 +93,23 @@ its issue when a run fails ends with a `linear:` step using
 `trigger_rule: one_failed`, which runs only when a step before it failed — see
 [handling a failure](/docs/workflows/authoring).
 
+### One trigger per status
+
+A Linear status can start only one workflow. Saving a second Linear trigger
+on the same team and status is refused, because both would start a run on
+every issue that arrives there. That holds whichever harness project each one
+targets and whatever label it adds. The one exception is two triggers narrowed
+to different Linear projects, since those never see the same issue.
+
+To do different things for different issues, keep the one trigger and let its
+workflow decide with a [route node](/docs/workflows/authoring#node-bodies). For
+example, a rule on the issue's labels or a short prompt can send epics to one
+set of steps and single tasks to another.
+
+If two triggers on the same status were saved before this rule existed, the
+older one fires. The newer one is marked *held back* until one of the two is
+removed.
+
 A Linear trigger fires **once each time an issue comes to match it**. While the
 issue stays in the status it doesn't fire again; move it out and back (or
 un-delegate and delegate it) to run it again. Delegating always starts a run
