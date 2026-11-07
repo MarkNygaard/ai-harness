@@ -1486,6 +1486,64 @@ impl LinearAuth {
     }
 }
 
+/// How long one workspace's discovery result is reused.
+///
+/// Discovery is the most expensive query the harness sends: 50 teams, each
+/// with up to 50 statuses and 50 labels, costs several thousand of Linear's
+/// complexity points, against a budget of 2,000,000 an hour per workspace.
+/// Every client is built per request, and many paths ask for it (the project
+/// page, its wiring check, the Triggers page once per project, the poller's
+/// label lookups, MCP, a run's `harness linear` calls), so without sharing a
+/// result a few open tabs exhaust the budget. Teams, statuses and labels change
+/// rarely; a minute's delay before a new one appears is the trade.
+const DISCOVERY_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Process-wide discovery results, keyed by credential.
+///
+/// Keyed by a hash of the `Authorization` value rather than the value itself,
+/// so this map doesn't hold a second long-lived copy of every token. Two
+/// connections to one workspace each get their own entry, which costs a query
+/// but never serves one credential's view to another.
+struct DiscoveryCache {
+    entries: std::sync::Mutex<std::collections::HashMap<u64, (std::time::Instant, Discovery)>>,
+}
+
+impl DiscoveryCache {
+    fn new() -> Self {
+        Self {
+            entries: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    fn global() -> &'static Self {
+        static CACHE: std::sync::OnceLock<DiscoveryCache> = std::sync::OnceLock::new();
+        CACHE.get_or_init(Self::new)
+    }
+
+    fn key(auth: &LinearAuth) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        auth.header_value().hash(&mut h);
+        h.finish()
+    }
+
+    fn get(&self, key: u64, now: std::time::Instant) -> Option<Discovery> {
+        let entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        entries
+            .get(&key)
+            .filter(|(at, _)| now.saturating_duration_since(*at) < DISCOVERY_TTL)
+            .map(|(_, d)| d.clone())
+    }
+
+    fn put(&self, key: u64, now: std::time::Instant, discovery: Discovery) {
+        let mut entries = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        // Drop expired entries while here, so a rotated token's slot doesn't
+        // linger for the life of the process.
+        entries.retain(|_, (at, _)| now.saturating_duration_since(*at) < DISCOVERY_TTL);
+        entries.insert(key, (now, discovery));
+    }
+}
+
 /// How long a single Linear API call may take before it is abandoned.
 ///
 /// reqwest applies **no** timeout by default, so a connection that opens and then
@@ -1717,9 +1775,18 @@ impl LinearClient {
     }
 
     /// List the workspace's teams + states + labels.
+    ///
+    /// Served from [`DiscoveryCache`] for [`DISCOVERY_TTL`] after a successful
+    /// fetch. Errors are not cached, so a failure is retried on the next call.
     pub async fn discover(&self) -> Result<Discovery, LinearError> {
+        let key = DiscoveryCache::key(&self.auth);
+        if let Some(hit) = DiscoveryCache::global().get(key, std::time::Instant::now()) {
+            return Ok(hit);
+        }
         let body = serde_json::json!({ "query": DISCOVERY_QUERY });
-        parse_discovery(&self.post(body).await?)
+        let fresh = parse_discovery(&self.post(body).await?)?;
+        DiscoveryCache::global().put(key, std::time::Instant::now(), fresh.clone());
+        Ok(fresh)
     }
 
     /// Issues in `team + state` that are **delegated to `delegate_id`** (the
@@ -2389,6 +2456,65 @@ fn expect_mutation_success(json: &[u8], field: &str) -> Result<(), LinearError> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn one_team(name: &str) -> Discovery {
+        Discovery {
+            teams: vec![Team {
+                id: "t1".into(),
+                name: name.into(),
+                key: "T".into(),
+                states: vec![],
+                labels: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn discovery_cache_serves_within_ttl_and_expires_after() {
+        let cache = DiscoveryCache::new();
+        let key = DiscoveryCache::key(&LinearAuth::OauthToken("a".into()));
+        let t0 = std::time::Instant::now();
+
+        assert!(cache.get(key, t0).is_none(), "empty cache misses");
+        cache.put(key, t0, one_team("first"));
+
+        let hit = cache
+            .get(key, t0 + DISCOVERY_TTL / 2)
+            .expect("fresh entry hits");
+        assert_eq!(hit.teams[0].name, "first");
+        assert!(
+            cache.get(key, t0 + DISCOVERY_TTL).is_none(),
+            "an entry exactly TTL old is stale"
+        );
+    }
+
+    #[test]
+    fn discovery_cache_never_crosses_credentials() {
+        let cache = DiscoveryCache::new();
+        let now = std::time::Instant::now();
+        let app = DiscoveryCache::key(&LinearAuth::OauthToken("tok".into()));
+        // Same secret, different scheme: a different Authorization value.
+        let key = DiscoveryCache::key(&LinearAuth::PersonalKey("tok".into()));
+        assert_ne!(app, key);
+
+        cache.put(app, now, one_team("app"));
+        assert!(cache.get(key, now).is_none());
+    }
+
+    #[test]
+    fn discovery_cache_prunes_expired_entries_on_put() {
+        let cache = DiscoveryCache::new();
+        let t0 = std::time::Instant::now();
+        let old = DiscoveryCache::key(&LinearAuth::OauthToken("old".into()));
+        let new = DiscoveryCache::key(&LinearAuth::OauthToken("new".into()));
+
+        cache.put(old, t0, one_team("old"));
+        cache.put(new, t0 + DISCOVERY_TTL, one_team("new"));
+
+        let entries = cache.entries.lock().unwrap();
+        assert!(!entries.contains_key(&old), "the stale slot is gone");
+        assert!(entries.contains_key(&new));
+    }
 
     #[test]
     fn oauth_tokens_are_bearer_personal_keys_are_verbatim() {

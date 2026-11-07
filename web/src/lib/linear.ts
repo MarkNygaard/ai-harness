@@ -188,7 +188,12 @@ export function useLinearDiscovery(project: string | null) {
         { signal },
       ),
     retry: false,
-    staleTime: 60_000,
+    // Not on the app-wide 5s poll. Discovery is the costliest Linear query
+    // there is, and polling it from an open page alone was enough to exhaust
+    // the workspace's hourly rate limit. Teams, statuses and labels rarely
+    // change; reopening the page or a window refocus picks up a new one.
+    staleTime: 5 * 60_000,
+    refetchInterval: false,
   });
 }
 
@@ -246,6 +251,11 @@ export function useLinearCheck(project: string | null) {
         { signal },
       ),
     retry: false,
+    // Runs a full Linear discovery server-side, so it stays off the 5s poll
+    // too. Saving or deleting a binding invalidates it, which is when the
+    // answer can actually change.
+    staleTime: 5 * 60_000,
+    refetchInterval: false,
   });
 }
 
