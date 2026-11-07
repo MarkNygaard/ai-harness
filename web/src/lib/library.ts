@@ -149,6 +149,13 @@ export interface PublisherIdentity {
   name: string | null;
   login: string | null;
   /**
+   * Whose token it is: `own` is this person's GitHub account, `server` the
+   * harness-wide one, which publishes as whoever it was issued to.
+   */
+  source: "own" | "server" | null;
+  /** This person has connected GitHub (by signing in with it, or Connect). */
+  github_connected: boolean;
+  /**
    * Whether this registry can issue a token by itself, rather than needing one
    * minted by whoever runs it. False for a private registry with no GitHub app
    * configured, where the only path is still a pasted token.

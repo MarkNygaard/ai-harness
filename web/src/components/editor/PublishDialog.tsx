@@ -19,8 +19,54 @@ import {
   usePublisher,
   useUnpublishWorkflow,
 } from "@/lib/library";
+import { useConnectGithub, useGithubSsoPublicStatus } from "@/lib/sso";
 import { titleFromSlug } from "@/lib/workflow-name";
 import type { WorkflowSummary } from "@/types/authoring";
+
+/**
+ * Connect GitHub to the account signed in here, then come back to this page.
+ *
+ * The library asks GitHub whose the connection is and publishes under that
+ * account, so nobody is believed about who they are. Only offered when this
+ * harness has GitHub sign-in set up; otherwise `fallback` says what to do.
+ */
+function ConnectGithub({
+  label = "Connect GitHub",
+  fallback,
+}: {
+  label?: string;
+  fallback?: React.ReactNode;
+}) {
+  const status = useGithubSsoPublicStatus();
+  const connect = useConnectGithub();
+  if (status.isLoading) return null;
+  if (!status.data?.enabled) {
+    return fallback ? (
+      <p className="text-xs text-muted-foreground">{fallback}</p>
+    ) : null;
+  }
+  return (
+    <div className="flex flex-col gap-1">
+      <div>
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={connect.isPending}
+          onClick={() =>
+            connect.mutate({
+              next: window.location.pathname + window.location.search,
+            })
+          }
+        >
+          {connect.isPending ? "Opening GitHub…" : label}
+        </Button>
+      </div>
+      {connect.isError && (
+        <p className="text-xs text-destructive">{connect.error.message}</p>
+      )}
+    </div>
+  );
+}
 
 /**
  * Share a workflow you wrote, or publish a new version of one you already
@@ -111,28 +157,37 @@ function PublishForm({
   if (publisher.isLoading) {
     return (
       <p className="text-sm text-muted-foreground">
-        Checking your publisher token…
+        Checking who you publish as…
       </p>
     );
   }
   if (publisher.isError) {
     return (
-      <p className="text-sm text-destructive">{publisher.error.message}</p>
+      <div className="flex flex-col gap-2 text-sm">
+        <p className="text-destructive">{publisher.error.message}</p>
+        <ConnectGithub />
+      </div>
     );
   }
   if (!publisher.data?.configured) {
     return (
-      <div className="flex flex-col gap-2 text-sm">
+      <div className="flex flex-col gap-3 text-sm">
         <p className="text-muted-foreground">
-          {publisher.data?.enrollment
-            ? "Publishing needs a one-off sign-in with GitHub, which the library uses to confirm who an entry belongs to."
-            : "Publishing needs a publisher token, which the person running the library issues."}{" "}
-          Connect it under{" "}
-          <span className="font-medium text-foreground">
-            Settings → Integrations
-          </span>
-          , then publish from here.
+          The library publishes under your GitHub account, so it can tell whose
+          each entry is. Connect it once and publish from here.
         </p>
+        <ConnectGithub
+          fallback={
+            <>
+              GitHub sign-in is not set up on this harness. An administrator can
+              add a publisher token under{" "}
+              <span className="font-medium text-foreground">
+                Settings → Integrations
+              </span>{" "}
+              instead.
+            </>
+          }
+        />
       </div>
     );
   }
@@ -199,7 +254,23 @@ function PublishForm({
         />
         <p className="text-[11px] text-muted-foreground">
           The name shown on every workflow you publish, not just this one.
+          {publisher.data.login && (
+            <>
+              {" "}
+              Publishing as{" "}
+              <span className="font-mono text-foreground">
+                @{publisher.data.login}
+              </span>
+              {publisher.data.source === "server" &&
+                ", this harness's shared publisher"}
+              .
+            </>
+          )}
         </p>
+        {publisher.data.source === "server" &&
+          !publisher.data.github_connected && (
+            <ConnectGithub label="Connect GitHub to publish as yourself" />
+          )}
       </Field>
 
       {/* Editable on a republish too. The entry's title and description are

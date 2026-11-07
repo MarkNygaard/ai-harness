@@ -284,7 +284,17 @@ pub async fn delete_user(
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e),
     }
     match users.delete(&id).await {
-        Ok(true) => Json(json!({ "deleted": true, "id": id })).into_response(),
+        Ok(true) => {
+            // Their GitHub token and publisher token go with them. Nothing
+            // else would ever remove them: there is no foreign key, because
+            // the stores are created in no fixed order.
+            if let Ok(store) = state.cred_store().await {
+                if let Err(e) = store.delete_all_for_user(&id).await {
+                    tracing::warn!("users: could not remove {id}'s own credentials: {e}");
+                }
+            }
+            Json(json!({ "deleted": true, "id": id })).into_response()
+        }
         Ok(false) => err(StatusCode::NOT_FOUND, "no such account"),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }

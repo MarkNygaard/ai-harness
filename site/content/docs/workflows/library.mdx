@@ -80,21 +80,27 @@ Works multi-repo (via `HARNESS_REPOS`) or single-repo.
 
 ## Publishing your own
 
-Publishing needs a one-off sign-in, under **Settings → Integrations → Workflow
-library**. Press **Sign in with GitHub**, enter the code it shows you, and the
-harness receives a publisher token and stores it encrypted. The token is never
-sent to the browser: one that reached the page could publish under your name
-from anything that could read it.
+Entries are published under your **GitHub account**. If you sign in to the
+harness with GitHub, there is nothing to set up: press **Publish** and it
+publishes as you. If you signed in another way, the Publish dialog offers
+**Connect GitHub** once.
 
-The sign-in asks for no permissions. The library reads your public profile to
-confirm which account an entry belongs to, and nothing else — no repositories,
-no email, no write of any kind. GitHub is used because an entry's owner has to
-mean something across installs, and a harness account is per-install: your
-address on one harness is not the same identity as on another.
+The harness never tells the library who you are. It hands over the GitHub
+token from your sign-in, and the library asks GitHub whose it is, then issues a
+publisher token for that account. The harness keeps that token, encrypted and
+per person, so on a shared harness everyone publishes as themselves. Neither
+token is ever sent to the browser.
 
-A registry that has no GitHub app configured cannot issue tokens itself, so it
-shows a field to paste one issued by whoever runs it. That is also how you move
-an existing token to another install.
+GitHub is used because an entry's owner has to mean something across installs.
+A harness account is per install, and an email address is something anyone can
+type: only a check the library makes itself can stop someone publishing under
+your name.
+
+Two older routes remain for a harness without GitHub sign-in, under **Settings →
+Integrations → Workflow library**: **Sign in with GitHub** there (on a registry
+with its own GitHub app), or a pasted token issued by whoever runs the registry.
+Either one sets a single publisher for the whole harness, used by anyone who has
+not connected GitHub themselves.
 
 After that, a workflow under **Custom** on the workflows page has a **Publish**
 button. Publish it once and the same button becomes **Publish update**, which
