@@ -507,11 +507,17 @@ nodes:
   # `all_done` so the preserve step above always runs to completion first, and so
   # this gate still fires when that step was skipped (validation passed) or
   # failed (nothing could be pushed). The gate must never depend on the rescue.
+  #
+  # `all_done` also means it runs when `validate` never did (an earlier step
+  # failed and everything behind it skipped). `$validate.output` is empty
+  # then, and the run must end failed on that earlier step rather than
+  # cancelled for a verdict nobody gave. A validate that ran always says
+  # something, even when its verdict can't be read.
   - id: abort-on-invalid
     category: validation
     depends_on: [preserve-on-invalid]
     trigger_rule: all_done
-    when: "$validate.output.passed != 'true'"
+    when: "$validate.output != '' && $validate.output.passed != 'true'"
     cancel: "refusing to open a PR — validation did not return a pass. An empty summary below means its verdict could not be read, rather than a check having failed. $validate.output.summary"
 
   # Record the exact commit `validate` just certified, per repo, so the final

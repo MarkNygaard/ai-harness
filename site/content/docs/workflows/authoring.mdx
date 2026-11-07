@@ -345,6 +345,22 @@ that never ran (skipped/upstream-skipped) counts as `Skipped` — **not** succes
   command: open-pr
 ```
 
+**A second gotcha, with `all_done`:** a step under `all_done` also runs when
+its dependencies were skipped because something further up failed. If it reads
+a skipped step's output, that output is empty. So a `when:` like
+`$validate.output.passed != 'true'` holds, and a gate meant for "validation
+failed" fires when validation never ran. It then reports the wrong reason, and
+a `cancel:` gate ends the run cancelled instead of failed. Check that the step
+produced output first:
+
+```yaml
+- id: abort-on-invalid
+  depends_on: [report-invalid]
+  trigger_rule: all_done
+  when: "$validate.output != '' && $validate.output.passed != 'true'"
+  cancel: "validation did not pass"
+```
+
 ### Handling a failure
 
 A step after a failed one is *skipped*, not failed — so a cleanup step at the
