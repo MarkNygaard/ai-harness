@@ -465,6 +465,11 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/hooks/{id}",
             post(super::triggers_routes::receive_hook),
         )
+        // ── Dashboard ───────────────────────────────────────────────────────
+        .route(
+            "/api/dashboard/metrics",
+            get(super::dashboard_routes::metrics),
+        )
         // ── Improvements ────────────────────────────────────────────────────
         .route("/api/improvements", get(super::improvements_routes::list))
         .route(

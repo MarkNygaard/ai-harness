@@ -2,9 +2,12 @@ import { RUN_STATUS_VARIANT } from "@/components/runflow/format";
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { AppShell } from "@/components/AppShell";
+import { MetricsPanel } from "@/components/dashboard/MetricsPanel";
 import { SubscriptionsRow } from "@/components/dashboard/SubscriptionsRow";
 import { PersonBadge } from "@/components/PersonBadge";
 import { Badge } from "@/components/ui/badge";
+import { Card } from "@/components/ui/card";
+import { PERIODS, type Period } from "@/lib/dashboard-metrics";
 import { distinctInitiators } from "@/lib/initiator";
 import { useRuns } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
@@ -91,6 +94,7 @@ export function DashboardPage() {
   const runs = useRuns();
   const projects = useProjects();
   const [filter, setFilter] = useState<string>(ALL);
+  const [period, setPeriod] = useState<Period>(7);
   const now = new Date();
 
   const days = useMemo(() => {
@@ -103,63 +107,115 @@ export function DashboardPage() {
 
   return (
     <AppShell title="Dashboard">
-      {/* Tasks fill 2/3 on the left; subscriptions sit in a 1/3 right rail. */}
-      <div className="grid w-full gap-6 p-6 lg:grid-cols-3">
-        <div className="flex flex-col gap-4 lg:col-span-2">
-          <div className="flex flex-wrap items-center gap-2">
+      <div className="flex w-full flex-col gap-6 p-6">
+        {/* One row of filters, scoping everything below it. */}
+        <div className="flex flex-wrap items-center gap-2">
+          <FilterButton active={filter === ALL} onClick={() => setFilter(ALL)}>
+            All projects
+          </FilterButton>
+          {projects.data?.map((p) => (
             <FilterButton
-              active={filter === ALL}
-              onClick={() => setFilter(ALL)}
+              key={p.name}
+              active={filter === p.name}
+              onClick={() => setFilter(p.name)}
             >
-              All
+              {p.name}
             </FilterButton>
-            {projects.data?.map((p) => (
-              <FilterButton
-                key={p.name}
-                active={filter === p.name}
-                onClick={() => setFilter(p.name)}
+          ))}
+          <div
+            className="ml-auto flex rounded-md border border-input p-0.5"
+            role="group"
+            aria-label="Period"
+          >
+            {PERIODS.map((d) => (
+              <button
+                key={d}
+                type="button"
+                onClick={() => setPeriod(d)}
+                aria-pressed={period === d}
+                className={
+                  period === d
+                    ? "rounded-sm bg-secondary px-3 py-1 text-[12px] font-medium"
+                    : "rounded-sm px-3 py-1 text-[12px] text-muted-foreground hover:text-foreground"
+                }
               >
-                {p.name}
-              </FilterButton>
+                {d} days
+              </button>
             ))}
           </div>
+        </div>
 
-          {runs.isLoading && (
-            <p className="text-sm text-muted-foreground">Loading…</p>
-          )}
-          {runs.isError && (
-            <p className="text-sm text-destructive">
-              Failed to load runs: {runs.error.message}
-            </p>
-          )}
-          {!runs.isLoading && !runs.isError && days.length === 0 && (
-            <p className="text-sm text-muted-foreground">
-              {filter === ALL ? "No runs yet. " : "No runs for this project. "}
-              <Link to="/runs" className="underline">
-                Start one
-              </Link>
-              .
-            </p>
-          )}
-
-          {days.map((day) => (
-            <section key={day.label} className="flex flex-col gap-0.5">
-              <h2 className="flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                <span className="h-3 w-0.5 bg-status-running" aria-hidden />
-                {day.label}
+        {/* The latest tasks beside the subscriptions, the list only as tall as
+            the cards next to it and scrolling within that — most people want
+            the last few, and the history is a scroll away. */}
+        <div className="grid gap-6 lg:grid-cols-3">
+          <section className="relative flex min-h-[24rem] flex-col gap-2 lg:col-span-2">
+            <div className="flex flex-col gap-2 lg:absolute lg:inset-0">
+              <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Recent tasks
               </h2>
-              <div className="flex flex-col">
-                {day.tasks.map((t, i) => (
-                  <TaskRow key={t.key} task={t} divider={i > 0} />
-                ))}
-              </div>
-            </section>
-          ))}
+              <Card className="min-h-0 flex-1 py-0">
+                <div className="max-h-[28rem] overflow-y-auto px-3 py-2 lg:max-h-none lg:h-full">
+                  {runs.isLoading && (
+                    <p className="text-sm text-muted-foreground">Loading…</p>
+                  )}
+                  {runs.isError && (
+                    <p className="text-sm text-destructive">
+                      Failed to load runs: {runs.error.message}
+                    </p>
+                  )}
+                  {!runs.isLoading && !runs.isError && days.length === 0 && (
+                    <p className="text-sm text-muted-foreground">
+                      {filter === ALL
+                        ? "No runs yet. "
+                        : "No runs for this project. "}
+                      <Link to="/runs" className="underline">
+                        Start one
+                      </Link>
+                      .
+                    </p>
+                  )}
+                  <div className="flex flex-col gap-3">
+                    {days.map((day) => (
+                      <section
+                        key={day.label}
+                        className="flex flex-col gap-0.5"
+                      >
+                        <h3 className="flex items-center gap-2 px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                          <span
+                            className="h-3 w-0.5 bg-status-running"
+                            aria-hidden
+                          />
+                          {day.label}
+                        </h3>
+                        <div className="flex flex-col">
+                          {day.tasks.map((t, i) => (
+                            <TaskRow key={t.key} task={t} divider={i > 0} />
+                          ))}
+                        </div>
+                      </section>
+                    ))}
+                  </div>
+                </div>
+              </Card>
+            </div>
+          </section>
+
+          <div className="lg:col-span-1">
+            <SubscriptionsRow vertical />
+          </div>
         </div>
 
-        <div className="lg:col-span-1">
-          <SubscriptionsRow vertical />
-        </div>
+        <section className="flex flex-col gap-2">
+          <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            How it&rsquo;s going — last {period} days
+            {filter !== ALL ? ` · ${filter}` : ""}
+          </h2>
+          <MetricsPanel
+            days={period}
+            project={filter === ALL ? null : filter}
+          />
+        </section>
       </div>
     </AppShell>
   );
