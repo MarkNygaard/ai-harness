@@ -79,7 +79,7 @@ nodes:
         #
         # Linear's own state category answers this without configuration: a
         # piece is waiting if its state is `backlog` or `unstarted`.
-        unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sortOrder)'
+        unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sort_order)'
         first_id="$(jq -r "$unstarted | .[0].id // empty" "$ARTIFACTS_DIR/children.json")"
         first_ident="$(jq -r "$unstarted | .[0].identifier // empty" "$ARTIFACTS_DIR/children.json")"
 
@@ -148,11 +148,11 @@ nodes:
       fi
 
       # The next piece is the next one that has not begun — not the next by
-      # order. Two things depend on that difference: a corrective filed later
-      # sorts *above* the piece it corrects (Linear gives new issues the lowest
-      # sortOrder), so "next after this one" would skip it forever; and a piece
-      # already building must not be started again.
-      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sortOrder)'
+      # order. Two things depend on that difference: a corrective must run
+      # before the pieces after the one it corrects, wherever Linear placed it
+      # in the sub-issue list, so correctives go first; and a piece already
+      # building must not be started again.
+      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by([((.body // "") | test("^Corrects: "; "m") | not), .sort_order])'
       next_id="$(jq -r "$unstarted | .[0].id // empty" "$ARTIFACTS_DIR/siblings.json")"
       next_ident="$(jq -r "$unstarted | .[0].identifier // empty" "$ARTIFACTS_DIR/siblings.json")"
 

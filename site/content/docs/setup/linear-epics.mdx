@@ -76,8 +76,8 @@ have to be wired in a ring:
   `epic/<EPIC>` exists. Any other sub-issue is built as an ordinary issue.
 
 Writing the epic is the same as below: delegate the epic and every sub-issue,
-create sub-issues in reverse build order, and give each one its own acceptance
-criteria. The project env vars `EPIC_READY_STATE`, `EPIC_REVIEW_STATE` and
+put the sub-issues in build order on the epic, and give each one its own
+acceptance criteria. The project env vars `EPIC_READY_STATE`, `EPIC_REVIEW_STATE` and
 `EPIC_BLOCKED_STATE` still override where pieces start, where the finished epic
 goes, and where a stuck one goes.
 
@@ -177,9 +177,11 @@ in column names rather than state ids.
 
 ## Writing the epic
 
-**Create sub-issues in reverse build order.** Linear gives newer issues the
-*lower* `sortOrder`, and the supervisor builds in ascending order — so create the
-last piece first and the board reads correctly without dragging anything.
+**Put the sub-issues in build order on the epic.** Pieces build in the order
+of the epic's own sub-issue list, top first. Linear shows that order when the
+list's display options sort it manually. Other sorts, such as by priority,
+show something else. Drag the sub-issues there until the first piece is on top.
+Their place on the board doesn't matter.
 
 **Delegate every sub-issue and the epic**, then put the epic in the build
 column. The harness cannot delegate an issue to itself, so a piece nobody

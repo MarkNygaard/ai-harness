@@ -41,8 +41,8 @@ description: |
       moves to In Review for a person.
     * **skip** — an epic whose pieces have all begun: nothing to start.
 
-  Delegate the epic and every sub-issue to the harness, and create the
-  sub-issues in reverse build order (Linear sorts newer issues first). A
+  Delegate the epic and every sub-issue to the harness. Pieces build in the
+  order of the epic's sub-issue list, top first (manual ordering). A
   sub-issue of an issue nobody started as an epic is built as a plain task.
   Optional project env vars: `EPIC_READY_STATE` (where a piece starts; by
   default the column the epic was picked up from, else Todo),
@@ -72,7 +72,7 @@ nodes:
       fi
       harness linear issue --issue "$issue" > "$ARTIFACTS_DIR/issue.json" || exit 1
       parent="$(jq -r '.parent_id // empty' "$ARTIFACTS_DIR/issue.json")"
-      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sortOrder)'
+      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sort_order)'
 
       if [ -z "$parent" ]; then
         harness linear children --issue "$issue" > "$ARTIFACTS_DIR/children.json" || exit 1
@@ -934,7 +934,7 @@ nodes:
       # Read the pieces now, not at the start: an hour of building is long
       # enough for someone to add or reorder one.
       harness linear children --issue "$parent" > "$ARTIFACTS_DIR/siblings.json" || exit 1
-      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sortOrder)'
+      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sort_order)'
       next_id="$(jq -r --arg me "$ISSUE_ID" "[$unstarted[] | select(.id != \$me)] | .[0].id // empty" "$ARTIFACTS_DIR/siblings.json")"
       next_ident="$(jq -r --arg me "$ISSUE_ID" "[$unstarted[] | select(.id != \$me)] | .[0].identifier // empty" "$ARTIFACTS_DIR/siblings.json")"
 
