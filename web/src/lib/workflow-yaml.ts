@@ -26,6 +26,7 @@ export function nodeKind(node: EditorNode): NodeKindId {
   if (node.loop !== undefined) return "loop";
   if (node.approval !== undefined) return "approval";
   if (node.cancel !== undefined) return "cancel";
+  if (node.linear !== undefined) return "linear";
   return "prompt";
 }
 
@@ -48,6 +49,11 @@ export function emptyNode(kind: NodeKindId, id: string): EditorNode {
       return { ...base, approval: { message: "" } };
     case "cancel":
       return { ...base, cancel: "" };
+    // Status is the common case by a distance -- it is what the binding's
+    // In-progress/Review/Ready map used to do -- so a fresh Linear step starts
+    // there rather than making you pick an action before you can type.
+    case "linear":
+      return { ...base, linear: { move_state: "" } };
     default:
       return { ...base, prompt: "" };
   }
@@ -138,6 +144,12 @@ export function nodeToDoc(n: EditorNode): Record<string, unknown> {
   const approval = n.approval
     ? clean(n.approval as unknown as Record<string, unknown>)
     : undefined;
+  // `clean` drops empty values, so an action still being typed (`move_state:
+  // ""`) would otherwise serialize as a bare `linear: {}` and come back as a
+  // prompt node, silently changing the step's kind under the author.
+  const linear = n.linear
+    ? (n.linear as unknown as Record<string, unknown>)
+    : undefined;
   return clean({
     id: n.id,
     depends_on: n.depends_on,
@@ -167,6 +179,7 @@ export function nodeToDoc(n: EditorNode): Record<string, unknown> {
     loop,
     approval,
     cancel: n.cancel,
+    linear,
   });
 }
 
@@ -215,6 +228,7 @@ export function fromYaml(text: string): EditorWorkflow {
     loop: n.loop as EditorNode["loop"],
     approval: n.approval as EditorNode["approval"],
     cancel: n.cancel as string | undefined,
+    linear: n.linear as EditorNode["linear"],
   }));
   return {
     name: String(raw.name ?? "untitled"),

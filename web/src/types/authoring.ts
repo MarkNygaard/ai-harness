@@ -184,7 +184,14 @@ export interface SavedStep extends PrebuiltStep {
 
 /** The node-kind discriminators (the single body each editor node carries). */
 export type NodeKindId =
-  "prompt" | "command" | "bash" | "loop" | "script" | "approval" | "cancel";
+  | "prompt"
+  | "command"
+  | "bash"
+  | "loop"
+  | "script"
+  | "approval"
+  | "cancel"
+  | "linear";
 
 export type ContextMode = "fresh" | "shared";
 export type TriggerRule =
@@ -201,6 +208,19 @@ export interface EditorLoop {
   max_iterations: number;
   provider?: string;
   model?: string;
+}
+
+/**
+ * Linear body config (mirrors `LinearAction`): exactly one key set, matching
+ * the parser's `linear.*` discriminators. The editor keeps the same one-of
+ * shape rather than a `{ action, value }` pair, so what the canvas produces is
+ * the YAML the server accepts.
+ */
+export interface EditorLinear {
+  move_state?: string;
+  comment?: string;
+  add_labels?: string[];
+  remove_labels?: string[];
 }
 
 /** Approval body config (mirrors `ApprovalConfig`, editor-relevant fields). */
@@ -252,6 +272,7 @@ export interface EditorNode {
   loop?: EditorLoop;
   approval?: EditorApproval;
   cancel?: string;
+  linear?: EditorLinear;
 }
 
 /** A whole workflow in the flat editor shape (round-trips to YAML via js-yaml). */

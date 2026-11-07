@@ -1118,6 +1118,14 @@ pub fn catalog(project_root: &Path, creds: ConnectedCreds) -> Catalog {
                 description: "Terminate the run with a reason (usually gated with when:).",
                 ai: false,
             },
+            NodeKindInfo {
+                kind: "linear",
+                label: "Linear",
+                description: "Move the issue's status, comment on it, or change its labels. \
+                              Does nothing (and the run continues) when the run did not come \
+                              from a Linear issue.",
+                ai: false,
+            },
         ],
         providers: build_providers(creds),
         commands: list_commands(project_root),
@@ -1600,10 +1608,12 @@ nodes:
                 cursor: false,
             },
         );
-        assert_eq!(cat.node_kinds.len(), 7);
+        assert_eq!(cat.node_kinds.len(), 8);
         assert!(cat.node_kinds.iter().any(|k| k.kind == "loop" && k.ai));
         assert!(cat.node_kinds.iter().any(|k| k.kind == "cancel"));
         assert!(cat.node_kinds.iter().any(|k| k.kind == "approval"));
+        // Deterministic: it calls the run-scoped Linear API, not a provider.
+        assert!(cat.node_kinds.iter().any(|k| k.kind == "linear" && !k.ai));
         assert!(cat.providers.iter().any(|p| p.id == "pi"));
         // Bundled commands surface in the catalog.
         assert!(cat.commands.iter().any(|c| c.name == "implement-tasks"));
