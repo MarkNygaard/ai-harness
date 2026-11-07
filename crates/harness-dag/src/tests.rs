@@ -2,7 +2,7 @@
 
 use crate::error::DagError;
 use crate::graph::topological_layers;
-use crate::model::{ContextMode, NodeKind, ScriptRuntime};
+use crate::model::{ContextMode, LinearAction, NodeKind, ScriptRuntime};
 use crate::parse::parse_workflow;
 use crate::vars::{substitute, VarContext};
 
@@ -609,4 +609,93 @@ nodes:
     let wf = parse_workflow(yaml).unwrap();
     let json = serde_json::to_string(&wf).unwrap();
     assert!(!json.contains("\"hooks\""));
+}
+
+// ── linear steps ─────────────────────────────────────────────────────────
+
+#[test]
+fn parses_each_linear_action() {
+    let yaml = r#"
+name: demo
+description: a demo
+nodes:
+  - id: start
+    linear:
+      move_state: In Progress
+  - id: note
+    depends_on: [start]
+    linear:
+      comment: "started from $TASK_TITLE"
+  - id: tag
+    depends_on: [note]
+    linear:
+      add_labels: ["in-harness", "automated"]
+  - id: untag
+    depends_on: [tag]
+    linear:
+      remove_labels: ["needs-triage"]
+"#;
+    let wf = parse_workflow(yaml).expect("parse");
+    assert_eq!(
+        wf.nodes[0].kind,
+        NodeKind::Linear(LinearAction::MoveState("In Progress".into()))
+    );
+    assert_eq!(
+        wf.nodes[1].kind,
+        NodeKind::Linear(LinearAction::Comment("started from $TASK_TITLE".into()))
+    );
+    assert_eq!(
+        wf.nodes[2].kind,
+        NodeKind::Linear(LinearAction::AddLabels(vec![
+            "in-harness".into(),
+            "automated".into()
+        ]))
+    );
+    assert_eq!(
+        wf.nodes[3].kind,
+        NodeKind::Linear(LinearAction::RemoveLabels(vec!["needs-triage".into()]))
+    );
+}
+
+#[test]
+fn a_linear_body_is_exclusive_with_other_bodies() {
+    let yaml = r#"
+name: demo
+description: a demo
+nodes:
+  - id: both
+    bash: "echo hi"
+    linear:
+      move_state: Done
+"#;
+    assert!(matches!(
+        parse_workflow(yaml),
+        Err(DagError::MultipleNodeKinds { .. })
+    ));
+}
+
+#[test]
+fn linear_text_is_substitutable_so_a_comment_can_carry_vars() {
+    // `$plan.output` has to be collectable for validation, or a comment
+    // referencing an upstream node would be rejected as an unknown reference.
+    let node = crate::model::Node {
+        id: "note".into(),
+        depends_on: vec!["plan".into()],
+        when: None,
+        trigger_rule: crate::model::TriggerRule::AllSuccess,
+        provider: None,
+        model: None,
+        effort: None,
+        context: ContextMode::Fresh,
+        category: None,
+        artifact: None,
+        timeout: None,
+        retries: 0,
+        output_format: None,
+        hooks: None,
+        mcp: vec![],
+        linear_comment: false,
+        kind: NodeKind::Linear(LinearAction::Comment("see $plan.output".into())),
+    };
+    assert_eq!(node.substitutable_text(), vec!["see $plan.output"]);
 }

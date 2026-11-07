@@ -143,6 +143,41 @@ pub enum HookDecision {
     Ask,
 }
 
+/// One Linear operation, performed declaratively by a step.
+///
+/// These already exist as run-scoped endpoints under `/api/run/linear/*`, but
+/// until now the only ways to reach them were an AI step *choosing* to call the
+/// MCP tool, or the poller applying a binding's status map. Neither is visible
+/// in the graph. As a node kind the operation is explicit, ordered against the
+/// rest of the DAG, and skipped on its own terms when Linear isn't in play.
+///
+/// Every variant acts on the issue the run was started from (`$ISSUE_ID`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinearAction {
+    /// Move the issue to a status, by name (resolved against the issue's team)
+    /// or by id.
+    MoveState(String),
+    /// Post a comment on the issue.
+    Comment(String),
+    /// Add labels to the issue, by name.
+    AddLabels(Vec<String>),
+    /// Remove labels from the issue, by name.
+    RemoveLabels(Vec<String>),
+}
+
+impl LinearAction {
+    /// A short phrase naming what this does, for logs and the skip reason.
+    pub fn summary(&self) -> String {
+        match self {
+            LinearAction::MoveState(s) => format!("move the issue to {s}"),
+            LinearAction::Comment(_) => "comment on the issue".to_string(),
+            LinearAction::AddLabels(l) => format!("label the issue {}", l.join(", ")),
+            LinearAction::RemoveLabels(l) => format!("unlabel the issue {}", l.join(", ")),
+        }
+    }
+}
+
 /// The executable body of a node. Exactly one variant per node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -165,6 +200,10 @@ pub enum NodeKind {
     Approval(ApprovalConfig),
     /// Terminate the run with a reason.
     Cancel(String),
+    /// A Linear operation on the issue the run came from. Skipped, not failed,
+    /// when the run has no issue or the project has no Linear connection — so a
+    /// prebuilt workflow can carry these steps and stay usable without Linear.
+    Linear(LinearAction),
 }
 
 impl NodeKind {
@@ -265,6 +304,15 @@ impl Node {
                     texts.push(b);
                 }
             }
+            // A comment is the obvious place to want `$TASK_TITLE` or an
+            // upstream node's output; a status or label name can be built the
+            // same way, so every Linear field substitutes.
+            NodeKind::Linear(action) => match action {
+                LinearAction::MoveState(t) | LinearAction::Comment(t) => texts.push(t),
+                LinearAction::AddLabels(l) | LinearAction::RemoveLabels(l) => {
+                    texts.extend(l.iter().map(String::as_str))
+                }
+            },
             // `command` is a file reference (resolved by the runner); `approval`
             // carries a human message, not substitutable node refs.
             NodeKind::Command(_) | NodeKind::Approval(_) => {}

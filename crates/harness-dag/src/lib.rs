@@ -44,9 +44,9 @@ pub use exec::{
 };
 pub use graph::topological_layers;
 pub use model::{
-    ApprovalConfig, ContextMode, HookDecision, HookRule, LoopConfig, Node, NodeHooks, NodeKind,
-    ReportAction, ReportStatus, ScriptRuntime, TriggerRule, Workflow, WorkflowNav, WorkflowReport,
-    WorkflowUi,
+    ApprovalConfig, ContextMode, HookDecision, HookRule, LinearAction, LoopConfig, Node, NodeHooks,
+    NodeKind, ReportAction, ReportStatus, ScriptRuntime, TriggerRule, Workflow, WorkflowNav,
+    WorkflowReport, WorkflowUi,
 };
 pub use parse::parse_workflow;
 pub use signal::{detect_signal, validate_signal};

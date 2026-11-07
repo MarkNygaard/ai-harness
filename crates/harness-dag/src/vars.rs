@@ -71,6 +71,12 @@ impl VarContext {
         self
     }
 
+    /// Read a named variable, if set. `ISSUE_ID` is read this way to decide
+    /// whether a Linear step has an issue to act on at all.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.named.get(name).map(String::as_str)
+    }
+
     /// Set the positional args (`$1` = `args[0]`, …, up to `$9`).
     pub fn with_positional(mut self, args: impl IntoIterator<Item = String>) -> Self {
         self.positional = args.into_iter().collect();
