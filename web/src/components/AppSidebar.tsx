@@ -30,12 +30,26 @@ import {
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
 
+/**
+ * Which part of the sidebar an entry belongs to: the harness's own tools, the
+ * same on every install, or a report page a workflow declared (`ui.nav`).
+ */
+export type NavGroup = "harness" | "reports";
+
+/** The sidebar's groups, in order, with the heading each shows (if any). */
+export const NAV_GROUPS: { group: NavGroup; label: string | null }[] = [
+  // The tools need no heading: they are what the app *is*.
+  { group: "harness", label: null },
+  { group: "reports", label: "Reports" },
+];
+
 export interface NavItem {
   href: string;
   label: string;
   icon: typeof IconRocket;
   /** Active when the path equals href, or (for prefixes) starts with `match`. */
   match?: string;
+  group: NavGroup;
 }
 
 /** Curated icon allow-list for workflow-declared nav entries (`ui.nav.icon`),
@@ -59,7 +73,8 @@ function isActive(pathname: string, item: NavItem): boolean {
 }
 
 /**
- * The Operations entries, in sidebar order.
+ * The sidebar's entries, in order: the harness's own tools, then the report
+ * pages workflows declare.
  *
  * Exported as a hook because Settings → Preferences lists the same entries to
  * show and hide them, and the workflow-declared ones are only knowable at
@@ -82,22 +97,47 @@ export function useOperationsNav(): NavItem[] {
       label: w.ui!.nav!.label,
       icon: NAV_ICONS[w.ui!.nav!.icon ?? ""] ?? DEFAULT_NAV_ICON,
       match: `/reports/${w.name}`,
+      group: "reports",
     }));
 
   return [
-    { href: "/", label: "Dashboard", icon: IconLayoutDashboard },
-    { href: "/runs", label: "Runs", icon: IconRocket, match: "/runs" },
-    { href: "/ab", label: "A/B Tests", icon: IconGitCompare, match: "/ab" },
-    // Hideable like the rest (sidebar edit mode, Settings → Preferences); the
-    // header's Ask button opens the same conversations in a side panel.
-    { href: "/chat", label: "Chat", icon: IconMessageCircle },
-    // Linear triggers and schedules, together: everything that starts a run
+    {
+      href: "/",
+      label: "Dashboard",
+      icon: IconLayoutDashboard,
+      group: "harness",
+    },
+    {
+      href: "/runs",
+      label: "Runs",
+      icon: IconRocket,
+      match: "/runs",
+      group: "harness",
+    },
+    // Hideable like the rest (Settings → Preferences); the header's Ask
+    // button opens the same conversations in a side panel.
+    {
+      href: "/chat",
+      label: "Chat",
+      icon: IconMessageCircle,
+      group: "harness",
+    },
+    // Linear triggers, webhooks and schedules: everything that starts a run
     // by itself.
     {
       href: "/triggers",
       label: "Triggers",
       icon: IconBolt,
       match: "/triggers",
+      group: "harness",
+    },
+    // Last of the tools: a comparison is occasional work, not daily.
+    {
+      href: "/ab",
+      label: "A/B Tests",
+      icon: IconGitCompare,
+      match: "/ab",
+      group: "harness",
     },
     ...declaredNav,
   ];
@@ -113,7 +153,7 @@ export function useOperationsNav(): NavItem[] {
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { pathname } = useLocation();
   const { isHidden } = useHiddenNav();
-  const operations = useOperationsNav().filter((i) => !isHidden(i.href));
+  const items = useOperationsNav().filter((i) => !isHidden(i.href));
 
   return (
     <Sidebar collapsible="offcanvas" {...props}>
@@ -131,26 +171,30 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        {operations.length > 0 && (
-          <SidebarGroup>
-            <SidebarGroupLabel>Operations</SidebarGroupLabel>
-            <SidebarGroupContent>
-              <SidebarMenu>
-                {operations.map((item) => (
-                  <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton
-                      render={<Link to={item.href} />}
-                      isActive={isActive(pathname, item)}
-                    >
-                      <item.icon />
-                      <span>{item.label}</span>
-                    </SidebarMenuButton>
-                  </SidebarMenuItem>
-                ))}
-              </SidebarMenu>
-            </SidebarGroupContent>
-          </SidebarGroup>
-        )}
+        {NAV_GROUPS.map(({ group, label }) => {
+          const entries = items.filter((i) => i.group === group);
+          if (entries.length === 0) return null;
+          return (
+            <SidebarGroup key={group}>
+              {label && <SidebarGroupLabel>{label}</SidebarGroupLabel>}
+              <SidebarGroupContent>
+                <SidebarMenu>
+                  {entries.map((item) => (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton
+                        render={<Link to={item.href} />}
+                        isActive={isActive(pathname, item)}
+                      >
+                        <item.icon />
+                        <span>{item.label}</span>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  ))}
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          );
+        })}
       </SidebarContent>
       <SidebarFooter>
         <AccountMenu />

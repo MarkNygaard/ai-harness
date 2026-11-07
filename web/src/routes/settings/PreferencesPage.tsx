@@ -3,7 +3,7 @@ import { IconEye, IconEyeOff } from "@tabler/icons-react";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { useOperationsNav } from "@/components/AppSidebar";
+import { NAV_GROUPS, useOperationsNav } from "@/components/AppSidebar";
 import { LinearAccountSection } from "@/components/settings/LinearAccountSection";
 import { useAuthStatus } from "@/lib/auth";
 import { resetNavHidden, toggleNavHidden, useHiddenNav } from "@/lib/nav-prefs";
@@ -110,32 +110,51 @@ function ThemeChoice() {
 function SidebarItems() {
   const items = useOperationsNav();
   const { hidden, isHidden } = useHiddenNav();
+  // In the sidebar's own order and grouping, so a row here is easy to find
+  // there. A group with nothing in it (no report pages yet) is skipped.
+  const ordered = NAV_GROUPS.flatMap(({ group, label }) => {
+    const entries = items.filter((i) => i.group === group);
+    return entries.length === 0
+      ? []
+      : [{ group, label, first: entries[0].href }, ...entries];
+  });
 
   return (
     <>
-      {items.map((item) => (
-        <Row key={item.href} title={item.label} description={item.href}>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => toggleNavHidden(item.href)}
-            aria-pressed={isHidden(item.href)}
-            title={
-              isHidden(item.href) ? "Show in sidebar" : "Hide from sidebar"
-            }
-          >
-            {isHidden(item.href) ? (
-              <>
-                <IconEyeOff className="size-3.5" /> Hidden
-              </>
-            ) : (
-              <>
-                <IconEye className="size-3.5" /> Shown
-              </>
-            )}
-          </Button>
-        </Row>
-      ))}
+      {ordered.map((item) =>
+        "first" in item ? (
+          item.label && (
+            <div
+              key={`group-${item.group}`}
+              className="px-1 pt-2 text-[11px] font-medium text-muted-foreground"
+            >
+              {item.label}
+            </div>
+          )
+        ) : (
+          <Row key={item.href} title={item.label} description={item.href}>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => toggleNavHidden(item.href)}
+              aria-pressed={isHidden(item.href)}
+              title={
+                isHidden(item.href) ? "Show in sidebar" : "Hide from sidebar"
+              }
+            >
+              {isHidden(item.href) ? (
+                <>
+                  <IconEyeOff className="size-3.5" /> Hidden
+                </>
+              ) : (
+                <>
+                  <IconEye className="size-3.5" /> Shown
+                </>
+              )}
+            </Button>
+          </Row>
+        ),
+      )}
       {hidden.length > 0 && (
         <Row
           title="Show everything again"
