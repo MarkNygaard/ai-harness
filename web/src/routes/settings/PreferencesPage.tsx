@@ -7,11 +7,6 @@ import { useOperationsNav } from "@/components/AppSidebar";
 import { LinearAccountSection } from "@/components/settings/LinearAccountSection";
 import { useAuthStatus } from "@/lib/auth";
 import { resetNavHidden, toggleNavHidden, useHiddenNav } from "@/lib/nav-prefs";
-import {
-  type LinearTriggerHome,
-  setLinearTriggerHome,
-  useLinearTriggerHome,
-} from "@/lib/trigger-prefs";
 import { useTheme } from "@/lib/theme";
 import type { ThemePreference } from "@/lib/theme";
 
@@ -105,22 +100,6 @@ function ThemeChoice() {
   );
 }
 
-const LINEAR_HOMES: { value: LinearTriggerHome; label: string }[] = [
-  { value: "triggers", label: "Triggers page" },
-  { value: "project", label: "Project tab" },
-];
-
-function LinearTriggerHomeChoice() {
-  const home = useLinearTriggerHome();
-  return (
-    <Segmented
-      options={LINEAR_HOMES}
-      value={home}
-      onChange={setLinearTriggerHome}
-    />
-  );
-}
-
 /**
  * Show or hide entries in the app sidebar.
  *
@@ -192,15 +171,6 @@ export function PreferencesPage() {
             description="System follows your operating system, and keeps following it as it changes."
           >
             <ThemeChoice />
-          </Row>
-        </Section>
-
-        <Section title="Triggers">
-          <Row
-            title="Manage Linear triggers on"
-            description="The Triggers page lists them with every other kind. The project tab is the older home, on each project's own page. Both edit the same triggers."
-          >
-            <LinearTriggerHomeChoice />
           </Row>
         </Section>
 

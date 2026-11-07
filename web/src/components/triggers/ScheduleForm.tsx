@@ -22,6 +22,7 @@ import {
   useSaveSchedule,
   useSchedulePreview,
 } from "@/lib/schedules";
+import { Field } from "./fields";
 
 /** Base UI's Select needs a concrete value for "write my own". */
 const CUSTOM = "__custom__";
@@ -262,27 +263,5 @@ export function ScheduleForm({
         </div>
       )}
     </form>
-  );
-}
-
-function Field({
-  label,
-  hint,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-muted-foreground">
-        {label}
-      </span>
-      {children}
-      {hint && (
-        <span className="text-[11px] text-muted-foreground">{hint}</span>
-      )}
-    </div>
   );
 }

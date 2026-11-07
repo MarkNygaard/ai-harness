@@ -3,7 +3,13 @@ import { SettingsShell } from "@/components/SettingsShell";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Link } from "react-router-dom";
 import { useGeneralSettings, useSetGeneralSettings } from "@/lib/settings";
+import {
+  type TriggerSystem,
+  useSetTriggerSystem,
+  useTriggerSystem,
+} from "@/lib/triggers";
 
 export function GeneralPage() {
   const settings = useGeneralSettings(true);
@@ -204,7 +210,88 @@ export function GeneralPage() {
             above is still the whole machine.
           </p>
         </section>
+
+        <TriggerSystemSection />
       </div>
     </SettingsShell>
+  );
+}
+
+const SYSTEMS: { value: TriggerSystem; title: string; body: string }[] = [
+  {
+    value: "classic",
+    title: "Project bindings (classic)",
+    body: "Each project's Linear tab maps a team to a workflow and also moves the issue through In Progress, Review and Ready.",
+  },
+  {
+    value: "triggers",
+    title: "Triggers page",
+    body: "Linear triggers on the Triggers page only start the run. The workflow moves the issue with its own linear: steps.",
+  },
+];
+
+/**
+ * Which system starts Linear runs. One switch for the whole harness, because
+ * both read the same issues: running the two at once would start every issue
+ * twice. Webhooks and schedules work under either.
+ */
+function TriggerSystemSection() {
+  const system = useTriggerSystem();
+  const set = useSetTriggerSystem();
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Linear triggers
+      </h2>
+      <Card>
+        <CardContent className="flex flex-col gap-3 px-4 py-3.5">
+          <div className="text-[11px] text-muted-foreground">
+            Which of the two starts runs from Linear issues. The other is kept
+            but idle, so switching back loses nothing. Set up the{" "}
+            <Link className="underline" to="/triggers?kind=linear">
+              Linear triggers
+            </Link>{" "}
+            you need before switching to them, and add{" "}
+            <code className="font-mono">linear:</code> steps to the workflows
+            that should move their issue.
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {SYSTEMS.map((s) => {
+              const active = system.data === s.value;
+              return (
+                <button
+                  key={s.value}
+                  type="button"
+                  aria-pressed={active}
+                  disabled={set.isPending || !system.data}
+                  onClick={() => !active && set.mutate(s.value)}
+                  className={
+                    "flex flex-col gap-1 rounded-lg border p-3 text-left transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-60 " +
+                    (active
+                      ? "border-primary bg-primary/5"
+                      : "border-border hover:bg-muted/50")
+                  }
+                >
+                  <span className="text-[13px] font-medium">
+                    {s.title}
+                    {active && (
+                      <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+                        in use
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground">
+                    {s.body}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+          {set.isError && (
+            <p className="text-[11px] text-destructive">{set.error.message}</p>
+          )}
+        </CardContent>
+      </Card>
+    </section>
   );
 }

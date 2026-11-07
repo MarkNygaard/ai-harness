@@ -1,10 +1,5 @@
 import { useState } from "react";
-import {
-  Link,
-  useLocation,
-  useNavigate,
-  useSearchParams,
-} from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { IconChevronRight, IconPlus, IconX } from "@tabler/icons-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
@@ -18,39 +13,26 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { OptionSelect } from "@/components/triggers/fields";
 import { TriggerKindIcon } from "@/components/triggers/TriggerKindIcon";
 import { formatWhen } from "@/components/triggers/ScheduleForm";
-import { useLinearDiscovery } from "@/lib/linear";
-import { useRestoreTrash } from "@/lib/projects";
-import { useLinearTriggerHome } from "@/lib/trigger-prefs";
 import {
   TRIGGER_KINDS,
   type Trigger,
   type TriggerKind,
   type TriggerState,
-  describeLinearWhen,
-  describeScheduleWhen,
+  type TriggerSystem,
+  describeWhen,
   filterTriggers,
   kindMeta,
   triggerHref,
+  triggerName,
+  triggerProject,
+  triggerState,
+  triggerWorkflow,
+  useTriggerSystem,
   useTriggers,
 } from "@/lib/triggers";
-import type { LinearSource } from "@/types/linear";
-
-/** Base UI's Select needs a concrete value for "no filter". */
-const ALL = "__all__";
-
-/** Set by a trigger's page after a delete, so the list can offer Undo. */
-export interface DeletedState {
-  deleted?: { label: string; trashId: string | null };
-}
 
 /**
  * Every trigger, of every kind, in one flat list.
@@ -61,12 +43,9 @@ export interface DeletedState {
  */
 export function TriggersPage() {
   const triggers = useTriggers();
-  const home = useLinearTriggerHome();
+  const system = useTriggerSystem();
   const [params, setParams] = useSearchParams();
   const [picking, setPicking] = useState(false);
-  const location = useLocation();
-  const navigate = useNavigate();
-  const deleted = (location.state as DeletedState | null)?.deleted;
 
   const kind = (params.get("kind") as TriggerKind | null) ?? null;
   const project = params.get("project");
@@ -81,9 +60,10 @@ export function TriggersPage() {
 
   const all = triggers.data ?? [];
   const rows = filterTriggers(all, { kind, project, workflow, q });
-  const projects = [...new Set(all.map((t) => t.project))].sort();
-  const workflows = [...new Set(all.map((t) => t.workflow))].sort();
+  const projects = [...new Set(all.map(triggerProject))].sort();
+  const workflows = [...new Set(all.map(triggerWorkflow))].sort();
   const filtered = !!(kind || project || workflow || q);
+  const hasLinear = all.some((t) => t.kind === "linear");
 
   return (
     <AppShell
@@ -98,40 +78,55 @@ export function TriggersPage() {
         <div className="sm:pr-64">
           <h1 className="text-lg font-semibold">Triggers</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            What starts runs: Linear issues and schedules. Each trigger starts
-            one workflow in one project.
+            What starts runs by itself: Linear issues, webhooks and schedules.
+            Each trigger starts one workflow in one project; what happens after
+            that is the workflow&rsquo;s job.
           </p>
         </div>
 
-        {deleted && (
-          <UndoDelete
-            deleted={deleted}
-            onDone={() => navigate(".", { replace: true, state: null })}
-          />
+        {system.data === "classic" && (hasLinear || kind === "linear") && (
+          <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[12px]">
+            <span className="font-medium">Linear triggers here are idle.</span>{" "}
+            This harness still starts Linear runs from each project&rsquo;s
+            classic bindings. Set up the triggers you need, then switch under{" "}
+            <Link to="/settings/general" className="underline">
+              Settings → General
+            </Link>
+            .
+          </div>
         )}
 
         <div className="flex flex-wrap items-center gap-2">
-          <FilterSelect
-            value={kind}
-            placeholder="All kinds"
-            options={TRIGGER_KINDS.map((k) => ({
-              value: k.kind,
-              label: k.label,
-            }))}
-            onChange={(v) => setParam("kind", v)}
-          />
-          <FilterSelect
-            value={project}
-            placeholder="All projects"
-            options={projects.map((p) => ({ value: p, label: p }))}
-            onChange={(v) => setParam("project", v)}
-          />
-          <FilterSelect
-            value={workflow}
-            placeholder="All workflows"
-            options={workflows.map((w) => ({ value: w, label: w }))}
-            onChange={(v) => setParam("workflow", v)}
-          />
+          <div className="w-40">
+            <OptionSelect
+              value={kind ?? ""}
+              onChange={(v) => setParam("kind", v || null)}
+              none="All kinds"
+              placeholder="All kinds"
+              options={TRIGGER_KINDS.map((k) => ({
+                value: k.kind,
+                label: k.label,
+              }))}
+            />
+          </div>
+          <div className="w-44">
+            <OptionSelect
+              value={project ?? ""}
+              onChange={(v) => setParam("project", v || null)}
+              none="All projects"
+              placeholder="All projects"
+              options={projects.map((p) => ({ value: p, label: p }))}
+            />
+          </div>
+          <div className="w-44">
+            <OptionSelect
+              value={workflow ?? ""}
+              onChange={(v) => setParam("workflow", v || null)}
+              none="All workflows"
+              placeholder="All workflows"
+              options={workflows.map((w) => ({ value: w, label: w }))}
+            />
+          </div>
           <Input
             value={q}
             onChange={(e) => setParam("q", e.target.value || null)}
@@ -164,14 +159,18 @@ export function TriggersPage() {
             <CardContent className="py-8 text-center text-sm text-muted-foreground">
               {filtered
                 ? "No trigger matches these filters."
-                : "No triggers yet. Add one to start runs from Linear or on a schedule."}
+                : "No triggers yet. Add one to start runs from Linear, a webhook or a schedule."}
             </CardContent>
           </Card>
         )}
 
         <div className="flex flex-col gap-2">
           {rows.map((t) => (
-            <TriggerRow key={t.key} trigger={t} href={triggerHref(t, home)} />
+            <TriggerRow
+              key={t.key}
+              trigger={t}
+              system={system.data ?? "classic"}
+            />
           ))}
         </div>
       </div>
@@ -181,57 +180,35 @@ export function TriggersPage() {
   );
 }
 
-function FilterSelect({
-  value,
-  placeholder,
-  options,
-  onChange,
-}: {
-  value: string | null;
-  placeholder: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string | null) => void;
-}) {
-  return (
-    <Select
-      value={value ?? ALL}
-      onValueChange={(v) => onChange(v == null || v === ALL ? null : v)}
-    >
-      <SelectTrigger className="w-44">
-        <SelectValue>
-          {(v: string | null) =>
-            !v || v === ALL
-              ? placeholder
-              : (options.find((o) => o.value === v)?.label ?? v)
-          }
-        </SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ALL}>{placeholder}</SelectItem>
-        {options.map((o) => (
-          <SelectItem key={o.value} value={o.value}>
-            {o.label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
-  );
-}
-
 const STATE_BADGE: Record<
   TriggerState,
-  { label: string; variant: "success" | "outline" | "secondary" }
+  {
+    label: string;
+    variant: "success" | "outline" | "secondary";
+    title?: string;
+  }
 > = {
   on: { label: "on", variant: "success" },
-  "dry-run": { label: "dry-run", variant: "secondary" },
+  idle: {
+    label: "idle",
+    variant: "secondary",
+    title: "Classic bindings start Linear runs on this harness",
+  },
   off: { label: "off", variant: "outline" },
 };
 
-function TriggerRow({ trigger: t, href }: { trigger: Trigger; href: string }) {
-  const state = STATE_BADGE[t.state];
+function TriggerRow({
+  trigger: t,
+  system,
+}: {
+  trigger: Trigger;
+  system: TriggerSystem;
+}) {
+  const state = STATE_BADGE[triggerState(t, system)];
+  const lastError = t.kind === "schedule" ? null : t.trigger.last_error;
   return (
     <Link
-      to={href}
+      to={triggerHref(t)}
       className="group rounded-xl outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
     >
       <Card size="sm" className="transition-colors group-hover:bg-muted/40">
@@ -242,34 +219,33 @@ function TriggerRow({ trigger: t, href }: { trigger: Trigger; href: string }) {
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="truncate text-sm font-medium">
-                {t.kind === "schedule" ? (
-                  t.schedule.name
-                ) : (
-                  <LinearWhen binding={t.binding} />
-                )}
+                {triggerName(t)}
               </span>
-              <Badge variant={state.variant} className="shrink-0 text-[10px]">
+              <Badge
+                variant={state.variant}
+                title={state.title}
+                className="shrink-0 text-[10px]"
+              >
                 {state.label}
               </Badge>
+              {lastError && (
+                <Badge
+                  variant="outline"
+                  title={lastError}
+                  className="shrink-0 border-destructive/50 text-[10px] text-destructive"
+                >
+                  failed to start
+                </Badge>
+              )}
             </div>
             <div className="truncate text-[12px] text-muted-foreground">
-              starts <span className="font-mono">{t.workflow}</span> in{" "}
-              <span className="font-mono">{t.project}</span>
-              {t.kind === "schedule" && (
-                <> · {describeScheduleWhen(t.schedule)}</>
-              )}
+              {describeWhen(t)} →{" "}
+              <span className="font-mono">{triggerWorkflow(t)}</span> in{" "}
+              <span className="font-mono">{triggerProject(t)}</span>
             </div>
           </div>
           <div className="hidden shrink-0 text-right text-[11px] text-muted-foreground sm:block">
-            {t.kind === "schedule" ? (
-              t.schedule.enabled ? (
-                <>Next {formatWhen(t.schedule.next_run_at)}</>
-              ) : (
-                "paused"
-              )
-            ) : (
-              <>polls every {t.binding.poll_interval_secs}s</>
-            )}
+            <LastOrNext trigger={t} />
           </div>
           <IconChevronRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
         </CardContent>
@@ -278,13 +254,19 @@ function TriggerRow({ trigger: t, href }: { trigger: Trigger; href: string }) {
   );
 }
 
-/**
- * A Linear trigger's "when", with its status named. One discovery per
- * project, shared by every row of it through the query cache, and not polled.
- */
-function LinearWhen({ binding }: { binding: LinearSource }) {
-  const discovery = useLinearDiscovery(binding.project);
-  return <>{describeLinearWhen(binding, discovery.data?.teams)}</>;
+function LastOrNext({ trigger: t }: { trigger: Trigger }) {
+  if (t.kind === "schedule") {
+    return t.schedule.enabled ? (
+      <>Next {formatWhen(t.schedule.next_run_at)}</>
+    ) : (
+      <>paused</>
+    );
+  }
+  return t.trigger.last_fired_at ? (
+    <>Last {formatWhen(t.trigger.last_fired_at)}</>
+  ) : (
+    <>never fired</>
+  );
 }
 
 /** Choose what kind of trigger to add. Each kind's own page does the rest. */
@@ -329,44 +311,5 @@ function KindPicker({
         </div>
       </DialogContent>
     </Dialog>
-  );
-}
-
-/** The trigger just deleted, with an Undo while it is still in the bin. */
-function UndoDelete({
-  deleted,
-  onDone,
-}: {
-  deleted: NonNullable<DeletedState["deleted"]>;
-  onDone: () => void;
-}) {
-  const restore = useRestoreTrash();
-  return (
-    <div className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-3 py-2 text-[12px]">
-      <span className="min-w-0 flex-1">Deleted {deleted.label}.</span>
-      {deleted.trashId && (
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={restore.isPending}
-          onClick={() =>
-            restore.mutate(deleted.trashId!, { onSuccess: onDone })
-          }
-        >
-          Undo
-        </Button>
-      )}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        aria-label="Dismiss"
-        onClick={onDone}
-      >
-        <IconX />
-      </Button>
-      {restore.isError && (
-        <span className="text-destructive">{restore.error.message}</span>
-      )}
-    </div>
   );
 }

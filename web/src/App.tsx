@@ -34,8 +34,8 @@ import { ChatSettingsPage } from "./routes/settings/ChatSettingsPage";
 import { ChatPage } from "./routes/chat/ChatPage";
 import { TriggersPage } from "./routes/triggers/TriggersPage";
 import {
-  LinearTriggerPage,
   NewTriggerPage,
+  RunTriggerPage,
   ScheduleTriggerPage,
 } from "./routes/triggers/TriggerPage";
 
@@ -66,13 +66,11 @@ export function App() {
             <Route path="/triggers" element={<TriggersPage />} />
             <Route path="/triggers/new/:kind" element={<NewTriggerPage />} />
             <Route
-              path="/triggers/linear/:project/:workflow"
-              element={<LinearTriggerPage />}
-            />
-            <Route
               path="/triggers/schedule/:id"
               element={<ScheduleTriggerPage />}
             />
+            {/* After the static segments, so `new` and `schedule` aren't ids. */}
+            <Route path="/triggers/:id" element={<RunTriggerPage />} />
             {/* Schedules became a kind of trigger. Bookmarks and the docs
               still point here. */}
             <Route

@@ -167,6 +167,10 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
         // what authenticates them: single-use, expiring, and hashed at rest.
         // A prefix, because the token is a path segment.
         || path.starts_with("/api/invites/token/")
+        // A webhook trigger's delivery. The sender is a third party with no
+        // session; each trigger verifies its own deliveries against its own
+        // secret, and an unknown id is a 404 (see `triggers_routes`).
+        || path.starts_with("/api/hooks/")
 }
 
 /// Bearer token authentication middleware.
