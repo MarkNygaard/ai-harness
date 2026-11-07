@@ -212,6 +212,8 @@ pub struct PullFields {
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
     pub merged_at: Option<String>,
+    /// The login that opened it.
+    pub author: String,
 }
 
 fn str_at(v: &Value, path: &[&str]) -> Option<String> {
@@ -243,7 +245,26 @@ pub fn parse_pull(v: &Value) -> Result<PullFields, GithubError> {
         created_at: str_at(v, &["created_at"]),
         updated_at: str_at(v, &["updated_at"]),
         merged_at,
+        author: str_at(v, &["user", "login"]).unwrap_or_default(),
     })
+}
+
+/// When a person other than the author first reviewed a PR, from
+/// `GET /repos/{o}/{r}/pulls/{n}/reviews`. Bots, the author's own replies and
+/// reviews still pending (not submitted) don't count.
+pub fn first_human_review(reviews: &Value, author: &str) -> Option<String> {
+    reviews
+        .as_array()?
+        .iter()
+        .filter(|r| str_at(r, &["state"]).as_deref() != Some("PENDING"))
+        .filter(|r| str_at(r, &["user", "type"]).as_deref() != Some("Bot"))
+        .filter(|r| {
+            let login = str_at(r, &["user", "login"]).unwrap_or_default();
+            !login.is_empty() && !login.eq_ignore_ascii_case(author)
+        })
+        .filter_map(|r| str_at(r, &["submitted_at"]))
+        // RFC 3339 in UTC sorts as text.
+        .min()
 }
 
 /// Fold `check-runs` and the combined `status` into one summary.
@@ -391,6 +412,22 @@ impl GithubClient {
         )
     }
 
+    /// When a person other than `author` first reviewed the PR, if anyone has.
+    /// The first 100 reviews are enough to find the earliest.
+    pub async fn first_review(
+        &self,
+        pr: &PrRef,
+        author: &str,
+    ) -> Result<Option<String>, GithubError> {
+        let v = self
+            .get(&format!(
+                "/repos/{}/{}/pulls/{}/reviews?per_page=100",
+                pr.owner, pr.repo, pr.number
+            ))
+            .await?;
+        Ok(first_human_review(&v, author))
+    }
+
     /// The files a pull request changes, with their diffs. Up to 300 files,
     /// which is past where reading a PR file by file stops being useful.
     pub async fn pr_files(&self, pr: &PrRef) -> Result<Vec<PrFile>, GithubError> {
@@ -518,6 +555,27 @@ mod tests {
         .unwrap();
         assert_eq!(open.state, "open");
         assert!(parse_pull(&json!({ "state": "open" })).is_err());
+    }
+
+    #[test]
+    fn the_first_review_is_a_submitted_one_by_a_person_who_did_not_write_it() {
+        let reviews = json!([
+            { "state": "COMMENTED", "submitted_at": "2026-11-01T08:00:00Z",
+              "user": { "login": "author", "type": "User" } },
+            { "state": "COMMENTED", "submitted_at": "2026-11-01T09:00:00Z",
+              "user": { "login": "ci-bot", "type": "Bot" } },
+            { "state": "PENDING",
+              "user": { "login": "alice", "type": "User" } },
+            { "state": "APPROVED", "submitted_at": "2026-11-01T12:00:00Z",
+              "user": { "login": "bob", "type": "User" } },
+            { "state": "CHANGES_REQUESTED", "submitted_at": "2026-11-01T10:00:00Z",
+              "user": { "login": "carol", "type": "User" } }
+        ]);
+        assert_eq!(
+            first_human_review(&reviews, "Author").as_deref(),
+            Some("2026-11-01T10:00:00Z")
+        );
+        assert_eq!(first_human_review(&json!([]), "a"), None);
     }
 
     #[test]

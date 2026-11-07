@@ -15,10 +15,13 @@ export interface Outcomes {
 export interface PrTotals {
   prs_opened: number;
   prs_merged: number;
-  /** Median from a run starting to its PR opening. */
+  /** Medians of the cycle. Kickoff is a run starting; the kickoff times
+   *  only count PRs the run itself opened. */
+  median_kickoff_to_merge_secs: number | null;
   median_to_pr_secs: number | null;
-  /** Median from a PR opening to it merging. */
-  median_to_merge_secs: number | null;
+  /** PR opened to someone other than its author first reviewing it. */
+  median_to_review_secs: number | null;
+  median_review_to_merge_secs: number | null;
 }
 
 export interface DayMetrics extends Outcomes {

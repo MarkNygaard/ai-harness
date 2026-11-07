@@ -57,6 +57,7 @@ pub(crate) async fn record_run(state: &Arc<RunsState>, detail: &RunDetail) {
                 state: harness_persist::PR_OPEN.to_string(),
                 opened_at: None,
                 merged_at: None,
+                first_review_at: None,
                 checked_at: None,
             };
             check(state, &pr).await;
@@ -102,10 +103,25 @@ async fn check(state: &Arc<RunsState>, pr: &RunPr) {
         Some(p) => state.github_token_for_project(p).await,
         None => state.github_token().await,
     };
-    match GithubClient::new(token).pull(&r).await {
+    let gh = GithubClient::new(token);
+    match gh.pull(&r).await {
         Ok(fields) => {
             let (status, opened, merged) = outcome(&fields);
-            if let Err(e) = store.update(&pr.url, status, opened, merged).await {
+            // Until a person has reviewed it; after that the answer can't change.
+            let reviewed = match pr.first_review_at {
+                Some(_) => None,
+                None => match gh.first_review(&r, &fields.author).await {
+                    Ok(at) => parse_time(&at),
+                    Err(e) => {
+                        tracing::debug!("pr tracking: reviews of {}: {e}", pr.url);
+                        None
+                    }
+                },
+            };
+            if let Err(e) = store
+                .update(&pr.url, status, opened, merged, reviewed)
+                .await
+            {
                 tracing::warn!("pr tracking: could not update {}: {e}", pr.url);
             }
         }
@@ -116,13 +132,15 @@ async fn check(state: &Arc<RunsState>, pr: &RunPr) {
     }
 }
 
+fn parse_time(s: &Option<String>) -> Option<DateTime<Utc>> {
+    s.as_deref()
+        .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
+        .map(|d| d.with_timezone(&Utc))
+}
+
 /// What a PR's GitHub fields mean for tracking: its state, opened and merged.
 fn outcome(f: &PullFields) -> (&'static str, Option<DateTime<Utc>>, Option<DateTime<Utc>>) {
-    let at = |s: &Option<String>| {
-        s.as_deref()
-            .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
-            .map(|d| d.with_timezone(&Utc))
-    };
+    let at = parse_time;
     let state = match f.state.as_str() {
         "merged" => harness_persist::PR_MERGED,
         "closed" => harness_persist::PR_CLOSED,
@@ -146,6 +164,7 @@ mod tests {
             created_at: created.map(str::to_string),
             updated_at: None,
             merged_at: merged.map(str::to_string),
+            author: String::new(),
         }
     }
 

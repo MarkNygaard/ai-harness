@@ -107,7 +107,7 @@ export function DashboardPage() {
 
   return (
     <AppShell title="Dashboard">
-      <div className="flex w-full flex-col gap-6 p-6">
+      <div className="flex w-full flex-col gap-4 p-6">
         {/* One row of filters, scoping everything below it. */}
         <div className="flex flex-wrap items-center gap-2">
           <FilterButton active={filter === ALL} onClick={() => setFilter(ALL)}>
@@ -148,7 +148,7 @@ export function DashboardPage() {
         {/* The latest tasks beside the subscriptions, the list only as tall as
             the cards next to it and scrolling within that — most people want
             the last few, and the history is a scroll away. */}
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid gap-3 lg:grid-cols-3">
           <section className="relative flex min-h-[24rem] flex-col gap-2 lg:col-span-2">
             <div className="flex flex-col gap-2 lg:absolute lg:inset-0">
               <h2 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
