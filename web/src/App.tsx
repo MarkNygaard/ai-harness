@@ -33,6 +33,7 @@ import { ChatProvider } from "./components/chat/ChatProvider";
 import { ChatSettingsPage } from "./routes/settings/ChatSettingsPage";
 import { ChatPage } from "./routes/chat/ChatPage";
 import { SchedulesPage } from "./routes/schedules/SchedulesPage";
+import { TriggersPage } from "./routes/triggers/TriggersPage";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -59,6 +60,7 @@ export function App() {
             <Route path="/ab" element={<AbTestsPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/schedules" element={<SchedulesPage />} />
+            <Route path="/triggers" element={<TriggersPage />} />
             <Route
               path="/reports/:workflow"
               element={<WorkflowReportsPage />}

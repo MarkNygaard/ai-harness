@@ -220,6 +220,21 @@ export function useLinearSources(project: string | null) {
   });
 }
 
+/**
+ * Every project's bindings in one response, for the Triggers page.
+ *
+ * A separate key from `useLinearSources`, not a merge of them: a per-project
+ * cache would have to be primed for every project before the page could render
+ * anything, and would go stale project-by-project after a save.
+ */
+export function useAllLinearSources() {
+  return useQuery<LinearSource[], Error>({
+    queryKey: ["linear", "sources", "all"],
+    queryFn: ({ signal }) =>
+      apiJson<LinearSource[]>("/api/linear-sources", { signal }),
+  });
+}
+
 /** Whether the project's bindings hand work on to one another. */
 export function useLinearCheck(project: string | null) {
   return useQuery<LinearFinding[], Error>({

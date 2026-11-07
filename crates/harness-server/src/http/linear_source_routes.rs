@@ -153,6 +153,21 @@ pub async fn list_sources(
     }
 }
 
+/// `GET /api/linear-sources` — every project's bindings, for the Triggers page.
+///
+/// No `ensure_project`, because there is no project to check: the rows carry
+/// their own. Admission is the same session auth as the per-project listing.
+pub async fn list_all_sources(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    let store = match state.linear_source_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    match store.list_all().await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+}
+
 /// `GET /api/projects/{project}/linear-check` — whether the bindings' columns
 /// hand work on to one another, as findings. The same report as the MCP
 /// `linear_check` tool, so the dialog shows a broken relay before an epic

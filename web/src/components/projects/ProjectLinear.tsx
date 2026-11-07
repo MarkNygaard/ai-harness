@@ -209,7 +209,7 @@ export function ProjectLinearPanel({ project }: { project: string }) {
         lets the poller catch delegated issues it missed. One binding per
         workflow.
       </p>
-      <LinearBody project={project} accounts={accounts} />
+      <ProjectLinearBindings project={project} accounts={accounts} />
     </div>
   );
 }
@@ -265,7 +265,14 @@ function AccountSelect({
   );
 }
 
-function LinearBody({
+/**
+ * One project's Linear bindings: the list, the accordion editors, and Add.
+ *
+ * Exported because the cross-project Triggers page is the same thing repeated
+ * per project — rebuilding the list and the form there would be two places to
+ * keep in step with the binding's fields.
+ */
+export function ProjectLinearBindings({
   project,
   accounts,
 }: {
