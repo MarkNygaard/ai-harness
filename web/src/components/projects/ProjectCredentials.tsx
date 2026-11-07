@@ -116,8 +116,18 @@ function CredentialField({
         </Badge>
       </div>
       <div className="flex items-center gap-2">
+        {/* These are stored secrets, never a sign-in, so the browser must not
+            treat them as one. Without this the password manager pairs them
+            with the nearest preceding text field -- the settings sidebar's
+            search box -- and fills the saved email there, which filters the
+            nav down to nothing. "new-password" rather than "off" because
+            Chrome ignores "off" on fields it has decided are credentials.
+            routes/credentials/parts.tsx already does this; the per-project tab
+            was added later and missed it. */}
         <Input
           type={meta.secret === false ? "text" : "password"}
+          name={`${provider}-${field}`}
+          autoComplete={meta.secret === false ? "off" : "new-password"}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && save()}

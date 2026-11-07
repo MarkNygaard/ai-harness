@@ -200,7 +200,19 @@ export function SettingsSidebar({
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>
+        {/* type="search" + autoComplete="off" are load-bearing, not cosmetic.
+            Left as a bare text input, this is the only text field preceding the
+            password inputs that the Credentials tab mounts, so Chrome reads the
+            pair as a login form and fills the saved email in here. That fires
+            onChange, the query filters every group away, and the nav appears to
+            empty itself. The data-*-ignore attributes do the same for 1Password
+            and LastPass, which use their own heuristics. */}
         <input
+          type="search"
+          name="settings-search"
+          autoComplete="off"
+          data-1p-ignore
+          data-lpignore="true"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search settings…"
