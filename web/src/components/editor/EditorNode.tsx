@@ -10,11 +10,13 @@ import {
   SquareTerminal,
   Terminal,
   Trash2,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NodeKindId } from "@/types/authoring";
 import { type EditorNodeData, nodeKind } from "./graph";
 import { useEditorActions } from "./context";
+import { useLinearConnections } from "@/lib/linear";
 
 const KIND_ICON: Record<NodeKindId, typeof Bot> = {
   prompt: Bot,
@@ -24,6 +26,7 @@ const KIND_ICON: Record<NodeKindId, typeof Bot> = {
   script: Terminal,
   approval: Hand,
   cancel: CircleSlash,
+  linear: Zap,
 };
 
 const KIND_LABEL: Record<NodeKindId, string> = {
@@ -34,6 +37,7 @@ const KIND_LABEL: Record<NodeKindId, string> = {
   script: "Script",
   approval: "Approval",
   cancel: "Cancel",
+  linear: "Linear",
 };
 
 /** A draggable, connectable workflow step on the editor canvas. */
@@ -43,6 +47,13 @@ export function EditorNode({ id, data }: NodeProps) {
   const Icon = KIND_ICON[kind];
   const { onConfigure, onDelete, selectedId } = useEditorActions();
   const selected = selectedId === id;
+  // A linear step with no account connected anywhere still saves and still
+  // runs -- it just does nothing and lets the run continue. Saying so on the
+  // node is the whole point: the step is present but inert, which is not
+  // something the graph would otherwise show.
+  const linear = useLinearConnections();
+  const inert =
+    kind === "linear" && linear.isSuccess && (linear.data?.length ?? 0) === 0;
 
   const providerModel =
     node.model ??
@@ -62,7 +73,12 @@ export function EditorNode({ id, data }: NodeProps) {
         className="!h-2 !w-2 !border-0 !bg-border"
       />
       <div className="flex items-center gap-2 px-3 py-2">
-        <Icon className="h-4 w-4 shrink-0 text-accent-orange" />
+        <Icon
+          className={cn(
+            "h-4 w-4 shrink-0",
+            inert ? "text-muted-foreground" : "text-accent-orange",
+          )}
+        />
         <div className="min-w-0 flex-1">
           <div
             className="truncate text-[13px] font-semibold text-card-foreground"
@@ -70,8 +86,16 @@ export function EditorNode({ id, data }: NodeProps) {
           >
             {node.id || "(unnamed)"}
           </div>
-          <div className="truncate text-[10px] text-muted-foreground">
+          <div
+            className="truncate text-[10px] text-muted-foreground"
+            title={
+              inert
+                ? "No Linear account is connected, so this step does nothing and the run carries on."
+                : undefined
+            }
+          >
             {KIND_LABEL[kind]}
+            {inert ? " · needs Linear" : ""}
             {providerModel ? ` · ${providerModel}` : ""}
           </div>
         </div>

@@ -300,3 +300,36 @@ describe("nodeToDoc", () => {
     });
   });
 });
+
+describe("linear steps", () => {
+  it("detects the kind and starts on move_state", () => {
+    expect(nodeKind({ id: "a", linear: { move_state: "In Review" } })).toBe(
+      "linear",
+    );
+    expect(nodeKind({ id: "a", linear: { comment: "hi" } })).toBe("linear");
+    expect(emptyNode("linear", "x").linear).toEqual({ move_state: "" });
+  });
+
+  it("round-trips each action through YAML", () => {
+    // The server parses `linear:` as a one-of, so a round-trip that merged or
+    // dropped keys would produce a workflow it rejects as conflicting bodies.
+    const wf: EditorWorkflow = {
+      name: "demo",
+      description: "d",
+      nodes: [
+        { id: "start", linear: { move_state: "In Progress" } },
+        { id: "note", depends_on: ["start"], linear: { comment: "on $TASK_TITLE" } },
+        { id: "tag", depends_on: ["note"], linear: { add_labels: ["a", "b"] } },
+        { id: "untag", depends_on: ["tag"], linear: { remove_labels: ["c"] } },
+      ],
+    };
+    const back = fromYaml(toYaml(wf));
+    expect(back.nodes.map((n) => n.linear)).toEqual([
+      { move_state: "In Progress" },
+      { comment: "on $TASK_TITLE" },
+      { add_labels: ["a", "b"] },
+      { remove_labels: ["c"] },
+    ]);
+    expect(back.nodes.every((n) => nodeKind(n) === "linear")).toBe(true);
+  });
+});

@@ -1,7 +1,12 @@
 import React, { useState } from "react";
 import { X } from "lucide-react";
 import { Markdown, ViewToggle } from "@/components/Markdown";
-import type { Catalog, EditorNode, NodeKindId } from "@/types/authoring";
+import type {
+  Catalog,
+  EditorLinear,
+  EditorNode,
+  NodeKindId,
+} from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
 import { useCategories } from "@/lib/categories";
 import { SaveStepButton } from "./SaveStepDialog";
@@ -27,6 +32,7 @@ const BODY_KEYS = [
   "loop",
   "approval",
   "cancel",
+  "linear",
 ] as const satisfies readonly (keyof EditorNode)[];
 
 /** Right drawer: edit the selected node's id, kind, body, and AI options. */
@@ -266,6 +272,12 @@ export function PropertiesDrawer({
               placeholder="Refusing to proceed: …"
             />
           </Field>
+        )}
+        {kind === "linear" && (
+          <LinearBody
+            value={node.linear ?? {}}
+            onChange={(linear) => set({ linear })}
+          />
         )}
 
         <Field label="When (condition)">
@@ -596,5 +608,106 @@ function SelectField({
         <SelectContent>{children}</SelectContent>
       </Select>
     </div>
+  );
+}
+
+/** Which `linear.*` key this node carries. */
+type LinearActionId = "move_state" | "comment" | "add_labels" | "remove_labels";
+
+const LINEAR_ACTIONS: { id: LinearActionId; label: string; help: string }[] = [
+  {
+    id: "move_state",
+    label: "Move status",
+    help: "A status name as it reads in Linear, resolved against the issue's own team.",
+  },
+  {
+    id: "comment",
+    label: "Comment",
+    help: "Posted on the issue. Takes variables, so $TASK_TITLE or an upstream node's output works here.",
+  },
+  {
+    id: "add_labels",
+    label: "Add labels",
+    help: "Existing label names, comma-separated. A name that is not already a label is refused rather than created.",
+  },
+  {
+    id: "remove_labels",
+    label: "Remove labels",
+    help: "Comma-separated. Removing one the issue does not have is a no-op, not an error.",
+  },
+];
+
+/**
+ * The `linear:` body — one action, matching the parser's one-of shape.
+ *
+ * Switching action replaces the key rather than adding one, because a node
+ * carrying two would be rejected at parse time with "conflicting bodies".
+ */
+function LinearBody({
+  value,
+  onChange,
+}: {
+  value: EditorLinear;
+  onChange: (v: EditorLinear) => void;
+}) {
+  const active: LinearActionId =
+    (LINEAR_ACTIONS.find((a) => value[a.id] !== undefined)?.id) ?? "move_state";
+  const meta = LINEAR_ACTIONS.find((a) => a.id === active)!;
+  const isLabels = active === "add_labels" || active === "remove_labels";
+  const text = isLabels
+    ? ((value[active] as string[] | undefined) ?? []).join(", ")
+    : ((value[active] as string | undefined) ?? "");
+
+  const setText = (next: string) =>
+    onChange({
+      [active]: isLabels
+        ? next
+            .split(",")
+            .map((s) => s.trim())
+            .filter(Boolean)
+        : next,
+    });
+
+  return (
+    <>
+      <SelectField
+        label="Linear action"
+        value={active}
+        onValueChange={(id) =>
+          // Replace, never merge: a node carrying two linear keys is rejected
+          // at parse time as conflicting bodies.
+          onChange(
+            id === "add_labels" || id === "remove_labels"
+              ? { [id]: [] }
+              : { [id]: "" },
+          )
+        }
+      >
+        {LINEAR_ACTIONS.map((a) => (
+          <SelectItem key={a.id} value={a.id}>
+            {a.label}
+          </SelectItem>
+        ))}
+      </SelectField>
+      <Field label={meta.label}>
+        {active === "comment" ? (
+          <Textarea
+            rows={3}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="Working on $TASK_TITLE"
+          />
+        ) : (
+          <Input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={
+              active === "move_state" ? "In Progress" : "needs-review, automated"
+            }
+          />
+        )}
+        <span className="text-[10px] text-muted-foreground">{meta.help}</span>
+      </Field>
+    </>
   );
 }
