@@ -115,7 +115,13 @@ export function fromGraph(
   edges: Edge[],
   meta: Pick<
     EditorWorkflow,
-    "name" | "description" | "provider" | "model" | "ui"
+    | "name"
+    | "description"
+    | "provider"
+    | "model"
+    | "ui"
+    | "improvements"
+    | "handles_epics"
   >,
 ): EditorWorkflow {
   const depsByTarget = new Map<string, string[]>();

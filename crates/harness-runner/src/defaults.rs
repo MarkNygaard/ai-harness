@@ -917,6 +917,125 @@ mod tests {
         assert!(runner.ran("finalize-pr"));
     }
 
+    // ── `task` runs epics itself ────────────────────────────────────────────
+
+    const BUILT: [(&str, &str); 3] = [
+        ("validate", r#"{"passed":true}"#),
+        ("pi-review-fix-loop", "<promise>PI_REVIEW_CLEAN</promise>"),
+        ("final-verify-loop", "<promise>FINAL_VERIFY_CLEAN</promise>"),
+    ];
+    const PIECE: &str =
+        r#"{"mode":"piece","parent":"epic-uuid","identifier":"NIL-11","epic_ident":"NIL-10"}"#;
+
+    async fn run_task(
+        extra: &[(&'static str, &'static str)],
+    ) -> (harness_dag::RunReport, Scripted) {
+        let mut outputs: Vec<(&'static str, &'static str)> = BUILT.to_vec();
+        outputs.extend_from_slice(extra);
+        run_bundled("task", &outputs).await
+    }
+
+    fn moves(runner: &Scripted) -> Vec<String> {
+        runner
+            .linear()
+            .into_iter()
+            .filter_map(|l| {
+                l.strip_prefix("linear:move the issue to ")
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn task_says_it_runs_epics_itself() {
+        let wf = harness_dag::parse_workflow(default_workflow("task").unwrap()).unwrap();
+        assert!(
+            wf.handles_epics,
+            "or the server hands its epics to the supervisor"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_issue_is_built_and_sent_to_review_as_before() {
+        let (report, runner) = run_task(&[("classify", r#"{"mode":"task"}"#)]).await;
+        assert_eq!(report.status, harness_dag::RunStatus::Completed);
+        assert!(runner.ran("finalize-pr"));
+        assert_eq!(moves(&runner), ["In Progress", "In Review"]);
+        for piece_only in ["grade", "merge-piece", "advance", "epic-start"] {
+            assert!(!runner.ran(piece_only), "{piece_only}");
+        }
+    }
+
+    #[tokio::test]
+    async fn an_epic_is_started_not_built() {
+        let (report, runner) = run_task(&[(
+            "classify",
+            r#"{"mode":"epic","first_id":"p1","first_ident":"NIL-11","epic_ident":"NIL-10","pieces":3}"#,
+        )])
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Completed);
+        assert!(runner.ran("epic-start"));
+        for build in ["ack", "explore", "validate", "finalize-pr", "grade"] {
+            assert!(!runner.ran(build), "{build}");
+        }
+        assert_eq!(
+            moves(&runner),
+            ["In Progress"],
+            "the epic itself is under way"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_epic_with_nothing_left_to_start_is_cancelled() {
+        let (report, runner) = run_task(&[("classify", r#"{"mode":"skip"}"#)]).await;
+        assert_eq!(report.status, harness_dag::RunStatus::Cancelled);
+        assert!(!runner.ran("explore"));
+    }
+
+    #[tokio::test]
+    async fn a_piece_that_passes_is_merged_marked_done_and_the_next_started() {
+        let (report, runner) = run_task(&[
+            ("classify", PIECE),
+            ("grade", r#"{"passed":true,"summary":"ok"}"#),
+        ])
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Completed);
+        assert!(runner.ran("merge-piece") && runner.ran("advance"));
+        assert!(!runner.ran("fix-shortfall"));
+        assert_eq!(
+            moves(&runner),
+            ["In Progress", "Done"],
+            "a piece's PR is into the epic branch: no In Review"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_piece_that_falls_short_gets_one_round_of_fixes() {
+        let (report, runner) = run_task(&[
+            ("classify", PIECE),
+            ("grade", r#"{"passed":false,"summary":"no"}"#),
+            ("regrade", r#"{"passed":true,"summary":"ok now"}"#),
+        ])
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Completed);
+        assert!(runner.ran("fix-shortfall") && runner.ran("regrade"));
+        assert!(runner.ran("merge-piece") && runner.ran("advance"));
+    }
+
+    #[tokio::test]
+    async fn a_piece_that_fails_twice_stops_for_a_person_unmerged() {
+        let (report, runner) = run_task(&[
+            ("classify", PIECE),
+            ("grade", r#"{"passed":false,"summary":"no"}"#),
+            ("regrade", r#"{"passed":false,"summary":"still no"}"#),
+        ])
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Completed);
+        assert!(!runner.ran("merge-piece") && !runner.ran("advance"));
+        assert!(runner.ran("report-stuck"));
+        assert_eq!(moves(&runner), ["In Progress", "In Review"]);
+    }
+
     const OPEN_PR: &str =
         r#"{"pr":"42","base":"main","title":"t","state":"OPEN","mergeable":"MERGEABLE"}"#;
 

@@ -23,17 +23,175 @@ description: |
   Status names must exist on the issue's team. Rename `In Progress` and
   `In Review` here if your board calls them something else. `task-merge` is the
   matching workflow for issues that are ready to merge.
+
+  It also runs epics (`handles_epics`). `classify` reads the issue, and the
+  `kind` route sends it one of four ways:
+
+    * **task** — an ordinary issue: the pipeline above.
+    * **epic** — an issue with sub-issues: `epic-start` creates the branch
+      `epic/<ID>` and moves the first sub-issue that hasn't begun to Todo. That
+      sub-issue starts its own run of this workflow.
+    * **piece** — a sub-issue of an epic that has been started: the pipeline,
+      on the epic's branch, then `grade` judges it against its own description
+      with fresh context. A shortfall gets one round of fixes and a second
+      grade. When it passes, the PR merges into the epic branch, the piece
+      moves to Done, and `advance` starts the next piece -- or, after the last,
+      opens `epic/<ID>` as one PR against the default branch and moves the epic
+      to In Review. A piece that fails twice stops: its PR stays open and it
+      moves to In Review for a person.
+    * **skip** — an epic whose pieces have all begun: nothing to start.
+
+  Delegate the epic and every sub-issue to the harness, and create the
+  sub-issues in reverse build order (Linear sorts newer issues first). A
+  sub-issue of an issue nobody started as an epic is built as a plain task.
+  Optional project env vars: `EPIC_READY_STATE` (where a piece starts; by
+  default the column the epic was picked up from, else Todo),
+  `EPIC_REVIEW_STATE` (where the finished epic goes; In Review),
+  `EPIC_BLOCKED_STATE` (where an epic goes when a piece is stuck).
 provider: pi
 model: kimi-code/kimi-for-coding
+handles_epics: true
 nodes:
   - id: start
     category: linear
     linear:
       move_state: In Progress
 
+  # ── What is this issue: a task, an epic, or a piece of one ──────────────
+  - id: classify
+    category: setup
+    timeout: 120000
+    bash: |
+      set -uo pipefail
+      issue="$ISSUE_ID"
+      mkdir -p "$ARTIFACTS_DIR"
+      # Started by hand: no issue, so an ordinary task.
+      if [ -z "$issue" ]; then
+        echo '{"mode": "task"}'
+        exit 0
+      fi
+      harness linear issue --issue "$issue" > "$ARTIFACTS_DIR/issue.json" || exit 1
+      parent="$(jq -r '.parent_id // empty' "$ARTIFACTS_DIR/issue.json")"
+      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sortOrder)'
+
+      if [ -z "$parent" ]; then
+        harness linear children --issue "$issue" > "$ARTIFACTS_DIR/children.json" || exit 1
+        kids="$(jq 'length' "$ARTIFACTS_DIR/children.json")"
+        if [ "$kids" -eq 0 ]; then
+          echo '{"mode": "task"}'
+          exit 0
+        fi
+        # An epic. Start the first piece that has not begun -- not simply the
+        # first: an epic delegated again must not restart a piece that is
+        # already building.
+        first_id="$(jq -r "$unstarted | .[0].id // empty" "$ARTIFACTS_DIR/children.json")"
+        first_ident="$(jq -r "$unstarted | .[0].identifier // empty" "$ARTIFACTS_DIR/children.json")"
+        epic_ident="$(jq -r '.identifier // empty' "$ARTIFACTS_DIR/issue.json")"
+        if [ -z "$first_id" ]; then
+          echo '{"mode": "skip"}'
+          exit 0
+        fi
+        jq -n --arg id "$first_id" --arg ident "$first_ident" --arg epic "$epic_ident" \
+              --argjson kids "$kids" \
+          '{mode: "epic", first_id: $id, first_ident: $ident, epic_ident: $epic, pieces: $kids}'
+        exit 0
+      fi
+
+      # A sub-issue. A piece only if its epic was started -- that is, its
+      # branch exists; the server based this run on it by the same test.
+      # Otherwise it is a sub-issue like any other, and built as a task.
+      epic_ident="$(jq -r '.parent_identifier // empty' "$ARTIFACTS_DIR/issue.json")"
+      if [ -z "$epic_ident" ] || ! git ls-remote --exit-code --heads origin "epic/$epic_ident" > /dev/null 2>&1; then
+        echo '{"mode": "task"}'
+        exit 0
+      fi
+      harness linear children --issue "$parent" > "$ARTIFACTS_DIR/siblings.json" || exit 1
+      me="$(jq -r --arg id "$issue" '.[] | select(.id == $id)' "$ARTIFACTS_DIR/siblings.json")"
+      if [ -z "$me" ]; then
+        echo "This issue is not among its own parent's children -- refusing to guess." >&2
+        exit 1
+      fi
+      # What the piece is graded against: its own description.
+      printf '%s' "$me" | jq -r '.body // ""' > "$ARTIFACTS_DIR/criteria.md"
+      ident="$(printf '%s' "$me" | jq -r '.identifier')"
+      jq -n --arg parent "$parent" --arg ident "$ident" --arg epic "$epic_ident" \
+        '{mode: "piece", parent: $parent, identifier: $ident, epic_ident: $epic}'
+
+  - id: kind
+    category: setup
+    depends_on: [classify]
+    route:
+      routes:
+        - name: epic
+          description: An issue with sub-issues, to be built one piece at a time.
+          when: "$classify.output.mode == 'epic'"
+        - name: piece
+          description: A sub-issue of a started epic, built on the epic's branch.
+          when: "$classify.output.mode == 'piece'"
+        - name: skip
+          description: An epic whose pieces have all begun.
+          when: "$classify.output.mode == 'skip'"
+        - name: task
+          description: An ordinary issue.
+      default: task
+
+  # ── An epic: create its branch and start the first piece ─────────────────
+  - id: epic-start
+    category: delivery
+    depends_on: [start, kind]
+    when: "$kind.output.route == 'epic'"
+    bash: |
+      set -uo pipefail
+      epic="$ISSUE_ID"
+      first_id="$classify.output.first_id"
+      first_ident="$classify.output.first_ident"
+      branch="epic/$classify.output.epic_ident"
+      note="$ARTIFACTS_DIR/note.md"
+
+      # The integration branch, pushed empty off the base branch this run was
+      # cut from. Every piece is built on it and merged into it, so the default
+      # branch sees the feature once, finished. It must exist before the first
+      # piece starts: the server bases that piece's run on it.
+      if git ls-remote --exit-code --heads origin "$branch" > /dev/null 2>&1; then
+        echo "$branch already exists -- leaving it alone"
+      elif ! git push origin "HEAD:refs/heads/$branch" 2> "$ARTIFACTS_DIR/push.err"; then
+        echo "Could not create $branch -- the epic cannot start without it:" >&2
+        cat "$ARTIFACTS_DIR/push.err" >&2
+        exit 1
+      fi
+
+      # Where a piece starts: an override, else the column the epic itself
+      # was picked up from, else Todo.
+      ready="${EPIC_READY_STATE:-}"
+      [ -n "$ready" ] || ready="$(harness linear ready-state 2>/dev/null | jq -r '.state // empty')"
+      [ -n "$ready" ] || ready="Todo"
+
+      if harness linear move-state --issue "$first_id" --state "$ready"; then
+        {
+          echo "**Started $first_ident**, the first of $classify.output.pieces pieces."
+          echo
+          echo "The feature accumulates on \`$branch\`. Each piece is built on that"
+          echo "branch and graded against its own description before the next begins;"
+          echo "the default branch sees it once, finished."
+        } > "$note"
+      else
+        echo "**Could not start $first_ident.** Move it to $ready by hand to begin the epic." > "$note"
+      fi
+      harness linear comment --issue "$epic" --body-file "$note" \
+        || echo "could not write the epic's comment; the move stands" >&2
+      cat "$note"
+
+  - id: nothing-to-start
+    category: setup
+    depends_on: [kind]
+    when: "$kind.output.route == 'skip'"
+    cancel: "Every piece of this epic is already under way or finished, so there is nothing to start. The epic advances as each piece passes its grade."
+
+  # ── A task or a piece: build it ──────────────────────────────────────────
   - id: ack
     category: linear
-    depends_on: [start]
+    depends_on: [start, kind]
+    when: "$kind.output.route == 'task' || $kind.output.route == 'piece'"
     linear:
       comment: Picked up **$TASK_TITLE**. Exploring the codebase and writing a plan; I will post it here before implementing.
 
@@ -43,7 +201,8 @@ nodes:
     provider: claude
     model: sonnet
     context: fresh
-    depends_on: [start]
+    depends_on: [start, kind]
+    when: "$kind.output.route == 'task' || $kind.output.route == 'piece'"
     prompt: |
       You are a codebase explorer. Read the task and gather the context
       a planner needs. Do NOT propose a solution and do NOT edit anything.
@@ -376,15 +535,18 @@ nodes:
         check_pr_base "." "$BASE_BRANCH"
       fi
 
+  # A task goes to review once its PR is open. A piece doesn't: its PR is
+  # into the epic branch, and its grade below is the review.
   - id: in-review
     category: linear
     depends_on: [verify-pr-base]
+    when: "$kind.output.route == 'task'"
     linear:
       move_state: In Review
 
   - id: pi-review-fix-loop
     category: validation
-    depends_on: [in-review]
+    depends_on: [verify-pr-base]
     loop:
       provider: pi
       model: kimi-code/kimi-for-coding
@@ -617,3 +779,258 @@ nodes:
 
       Output ONLY the comment. Do NOT post it yourself; the harness posts
       this output to the issue when the run completes.
+
+  # ── A piece: grade it, merge it, start the next ─────────────────────────
+  #
+  # The grade reads the piece's own description and the code with fresh
+  # context. A piece passing something broken costs more than one wasted
+  # round, because the next piece is written against this one having worked.
+  - id: grade
+    category: validation
+    provider: claude
+    model: opus
+    effort: high
+    context: fresh
+    depends_on: [final-verify-loop]
+    when: "$kind.output.route == 'piece'"
+    prompt: &grade |
+      This worktree holds a piece of an epic ($classify.output.identifier),
+      built on its pull request branch. The epic accumulates on
+      `$BASE_BRANCH`. `cat $ARTIFACTS_DIR/.pr-list` lists the piece's pull
+      request(s) as JSON `{folder, number, url, base, head}`; in each entry's
+      folder, `git diff origin/<base>...HEAD` is this piece. Decide whether it
+      does what it was supposed to.
+
+      Its acceptance criteria are its description, in
+      `$ARTIFACTS_DIR/criteria.md`. Read that first, then the diff and the
+      code around it. Judge **against those criteria and nothing else** -- not
+      against what you would have built, not style, not work the criteria
+      leave to a later piece.
+
+      Look for the criteria being *met*, not merely *addressed*: a function
+      that is never called, a flag parsed but never read, a test that asserts
+      nothing. Those are the failures worth catching.
+
+      Change nothing. Write the verdict in two files, prose only, a few short
+      paragraphs at most, never pasted command output:
+      `$ARTIFACTS_DIR/summary.md` (what was built and why it passes or not)
+      and, only when failing, `$ARTIFACTS_DIR/shortfall.md` (what is missing,
+      precisely enough to build from). Keep `summary` in the JSON to one plain
+      sentence.
+    output_format:
+      type: object
+      properties:
+        passed:
+          type: boolean
+          description: "True only if every acceptance criterion is genuinely met."
+        summary:
+          type: string
+          description: "One plain sentence."
+      required: [passed, summary]
+
+  - id: verdict
+    category: validation
+    depends_on: [grade]
+    route:
+      routes:
+        - name: pass
+          when: "$grade.output.passed == 'true'"
+        - name: fix
+      default: fix
+
+  # One round of fixes, then a second grade with fresh eyes.
+  - id: fix-shortfall
+    category: implementation
+    provider: pi
+    model: kimi-code/kimi-for-coding
+    context: fresh
+    depends_on: [verdict]
+    when: "$verdict.output.route == 'fix'"
+    prompt: |
+      A review of this piece ($classify.output.identifier) found it falls
+      short of its acceptance criteria. The criteria are in
+      `$ARTIFACTS_DIR/criteria.md`; what is missing is in
+      `$ARTIFACTS_DIR/shortfall.md`.
+
+      Fix exactly that, on this branch: change what the shortfall names, run
+      the project's verify chain for what you touched (CLAUDE.md /
+      AGENTS.md), commit with a conventional-commit message and push to the
+      PR branch. Do not widen scope, never use `--no-verify`, never run
+      database migrations.
+
+  - id: regrade
+    category: validation
+    provider: claude
+    model: opus
+    effort: high
+    context: fresh
+    depends_on: [fix-shortfall]
+    prompt: *grade
+    output_format:
+      type: object
+      properties:
+        passed:
+          type: boolean
+          description: "True only if every acceptance criterion is genuinely met."
+        summary:
+          type: string
+          description: "One plain sentence."
+      required: [passed, summary]
+
+  - id: reverdict
+    category: validation
+    depends_on: [regrade]
+    route:
+      routes:
+        - name: pass
+          when: "$regrade.output.passed == 'true'"
+        - name: stuck
+      default: stuck
+
+  # Passed, at the first grade or the second: merge it into the epic branch.
+  # No human approval -- the epic branch takes none; the grade is the gate, and
+  # the whole feature is reviewed once, as the epic's own PR.
+  - id: merge-piece
+    category: delivery
+    depends_on: [verdict, reverdict]
+    trigger_rule: none_failed_min_one_success
+    when: "$verdict.output.route == 'pass' || $reverdict.output.route == 'pass'"
+    timeout: 300000
+    bash: |
+      set -uo pipefail
+      LIST="$ARTIFACTS_DIR/.pr-list"
+      if [ ! -s "$LIST" ]; then
+        echo "No pull request was recorded for this piece, so there is nothing to merge." >&2
+        exit 1
+      fi
+      rc=0
+      while read -r entry; do
+        folder=$(echo "$entry" | jq -r '.folder')
+        number=$(echo "$entry" | jq -r '.number')
+        ( cd "$folder" && gh pr merge "$number" --squash --delete-branch ) || {
+          echo "Could not merge PR #$number in $folder" >&2
+          rc=1
+        }
+      done < <(jq -c '.[]' "$LIST")
+      exit $rc
+
+  - id: piece-done
+    category: linear
+    depends_on: [merge-piece]
+    linear:
+      move_state: Done
+
+  - id: advance
+    category: delivery
+    depends_on: [piece-done]
+    timeout: 300000
+    bash: |
+      set -uo pipefail
+      parent="$classify.output.parent"
+      epic_ident="$classify.output.epic_ident"
+      note="$ARTIFACTS_DIR/note.md"
+      [ -s "$ARTIFACTS_DIR/summary.md" ] || echo "_The grade left no summary._" > "$ARTIFACTS_DIR/summary.md"
+
+      # Read the pieces now, not at the start: an hour of building is long
+      # enough for someone to add or reorder one.
+      harness linear children --issue "$parent" > "$ARTIFACTS_DIR/siblings.json" || exit 1
+      unstarted='[.[] | select(.state_type == "backlog" or .state_type == "unstarted")] | sort_by(.sortOrder)'
+      next_id="$(jq -r --arg me "$ISSUE_ID" "[$unstarted[] | select(.id != \$me)] | .[0].id // empty" "$ARTIFACTS_DIR/siblings.json")"
+      next_ident="$(jq -r --arg me "$ISSUE_ID" "[$unstarted[] | select(.id != \$me)] | .[0].identifier // empty" "$ARTIFACTS_DIR/siblings.json")"
+
+      if [ -n "$next_id" ]; then
+        ready="${EPIC_READY_STATE:-}"
+        [ -n "$ready" ] || ready="$(harness linear ready-state --issue "$ISSUE_ID" 2>/dev/null | jq -r '.state // empty')"
+        [ -n "$ready" ] || ready="Todo"
+        if harness linear move-state --issue "$next_id" --state "$ready"; then
+          started="Started $next_ident."
+        else
+          started="Could not start $next_ident -- move it to $ready by hand."
+        fi
+        {
+          echo "**$classify.output.identifier passed and is merged.** $started"
+          echo
+          cat "$ARTIFACTS_DIR/summary.md"
+        } > "$note"
+      else
+        # Every piece is in. The epic branch is the feature: one pull request
+        # against the default branch, the first review of the whole change.
+        default_branch="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null)"
+        [ -n "$default_branch" ] || default_branch="main"
+        pr="$(gh pr list --head "$BASE_BRANCH" --base "$default_branch" --state open --json url -q '.[0].url' 2>/dev/null)"
+        if [ -z "$pr" ]; then
+          body="$ARTIFACTS_DIR/epic-pr.md"
+          {
+            echo "Closes $epic_ident."
+            echo
+            echo "**This is the first review of the whole change.** Each piece below"
+            echo "was built on this branch and graded against its own description"
+            echo "before the next began, so what has *not* been reviewed is how they"
+            echo "fit together."
+            echo
+            echo "Built in this order:"
+            echo
+            jq -r 'sort_by(.completed_at // "9999") | .[] | "- \(.identifier)  \(.title)"' \
+              "$ARTIFACTS_DIR/siblings.json"
+          } > "$body"
+          pr="$(gh pr create --base "$default_branch" --head "$BASE_BRANCH" \
+                --title "$epic_ident: the finished feature" --body-file "$body" 2>&1)" || {
+            echo "Could not open the epic's pull request: $pr" >&2
+            pr=""
+          }
+        fi
+        review="${EPIC_REVIEW_STATE:-In Review}"
+        harness linear move-state --issue "$parent" --state "$review" \
+          || echo "could not move the epic to $review" >&2
+        {
+          echo "**$classify.output.identifier passed, and it was the last piece.**"
+          echo
+          cat "$ARTIFACTS_DIR/summary.md"
+          echo
+          if [ -n "$pr" ]; then
+            echo "Every piece is in. The feature is one pull request against \`$default_branch\`: $pr"
+          else
+            echo "Every piece is in, on \`$BASE_BRANCH\`. Opening its pull request failed -- raise it by hand."
+          fi
+        } > "$note"
+      fi
+      harness linear comment --issue "$parent" --body-file "$note" \
+        || echo "could not write the epic's comment" >&2
+      cat "$note"
+
+  # Failed twice: stop, and hand the piece to a person. Its PR stays open.
+  - id: piece-stuck
+    category: linear
+    depends_on: [reverdict]
+    when: "$reverdict.output.route == 'stuck'"
+    linear:
+      move_state: In Review
+
+  - id: report-stuck
+    category: delivery
+    depends_on: [piece-stuck]
+    trigger_rule: all_done
+    when: "$reverdict.output.route == 'stuck'"
+    bash: |
+      set -uo pipefail
+      parent="$classify.output.parent"
+      note="$ARTIFACTS_DIR/note.md"
+      [ -s "$ARTIFACTS_DIR/shortfall.md" ] || echo "_The grade left no detail._" > "$ARTIFACTS_DIR/shortfall.md"
+      {
+        echo "**Stopped on $classify.output.identifier.** It fell short of its"
+        echo "description twice, once after a round of fixes, so its pull request"
+        echo "is left open and the piece is in review for a person. The epic waits"
+        echo "until it is merged and the next piece is started."
+        echo
+        echo "What the second grade found:"
+        echo
+        cat "$ARTIFACTS_DIR/shortfall.md"
+      } > "$note"
+      harness linear comment --issue "$parent" --body-file "$note" || true
+      harness linear comment --issue "$ISSUE_ID" --body-file "$note" || true
+      blocked="${EPIC_BLOCKED_STATE:-}"
+      if [ -n "$blocked" ]; then
+        harness linear move-state --issue "$parent" --state "$blocked" \
+          || echo "could not move the epic to $blocked" >&2
+      fi
+      cat "$note"

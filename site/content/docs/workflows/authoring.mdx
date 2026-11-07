@@ -98,6 +98,7 @@ ui:                           # optional — opt into UI surfaces (see below)
   report: { label: "Findings", verdict_node: deep-review, scored: false }
 improvements:                 # optional — suggestions from its own runs (see below)
   every: 10
+handles_epics: true           # optional — it runs Linear epics itself (see below)
 nodes:
   - id: first
     bash: "echo hi"
@@ -108,6 +109,16 @@ nodes:
 
 A workflow is a list of **nodes** connected by `depends_on` edges. The scheduler
 computes topological layers; nodes in the same layer run in parallel.
+
+### `handles_epics:` — a workflow that runs epics itself
+
+By default the server never hands a Linear epic (an issue with sub-issues) to
+the workflow a trigger names. It goes to `linear-epic-supervise` instead. With
+`handles_epics: true` the workflow gets the epic itself and decides what to do
+with it, usually with a [route node](#node-bodies) on the issue's shape. A
+sub-issue is then based on `epic/<PARENT>` when that branch exists, and
+otherwise built like any other issue. The bundled `task` workflow is the
+worked example. See [Linear epics](/docs/setup/linear-epics).
 
 ### `ui:` — nav entry + report tab
 

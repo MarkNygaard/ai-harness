@@ -223,6 +223,8 @@ export function toYaml(wf: EditorWorkflow): string {
     improvements: wf.improvements?.every
       ? { every: wf.improvements.every }
       : undefined,
+    // `false` is the default, so only `true` is written.
+    handles_epics: wf.handles_epics || undefined,
   });
   return yaml.dump(doc, { lineWidth: 100, noRefs: true });
 }
@@ -270,6 +272,7 @@ export function fromYaml(text: string): EditorWorkflow {
     nodes,
     ui: uiFromRaw(raw.ui),
     improvements: improvementsFromRaw(raw.improvements),
+    handles_epics: raw.handles_epics === true ? true : undefined,
   };
 }
 

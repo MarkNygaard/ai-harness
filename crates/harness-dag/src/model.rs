@@ -564,6 +564,13 @@ pub struct Workflow {
     /// person: hidden from every workflow list and picker.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub internal: bool,
+    /// The workflow runs Linear epics itself: it is handed an epic (an issue
+    /// with sub-issues) rather than the server passing it to
+    /// `linear-epic-supervise`, and a sub-issue of an epic it has started is
+    /// based on that epic's branch. Without it a delegated epic goes to the
+    /// supervisor, as it always has.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub handles_epics: bool,
     /// Nodes in declaration order.
     pub nodes: Vec<Node>,
 }

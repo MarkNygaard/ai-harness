@@ -321,4 +321,7 @@ export interface EditorWorkflow {
   /** Improvement suggestions from the workflow's own runs — round-tripped for
    *  the same reason. */
   improvements?: ImprovementsConfig | null;
+  /** The workflow runs Linear epics itself — round-tripped for the same
+   *  reason; without it the server hands its epics to the supervisor. */
+  handles_epics?: boolean;
 }

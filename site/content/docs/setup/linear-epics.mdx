@@ -43,6 +43,46 @@ in parallel.
 Good epic: a frontend where component B imports component A. Poor epic: a docs
 set, or three unrelated bug fixes.
 
+## With triggers: one workflow
+
+On the [Triggers page](/docs/triggers), the bundled `task` workflow runs an
+epic by itself. One trigger, Todo → `task`, is the whole setup:
+
+```
+Todo  →  task
+           ├ an epic   → creates epic/<EPIC>, moves the first piece to Todo
+           ├ a piece   → builds it on epic/<EPIC>, grades it, merges it,
+           │             moves it to Done, moves the next piece to Todo
+           │             (after the last: one PR epic/<EPIC> → default branch,
+           │              and the epic to In Review)
+           └ a task    → builds it as usual
+```
+
+Each piece is still its own run with fresh context, started from the board, so
+an epic survives a restart and you can follow it on the board. What changes is
+that the hand-offs are steps in one workflow rather than three bindings that
+have to be wired in a ring:
+
+- **The grade comes before the merge.** A piece that falls short gets one
+  round of fixes and a second grade. If it fails again it stops, with its pull
+  request open and the piece in In Review, rather than filing correctives.
+- **Pieces merge without a person approving them.** That's safe only if your
+  repository doesn't require reviews on `epic/*` branches. The grade is the
+  check on each piece, and the finished feature is reviewed once, as the epic's
+  own pull request. Merge that one as you would any other: approve it, and
+  move the epic to Ready for merge if a `task-merge` trigger watches that
+  column.
+- **A sub-issue is a piece only once its epic has started**, which is when
+  `epic/<EPIC>` exists. Any other sub-issue is built as an ordinary issue.
+
+Writing the epic is the same as below: delegate the epic and every sub-issue,
+create sub-issues in reverse build order, and give each one its own acceptance
+criteria. The project env vars `EPIC_READY_STATE`, `EPIC_REVIEW_STATE` and
+`EPIC_BLOCKED_STATE` still override where pieces start, where the finished epic
+goes, and where a stuck one goes.
+
+The rest of this page describes the classic setup, with project bindings.
+
 ## The relay
 
 Nothing in the harness "runs an epic". Bindings hand an issue from one column to

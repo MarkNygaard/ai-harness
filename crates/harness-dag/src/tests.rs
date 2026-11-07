@@ -813,3 +813,19 @@ fn a_route_rule_must_reference_real_nodes() {
         Err(crate::DagError::UnknownNodeReference { .. })
     ));
 }
+
+#[test]
+fn a_workflow_can_say_it_runs_epics_itself() {
+    let wf =
+        parse_workflow("name: w\nhandles_epics: true\nnodes:\n  - id: a\n    bash: x\n").unwrap();
+    assert!(wf.handles_epics);
+    let plain = parse_workflow("name: w\nnodes:\n  - id: a\n    bash: x\n").unwrap();
+    assert!(!plain.handles_epics, "off unless asked for");
+    // Round-trips, and stays out of the YAML when off.
+    assert!(serde_yaml::to_string(&wf)
+        .unwrap()
+        .contains("handles_epics: true"));
+    assert!(!serde_yaml::to_string(&plain)
+        .unwrap()
+        .contains("handles_epics"));
+}
