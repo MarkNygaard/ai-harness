@@ -134,7 +134,15 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
     // 1. Drive transitions for in-flight claims (independent of bindings).
     sync_active_claims(state).await;
 
-    // 2. Claim / dry-run per enabled binding, honoring per-binding intervals.
+    // 2. Which system starts Linear runs. Classic: every enabled binding,
+    //    below. Triggers: the Triggers page's Linear triggers — and the
+    //    bindings stay idle, so the two never claim the same issue.
+    if super::triggers_routes::uses_triggers(state).await {
+        poll_triggers(state, last).await;
+        return;
+    }
+
+    // 3. Claim / dry-run per enabled binding, honoring per-binding intervals.
     let source_store = match state.linear_source_store().await {
         Ok(s) => s,
         Err(_) => return, // no DB configured
@@ -161,46 +169,82 @@ async fn poll_once(state: &Arc<RunsState>, last: &mut HashMap<(String, String), 
         }
         last.insert(key, now);
 
-        // Which Linear account this binding's project belongs to. A
-        // single-account install resolves every project to the one connection.
-        let conn = match resolve_for_project(state, &b.project).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(
-                    "linear poller: {}/{} — {e}; skipping",
-                    b.project,
-                    b.workflow
-                );
-                continue;
-            }
-        };
-        let Some(client) = linear_client_or_none(state, &conn).await else {
-            tracing::debug!(
-                "linear poller: {}/{} — Linear is not connected",
-                b.project,
-                b.workflow
-            );
+        let Some((client, delegate_id)) = linear_access(state, &b).await else {
             continue;
         };
-        // Delegation is the eligibility gate, so without knowing our own app user
-        // id there is no gate — claim nothing rather than everything in the
-        // column. Reconnecting the workspace records the id.
-        let Some(delegate_id) = app_user_id(state, &conn).await else {
-            tracing::warn!(
-                "linear poller: {}/{} — the harness's Linear app user id is unknown, so \
-                 delegated issues cannot be identified; skipping (reconnect the workspace \
-                 on the Credentials page)",
-                b.project,
-                b.workflow
-            );
-            continue;
-        };
-
         if b.live {
-            claim_and_fire(state, &client, &b, &delegate_id).await;
+            claim_and_fire(state, &client, &b, &delegate_id, None).await;
         } else {
             dry_run_log(&client, &b, &delegate_id).await;
         }
+    }
+}
+
+/// The Linear client for a binding's project and the harness's own user id
+/// there, or `None` (logged) when either is missing.
+async fn linear_access(state: &Arc<RunsState>, b: &LinearSource) -> Option<(LinearClient, String)> {
+    // Which Linear account this binding's project belongs to. A
+    // single-account install resolves every project to the one connection.
+    let conn = match resolve_for_project(state, &b.project).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                "linear poller: {}/{} — {e}; skipping",
+                b.project,
+                b.workflow
+            );
+            return None;
+        }
+    };
+    let Some(client) = linear_client_or_none(state, &conn).await else {
+        tracing::debug!(
+            "linear poller: {}/{} — Linear is not connected",
+            b.project,
+            b.workflow
+        );
+        return None;
+    };
+    // Delegation is the eligibility gate, so without knowing our own app user
+    // id there is no gate — claim nothing rather than everything in the
+    // column. Reconnecting the workspace records the id.
+    let Some(delegate_id) = app_user_id(state, &conn).await else {
+        tracing::warn!(
+            "linear poller: {}/{} — the harness's Linear app user id is unknown, so \
+             delegated issues cannot be identified; skipping (reconnect the workspace \
+             on the Credentials page)",
+            b.project,
+            b.workflow
+        );
+        return None;
+    };
+    Some((client, delegate_id))
+}
+
+/// How often a Linear trigger is polled. A trigger has no interval of its own:
+/// delegation starts it at once, and the poller is the catch-up.
+const TRIGGER_POLL_SECS: u64 = 60;
+
+/// Claim per enabled Linear trigger. A trigger is always live — there is no
+/// dry-run — and carries no status map; see `triggers_routes::as_binding`.
+async fn poll_triggers(state: &Arc<RunsState>, last: &mut HashMap<(String, String), Instant>) {
+    let now = Instant::now();
+    for (trigger_id, b) in super::triggers_routes::linear_bindings(state).await {
+        if !b.enabled {
+            continue;
+        }
+        let key = ("trigger".to_string(), trigger_id.clone());
+        let due = last
+            .get(&key)
+            .map(|t| now.duration_since(*t) >= Duration::from_secs(TRIGGER_POLL_SECS))
+            .unwrap_or(true);
+        if !due {
+            continue;
+        }
+        last.insert(key, now);
+        let Some((client, delegate_id)) = linear_access(state, &b).await else {
+            continue;
+        };
+        claim_and_fire(state, &client, &b, &delegate_id, Some(&trigger_id)).await;
     }
 }
 
@@ -400,15 +444,33 @@ pub(crate) async fn rearm_linear_claim(
 
 /// Claim one eligible issue for a live binding and fire its workflow — one at a
 /// time per binding.
+///
+/// `trigger_id` is set when `b` stands for a Linear trigger rather than a
+/// binding. A trigger fires once per entry — an issue that fired it and still
+/// matches waits until it has left and come back — so it needs neither the
+/// binding's attempt cap nor its label removal, and records each entry.
 async fn claim_and_fire(
     state: &Arc<RunsState>,
     client: &LinearClient,
     b: &LinearSource,
     delegate_id: &str,
+    trigger_id: Option<&str>,
 ) {
     let claim_store = match state.linear_claim_store().await {
         Ok(s) => s,
         Err(_) => return,
+    };
+    // Without the entries, "once per entry" can't be kept — fire nothing
+    // rather than everything every minute.
+    let fired_by = match trigger_id {
+        Some(id) => match state.trigger_store().await {
+            Ok(store) => Some((id, store)),
+            Err(e) => {
+                tracing::warn!("linear poller: trigger {id} — {e}; skipping");
+                return;
+            }
+        },
+        None => None,
     };
     // Concurrency gate: skip if this binding is already at its in-flight cap.
     // `max_concurrent_runs` defaults to 1 (the original one-at-a-time behaviour);
@@ -445,13 +507,40 @@ async fn claim_and_fire(
         .into_iter()
         .filter(|c| !has_failed_label(b, &c.issue))
         .collect();
+    // Once per entry. An issue no longer in this list has left (moved on, or
+    // was un-delegated), so its entry goes and coming back fires again; one
+    // still here that already fired waits.
+    let found: Vec<Candidate> = match &fired_by {
+        Some((id, store)) => {
+            let matching: Vec<String> = found.iter().map(|c| c.issue.id.clone()).collect();
+            if let Err(e) = store.prune_entries(id, &matching).await {
+                tracing::warn!("linear poller: trigger {id} — pruning entries failed: {e}");
+                return;
+            }
+            let entered = match store.entries(id).await {
+                Ok(e) => e,
+                Err(e) => {
+                    tracing::warn!("linear poller: trigger {id} — reading entries failed: {e}");
+                    return;
+                }
+            };
+            found
+                .into_iter()
+                .filter(|c| !entered.contains(&c.issue.id))
+                .collect()
+        }
+        None => found,
+    };
     // Pick the first eligible issue that hasn't already exhausted its attempt
     // cap (per (issue, workflow), so an issue that legitimately flows through
     // several bindings across pipeline stages isn't exhausted by an earlier one).
     // With a failed-label configured, that label is the real pickup gate (above)
     // and removing it re-arms the issue, so here we only enforce a generous
     // runaway backstop; without it, the per-binding `max_attempts` is the cap.
-    let cap = if b.failed_label.is_some() {
+    let cap = if fired_by.is_some() {
+        // A trigger's own rule is the entry, checked above.
+        i64::MAX
+    } else if b.failed_label.is_some() {
         RUNAWAY_BACKSTOP
     } else {
         b.max_attempts.max(1) as i64
@@ -534,6 +623,18 @@ async fn claim_and_fire(
     let Some((issue, by_label, _issue_guard)) = chosen else {
         return; // nothing eligible (retries exhausted, or already being claimed)
     };
+    // Take the entry before anything visible happens: if delegation recorded it
+    // first, this issue is already on its way to a run.
+    if let Some((id, store)) = &fired_by {
+        match store.enter(id, &issue.id, None).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(e) => {
+                tracing::warn!("linear poller: trigger {id} — recording the entry failed: {e}");
+                return;
+            }
+        }
+    }
 
     let route = super::linear_agent::route_issue(state, client, b, &issue.id).await;
 
@@ -560,7 +661,13 @@ async fn claim_and_fire(
     // failed run drops back into the column isn't started again every tick.
     // Putting the label back is the retry, as delegating again is for
     // delegation.
-    let trigger_label_id = match b.trigger_label.as_deref().filter(|_| by_label) {
+    // A trigger leaves its label alone: the entry is what stops a second run,
+    // and what happens to the issue is the workflow's to decide.
+    let trigger_label_id = match b
+        .trigger_label
+        .as_deref()
+        .filter(|_| by_label && fired_by.is_none())
+    {
         Some(label) => match take_label_off(client, b, &issue, label).await {
             Some(id) => Some(id),
             // Without an In Progress move the label is the only claim signal,
@@ -689,6 +796,10 @@ async fn claim_and_fire(
                     tracing::warn!("linear poller: failed to record claim for {}: {e}", run_id)
                 }
             }
+            if let Some((id, store)) = &fired_by {
+                let _ = store.set_entry_run(id, &issue.id, &run_id).await;
+                let _ = store.record_fired(id, &run_id).await;
+            }
             let run_url = state
                 .public_url()
                 .map(|base| format!("{base}/runs/{run_id}"));
@@ -755,14 +866,22 @@ async fn claim_and_fire(
             // Undo the In Progress move so the issue can be retried next poll.
             // `client` is already a `&LinearClient` here (unlike the owned binding
             // inside the other call sites), so it is passed through as-is.
-            transition(
-                client,
-                &issue.identifier,
-                &issue.id,
-                &b.source_state_id,
-                "source",
-            )
-            .await;
+            if b.in_progress_state_id.is_some() {
+                transition(
+                    client,
+                    &issue.identifier,
+                    &issue.id,
+                    &b.source_state_id,
+                    "source",
+                )
+                .await;
+            }
+            // Nothing started, so this entry doesn't count: the next poll tries
+            // again, and the trigger's page says why.
+            if let Some((id, store)) = &fired_by {
+                let _ = store.leave(id, &issue.id).await;
+                let _ = store.record_error(id, &e).await;
+            }
             // And give the label back, or the issue would wait for a person.
             if let Some(label_id) = &trigger_label_id {
                 if let Err(e) = client.add_label(&issue.id, label_id).await {
@@ -1063,6 +1182,7 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
         Err(_) => return,
     };
     let source_store = state.linear_source_store().await.ok();
+    let trigger_store = state.trigger_store().await.ok();
 
     for c in claims {
         let detail = match run_store.get_run(&c.run_id).await {
@@ -1098,9 +1218,16 @@ async fn sync_active_claims(state: &Arc<RunsState>) {
         let Some(client) = linear_client_or_none(state, &conn).await else {
             continue;
         };
+        // A run a trigger started moves its issue through its own `linear:`
+        // steps, if at all — never through a binding's status map, even one
+        // that happens to share its project and workflow.
+        let from_trigger = match trigger_store {
+            Some(ts) => ts.trigger_for_run(&c.run_id).await.ok().flatten().is_some(),
+            None => false,
+        };
         let binding = match &source_store {
-            Some(s) => s.get(&c.project, &c.workflow).await.ok().flatten(),
-            None => None,
+            Some(s) if !from_trigger => s.get(&c.project, &c.workflow).await.ok().flatten(),
+            _ => None,
         };
 
         match detail.run.status.as_str() {

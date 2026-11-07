@@ -51,22 +51,86 @@ A weekly report or a nightly check has nobody to ask for it.
 
 ## The Triggers page
 
-Everything that starts a run *by itself* is a **trigger**: a Linear trigger
-(an issue in a team's status, delegated to the harness or carrying a label) or
-a schedule. **Triggers** in the sidebar lists every one of them, of every kind,
-in one list. Each row says what sets it off, which workflow it starts in which
-project, and whether it is **on**, **dry-run** (a Linear trigger that logs what
-it would claim and starts nothing) or **off**.
+Everything that starts a run *by itself* is a **trigger**. **Triggers** in the
+sidebar lists every one of them in one list, whatever its kind:
 
-Filter by kind, project or workflow, or search. Click a trigger to open its own
-page and change it; **New trigger** asks which kind first.
+- **Linear** — an issue enters a status in a team and is delegated to the
+  harness, or carries a label you name.
+- **Webhook** — another service calls the trigger's URL: GitHub, Sentry, a
+  deploy pipeline, anything that can send a signed request.
+- **Schedule** — a time comes round. See [schedules](/docs/schedules).
 
-Linear triggers used to live on each project's **Linear** tab, and still can:
-**Settings → Preferences → Triggers** chooses which of the two you manage them
-on, per browser. Both edit the same triggers.
+Each row says what sets it off, which workflow it starts in which project, when
+it last fired, and whether it is **on**, **off** or **idle** (below). Filter by
+kind, project or workflow, or search; **New trigger** asks which kind first.
+
+### A trigger only starts the run
+
+This is the difference from a classic [binding](/docs/setup/bindings). A
+binding also moves the issue: to In Progress when it claims it, to In Review
+when the pull request opens, to Ready when the run completes, back on failure.
+A Linear trigger does none of that. It starts the workflow, and the workflow
+moves the issue with its own `linear:` steps, next to the work that justifies
+each move:
+
+```yaml
+nodes:
+  - id: start
+    linear: { move_state: In Progress }
+  # … plan, implement, open the PR …
+  - id: in-review
+    depends_on: [open-pr]
+    linear: { move_state: In Review }
+```
+
+A Linear trigger fires **once each time an issue comes to match it**. While the
+issue stays in the status it doesn't fire again; move it out and back (or
+un-delegate and delegate it) to run it again. Delegating always starts a run
+straight away; the poller catches anything delegation missed, once a minute.
+
+### Classic bindings or Linear triggers
+
+Both read the same issues, so only one of them starts Linear runs.
+**Settings → General → Linear triggers** chooses which, for the whole harness.
+The default is **project bindings (classic)**, so nothing changes until you
+switch. Until then, Linear triggers on this page show as **idle**; after it,
+the bindings on each project's Linear tab do. Nothing is deleted either way, so
+switching back picks up where it left off.
+
+To move over: create the Linear triggers you need, add `linear:` steps to the
+workflows that should move their issue, then switch.
+
+### Webhooks
+
+A webhook trigger gets its own URL, `https://<harness>/api/hooks/<id>`, and a
+secret, shown once when the trigger is made (and again only by replacing it).
+Deliveries prove they know the secret one of two ways:
+
+- **Signature** (the default): an HMAC-SHA256 of the body with the secret, sent
+  as `X-Hub-Signature-256: sha256=<hex>`. This is exactly what GitHub sends, so
+  for GitHub paste the URL and secret into the repository's webhook settings
+  with content type `application/json`.
+- **Token**, for senders that can't sign: the secret as
+  `Authorization: Bearer <secret>`, an `X-Harness-Token` header, or
+  `?token=<secret>`.
+
+**Only when** conditions narrow what starts a run: each names a path into the
+delivery — `body.action`, `headers.x-github-event` — and the values that count.
+A delivery that doesn't match is acknowledged and ignored, so the sender
+doesn't retry it. A retry of the same delivery (same `X-GitHub-Delivery`,
+`X-Request-Id` or a header you name) starts nothing.
+
+The **task** is what the run is asked to do, with parts of the delivery filled
+in: `Review {{body.pull_request.html_url}}`. Left empty, the run gets the whole
+payload.
+
+Webhooks work whichever system starts Linear runs. Only administrators create
+or change them, since each one is a public endpoint.
+
+### Over MCP
 
 An assistant connected over [MCP](/docs/mcp#triggers) can list, create, change
-and delete triggers of every kind, with `trigger_list`, `trigger_save` and
+and delete triggers of every kind with `trigger_list`, `trigger_save` and
 `trigger_delete`.
 
 ## What a trigger supplies

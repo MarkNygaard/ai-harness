@@ -439,6 +439,32 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/linear-sources",
             get(linear_source_routes::list_all_sources),
         )
+        // ── Triggers (the Triggers page's model) ────────────────────────────
+        // Static segments before `{id}`, so `system` isn't read as an id.
+        .route(
+            "/api/triggers/system",
+            get(super::triggers_routes::get_system).put(super::triggers_routes::put_system),
+        )
+        .route(
+            "/api/triggers",
+            get(super::triggers_routes::list_triggers).post(super::triggers_routes::create_trigger),
+        )
+        .route(
+            "/api/triggers/{id}",
+            get(super::triggers_routes::get_trigger)
+                .put(super::triggers_routes::update_trigger)
+                .delete(super::triggers_routes::delete_trigger),
+        )
+        .route(
+            "/api/triggers/{id}/secret",
+            post(super::triggers_routes::rotate_trigger_secret),
+        )
+        // A webhook trigger's delivery: auth-exempt, authenticated by the
+        // trigger's own secret (see `auth::is_public_path`).
+        .route(
+            "/api/hooks/{id}",
+            post(super::triggers_routes::receive_hook),
+        )
         .route(
             "/api/projects/{project}/linear-check",
             get(linear_source_routes::check_sources),

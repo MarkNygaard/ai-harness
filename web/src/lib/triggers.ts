@@ -1,29 +1,24 @@
 /**
- * Triggers: everything that starts a run on its own.
+ * Triggers: everything that starts a run by itself.
  *
- * A trigger is a *source* (what happens) plus a *target* (the project and
- * workflow it starts). Today there are two sources, each with its own store and
- * API — Linear bindings and schedules — and this module is where they become
- * one list. It owns no data of its own: the rows are the same ones the Linear
- * and schedule hooks return, wrapped in a common shape.
+ * A trigger is *when* (a Linear status, a webhook, a time) plus *what* (a
+ * project and a workflow). Linear triggers and webhooks are the Triggers page's
+ * own model (`/api/triggers`); schedules keep their store and join the list
+ * here.
  *
- * Merged here rather than behind a server endpoint on purpose. The one thing a
- * server-side list would add is a Linear binding's status *name*, which needs a
- * Linear discovery call — the query that exhausted the workspace's rate limit
- * when a page polled it. The list resolves names per project instead, through
- * the cached, unpolled discovery hook.
+ * A Linear trigger only *starts* the run. Unlike a classic project binding it
+ * has no status map: where the issue goes next is the workflow's business,
+ * through its `linear:` steps. Which of the two starts Linear runs is one
+ * installation-wide switch — see {@link useTriggerSystem}.
  */
 import { useMemo } from "react";
-import type { LinearSource, LinearTeam } from "@/types/linear";
-import { useAllLinearSources } from "./linear";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch, apiJson } from "./api";
 import { describeCron, type Schedule, useSchedules } from "./schedules";
 
-export type TriggerKind = "linear" | "schedule";
+export type TriggerKind = "linear" | "webhook" | "schedule";
 
-/**
- * Display metadata per kind, in the order the kind picker offers them. The
- * icons live in `TriggerKindIcon`, so this module stays free of components.
- */
+/** Display metadata per kind, in the order the kind picker offers them. */
 export const TRIGGER_KINDS: {
   kind: TriggerKind;
   label: string;
@@ -33,7 +28,13 @@ export const TRIGGER_KINDS: {
     kind: "linear",
     label: "Linear",
     description:
-      "Start a run when an issue in a team's status is delegated to the harness, or carries a label.",
+      "Start a run when an issue enters a status and is delegated to the harness, or carries a label. The workflow moves the issue from there.",
+  },
+  {
+    kind: "webhook",
+    label: "Webhook",
+    description:
+      "Start a run when another service calls a URL — GitHub, Sentry, a deploy, anything that can send a signed request.",
   },
   {
     kind: "schedule",
@@ -47,61 +48,252 @@ export function kindMeta(kind: TriggerKind) {
   return TRIGGER_KINDS.find((k) => k.kind === kind)!;
 }
 
-/**
- * Whether a trigger will start anything. `dry-run` is a Linear binding that is
- * enabled but not live: it logs what it would claim and starts nothing.
- */
-export type TriggerState = "on" | "dry-run" | "off";
+// ── The model ──────────────────────────────────────────────────────────────
 
-interface TriggerBase {
-  /** Unique across kinds and stable across reloads. */
-  key: string;
+export interface LinearTriggerConfig {
+  team_id: string;
+  team_name: string;
+  state_id: string;
+  state_name: string;
+  linear_project_id?: string | null;
+  linear_project_name?: string | null;
+  /** Also start on issues with this label that nobody delegated. */
+  label?: string | null;
+  base_branch?: string | null;
+  max_concurrent_runs: number;
+}
+
+export type WebhookAuth = "signature" | "token";
+
+export interface WebhookFilter {
+  /** `body.<a>.<b>` or `headers.<name>`. */
+  path: string;
+  equals: string[];
+}
+
+export interface WebhookTriggerConfig {
+  auth: WebhookAuth;
+  filters: WebhookFilter[];
+  /** `{{body.x}}` / `{{headers.name}}` placeholders; empty = the payload. */
+  task_template: string;
+  delivery_header?: string | null;
+  base_branch?: string | null;
+}
+
+interface RunTriggerBase {
+  id: string;
+  name: string;
   project: string;
   workflow: string;
-  state: TriggerState;
+  enabled: boolean;
+  last_fired_at: string | null;
+  last_run_id: string | null;
+  /** Why the last attempt didn't start a run, until one does. */
+  last_error: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
-export type Trigger =
-  | (TriggerBase & { kind: "linear"; binding: LinearSource })
-  | (TriggerBase & { kind: "schedule"; schedule: Schedule });
+/** A row of `/api/triggers`. */
+export type RunTrigger =
+  | (RunTriggerBase & { kind: "linear"; config: LinearTriggerConfig })
+  | (RunTriggerBase & {
+      kind: "webhook";
+      config: WebhookTriggerConfig;
+      /** Where deliveries go; null without a public URL. */
+      url: string | null;
+    });
 
-export function fromBinding(b: LinearSource): Trigger {
-  return {
-    kind: "linear",
-    key: `linear/${b.project}/${b.workflow}`,
-    project: b.project,
-    workflow: b.workflow,
-    state: !b.enabled ? "off" : b.live ? "on" : "dry-run",
-    binding: b,
-  };
+export interface TriggerBody {
+  name: string;
+  kind: "linear" | "webhook";
+  project: string;
+  workflow: string;
+  enabled: boolean;
+  config: LinearTriggerConfig | WebhookTriggerConfig;
 }
 
-export function fromSchedule(s: Schedule): Trigger {
-  return {
-    kind: "schedule",
-    key: `schedule/${s.id}`,
-    project: s.project,
-    workflow: s.workflow,
-    state: s.enabled ? "on" : "off",
-    schedule: s,
-  };
+/** Which system starts Linear runs. */
+export type TriggerSystem = "classic" | "triggers";
+
+// ── Data ───────────────────────────────────────────────────────────────────
+
+export function useRunTriggers() {
+  return useQuery<RunTrigger[], Error>({
+    queryKey: ["triggers", "list"],
+    queryFn: async ({ signal }) =>
+      (await apiJson<{ triggers: RunTrigger[] }>("/api/triggers", { signal }))
+        .triggers,
+  });
+}
+
+export function useRunTrigger(id: string | null) {
+  return useQuery<RunTrigger, Error>({
+    queryKey: ["triggers", "one", id],
+    enabled: !!id,
+    queryFn: ({ signal }) =>
+      apiJson<RunTrigger>(`/api/triggers/${encodeURIComponent(id!)}`, {
+        signal,
+      }),
+  });
+}
+
+export function useSaveTrigger() {
+  const qc = useQueryClient();
+  return useMutation<
+    { trigger: RunTrigger; secret: string | null },
+    Error,
+    { id?: string; body: TriggerBody }
+  >({
+    mutationFn: async ({ id, body }) => {
+      const init = {
+        method: id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      };
+      if (id) {
+        const trigger = await apiJson<RunTrigger>(
+          `/api/triggers/${encodeURIComponent(id)}`,
+          init,
+        );
+        return { trigger, secret: null };
+      }
+      return apiJson("/api/triggers", init);
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["triggers"] }),
+  });
+}
+
+export function useDeleteTrigger() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    // `apiFetch`: a 204 has no body to parse.
+    mutationFn: async (id) => {
+      await apiFetch(`/api/triggers/${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["triggers"] }),
+  });
+}
+
+/** A new webhook secret; the old one stops working at once. */
+export function useRotateSecret() {
+  return useMutation<{ secret: string }, Error, string>({
+    mutationFn: (id) =>
+      apiJson(`/api/triggers/${encodeURIComponent(id)}/secret`, {
+        method: "POST",
+      }),
+  });
 }
 
 /**
- * Both sources as one list: by workflow, then project, then kind. Not grouped
- * by project — what a trigger *starts* is the first thing anyone scans for.
+ * Which system starts Linear runs: each project's classic bindings, or the
+ * Linear triggers here. Installation-wide; readable by anyone signed in.
  */
+export function useTriggerSystem() {
+  return useQuery<TriggerSystem, Error>({
+    queryKey: ["triggers", "system"],
+    queryFn: async ({ signal }) =>
+      (
+        await apiJson<{ system: TriggerSystem }>("/api/triggers/system", {
+          signal,
+        })
+      ).system,
+    staleTime: 60_000,
+    refetchInterval: false,
+  });
+}
+
+export function useSetTriggerSystem() {
+  const qc = useQueryClient();
+  return useMutation<{ system: TriggerSystem }, Error, TriggerSystem>({
+    mutationFn: (system) =>
+      apiJson("/api/triggers/system", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ system }),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["triggers"] }),
+  });
+}
+
+// ── One list ───────────────────────────────────────────────────────────────
+
+/**
+ * Whether a trigger will start anything. `idle` is a Linear trigger while the
+ * installation still runs classic bindings: saved and enabled, not in charge.
+ */
+export type TriggerState = "on" | "off" | "idle";
+
+export type Trigger =
+  | { kind: "linear" | "webhook"; key: string; trigger: RunTrigger }
+  | { kind: "schedule"; key: string; schedule: Schedule };
+
+export function triggerName(t: Trigger): string {
+  return t.kind === "schedule" ? t.schedule.name : t.trigger.name;
+}
+export function triggerProject(t: Trigger): string {
+  return t.kind === "schedule" ? t.schedule.project : t.trigger.project;
+}
+export function triggerWorkflow(t: Trigger): string {
+  return t.kind === "schedule" ? t.schedule.workflow : t.trigger.workflow;
+}
+
+export function triggerState(t: Trigger, system: TriggerSystem): TriggerState {
+  const enabled =
+    t.kind === "schedule" ? t.schedule.enabled : t.trigger.enabled;
+  if (!enabled) return "off";
+  if (t.kind === "linear" && system === "classic") return "idle";
+  return "on";
+}
+
+/** Both stores as one list: by workflow, then project, then name. */
 export function toTriggers(
-  bindings: LinearSource[],
+  runTriggers: RunTrigger[],
   schedules: Schedule[],
 ): Trigger[] {
-  return [...bindings.map(fromBinding), ...schedules.map(fromSchedule)].sort(
+  const rows: Trigger[] = [
+    ...runTriggers.map((t): Trigger => ({
+      kind: t.kind,
+      key: `${t.kind}/${t.id}`,
+      trigger: t,
+    })),
+    ...schedules.map((s): Trigger => ({
+      kind: "schedule",
+      key: `schedule/${s.id}`,
+      schedule: s,
+    })),
+  ];
+  return rows.sort(
     (a, b) =>
-      a.workflow.localeCompare(b.workflow) ||
-      a.project.localeCompare(b.project) ||
-      a.kind.localeCompare(b.kind) ||
+      triggerWorkflow(a).localeCompare(triggerWorkflow(b)) ||
+      triggerProject(a).localeCompare(triggerProject(b)) ||
+      triggerName(a).localeCompare(triggerName(b)) ||
       a.key.localeCompare(b.key),
   );
+}
+
+/** What sets a trigger off, in words. */
+export function describeWhen(t: Trigger): string {
+  if (t.kind === "schedule") {
+    return `${describeCron(t.schedule.cron) ?? t.schedule.cron} · ${t.schedule.timezone}`;
+  }
+  const r = t.trigger;
+  if (r.kind === "linear") {
+    const c = r.config;
+    let out = `${c.team_name} · ${c.state_name}`;
+    if (c.linear_project_id) {
+      out += ` · only ${c.linear_project_name ?? "one Linear project"}`;
+    }
+    out += c.label ? ` · delegated or labelled ${c.label}` : " · delegated";
+    return out;
+  }
+  const f = r.config.filters;
+  return f.length === 0
+    ? "any signed delivery"
+    : f.map((x) => `${x.path} = ${x.equals.join(" | ")}`).join(" and ");
 }
 
 export interface TriggerFilter {
@@ -113,19 +305,16 @@ export interface TriggerFilter {
 }
 
 function haystack(t: Trigger): string {
-  const parts = [t.kind, t.project, t.workflow];
-  if (t.kind === "linear") {
-    const b = t.binding;
-    parts.push(
-      b.team_name,
-      b.trigger_label ?? "",
-      b.linear_project_name ?? "",
-      b.base_branch ?? "",
-    );
-  } else {
-    const s = t.schedule;
-    parts.push(s.name, s.cron, describeCron(s.cron) ?? "", s.timezone, s.task);
-  }
+  const parts = [
+    t.kind,
+    triggerName(t),
+    triggerProject(t),
+    triggerWorkflow(t),
+    describeWhen(t),
+  ];
+  if (t.kind === "schedule") parts.push(t.schedule.cron, t.schedule.task);
+  else if (t.trigger.kind === "webhook")
+    parts.push(t.trigger.config.task_template);
   return parts.join(" ").toLowerCase();
 }
 
@@ -134,77 +323,36 @@ export function filterTriggers(rows: Trigger[], f: TriggerFilter): Trigger[] {
   return rows.filter(
     (t) =>
       (!f.kind || t.kind === f.kind) &&
-      (!f.project || t.project === f.project) &&
-      (!f.workflow || t.workflow === f.workflow) &&
+      (!f.project || triggerProject(t) === f.project) &&
+      (!f.workflow || triggerWorkflow(t) === f.workflow) &&
       (terms.length === 0 || terms.every((term) => haystack(t).includes(term))),
   );
 }
 
-/**
- * What sets a Linear binding off, in words: the team and status, narrowed by
- * Linear project, and whether a label also starts it. `teams` resolves the
- * status id to its name; without it (discovery not loaded or failed) the
- * sentence still reads, just less specifically.
- */
-export function describeLinearWhen(
-  b: LinearSource,
-  teams: LinearTeam[] | undefined,
-): string {
-  const state = teams
-    ?.find((t) => t.id === b.team_id)
-    ?.states.find((s) => s.id === b.source_state_id)?.name;
-  let out = `${b.team_name} · ${state ?? "its start status"}`;
-  if (b.linear_project_id) {
-    out += ` · only ${b.linear_project_name ?? "one Linear project"}`;
-  }
-  out += b.trigger_label
-    ? ` · delegated or labelled ${b.trigger_label}`
-    : " · delegated";
-  return out;
+/** Where a trigger is edited. */
+export function triggerHref(t: Trigger): string {
+  return t.kind === "schedule"
+    ? `/triggers/schedule/${encodeURIComponent(t.schedule.id)}`
+    : `/triggers/${encodeURIComponent(t.trigger.id)}`;
 }
 
-/** A schedule's timing, in words when it matches a preset. */
-export function describeScheduleWhen(s: Schedule): string {
-  return `${describeCron(s.cron) ?? s.cron} · ${s.timezone}`;
-}
-
-/**
- * Where a trigger is edited.
- *
- * `linearHome` is the per-browser choice between this page and the project's
- * own Linear tab (see `trigger-prefs`). Schedules only ever live here.
- */
-export function triggerHref(
-  t: Trigger,
-  linearHome: "triggers" | "project",
-): string {
-  if (t.kind === "schedule") {
-    return `/triggers/schedule/${encodeURIComponent(t.schedule.id)}`;
-  }
-  return linearHome === "project"
-    ? `/settings/projects/${encodeURIComponent(t.project)}/linear`
-    : `/triggers/linear/${encodeURIComponent(t.project)}/${encodeURIComponent(t.workflow)}`;
-}
-
-/**
- * Every trigger, from both sources. Loading until both have answered; a source
- * that failed contributes no rows but doesn't hide the other's.
- */
+/** Every trigger, from both stores. Loading until both have answered. */
 export function useTriggers() {
-  const linear = useAllLinearSources();
+  const runTriggers = useRunTriggers();
   const schedules = useSchedules();
-  const isLoading = linear.isLoading || schedules.isLoading;
+  const isLoading = runTriggers.isLoading || schedules.isLoading;
   const rows = useMemo(
     () =>
       isLoading
         ? undefined
-        : toTriggers(linear.data ?? [], schedules.data?.schedules ?? []),
-    [isLoading, linear.data, schedules.data],
+        : toTriggers(runTriggers.data ?? [], schedules.data?.schedules ?? []),
+    [isLoading, runTriggers.data, schedules.data],
   );
   return {
     data: rows,
     isLoading,
-    errors: [linear.error, schedules.error].filter(
+    // A store that failed contributes no rows but doesn't hide the other's.
+    errors: [runTriggers.error, schedules.error].filter(
       (e): e is Error => e != null,
     ),
   };

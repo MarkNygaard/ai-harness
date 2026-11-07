@@ -164,22 +164,20 @@ Useful if you are not using Linear, or for the A/B case below.
 ### Triggers
 
 The same triggers as the [Triggers page](/docs/triggers#the-triggers-page):
-everything that starts a run by itself, Linear triggers and schedules alike,
-through one set of tools.
+Linear triggers, webhooks and schedules, through one set of tools.
 
 | Tool | What it does |
 | --- | --- |
-| `trigger_list` | Every trigger of every kind: what sets it off, what it starts, and whether it is on, dry-run or off. Filter by `kind`, `project` or `workflow` |
-| `trigger_save` | Create or change a trigger. `kind: linear` is keyed by project + workflow and takes teams and statuses by name; `kind: schedule` takes an `id` to change one. Only the fields you give change |
-| `trigger_delete` | Delete a trigger. A Linear trigger goes to the bin for 14 days; a schedule is gone, though the runs it started are kept |
+| `trigger_list` | Every trigger: what sets it off, what it starts, and whether it is enabled. Also says which `system` starts Linear runs — `triggers`, or `classic` bindings, in which case Linear triggers are saved but idle. Filter by `kind`, `project` or `workflow` |
+| `trigger_save` | Create a trigger, or change one by `id`. Only the fields you give change |
+| `trigger_delete` | Delete a trigger by `kind` and `id`. Runs it already started are kept |
 
-A new Linear trigger needs a `team` and the status it claims from
-(`claims_from`), and starts **disabled and dry-run**, so nothing runs until you
-turn it on with `enabled` and `live`. The status map (`in_progress`, `review`,
-`ready`, …) is optional: a workflow can move its issue itself with `linear:`
-steps instead. Schedules keep their
-rule: only administrators change them. In the built-in chat, `trigger_save` and
-`trigger_delete` wait for you to confirm.
+A Linear trigger takes `team` and `status` by name (as `linear_states` shows
+them) and an optional `label`. It has no status map: the workflow moves the
+issue with `linear:` steps. A webhook trigger's `secret` is returned only when
+it is created; deliveries go to its `url`. Webhooks and schedules are for
+administrators. In the built-in chat, `trigger_save` and `trigger_delete` wait
+for you to confirm.
 
 ### Schedules
 

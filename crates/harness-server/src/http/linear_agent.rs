@@ -501,9 +501,10 @@ async fn start_delegated_run(
                     &AgentActivity::Error {
                         body: "No enabled Linear trigger covers this issue's team — or, where \
                                the team's triggers are split by Linear project, this issue's \
-                               project. Add one for the project on the Projects page, enable \
-                               the existing one, or move the issue into a bound Linear \
-                               project, then delegate again."
+                               project. Add one (on the Triggers page, or the project's Linear \
+                               tab if this harness still uses those), enable the existing one, \
+                               or move the issue into a bound Linear project, then delegate \
+                               again."
                             .into(),
                     },
                 )
@@ -711,6 +712,14 @@ async fn start_delegated_run(
                     }
                 }
             }
+            // A Linear trigger's run: note the entry, so the poller doesn't start
+            // this issue again while it stays in the status, and so the status
+            // sync knows the run has no status map. A delegation is an explicit
+            // ask, so it re-points an existing entry rather than being refused
+            // by it.
+            if let Some(issue_id) = event.issue_id.as_deref() {
+                record_trigger_entry(state, &binding, issue_id, &run_id).await;
+            }
             let run_link = state.public_url().map(|b| format!("{b}/runs/{run_id}"));
             let _ = client
                 .create_agent_activity(
@@ -751,6 +760,36 @@ async fn start_delegated_run(
                 .await;
         }
     }
+}
+
+/// When `binding` stands for a Linear trigger, record that `issue_id` fired it
+/// with `run_id`. A no-op under classic bindings.
+async fn record_trigger_entry(
+    state: &Arc<RunsState>,
+    binding: &LinearSource,
+    issue_id: &str,
+    run_id: &str,
+) {
+    if !super::triggers_routes::uses_triggers(state).await {
+        return;
+    }
+    let pairs = super::triggers_routes::linear_bindings(state).await;
+    let Some(trigger_id) = super::triggers_routes::trigger_id_for(&pairs, binding) else {
+        return;
+    };
+    let Ok(store) = state.trigger_store().await else {
+        return;
+    };
+    match store.enter(&trigger_id, issue_id, Some(run_id)).await {
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = store.set_entry_run(&trigger_id, issue_id, run_id).await;
+        }
+        Err(e) => {
+            tracing::warn!("linear webhook: trigger {trigger_id} — recording the entry failed: {e}")
+        }
+    }
+    let _ = store.record_fired(&trigger_id, run_id).await;
 }
 
 /// A follow-up message in an existing session.
@@ -1040,14 +1079,25 @@ async fn resolve_target(
     conn: &ConnectionId,
     event: &AgentSessionEvent,
 ) -> Target {
-    let Ok(sources) = state.linear_source_store().await else {
-        return Target::NoBinding;
-    };
-    // `list_all`, not `list_enabled`: `enabled`/`live` govern only the column
-    // poller, and delegation-only is the expected setup (poller off, bindings
-    // kept as the team → project/workflow/status-map mapping).
-    let Ok(bindings) = sources.list_all().await else {
-        return Target::NoBinding;
+    // With the Triggers page in charge, its Linear triggers stand in for the
+    // bindings — as bindings with no status map — and the bindings are idle.
+    let bindings: Vec<LinearSource> = if super::triggers_routes::uses_triggers(state).await {
+        super::triggers_routes::linear_bindings(state)
+            .await
+            .into_iter()
+            .map(|(_, b)| b)
+            .collect()
+    } else {
+        let Ok(sources) = state.linear_source_store().await else {
+            return Target::NoBinding;
+        };
+        // `list_all`, not `list_enabled`: `enabled`/`live` govern only the
+        // column poller, and delegation-only is the expected setup (poller off,
+        // bindings kept as the team → project/workflow/status-map mapping).
+        let Ok(bindings) = sources.list_all().await else {
+            return Target::NoBinding;
+        };
+        bindings
     };
     // Only the bindings belonging to the workspace that sent this. Linear team
     // ids are unique across workspaces, so a cross-account collision is not the

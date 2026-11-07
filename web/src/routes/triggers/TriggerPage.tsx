@@ -2,11 +2,17 @@ import { useState } from "react";
 import {
   Link,
   Navigate,
+  useLocation,
   useNavigate,
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { IconHierarchy2, IconPlayerPlay, IconTrash } from "@tabler/icons-react";
+import {
+  IconCopy,
+  IconKey,
+  IconPlayerPlay,
+  IconTrash,
+} from "@tabler/icons-react";
 import { AppShell } from "@/components/AppShell";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -18,46 +24,35 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { WiringCheck, EpicSetupForm } from "@/components/projects/EpicSetup";
-import {
-  AccountSelect,
-  BindingForm,
-} from "@/components/projects/ProjectLinear";
+import { LinearTriggerForm } from "@/components/triggers/LinearTriggerForm";
 import { ScheduleForm, formatWhen } from "@/components/triggers/ScheduleForm";
 import { TriggerKindIcon } from "@/components/triggers/TriggerKindIcon";
+import { WebhookTriggerForm } from "@/components/triggers/WebhookTriggerForm";
 import { isAdminOf, useAuthStatus } from "@/lib/auth";
-import { useWorkflowList } from "@/lib/authoring";
-import {
-  useDeleteLinearSource,
-  useLinearConnections,
-  useLinearDiscovery,
-  useLinearSources,
-} from "@/lib/linear";
-import { useProjects } from "@/lib/projects";
 import {
   useDeleteSchedule,
   useRunScheduleNow,
   useSchedules,
 } from "@/lib/schedules";
-import { useLinearTriggerHome } from "@/lib/trigger-prefs";
 import {
+  type RunTrigger,
   type TriggerKind,
-  describeLinearWhen,
-  describeScheduleWhen,
-  fromBinding,
-  fromSchedule,
+  type TriggerState,
+  describeWhen,
   kindMeta,
+  triggerState,
+  useDeleteTrigger,
+  useRotateSecret,
+  useRunTrigger,
+  useTriggerSystem,
 } from "@/lib/triggers";
-import type { DeletedState } from "./TriggersPage";
 
 const LIST = "/triggers";
+
+/** Router state a create hands to the trigger's page: the secret, once. */
+interface CreatedState {
+  secret?: string | null;
+}
 
 /** The app frame with a `Triggers / <page>` trail. */
 function TriggerShell({
@@ -94,19 +89,19 @@ function TriggerShell({
   );
 }
 
-/** Kind icon, the trigger's "when", its state, and what it starts. */
+const STATE_VARIANT: Record<TriggerState, "success" | "secondary" | "outline"> =
+  { on: "success", idle: "secondary", off: "outline" };
+
 function TriggerHeader({
   kind,
   title,
-  workflow,
-  project,
+  subtitle,
   state,
 }: {
   kind: TriggerKind;
   title: string;
-  workflow?: string;
-  project?: string;
-  state?: "on" | "dry-run" | "off";
+  subtitle?: React.ReactNode;
+  state?: TriggerState;
 }) {
   return (
     <div className="flex items-start gap-3">
@@ -114,310 +109,319 @@ function TriggerHeader({
       <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="text-lg font-semibold">{title}</h1>
-          {state && (
-            <Badge
-              variant={
-                state === "on"
-                  ? "success"
-                  : state === "dry-run"
-                    ? "secondary"
-                    : "outline"
-              }
-            >
-              {state}
-            </Badge>
-          )}
+          {state && <Badge variant={STATE_VARIANT[state]}>{state}</Badge>}
         </div>
         <div className="text-sm text-muted-foreground">
           {kindMeta(kind).label} trigger
-          {workflow && project && (
-            <>
-              {" "}
-              · starts <span className="font-mono">{workflow}</span> in{" "}
-              <span className="font-mono">{project}</span>
-            </>
-          )}
+          {subtitle && <> · {subtitle}</>}
         </div>
       </div>
     </div>
   );
 }
 
-function ProjectPicker({
-  value,
-  onChange,
-}: {
-  value: string | null;
-  onChange: (project: string) => void;
-}) {
-  const projects = useProjects();
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[11px] font-medium text-muted-foreground">
-        Project
-      </span>
-      <Select value={value} onValueChange={(v) => v != null && onChange(v)}>
-        <SelectTrigger className="w-full sm:w-72">
-          <SelectValue>
-            {(v: string | null) => v || "Choose a project"}
-          </SelectValue>
-        </SelectTrigger>
-        <SelectContent>
-          {(projects.data ?? []).map((p) => (
-            <SelectItem key={p.name} value={p.name}>
-              {p.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-}
+// ── New ────────────────────────────────────────────────────────────────────
 
 /** `/triggers/new/:kind` */
 export function NewTriggerPage() {
   const { kind } = useParams();
-  if (kind === "linear") return <NewLinearTrigger />;
-  if (kind === "schedule") return <NewScheduleTrigger />;
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const admin = isAdminOf(useAuthStatus().data);
+  const project = params.get("project") ?? undefined;
+  const opened = (t: RunTrigger, secret: string | null) =>
+    navigate(`/triggers/${encodeURIComponent(t.id)}`, {
+      replace: true,
+      state: { secret } satisfies CreatedState,
+    });
+
+  if (kind === "linear") {
+    return (
+      <TriggerShell title="New Linear trigger">
+        <TriggerHeader kind="linear" title="New Linear trigger" />
+        <LinearTriggerForm
+          initialProject={project}
+          onSaved={(t) => opened(t, null)}
+          onCancel={() => navigate(LIST)}
+        />
+      </TriggerShell>
+    );
+  }
+  if (kind === "webhook") {
+    return (
+      <TriggerShell title="New webhook">
+        <TriggerHeader kind="webhook" title="New webhook" />
+        {!admin && <AdminNote what="create webhooks" />}
+        <WebhookTriggerForm
+          initialProject={project}
+          readOnly={!admin}
+          onSaved={opened}
+          onCancel={() => navigate(LIST)}
+        />
+      </TriggerShell>
+    );
+  }
+  if (kind === "schedule") {
+    return (
+      <TriggerShell title="New schedule">
+        <TriggerHeader kind="schedule" title="New schedule" />
+        {admin ? (
+          <ScheduleForm
+            schedule={null}
+            initialProject={project}
+            readOnly={false}
+            onSaved={() => navigate(LIST)}
+            onCancel={() => navigate(LIST)}
+          />
+        ) : (
+          <AdminNote what="create schedules" />
+        )}
+      </TriggerShell>
+    );
+  }
   return <Navigate to={LIST} replace />;
 }
 
-// ── Linear ─────────────────────────────────────────────────────────────────
+// ── Linear triggers and webhooks ───────────────────────────────────────────
 
-const linearTab = (project: string) =>
-  `/settings/projects/${encodeURIComponent(project)}/linear`;
-
-/** Until a usable Linear account exists there is nothing to bind to. */
-function useLinearAccounts() {
-  const connections = useLinearConnections();
-  const accounts = connections.data ?? [];
-  return {
-    loading: connections.isLoading,
-    accounts,
-    usable: accounts.some((c) => c.mode !== "none"),
-  };
-}
-
-function NoLinearAccount() {
-  return (
-    <div className="rounded-md border border-dashed border-border px-4 py-6 text-center text-sm text-muted-foreground">
-      No Linear account is connected.{" "}
-      <Link
-        to="/settings/integrations"
-        className="text-foreground underline underline-offset-2"
-      >
-        Connect one under Integrations
-      </Link>{" "}
-      to start runs from Linear issues.
-    </div>
-  );
-}
-
-function NewLinearTrigger() {
-  const [params, setParams] = useSearchParams();
-  const project = params.get("project");
-  const home = useLinearTriggerHome();
-  const { loading, accounts, usable } = useLinearAccounts();
+/** `/triggers/:id` */
+export function RunTriggerPage() {
+  const { id = "" } = useParams();
+  const location = useLocation();
   const navigate = useNavigate();
-
-  // This browser manages Linear triggers on the project page.
-  if (home === "project" && project) {
-    return <Navigate to={linearTab(project)} replace />;
-  }
-
-  return (
-    <TriggerShell title="New Linear trigger">
-      <TriggerHeader kind="linear" title="New Linear trigger" />
-      {loading ? (
-        <p className="text-xs text-muted-foreground">Loading…</p>
-      ) : !usable ? (
-        <NoLinearAccount />
-      ) : (
-        <>
-          <ProjectPicker
-            value={project}
-            onChange={(p) => setParams({ project: p }, { replace: true })}
-          />
-          {project && (
-            <LinearTriggerEditor
-              key={project}
-              project={project}
-              accounts={accounts}
-              onDone={() => navigate(LIST)}
-            />
-          )}
-        </>
-      )}
-    </TriggerShell>
+  const trigger = useRunTrigger(id);
+  const system = useTriggerSystem();
+  const admin = isAdminOf(useAuthStatus().data);
+  const remove = useDeleteTrigger();
+  // A webhook's secret, straight after creating it — the one time it is shown.
+  const [secret, setSecret] = useState(
+    (location.state as CreatedState | null)?.secret ?? null,
   );
-}
 
-/** A new binding's form for one project, or the epic set-up for it. */
-function LinearTriggerEditor({
-  project,
-  accounts,
-  onDone,
-}: {
-  project: string;
-  accounts: ReturnType<typeof useLinearAccounts>["accounts"];
-  onDone: () => void;
-}) {
-  const discovery = useLinearDiscovery(project);
-  const sources = useLinearSources(project);
-  const workflows = useWorkflowList();
-  const [epics, setEpics] = useState(false);
-  const bound = new Set((sources.data ?? []).map((s) => s.workflow));
-  const available = (workflows.data ?? []).filter((w) => !bound.has(w.name));
-  const teams = discovery.data?.teams ?? [];
+  const t = trigger.data;
+  const row = t && { kind: t.kind, key: t.id, trigger: t };
+  // Changing a webhook is an administrator's call; a Linear trigger anyone's.
+  const canChange = t?.kind === "linear" || admin;
 
   return (
-    <div className="flex flex-col gap-4">
-      <AccountSelect project={project} accounts={accounts} />
-      {discovery.isError ? (
-        <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-          {discovery.error.message}
-        </div>
-      ) : !discovery.data || !sources.data ? (
+    <TriggerShell title={t?.name ?? "Trigger"}>
+      {trigger.isLoading ? (
         <p className="text-xs text-muted-foreground">Loading…</p>
-      ) : epics ? (
-        <EpicSetupForm
-          project={project}
-          sources={sources.data}
-          teams={teams}
-          onDone={onDone}
-        />
-      ) : available.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
-          Every workflow already has a Linear trigger in {project}. Open one
-          from the list to change it.
-        </p>
-      ) : (
-        <>
-          <BindingForm
-            project={project}
-            workflow=""
-            fixedWorkflow={false}
-            availableWorkflows={available}
-            teams={teams}
-            onDone={onDone}
-          />
-          <div className="border-t border-border pt-4">
-            <Button size="sm" variant="outline" onClick={() => setEpics(true)}>
-              <IconHierarchy2 /> Set up epics instead
-            </Button>
-            <p className="mt-1 text-[11px] text-muted-foreground">
-              Writes the three triggers that build an epic piece by piece.
-            </p>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/** `/triggers/linear/:project/:workflow` */
-export function LinearTriggerPage() {
-  const { project = "", workflow = "" } = useParams();
-  const home = useLinearTriggerHome();
-  const { loading, accounts, usable } = useLinearAccounts();
-  const sources = useLinearSources(project);
-  const discovery = useLinearDiscovery(project);
-  const del = useDeleteLinearSource(project);
-  const navigate = useNavigate();
-
-  if (home === "project") return <Navigate to={linearTab(project)} replace />;
-
-  const binding = sources.data?.find((s) => s.workflow === workflow);
-  const title = binding
-    ? describeLinearWhen(binding, discovery.data?.teams)
-    : workflow;
-
-  return (
-    <TriggerShell title={title}>
-      {loading || sources.isLoading ? (
-        <p className="text-xs text-muted-foreground">Loading…</p>
-      ) : !usable ? (
-        <NoLinearAccount />
-      ) : !binding ? (
-        <NotFound what={`a Linear trigger for ${workflow} in ${project}`} />
+      ) : !t || !row ? (
+        <NotFound what="this trigger" />
       ) : (
         <>
           <TriggerHeader
-            kind="linear"
-            title={title}
-            workflow={workflow}
-            project={project}
-            state={fromBinding(binding).state}
-          />
-          <AccountSelect project={project} accounts={accounts} />
-          {discovery.isError ? (
-            <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-              {discovery.error.message}
-            </div>
-          ) : !discovery.data ? (
-            <p className="text-xs text-muted-foreground">Loading…</p>
-          ) : (
-            <BindingForm
-              key={binding.updated_at}
-              project={project}
-              workflow={workflow}
-              fixedWorkflow
-              source={binding}
-              teams={discovery.data.teams}
-              onDone={() => navigate(LIST)}
-            />
-          )}
-          <WiringCheck project={project} />
-          <DangerZone
-            busy={del.isPending}
-            error={del.error?.message}
-            label="Delete trigger"
-            note="It goes to Recently deleted on the Projects page for 14 days."
-            onDelete={() =>
-              del.mutate(workflow, {
-                onSuccess: (res) =>
-                  navigate(LIST, {
-                    state: {
-                      deleted: {
-                        label: `the ${workflow} trigger in ${project}`,
-                        trashId: res.trash_id,
-                      },
-                    } satisfies DeletedState,
-                  }),
-              })
+            kind={t.kind}
+            title={t.name}
+            state={triggerState(row, system.data ?? "classic")}
+            subtitle={
+              <>
+                {describeWhen(row)} → starts{" "}
+                <span className="font-mono">{t.workflow}</span> in{" "}
+                <span className="font-mono">{t.project}</span>
+              </>
             }
           />
+
+          <LastFired trigger={t} />
+
+          {t.kind === "linear" && system.data === "classic" && (
+            <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[12px]">
+              <span className="font-medium">Idle for now.</span> This harness
+              still starts Linear runs from each project&rsquo;s classic
+              bindings, so this trigger won&rsquo;t fire until you switch under{" "}
+              <Link to="/settings/general" className="underline">
+                Settings → General
+              </Link>
+              .
+            </div>
+          )}
+
+          {t.kind === "webhook" && (
+            <WebhookEndpoint
+              trigger={t}
+              secret={secret}
+              onSecret={setSecret}
+              admin={admin}
+            />
+          )}
+
+          {!canChange && <AdminNote what="change webhooks" />}
+
+          {t.kind === "linear" ? (
+            <LinearTriggerForm
+              key={t.updated_at}
+              trigger={t}
+              onSaved={() => navigate(LIST)}
+              onCancel={() => navigate(LIST)}
+            />
+          ) : (
+            <WebhookTriggerForm
+              key={t.updated_at}
+              trigger={t}
+              readOnly={!admin}
+              onSaved={() => navigate(LIST)}
+              onCancel={() => navigate(LIST)}
+            />
+          )}
+
+          {canChange && (
+            <DangerZone
+              busy={remove.isPending}
+              error={remove.error?.message}
+              label="Delete trigger"
+              note={
+                t.kind === "webhook"
+                  ? "Its URL stops working at once. Runs it already started are kept."
+                  : "Runs it already started are kept."
+              }
+              confirmText={`Delete the trigger “${t.name}”?`}
+              onDelete={() =>
+                remove.mutate(t.id, { onSuccess: () => navigate(LIST) })
+              }
+            />
+          )}
         </>
       )}
     </TriggerShell>
+  );
+}
+
+/** When the trigger last started a run, or why it last couldn't. */
+function LastFired({ trigger: t }: { trigger: RunTrigger }) {
+  return (
+    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
+      <span>
+        Last fired:{" "}
+        {t.last_fired_at && t.last_run_id ? (
+          <Link to={`/runs/${t.last_run_id}`} className="underline">
+            {formatWhen(t.last_fired_at)}
+          </Link>
+        ) : (
+          "never"
+        )}
+      </span>
+      {t.last_error && (
+        <span className="text-destructive">
+          Last attempt failed: {t.last_error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(() => {
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        });
+      }}
+    >
+      <IconCopy /> {copied ? "Copied" : "Copy"}
+    </Button>
+  );
+}
+
+/** Where deliveries go, how to sign them, and the secret — shown once. */
+function WebhookEndpoint({
+  trigger: t,
+  secret,
+  onSecret,
+  admin,
+}: {
+  trigger: Extract<RunTrigger, { kind: "webhook" }>;
+  secret: string | null;
+  onSecret: (secret: string) => void;
+  admin: boolean;
+}) {
+  const rotate = useRotateSecret();
+  return (
+    <section className="flex flex-col gap-3 rounded-md border border-border p-4">
+      <div className="flex flex-col gap-1">
+        <span className="text-[11px] font-medium text-muted-foreground">
+          Payload URL
+        </span>
+        {t.url ? (
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-[12px]">
+              {t.url}
+            </code>
+            <CopyButton text={t.url} />
+          </div>
+        ) : (
+          <span className="text-[12px] text-destructive">
+            This harness has no public URL, so nothing outside can reach it. Set
+            one under{" "}
+            <Link to="/settings/general" className="underline">
+              Settings → General
+            </Link>
+            .
+          </span>
+        )}
+        <span className="text-[11px] text-muted-foreground">
+          POST to it with a JSON body.{" "}
+          {t.config.auth === "signature"
+            ? "Sign the body with the secret (HMAC-SHA256) and send it as X-Hub-Signature-256: sha256=<hex>. For GitHub, choose content type application/json and paste the secret into the webhook's Secret field."
+            : "Send the secret as Authorization: Bearer <secret>, an X-Harness-Token header, or ?token=<secret> on the URL."}
+        </span>
+      </div>
+
+      {secret ? (
+        <div className="flex flex-col gap-1 rounded-md border border-primary/40 bg-primary/5 p-3">
+          <span className="text-[12px] font-medium">
+            The secret — copy it now. It won&rsquo;t be shown again.
+          </span>
+          <div className="flex items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded bg-muted px-2 py-1 font-mono text-[12px]">
+              {secret}
+            </code>
+            <CopyButton text={secret} />
+          </div>
+        </div>
+      ) : (
+        admin && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={rotate.isPending}
+              onClick={() => {
+                if (
+                  window.confirm(
+                    "Replace the secret? Deliveries signed with the old one are refused from now on.",
+                  )
+                ) {
+                  rotate.mutate(t.id, { onSuccess: (r) => onSecret(r.secret) });
+                }
+              }}
+            >
+              <IconKey /> New secret
+            </Button>
+            <span className="text-[11px] text-muted-foreground">
+              The secret is stored encrypted and shown only when it is made.
+            </span>
+            {rotate.isError && (
+              <span className="text-[11px] text-destructive">
+                {rotate.error.message}
+              </span>
+            )}
+          </div>
+        )
+      )}
+    </section>
   );
 }
 
 // ── Schedules ──────────────────────────────────────────────────────────────
-
-function NewScheduleTrigger() {
-  const [params] = useSearchParams();
-  const admin = isAdminOf(useAuthStatus().data);
-  const navigate = useNavigate();
-  return (
-    <TriggerShell title="New schedule">
-      <TriggerHeader kind="schedule" title="New schedule" />
-      {admin ? (
-        <ScheduleForm
-          schedule={null}
-          initialProject={params.get("project") ?? undefined}
-          readOnly={false}
-          onSaved={() => navigate(LIST)}
-          onCancel={() => navigate(LIST)}
-        />
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Only administrators create schedules.
-        </p>
-      )}
-    </TriggerShell>
-  );
-}
 
 /** `/triggers/schedule/:id` */
 export function ScheduleTriggerPage() {
@@ -442,12 +446,22 @@ export function ScheduleTriggerPage() {
           <TriggerHeader
             kind="schedule"
             title={schedule.name}
-            workflow={schedule.workflow}
-            project={schedule.project}
-            state={fromSchedule(schedule).state}
+            state={schedule.enabled ? "on" : "off"}
+            subtitle={
+              <>
+                starts <span className="font-mono">{schedule.workflow}</span> in{" "}
+                <span className="font-mono">{schedule.project}</span>
+              </>
+            }
           />
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
-            <span>{describeScheduleWhen(schedule)}</span>
+            <span>
+              {describeWhen({
+                kind: "schedule",
+                key: schedule.id,
+                schedule,
+              })}
+            </span>
             <span>
               Next:{" "}
               {schedule.enabled ? formatWhen(schedule.next_run_at) : "paused"}
@@ -483,11 +497,7 @@ export function ScheduleTriggerPage() {
               <span className="text-destructive">{run.error.message}</span>
             )}
           </div>
-          {!admin && (
-            <p className="text-[12px] text-muted-foreground">
-              Only administrators change schedules.
-            </p>
-          )}
+          {!admin && <AdminNote what="change schedules" />}
           <ScheduleForm
             key={schedule.updated_at}
             schedule={schedule}
@@ -503,17 +513,7 @@ export function ScheduleTriggerPage() {
               note="Runs it already started are kept."
               confirmText={`Delete the schedule “${schedule.name}”?`}
               onDelete={() =>
-                remove.mutate(schedule.id, {
-                  onSuccess: () =>
-                    navigate(LIST, {
-                      state: {
-                        deleted: {
-                          label: `the schedule “${schedule.name}”`,
-                          trashId: null,
-                        },
-                      } satisfies DeletedState,
-                    }),
-                })
+                remove.mutate(schedule.id, { onSuccess: () => navigate(LIST) })
               }
             />
           )}
@@ -524,6 +524,14 @@ export function ScheduleTriggerPage() {
 }
 
 // ── Shared ─────────────────────────────────────────────────────────────────
+
+function AdminNote({ what }: { what: string }) {
+  return (
+    <p className="text-[12px] text-muted-foreground">
+      Only administrators {what}.
+    </p>
+  );
+}
 
 function NotFound({ what }: { what: string }) {
   return (
@@ -548,8 +556,7 @@ function DangerZone({
 }: {
   label: string;
   note: string;
-  /** Ask first: for a delete that can't be undone. */
-  confirmText?: string;
+  confirmText: string;
   busy: boolean;
   error?: string;
   onDelete: () => void;
@@ -564,7 +571,7 @@ function DangerZone({
           size="sm"
           disabled={busy}
           onClick={() => {
-            if (!confirmText || window.confirm(confirmText)) onDelete();
+            if (window.confirm(confirmText)) onDelete();
           }}
         >
           <IconTrash /> {busy ? "Deleting…" : "Delete"}

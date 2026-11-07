@@ -1,9 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import {
-  setLinearTriggerHome,
-  useLinearTriggerHome,
-} from "@/lib/trigger-prefs";
+import { useTriggerSystem } from "@/lib/triggers";
 import {
   IconChevronRight,
   IconHierarchy2,
@@ -77,7 +74,7 @@ const WHOLE_TEAM = "__whole_team__";
  * Narrow a binding to one Linear project of its team, so two harness projects
  * can share a team — which Linear's free plan (two teams) makes necessary.
  */
-function LinearProjectField({
+export function LinearProjectField({
   project,
   teamId,
   value,
@@ -178,7 +175,7 @@ function StateSelect({
  * connect one instead.
  */
 export function ProjectLinearPanel({ project }: { project: string }) {
-  const home = useLinearTriggerHome();
+  const system = useTriggerSystem();
   // Gate on an account that can actually authenticate (an app install or a
   // legacy key) — one holding only OAuth client details isn't one yet. Any
   // usable account is enough: which one this project uses is chosen inside.
@@ -203,43 +200,22 @@ export function ProjectLinearPanel({ project }: { project: string }) {
     );
   }
 
-  if (home === "triggers") {
-    return (
-      <div className="flex flex-col gap-3">
-        <p className="text-sm text-muted-foreground">
-          This project&rsquo;s Linear triggers are managed on the Triggers page,
-          alongside schedules and every other way a run starts.
-        </p>
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            render={
-              <Link
-                to={`/triggers?project=${encodeURIComponent(project)}&kind=linear`}
-              />
-            }
-          >
-            Open this project&rsquo;s triggers
-          </Button>
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => setLinearTriggerHome("project")}
-          >
-            Manage them here instead
-          </Button>
-        </div>
-        <p className="text-[11px] text-muted-foreground">
-          Which one you use is a per-browser choice, under Settings →
-          Preferences.
-        </p>
-      </div>
-    );
-  }
-
   return (
     <div className="flex flex-col gap-4">
+      {system.data === "triggers" && (
+        <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[12px]">
+          <span className="font-medium">These bindings are idle.</span> This
+          harness starts Linear runs from the{" "}
+          <Link
+            to={`/triggers?project=${encodeURIComponent(project)}&kind=linear`}
+            className="underline underline-offset-2"
+          >
+            Linear triggers on the Triggers page
+          </Link>
+          , so nothing below claims an issue or moves one. They are kept so
+          switching back under Settings → General picks up where it left off.
+        </div>
+      )}
       <p className="text-sm text-muted-foreground">
         Maps a Linear team to this project: which workflow runs, the source
         status that triggers it, the rest of the status map, and the base

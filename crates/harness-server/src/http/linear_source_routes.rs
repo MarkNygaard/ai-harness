@@ -65,7 +65,7 @@ pub struct WorkflowQuery {
     pub workflow: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct PutSourceBody {
     pub workflow: String,
     pub team_id: String,
@@ -390,61 +390,6 @@ pub(crate) async fn save_binding(
         .upsert(project, &workflow, &input)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
-}
-
-impl PutSourceBody {
-    /// The body that would save `b` unchanged — the starting point for an
-    /// update that names only the fields it changes.
-    pub(crate) fn from_binding(b: &LinearSource) -> Self {
-        Self {
-            workflow: b.workflow.clone(),
-            team_id: b.team_id.clone(),
-            team_name: b.team_name.clone(),
-            source_state_id: b.source_state_id.clone(),
-            failed_label: b.failed_label.clone(),
-            in_progress_state_id: b.in_progress_state_id.clone(),
-            review_state_id: b.review_state_id.clone(),
-            ready_state_id: b.ready_state_id.clone(),
-            epic_review_state_id: b.epic_review_state_id.clone(),
-            piece_ready_state_id: b.piece_ready_state_id.clone(),
-            base_branch: b.base_branch.clone(),
-            poll_interval_secs: b.poll_interval_secs,
-            max_concurrent_runs: b.max_concurrent_runs,
-            max_attempts: b.max_attempts,
-            enabled: b.enabled,
-            live: b.live,
-            linear_project_id: b.linear_project_id.clone(),
-            linear_project_name: b.linear_project_name.clone(),
-            trigger_label: b.trigger_label.clone(),
-        }
-    }
-
-    /// A new binding's body: everything optional unset, the numeric limits at
-    /// their defaults, and — like the form — created disabled and dry-run, so
-    /// nothing starts until someone turns it on.
-    pub(crate) fn new(workflow: &str) -> Self {
-        Self {
-            workflow: workflow.to_string(),
-            team_id: String::new(),
-            team_name: String::new(),
-            source_state_id: String::new(),
-            failed_label: None,
-            in_progress_state_id: None,
-            review_state_id: None,
-            ready_state_id: None,
-            epic_review_state_id: None,
-            piece_ready_state_id: None,
-            base_branch: None,
-            poll_interval_secs: default_poll(),
-            max_concurrent_runs: default_max_concurrent_runs(),
-            max_attempts: default_max_attempts(),
-            enabled: false,
-            live: false,
-            linear_project_id: None,
-            linear_project_name: None,
-            trigger_label: None,
-        }
-    }
 }
 
 /// Move a binding to the bin. `Ok(None)` when there was no such binding.

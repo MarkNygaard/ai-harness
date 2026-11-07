@@ -107,6 +107,7 @@ pub struct RunsState {
     finding_store: OnceCell<harness_persist::FindingStateStore>,
     chat_store: OnceCell<harness_persist::ChatStore>,
     schedule_store: OnceCell<harness_persist::ScheduleStore>,
+    trigger_store: OnceCell<harness_persist::TriggerStore>,
     saved_step_store: OnceCell<harness_persist::SavedStepStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     trash_store: OnceCell<harness_persist::TrashStore>,
@@ -217,6 +218,7 @@ impl RunsState {
             finding_store: OnceCell::new(),
             chat_store: OnceCell::new(),
             schedule_store: OnceCell::new(),
+            trigger_store: OnceCell::new(),
             saved_step_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
             trash_store: OnceCell::new(),
@@ -493,6 +495,21 @@ impl RunsState {
         self.schedule_store
             .get_or_try_init(|| async {
                 harness_persist::ScheduleStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the triggers store (the Triggers page's own model).
+    pub(crate) async fn trigger_store(&self) -> Result<&harness_persist::TriggerStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.trigger_store
+            .get_or_try_init(|| async {
+                harness_persist::TriggerStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })

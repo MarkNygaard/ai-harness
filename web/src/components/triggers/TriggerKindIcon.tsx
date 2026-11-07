@@ -1,11 +1,11 @@
-import { IconClockPlay } from "@tabler/icons-react";
+import { IconClockPlay, IconWebhook } from "@tabler/icons-react";
 import { BrandMark } from "@/components/providers/ProviderMark";
 import type { TriggerKind } from "@/lib/triggers";
 
 /**
  * A trigger kind's icon. Linear gets its own mark, in its brand colour, since
- * a trigger of that kind *is* Linear's; a schedule is no one's, so it gets a
- * neutral glyph.
+ * a trigger of that kind *is* Linear's; a webhook or a schedule is no one's,
+ * so they get neutral glyphs.
  */
 export function TriggerKindIcon({
   kind,
@@ -16,7 +16,6 @@ export function TriggerKindIcon({
 }) {
   if (kind === "linear")
     return <BrandMark brand="linear" className={className} />;
-  return (
-    <IconClockPlay className={`shrink-0 text-muted-foreground ${className}`} />
-  );
+  const Icon = kind === "webhook" ? IconWebhook : IconClockPlay;
+  return <Icon className={`shrink-0 text-muted-foreground ${className}`} />;
 }
