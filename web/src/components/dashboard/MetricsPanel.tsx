@@ -376,6 +376,29 @@ function lineProps(key: string) {
   };
 }
 
+/**
+ * A marker for a point no line reaches: with `connectNulls`, the only day that
+ * has a value. A line drawn through one point is a speck at its round cap, so
+ * a first day of data otherwise looks like an empty chart.
+ */
+function loneDot<T>(key: keyof T & string, data: readonly T[]) {
+  const days = data.filter((d) => d[key] != null).length;
+  return (p: { cx?: number; cy?: number; index?: number; value?: unknown }) =>
+    days === 1 && p.value != null && p.cx != null && p.cy != null ? (
+      <circle
+        key={p.index}
+        cx={p.cx}
+        cy={p.cy}
+        r={4}
+        fill={`var(--color-${key})`}
+        stroke="var(--card)"
+        strokeWidth={2}
+      />
+    ) : (
+      <g key={p.index} />
+    );
+}
+
 /** A tooltip row: the series name, and its value formatted. */
 function valueRow(label: string, value: string) {
   return (
@@ -620,7 +643,11 @@ function RunTime({ m }: { m: Metrics }) {
               />
             }
           />
-          <Line {...lineProps("median_secs")} connectNulls />
+          <Line
+            {...lineProps("median_secs")}
+            dot={loneDot("median_secs", m.daily)}
+            connectNulls
+          />
         </LineChart>
       </ChartContainer>
     </ChartCard>
