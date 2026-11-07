@@ -1584,6 +1584,7 @@ dependencies = [
  "harness-dag",
  "harness-persist",
  "harness-sandbox",
+ "reqwest",
  "serde",
  "serde_json",
  "serde_yaml",

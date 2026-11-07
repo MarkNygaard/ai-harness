@@ -12,7 +12,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use harness_dag::{
-    substitute, NodeBody, NodeOutput, NodeRequest, NodeRunner, RunnerError, ScriptRuntime, Usage,
+    substitute, LinearAction, NodeBody, NodeOutput, NodeRequest, NodeRunner, RunnerError,
+    ScriptRuntime, Usage,
 };
 use tokio::process::Command;
 
@@ -132,6 +133,89 @@ impl LocalRunner {
             text,
             session: None,
             success,
+            usage: Usage::default(),
+        })
+    }
+
+    /// Perform a `linear:` body against the server's run-scoped Linear API.
+    ///
+    /// Deliberately not a Linear client of its own: `HARNESS_RUN_URL` and
+    /// `HARNESS_RUN_TOKEN` are already in this runner's env for every run, and
+    /// `/api/run/linear/*` already resolves the project's connection, the
+    /// issue's team, and status/label names. The grant is scoped to one run on
+    /// one project and expires with it, so a leaked one buys very little.
+    ///
+    /// A missing grant means the server has no public URL configured, not a
+    /// Linear problem, so it fails rather than pretending to have acted.
+    async fn run_linear(
+        &self,
+        action: &LinearAction,
+        issue: &str,
+    ) -> Result<NodeOutput, RunnerError> {
+        let base = self
+            .env_vars
+            .get("HARNESS_RUN_URL")
+            .map(|s| s.trim_end_matches('/'))
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| {
+                RunnerError(
+                    "a linear step needs HARNESS_RUN_URL — the server has no public URL set"
+                        .to_string(),
+                )
+            })?;
+        let token = self
+            .env_vars
+            .get("HARNESS_RUN_TOKEN")
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| RunnerError("a linear step needs HARNESS_RUN_TOKEN".to_string()))?;
+
+        // Every one of these endpoints names the issue explicitly; the grant
+        // scopes the *project*, not which issue may be touched.
+        let (path, payload) = match action {
+            LinearAction::MoveState(state) => (
+                "/api/run/linear/state",
+                serde_json::json!({ "issue": issue, "state": state }),
+            ),
+            LinearAction::Comment(body) => (
+                "/api/run/linear/comment",
+                serde_json::json!({ "issue": issue, "body": body }),
+            ),
+            LinearAction::AddLabels(labels) => (
+                "/api/run/linear/labels",
+                serde_json::json!({ "issue": issue, "add": labels }),
+            ),
+            LinearAction::RemoveLabels(labels) => (
+                "/api/run/linear/labels",
+                serde_json::json!({ "issue": issue, "remove": labels }),
+            ),
+        };
+
+        let res = reqwest::Client::new()
+            .post(format!("{base}{path}"))
+            .bearer_auth(token)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|e| RunnerError(format!("linear step: {e}")))?;
+
+        let status = res.status();
+        let body = res.text().await.unwrap_or_default();
+        if !status.is_success() {
+            // The endpoint's own `{"error": …}` sentence is better than
+            // anything this layer could invent, so surface it when present.
+            let detail = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string))
+                .unwrap_or_else(|| body.trim().to_string());
+            return Err(RunnerError(format!(
+                "could not {}: {status} {detail}",
+                action.summary()
+            )));
+        }
+        Ok(NodeOutput {
+            text: format!("{} — done", action.summary()),
+            session: None,
+            success: true,
             usage: Usage::default(),
         })
     }
@@ -319,6 +403,18 @@ impl NodeRunner for LocalRunner {
             } => {
                 // Script text is already variable-substituted by the driver.
                 self.run_script(script, *runtime, deps, req.timeout).await
+            }
+            // Already substituted by the driver, which has also established
+            // that this run has an issue to act on — so a missing `ISSUE_ID`
+            // here is a bug in the driver, not a workflow that lacks Linear.
+            NodeBody::Linear(action) => {
+                let issue = req.vars.get("ISSUE_ID").unwrap_or_default();
+                if issue.is_empty() {
+                    return Err(RunnerError(
+                        "a linear step reached the runner with no ISSUE_ID".to_string(),
+                    ));
+                }
+                self.run_linear(action, issue).await
             }
         }
     }

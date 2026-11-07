@@ -11,8 +11,8 @@ use serde::Deserialize;
 
 use crate::error::DagError;
 use crate::model::{
-    ApprovalConfig, ContextMode, LoopConfig, Node, NodeHooks, NodeKind, ScriptRuntime, TriggerRule,
-    Workflow,
+    ApprovalConfig, ContextMode, LinearAction, LoopConfig, Node, NodeHooks, NodeKind,
+    ScriptRuntime, TriggerRule, Workflow,
 };
 
 #[derive(Debug, Deserialize)]
@@ -83,6 +83,64 @@ struct RawNode {
     approval: Option<ApprovalConfig>,
     #[serde(default)]
     cancel: Option<String>,
+    #[serde(default)]
+    linear: Option<RawLinear>,
+}
+
+/// The `linear:` body's own mutually exclusive keys.
+///
+/// A struct of optionals rather than deserializing [`LinearAction`] directly:
+/// serde's externally-tagged enum wants `!move_state` YAML-tag syntax, which is
+/// not how the rest of this file reads. This mirrors how `RawNode` picks one
+/// body from several discriminators, and gives the same kind of error.
+#[derive(Debug, Deserialize)]
+struct RawLinear {
+    #[serde(default)]
+    move_state: Option<String>,
+    #[serde(default)]
+    comment: Option<String>,
+    #[serde(default)]
+    add_labels: Option<Vec<String>>,
+    #[serde(default)]
+    remove_labels: Option<Vec<String>>,
+}
+
+impl RawLinear {
+    fn into_action(self, node: &str) -> Result<LinearAction, DagError> {
+        let mut found: Vec<&'static str> = Vec::new();
+        if self.move_state.is_some() {
+            found.push("linear.move_state");
+        }
+        if self.comment.is_some() {
+            found.push("linear.comment");
+        }
+        if self.add_labels.is_some() {
+            found.push("linear.add_labels");
+        }
+        if self.remove_labels.is_some() {
+            found.push("linear.remove_labels");
+        }
+        match found.as_slice() {
+            [] => Err(DagError::NoNodeKind(node.to_string())),
+            [_one] => {
+                if let Some(s) = self.move_state {
+                    Ok(LinearAction::MoveState(s))
+                } else if let Some(c) = self.comment {
+                    Ok(LinearAction::Comment(c))
+                } else if let Some(l) = self.add_labels {
+                    Ok(LinearAction::AddLabels(l))
+                } else if let Some(l) = self.remove_labels {
+                    Ok(LinearAction::RemoveLabels(l))
+                } else {
+                    unreachable!("exactly one linear key matched")
+                }
+            }
+            _ => Err(DagError::MultipleNodeKinds {
+                node: node.to_string(),
+                found,
+            }),
+        }
+    }
 }
 
 impl RawNode {
@@ -100,6 +158,7 @@ impl RawNode {
             loop_,
             approval,
             cancel,
+            linear,
             depends_on,
             when,
             trigger_rule,
@@ -139,6 +198,9 @@ impl RawNode {
         if cancel.is_some() {
             found.push("cancel");
         }
+        if linear.is_some() {
+            found.push("linear");
+        }
 
         let kind = match found.as_slice() {
             [] => return Err(DagError::NoNodeKind(id)),
@@ -163,6 +225,8 @@ impl RawNode {
                     NodeKind::Approval(a)
                 } else if let Some(c) = cancel {
                     NodeKind::Cancel(c)
+                } else if let Some(l) = linear {
+                    NodeKind::Linear(l.into_action(&id)?)
                 } else {
                     unreachable!("found exactly one discriminator")
                 }

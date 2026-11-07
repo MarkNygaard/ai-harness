@@ -20,6 +20,9 @@ tempfile = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+# For `linear:` step bodies, which call the server's own run-scoped Linear
+# endpoints with the run grant already in this runner's env.
+reqwest = { workspace = true }
 shlex = { workspace = true }
 tracing = { workspace = true }
 
