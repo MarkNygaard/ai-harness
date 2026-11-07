@@ -1,8 +1,18 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { IconHierarchy2, IconPlus, IconTrash } from "@tabler/icons-react";
+import {
+  IconChevronRight,
+  IconHierarchy2,
+  IconPlus,
+  IconTrash,
+} from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import {
   Select,
   SelectContent,
@@ -322,24 +332,6 @@ function LinearBody({
     bound.has(SUPERVISOR_WORKFLOW) &&
     (sources.data ?? []).some((s) => s.piece_ready_state_id);
 
-  if (editing !== null) {
-    const source =
-      editing === ""
-        ? undefined
-        : (sources.data ?? []).find((s) => s.workflow === editing);
-    return (
-      <BindingForm
-        project={project}
-        workflow={editing}
-        fixedWorkflow={editing !== ""}
-        source={source}
-        availableWorkflows={editing === "" ? availableWorkflows : undefined}
-        teams={teams}
-        onDone={() => setEditing(null)}
-      />
-    );
-  }
-
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <AccountSelect project={project} accounts={accounts} />
@@ -354,70 +346,93 @@ function LinearBody({
       {sources.data && sources.data.length > 0 && (
         <div className="flex flex-col gap-2">
           {sources.data.map((s) => (
-            <div
+            <Collapsible
               key={s.workflow}
-              className="flex items-center gap-2 rounded-md border border-border px-3 py-2"
+              open={editing === s.workflow}
+              onOpenChange={(open) => setEditing(open ? s.workflow : null)}
+              className="rounded-md border border-border"
             >
-              <div className="min-w-0 flex-1 flex flex-col gap-1">
-                <div className="flex items-center gap-2">
-                  {/* Team in the heading, not just the detail line: bindings in
-                      one project can watch different teams, and the team is what
-                      distinguishes them at a glance. */}
-                  <span className="truncate text-[13px] font-medium">
-                    <span className="font-mono">{s.workflow}</span>
-                    <span className="text-muted-foreground">
-                      {" "}
-                      ({s.team_name})
+              <div className="flex items-center gap-2 px-3 py-2">
+                {/* The whole summary is the trigger, not a separate Edit
+                    button: the row already names the binding, so making it
+                    the affordance saves a click and keeps the list in place
+                    while a binding is open. */}
+                <CollapsibleTrigger className="group flex min-w-0 flex-1 items-center gap-2 text-left">
+                  <IconChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
+                  {/* Spans, not divs: the trigger renders a <button>, whose
+                      content model is phrasing content. Badge is a span
+                      already, so this keeps the markup valid without changing
+                      the layout. */}
+                  <span className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="flex items-center gap-2">
+                      {/* Team in the heading, not just the detail line: bindings in
+                          one project can watch different teams, and the team is what
+                          distinguishes them at a glance. */}
+                      <span className="truncate text-[13px] font-medium">
+                        <span className="font-mono">{s.workflow}</span>
+                        <span className="text-muted-foreground">
+                          {" "}
+                          ({s.team_name})
+                        </span>
+                      </span>
+                      <Badge
+                        variant={s.enabled ? "success" : "outline"}
+                        className="shrink-0 text-[10px]"
+                      >
+                        {s.enabled ? "enabled" : "disabled"}
+                      </Badge>
+                      <Badge
+                        variant={s.live ? "success" : "outline"}
+                        className="shrink-0 text-[10px]"
+                      >
+                        {s.live ? "live" : "dry-run"}
+                      </Badge>
+                    </span>
+                    {/* Team moved to the heading above, so this is the status it
+                        triggers from — the other thing that identifies a binding. */}
+                    <span className="truncate text-[11px] text-muted-foreground">
+                      starts from {resolveStateName(s.team_id, s.source_state_id)}
+                      {s.linear_project_id &&
+                        ` · only ${s.linear_project_name ?? "one Linear project"}`}
+                      {s.trigger_label && ` · labelled ${s.trigger_label}`}
                     </span>
                   </span>
-                  <Badge
-                    variant={s.enabled ? "success" : "outline"}
-                    className="shrink-0 text-[10px]"
-                  >
-                    {s.enabled ? "enabled" : "disabled"}
-                  </Badge>
-                  <Badge
-                    variant={s.live ? "success" : "outline"}
-                    className="shrink-0 text-[10px]"
-                  >
-                    {s.live ? "live" : "dry-run"}
-                  </Badge>
-                </div>
-                {/* Team moved to the heading above, so this is the status it
-                    triggers from — the other thing that identifies a binding. */}
-                <span className="truncate text-[11px] text-muted-foreground">
-                  starts from {resolveStateName(s.team_id, s.source_state_id)}
-                  {s.linear_project_id &&
-                    ` · only ${s.linear_project_name ?? "one Linear project"}`}
-                  {s.trigger_label && ` · labelled ${s.trigger_label}`}
-                </span>
+                </CollapsibleTrigger>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() =>
+                    del.mutate(s.workflow, {
+                      onSuccess: (res) =>
+                        setJustDeleted(
+                          res.trash_id
+                            ? { workflow: res.workflow, trashId: res.trash_id }
+                            : null,
+                        ),
+                    })
+                  }
+                  disabled={del.isPending}
+                  title="Delete binding"
+                >
+                  <IconTrash className="size-3.5" />
+                </Button>
               </div>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setEditing(s.workflow)}
-              >
-                Edit
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() =>
-                  del.mutate(s.workflow, {
-                    onSuccess: (res) =>
-                      setJustDeleted(
-                        res.trash_id
-                          ? { workflow: res.workflow, trashId: res.trash_id }
-                          : null,
-                      ),
-                  })
-                }
-                disabled={del.isPending}
-                title="Delete binding"
-              >
-                <IconTrash className="size-3.5" />
-              </Button>
-            </div>
+              {/* Mounted only while open, so the form's useState initialisers
+                  re-read `source` each time a binding is expanded rather than
+                  holding the values of whichever one was opened first. */}
+              <CollapsibleContent className="border-t border-border px-3 py-3">
+                {editing === s.workflow && (
+                  <BindingForm
+                    project={project}
+                    workflow={s.workflow}
+                    fixedWorkflow
+                    source={s}
+                    teams={teams}
+                    onDone={() => setEditing(null)}
+                  />
+                )}
+              </CollapsibleContent>
+            </Collapsible>
           ))}
         </div>
       )}
@@ -454,11 +469,26 @@ function LinearBody({
       {sources.data && sources.data.length > 0 && (
         <WiringCheck project={project} />
       )}
+      {/* The new-binding form opens in place too, below the list, so adding
+          one reads the same way as editing one. "" is the new-binding key,
+          which is why toggling compares against it rather than null. */}
+      {editing === "" && (
+        <div className="rounded-md border border-border px-3 py-3">
+          <BindingForm
+            project={project}
+            workflow=""
+            fixedWorkflow={false}
+            availableWorkflows={availableWorkflows}
+            teams={teams}
+            onDone={() => setEditing(null)}
+          />
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-2">
         <Button
           size="sm"
           variant="outline"
-          onClick={() => setEditing("")}
+          onClick={() => setEditing(editing === "" ? null : "")}
           disabled={availableWorkflows.length === 0}
           title={
             availableWorkflows.length === 0
@@ -466,7 +496,8 @@ function LinearBody({
               : "Add a Linear trigger binding"
           }
         >
-          <IconPlus className="size-4" /> Add binding
+          <IconPlus className="size-4" />{" "}
+          {editing === "" ? "Cancel" : "Add binding"}
         </Button>
         <Button
           size="sm"
