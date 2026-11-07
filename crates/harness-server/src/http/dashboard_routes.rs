@@ -4,6 +4,8 @@
 //! `GET /api/dashboard/metrics?days=7|30|90&project=<name>` answers with
 //! per-day outcomes, run time and notional cost, the same per workflow, and
 //! totals for the period and the one before it (for "vs previous 7 days").
+//! The pull requests runs opened (see `pr_tracking`) add PRs opened and
+//! merged per day, and how long tasks took from kickoff to PR and PR to merge.
 //!
 //! Aggregated here from two plain queries rather than in SQL, so the
 //! arithmetic — medians, windows, what counts as a task — is tested without a
@@ -17,7 +19,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{DateTime, Duration, NaiveDate, Utc};
-use harness_persist::{DashboardRun, RunModelTokens};
+use harness_persist::{DashboardRun, RunModelTokens, RunPr};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -57,6 +59,9 @@ pub(crate) struct DayMetrics {
     pub median_secs: Option<f64>,
     /// API-equivalent cost of their tokens, in USD.
     pub cost_usd: f64,
+    /// Pull requests opened that day, and merged that day.
+    pub prs_opened: u32,
+    pub prs_merged: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -78,6 +83,21 @@ pub(crate) struct Totals {
     pub tasks: u32,
     pub median_secs: Option<f64>,
     pub cost_usd: f64,
+    #[serde(flatten)]
+    pub prs: PrTotals,
+}
+
+/// Pull requests over a period.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub(crate) struct PrTotals {
+    pub prs_opened: u32,
+    pub prs_merged: u32,
+    /// Median from a run starting to its PR opening, over the PRs opened in
+    /// the period that the run itself opened.
+    pub median_to_pr_secs: Option<f64>,
+    /// Median from a PR opening to it merging, over the PRs merged in the
+    /// period.
+    pub median_to_merge_secs: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -155,6 +175,39 @@ fn totals(runs: &[&DashboardRun], costs: &HashMap<&str, f64>) -> Totals {
     t
 }
 
+/// Pull requests opened and merged in `[from, to)` (UTC days), with the
+/// medians. A PR opened before its run started was opened by someone else
+/// and only worked on by the run, so it has no kickoff-to-PR time.
+fn pr_totals(prs: &[RunPr], from: NaiveDate, to: NaiveDate) -> PrTotals {
+    let within = |t: &Option<DateTime<Utc>>| {
+        t.map(|t| t.date_naive())
+            .is_some_and(|d| d >= from && d < to)
+    };
+    let mut t = PrTotals::default();
+    let mut to_pr = Vec::new();
+    let mut to_merge = Vec::new();
+    for pr in prs {
+        if within(&pr.opened_at) {
+            t.prs_opened += 1;
+            if let Some(opened) = pr.opened_at {
+                let secs = (opened - pr.run_started_at).num_seconds();
+                if secs >= 0 {
+                    to_pr.push(secs as f64);
+                }
+            }
+        }
+        if within(&pr.merged_at) {
+            t.prs_merged += 1;
+            if let (Some(opened), Some(merged)) = (pr.opened_at, pr.merged_at) {
+                to_merge.push((merged - opened).num_seconds().max(0) as f64);
+            }
+        }
+    }
+    t.median_to_pr_secs = median(to_pr);
+    t.median_to_merge_secs = median(to_merge);
+    t
+}
+
 /// The first UTC day of a `days`-long period ending today.
 fn period_start(now: DateTime<Utc>, days: u32) -> NaiveDate {
     now.date_naive() - Duration::days(i64::from(days) - 1)
@@ -165,6 +218,7 @@ fn period_start(now: DateTime<Utc>, days: u32) -> NaiveDate {
 pub(crate) fn aggregate(
     runs: &[DashboardRun],
     tokens: &[RunModelTokens],
+    prs: &[RunPr],
     days: u32,
     now: DateTime<Utc>,
 ) -> Metrics {
@@ -196,13 +250,27 @@ pub(crate) fn aggregate(
             entry.2 += costs.get(r.id.as_str()).copied().unwrap_or(0.0);
         }
     }
+    let mut prs_by_day: HashMap<NaiveDate, (u32, u32)> = HashMap::new();
+    for pr in prs {
+        if let Some(d) = pr.opened_at {
+            prs_by_day.entry(d.date_naive()).or_default().0 += 1;
+        }
+        if let Some(d) = pr.merged_at {
+            prs_by_day.entry(d.date_naive()).or_default().1 += 1;
+        }
+    }
     let daily = by_day
         .into_iter()
-        .map(|(day, (outcomes, secs, cost))| DayMetrics {
-            day: day.format("%Y-%m-%d").to_string(),
-            outcomes,
-            median_secs: median(secs),
-            cost_usd: cost,
+        .map(|(day, (outcomes, secs, cost))| {
+            let (opened, merged) = prs_by_day.get(&day).copied().unwrap_or_default();
+            DayMetrics {
+                day: day.format("%Y-%m-%d").to_string(),
+                outcomes,
+                median_secs: median(secs),
+                cost_usd: cost,
+                prs_opened: opened,
+                prs_merged: merged,
+            }
         })
         .collect();
 
@@ -230,12 +298,19 @@ pub(crate) fn aggregate(
             .then_with(|| a.workflow.cmp(&b.workflow))
     });
 
+    let end = now.date_naive() + Duration::days(1);
     Metrics {
         days,
         daily,
         workflows,
-        totals: totals(&current, &costs),
-        previous: totals(&previous, &costs),
+        totals: Totals {
+            prs: pr_totals(prs, start, end),
+            ..totals(&current, &costs)
+        },
+        previous: Totals {
+            prs: pr_totals(prs, prev_start, start),
+            ..totals(&previous, &costs)
+        },
     }
 }
 
@@ -287,7 +362,16 @@ pub async fn metrics(
         Ok(t) => t,
         Err(e) => return fail(e),
     };
-    Json(aggregate(&runs, &tokens, days, now)).into_response()
+    // PRs are an addition to the picture, not a condition for it: with the
+    // store unreachable the runs still show, and the PR numbers read zero.
+    let prs = match state.pr_store().await {
+        Ok(s) => s.dashboard_prs(since, project).await.unwrap_or_else(|e| {
+            tracing::warn!("dashboard: could not read pull requests: {e}");
+            Vec::new()
+        }),
+        Err(_) => Vec::new(),
+    };
+    Json(aggregate(&runs, &tokens, &prs, days, now)).into_response()
 }
 
 #[cfg(test)]
@@ -330,7 +414,13 @@ mod tests {
 
     #[test]
     fn the_period_is_zero_filled_oldest_first_and_ends_today() {
-        let m = aggregate(&[run("a", "w", "t", "completed", 0, 60.0)], &[], 7, now());
+        let m = aggregate(
+            &[run("a", "w", "t", "completed", 0, 60.0)],
+            &[],
+            &[],
+            7,
+            now(),
+        );
         assert_eq!(m.daily.len(), 7);
         assert_eq!(m.daily.first().unwrap().day, "2026-11-01");
         assert_eq!(m.daily.last().unwrap().day, "2026-11-07");
@@ -347,7 +437,7 @@ mod tests {
             run("c", "idea-to-pr", "AIH-2 Add", "failed", 2, 300.0),
             run("d", "idea-to-pr", "", "completed", 2, 10.0),
         ];
-        let m = aggregate(&runs, &[], 7, now());
+        let m = aggregate(&runs, &[], &[], 7, now());
         assert_eq!(m.totals.runs, 4);
         assert_eq!(
             m.totals.tasks, 2,
@@ -363,7 +453,7 @@ mod tests {
             run("b", "w", "2", "failed", 0, 300.0),
             run("c", "w", "3", "cancelled", 0, 5.0),
         ];
-        let m = aggregate(&runs, &[], 7, now());
+        let m = aggregate(&runs, &[], &[], 7, now());
         assert_eq!(m.totals.median_secs, Some(200.0));
         assert_eq!(m.daily.last().unwrap().median_secs, Some(200.0));
         assert_eq!(m.totals.outcomes.cancelled, 1);
@@ -377,7 +467,7 @@ mod tests {
         ];
         // Opus: 1M input at $5 + 1M output at $25.
         let t = [tokens("a", 1_000_000, 1_000_000)];
-        let m = aggregate(&runs, &t, 7, now());
+        let m = aggregate(&runs, &t, &[], 7, now());
         assert!((m.totals.cost_usd - 30.0).abs() < 1e-9);
         assert!((m.daily.last().unwrap().cost_usd - 30.0).abs() < 1e-9);
         let idea = m
@@ -397,7 +487,7 @@ mod tests {
             run("prev2", "w", "4", "completed", 13, 60.0),
             run("too-old", "w", "5", "completed", 14, 60.0),
         ];
-        let m = aggregate(&runs, &[], 7, now());
+        let m = aggregate(&runs, &[], &[], 7, now());
         assert_eq!(m.totals.runs, 2);
         assert_eq!(m.previous.runs, 2);
         assert_eq!(m.previous.outcomes.failed, 1);
@@ -410,9 +500,63 @@ mod tests {
             run("b", "idea-to-pr", "2", "completed", 0, 1.0),
             run("c", "idea-to-pr", "3", "failed", 0, 1.0),
         ];
-        let m = aggregate(&runs, &[], 7, now());
+        let m = aggregate(&runs, &[], &[], 7, now());
         let names: Vec<&str> = m.workflows.iter().map(|w| w.workflow.as_str()).collect();
         assert_eq!(names, ["idea-to-pr", "merge-pr"]);
+    }
+
+    fn pr(
+        run_hours_ago: i64,
+        opened_hours_ago: Option<i64>,
+        merged_hours_ago: Option<i64>,
+    ) -> RunPr {
+        let at = |h: i64| now() - Duration::hours(h);
+        RunPr {
+            url: format!("https://github.com/o/r/pull/{run_hours_ago}"),
+            run_id: "r".into(),
+            project: None,
+            workflow: "task".into(),
+            run_started_at: at(run_hours_ago),
+            state: if merged_hours_ago.is_some() {
+                "merged"
+            } else {
+                "open"
+            }
+            .into(),
+            opened_at: opened_hours_ago.map(at),
+            merged_at: merged_hours_ago.map(at),
+            checked_at: None,
+        }
+    }
+
+    #[test]
+    fn prs_are_counted_on_the_day_they_open_and_the_day_they_merge() {
+        let prs = [
+            // Kicked off 3h ago, PR 2h ago (1h), merged 1h ago (1h).
+            pr(3, Some(2), Some(1)),
+            // Kicked off 50h ago, PR 47h ago (3h), still open.
+            pr(50, Some(47), None),
+            // Opened by a person before the run touched it: no kickoff time.
+            pr(10, Some(30), None),
+            // Opened in the previous period, merged in this one.
+            pr(24 * 9, Some(24 * 8), Some(24 * 2)),
+        ];
+        let m = aggregate(&[], &[], &prs, 7, now());
+        assert_eq!(m.totals.prs.prs_opened, 3);
+        assert_eq!(m.totals.prs.prs_merged, 2);
+        assert_eq!(
+            m.totals.prs.median_to_pr_secs,
+            Some(7200.0),
+            "1h and 3h; the person's PR is left out"
+        );
+        assert_eq!(
+            m.totals.prs.median_to_merge_secs,
+            Some((3600.0 + 6.0 * 86400.0) / 2.0)
+        );
+        assert_eq!(m.previous.prs.prs_opened, 1);
+        assert_eq!(m.previous.prs.prs_merged, 0);
+        let today = m.daily.last().unwrap();
+        assert_eq!((today.prs_opened, today.prs_merged), (1, 1));
     }
 
     #[test]

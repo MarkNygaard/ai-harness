@@ -40,6 +40,8 @@ import {
  */
 const SERIES = { light: "#2a78d6", dark: "#3987e5" };
 const CRITICAL = { light: "#d03b3b", dark: "#d03b3b" };
+/** Categorical slot 2, beside SERIES for merged against opened PRs. */
+const SERIES_2 = { light: "#eb6834", dark: "#d95926" };
 
 const outcomeConfig = {
   completed: { label: "Completed", theme: SERIES },
@@ -52,6 +54,11 @@ const runTimeConfig = {
 
 const costConfig = {
   cost_usd: { label: "Notional cost", theme: SERIES },
+} satisfies ChartConfig;
+
+const prConfig = {
+  prs_opened: { label: "Opened", theme: SERIES },
+  prs_merged: { label: "Merged", theme: SERIES_2 },
 } satisfies ChartConfig;
 
 /** Workflows shown by name; the rest fold into one "Other" bar. */
@@ -106,7 +113,139 @@ export function MetricsPanel({
           <ByWorkflow m={m} />
         </div>
       )}
+      <PullRequests m={m} project={project} />
     </div>
+  );
+}
+
+// ── Pull requests ──────────────────────────────────────────────────────────
+
+/**
+ * What became of the PRs the runs opened: how many opened and merged, how
+ * long a task took from kickoff to its PR, and how long a PR waited to merge.
+ */
+function PullRequests({ m, project }: { m: Metrics; project: string | null }) {
+  const vs = `vs previous ${m.days} days`;
+  const t = m.totals;
+  const p = m.previous;
+  const none = t.prs_opened + t.prs_merged + p.prs_opened + p.prs_merged === 0;
+  return (
+    <section className="flex flex-col gap-3">
+      <h2 className="text-sm font-medium">Pull requests</h2>
+      {none ? (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-muted-foreground">
+            No pull requests from runs in the last {m.days} days
+            {project ? ` in ${project}` : ""}. A run whose output links a pull
+            request is followed until it merges or closes.
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="grid grid-cols-2 content-start gap-3">
+            <StatTile
+              label="PRs opened"
+              value={t.prs_opened.toLocaleString()}
+              delta={delta(t.prs_opened, p.prs_opened, { better: "up" })}
+              caption={vs}
+              help="Pull requests the runs opened in the period."
+            />
+            <StatTile
+              label="PRs merged"
+              value={t.prs_merged.toLocaleString()}
+              delta={delta(t.prs_merged, p.prs_merged, { better: "up" })}
+              caption={vs}
+              help="Pull requests from runs that merged in the period, whenever they were opened."
+            />
+            <StatTile
+              label="Kickoff to PR"
+              value={formatDuration(t.median_to_pr_secs)}
+              delta={delta(t.median_to_pr_secs, p.median_to_pr_secs, {
+                better: "down",
+              })}
+              caption={`median · ${vs}`}
+              help="From the run starting to its pull request opening. A PR someone opened before the run started is left out."
+            />
+            <StatTile
+              label="PR to merge"
+              value={formatDuration(t.median_to_merge_secs)}
+              delta={delta(t.median_to_merge_secs, p.median_to_merge_secs, {
+                better: "down",
+              })}
+              caption={`median · ${vs}`}
+              help="From a pull request opening to it merging: the time it spent in review."
+            />
+          </div>
+          <PrsPerDay m={m} />
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PrsPerDay({ m }: { m: Metrics }) {
+  return (
+    <ChartCard
+      title="Pull requests per day"
+      subtitle="Opened, and merged, on each day"
+      table={
+        <DataTable
+          head={["Day", "Opened", "Merged"]}
+          rows={[...m.daily]
+            .reverse()
+            .map((d) => [dayLabel(d.day), d.prs_opened, d.prs_merged])}
+        />
+      }
+    >
+      <ChartContainer config={prConfig} className="aspect-auto h-56 w-full">
+        <BarChart
+          data={m.daily}
+          barGap={2}
+          margin={{ left: -16, right: 4, top: 8 }}
+        >
+          <CartesianGrid vertical={false} stroke="var(--border)" />
+          <XAxis
+            dataKey="day"
+            tickFormatter={dayLabel}
+            tickLine={false}
+            axisLine={false}
+            minTickGap={24}
+            tick={axisTick}
+          />
+          <YAxis
+            allowDecimals={false}
+            tickLine={false}
+            axisLine={false}
+            tick={axisTick}
+            width={40}
+          />
+          <ChartTooltip
+            cursor={false}
+            content={
+              <ChartTooltipContent
+                indicator="line"
+                labelFormatter={(v) => dayLabel(String(v))}
+              />
+            }
+          />
+          <ChartLegend content={<ChartLegendContent />} />
+          <Bar
+            isAnimationActive={false}
+            dataKey="prs_opened"
+            fill="var(--color-prs_opened)"
+            radius={[4, 4, 0, 0]}
+            maxBarSize={12}
+          />
+          <Bar
+            isAnimationActive={false}
+            dataKey="prs_merged"
+            fill="var(--color-prs_merged)"
+            radius={[4, 4, 0, 0]}
+            maxBarSize={12}
+          />
+        </BarChart>
+      </ChartContainer>
+    </ChartCard>
   );
 }
 

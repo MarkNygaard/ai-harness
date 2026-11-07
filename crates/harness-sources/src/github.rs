@@ -378,8 +378,19 @@ impl GithubClient {
             .map_err(|e| GithubError(format!("bad JSON from GET {path}: {e}")))
     }
 
-    /// A PR's state, CI and preview URL. Only the PR itself is required; a check
-    /// or deployment read that fails becomes a warning on the snapshot.
+    /// The pull request itself: state, title, branch and its timestamps. One
+    /// request, for callers that only need to know whether it has merged.
+    pub async fn pull(&self, pr: &PrRef) -> Result<PullFields, GithubError> {
+        parse_pull(
+            &self
+                .get(&format!(
+                    "/repos/{}/{}/pulls/{}",
+                    pr.owner, pr.repo, pr.number
+                ))
+                .await?,
+        )
+    }
+
     /// The files a pull request changes, with their diffs. Up to 300 files,
     /// which is past where reading a PR file by file stops being useful.
     pub async fn pr_files(&self, pr: &PrRef) -> Result<Vec<PrFile>, GithubError> {
@@ -401,6 +412,8 @@ impl GithubClient {
         Ok(out)
     }
 
+    /// A PR's state, CI and preview URL. Only the PR itself is required; a check
+    /// or deployment read that fails becomes a warning on the snapshot.
     pub async fn pr_snapshot(&self, pr: &PrRef) -> Result<PrSnapshot, GithubError> {
         let base = format!("/repos/{}/{}", pr.owner, pr.repo);
         let pull = parse_pull(&self.get(&format!("{base}/pulls/{}", pr.number)).await?)?;

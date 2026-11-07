@@ -60,6 +60,8 @@ pub use improvements::{
     SUGGESTION_NEW,
 };
 pub use triggers::{RunTrigger, TriggerInput, TriggerStore, KIND_LINEAR, KIND_WEBHOOK};
+mod pull_requests;
+pub use pull_requests::{PrStore, RunPr, PR_CLOSED, PR_MERGED, PR_OPEN};
 mod saved_steps;
 pub use saved_steps::{SaveStepError, SavedStep, SavedStepStore};
 
