@@ -27,6 +27,10 @@ struct RawWorkflow {
     #[serde(default)]
     ui: Option<crate::model::WorkflowUi>,
     #[serde(default)]
+    improvements: Option<crate::model::ImprovementsConfig>,
+    #[serde(default)]
+    internal: bool,
+    #[serde(default)]
     nodes: Vec<RawNode>,
 }
 
@@ -381,12 +385,20 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
         }
     }
 
+    if let Some(cfg) = &raw.improvements {
+        if !crate::model::IMPROVEMENTS_EVERY.contains(&cfg.every) {
+            return Err(DagError::ImprovementsEvery(cfg.every));
+        }
+    }
+
     Ok(Workflow {
         name: raw.name,
         description: raw.description,
         provider: raw.provider,
         model: raw.model,
         ui: raw.ui,
+        improvements: raw.improvements,
+        internal: raw.internal,
         nodes,
     })
 }

@@ -10,6 +10,10 @@
 use std::path::Path;
 
 /// The workflow run when a request doesn't name one.
+/// The harness's own improvement review (`internal: true`): started by the
+/// server, never offered to a person.
+pub const IMPROVEMENTS_WORKFLOW: &str = "improvements-analysis";
+
 pub const DEFAULT_WORKFLOW: &str = "idea-to-pr";
 
 /// Bundled workflows by name.
@@ -41,6 +45,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
     (
         "linear-epic-supervise",
         include_str!("../defaults/workflows/linear-epic-supervise.yaml"),
+    ),
+    (
+        IMPROVEMENTS_WORKFLOW,
+        include_str!("../defaults/workflows/improvements-analysis.yaml"),
     ),
 ];
 
@@ -733,6 +741,18 @@ mod tests {
     fn resolve_unknown_name_errors() {
         let err = resolve_workflow_source("ghost-workflow", &std::env::temp_dir()).unwrap_err();
         assert!(err.contains("ghost-workflow"));
+    }
+
+    #[test]
+    fn the_improvements_review_is_internal_and_reads_its_evidence() {
+        let wf = harness_dag::parse_workflow(default_workflow(IMPROVEMENTS_WORKFLOW).unwrap())
+            .expect("parses");
+        assert!(wf.internal, "hidden from every workflow list");
+        assert!(wf.improvements.is_none(), "it must not review itself");
+        assert!(wf.node("evidence").is_some(), "fetches the runs first");
+        let suggest = wf.node("suggest").expect("suggest step");
+        assert!(suggest.output_format.is_some());
+        assert_eq!(suggest.depends_on, vec!["evidence".to_string()]);
     }
 
     #[test]

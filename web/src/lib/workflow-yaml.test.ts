@@ -34,6 +34,22 @@ describe("emptyNode", () => {
 });
 
 describe("toYaml / fromYaml round-trip", () => {
+  it("keeps improvements, and leaves the key out when it is off", () => {
+    const on: EditorWorkflow = {
+      name: "w",
+      nodes: [{ id: "a", prompt: "x" }],
+      improvements: { every: 10 },
+    };
+    expect(toYaml(on)).toMatch(/improvements:\s+every: 10/);
+    expect(fromYaml(toYaml(on)).improvements).toEqual({ every: 10 });
+    const off: EditorWorkflow = {
+      name: "w",
+      nodes: [{ id: "a", prompt: "x" }],
+    };
+    expect(toYaml(off)).not.toContain("improvements");
+    expect(fromYaml(toYaml(off)).improvements).toBeUndefined();
+  });
+
   it("preserves workflow + node fields and drops empty ones", () => {
     const wf: EditorWorkflow = {
       name: "demo",
@@ -318,7 +334,11 @@ describe("linear steps", () => {
       description: "d",
       nodes: [
         { id: "start", linear: { move_state: "In Progress" } },
-        { id: "note", depends_on: ["start"], linear: { comment: "on $TASK_TITLE" } },
+        {
+          id: "note",
+          depends_on: ["start"],
+          linear: { comment: "on $TASK_TITLE" },
+        },
         { id: "tag", depends_on: ["note"], linear: { add_labels: ["a", "b"] } },
         { id: "untag", depends_on: ["tag"], linear: { remove_labels: ["c"] } },
       ],

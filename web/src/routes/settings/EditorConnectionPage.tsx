@@ -249,6 +249,14 @@ export function EditorConnectionPage() {
                       </div>
                     </div>
                   )}
+                  {!!data?.improvement_tools?.length && (
+                    <div>
+                      <div className="mb-1 font-medium">Improvements</div>
+                      <div className="font-mono text-muted-foreground">
+                        {data.improvement_tools.join(" · ")}
+                      </div>
+                    </div>
+                  )}
                   {!!data?.schedule_tools?.length && (
                     <div>
                       <div className="mb-1 font-medium">Schedules</div>

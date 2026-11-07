@@ -465,6 +465,25 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/hooks/{id}",
             post(super::triggers_routes::receive_hook),
         )
+        // ── Improvements ────────────────────────────────────────────────────
+        .route("/api/improvements", get(super::improvements_routes::list))
+        .route(
+            "/api/improvements/review",
+            post(super::improvements_routes::review_now),
+        )
+        .route(
+            "/api/improvements/suggestions/{id}",
+            put(super::improvements_routes::update_suggestion),
+        )
+        .route(
+            "/api/improvements/suggestions/{id}/apply",
+            post(super::improvements_routes::apply_suggestion),
+        )
+        // What a review's run reads; authenticated by that run's grant.
+        .route(
+            "/api/run/improvements/evidence",
+            get(super::improvements_routes::get_evidence),
+        )
         .route(
             "/api/projects/{project}/linear-check",
             get(linear_source_routes::check_sources),

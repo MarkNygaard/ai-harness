@@ -404,6 +404,22 @@ impl ReportStatus {
     }
 }
 
+/// Improvement suggestions for a workflow: after every `every` finished runs
+/// of it in a project, the harness reviews those runs and suggests changes —
+/// mostly to the project's repo (its `CLAUDE.md`, skills, checks), sometimes
+/// to the workflow itself.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImprovementsConfig {
+    /// Finished runs per project between reviews.
+    pub every: u32,
+}
+
+/// The range `improvements.every` accepts. Fewer than a handful of runs can't
+/// show what *keeps* happening, which is the point; more than a hundred would
+/// review stale history.
+pub const IMPROVEMENTS_EVERY: std::ops::RangeInclusive<u32> = 3..=100;
+
 /// A parsed, validated workflow DAG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workflow {
@@ -421,6 +437,13 @@ pub struct Workflow {
     /// Optional UI surfaces (left-nav entry, report tab) this workflow opts into.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui: Option<WorkflowUi>,
+    /// Improvement suggestions, when the workflow opts in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub improvements: Option<ImprovementsConfig>,
+    /// The harness's own machinery, started by the server and never by a
+    /// person: hidden from every workflow list and picker.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub internal: bool,
     /// Nodes in declaration order.
     pub nodes: Vec<Node>,
 }

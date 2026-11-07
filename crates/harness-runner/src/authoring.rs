@@ -52,6 +52,9 @@ pub struct WorkflowSummary {
     /// lets the web render nav/report generically instead of hard-coding names.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ui: Option<harness_dag::WorkflowUi>,
+    /// Improvement suggestions, when the workflow opts in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub improvements: Option<harness_dag::ImprovementsConfig>,
 }
 
 /// A workflow's editable source.
@@ -287,6 +290,10 @@ pub fn list_workflows(project_root: &Path) -> Vec<WorkflowSummary> {
             if let Ok(yaml) = std::fs::read_to_string(&path) {
                 if let Ok(wf) = parse_workflow(&yaml) {
                     seen.insert(stem.to_string());
+                    // The harness's own machinery: never offered to a person.
+                    if wf.internal {
+                        continue;
+                    }
                     out.push(WorkflowSummary {
                         name: stem.to_string(),
                         source: Source::Project,
@@ -294,6 +301,7 @@ pub fn list_workflows(project_root: &Path) -> Vec<WorkflowSummary> {
                         description: wf.description.clone(),
                         node_count: wf.nodes.len(),
                         ui: wf.ui.clone(),
+                        improvements: wf.improvements.clone(),
                     });
                 }
             }
@@ -306,6 +314,9 @@ pub fn list_workflows(project_root: &Path) -> Vec<WorkflowSummary> {
         }
         if let Some(yaml) = defaults::default_workflow(name) {
             if let Ok(wf) = parse_workflow(yaml) {
+                if wf.internal {
+                    continue;
+                }
                 out.push(WorkflowSummary {
                     name: name.to_string(),
                     source: Source::Bundled,
@@ -313,6 +324,7 @@ pub fn list_workflows(project_root: &Path) -> Vec<WorkflowSummary> {
                     description: wf.description.clone(),
                     node_count: wf.nodes.len(),
                     ui: wf.ui.clone(),
+                    improvements: wf.improvements.clone(),
                 });
             }
         }

@@ -111,6 +111,61 @@ nodes:
 }
 
 #[test]
+fn parses_improvements_and_internal() {
+    let yaml = "name: w
+improvements:
+  every: 10
+internal: true
+nodes:
+  - id: a
+    prompt: x
+";
+    let wf = parse_workflow(yaml).unwrap();
+    assert_eq!(wf.improvements.map(|c| c.every), Some(10));
+    assert!(wf.internal);
+
+    let plain = parse_workflow(
+        "name: w
+nodes:
+  - id: a
+    prompt: x
+",
+    )
+    .unwrap();
+    assert!(plain.improvements.is_none() && !plain.internal);
+}
+
+#[test]
+fn rejects_improvements_outside_the_range() {
+    for every in [0, 2, 101] {
+        let yaml = format!(
+            "name: w
+improvements:
+  every: {every}
+nodes:
+  - id: a
+    prompt: x
+"
+        );
+        assert!(
+            matches!(parse_workflow(&yaml), Err(crate::DagError::ImprovementsEvery(n)) if n == every),
+            "{every}"
+        );
+    }
+    // A misspelt key is refused, not silently ignored.
+    assert!(parse_workflow(
+        "name: w
+improvements:
+  evry: 10
+nodes:
+  - id: a
+    prompt: x
+"
+    )
+    .is_err());
+}
+
+#[test]
 fn parses_workflow_ui_nav_and_report() {
     let yaml = r#"
 name: security-audit

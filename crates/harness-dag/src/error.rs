@@ -72,4 +72,8 @@ pub enum DagError {
     /// A workflow's `ui.report.verdict_node` names a node that doesn't exist.
     #[error("workflow `ui.report.verdict_node` references unknown node `{0}`")]
     ReportVerdictNodeUnknown(String),
+
+    /// `improvements.every` outside [`crate::model::IMPROVEMENTS_EVERY`].
+    #[error("`improvements.every` is {0}; it must be between 3 and 100 runs")]
+    ImprovementsEvery(u32),
 }
