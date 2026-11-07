@@ -12,6 +12,7 @@ pub(crate) mod categories_routes;
 pub(crate) mod chat_routes;
 pub(crate) mod codex_routes;
 pub(crate) mod credentials_routes;
+pub(crate) mod dashboard_routes;
 pub(crate) mod finding_routes;
 pub(crate) mod github_sso;
 pub(crate) mod http_router;

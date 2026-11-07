@@ -178,6 +178,30 @@ pub struct ModelTokenSum {
     pub cache_write: i64,
 }
 
+/// One finished run, as the dashboard's metrics read it.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct DashboardRun {
+    pub id: String,
+    pub workflow_name: String,
+    pub title: Option<String>,
+    /// `completed`, `failed` or `cancelled`.
+    pub status: String,
+    pub recorded_at: DateTime<Utc>,
+    /// First step started to last step ended; `None` when no step ran.
+    pub secs: Option<f64>,
+}
+
+/// One run's token usage on one model, for pricing it.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunModelTokens {
+    pub run_id: String,
+    pub model: String,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read: i64,
+    pub cache_write: i64,
+}
+
 /// A persisted per-node row (matches `harness_run_nodes`).
 #[derive(Debug, Clone, Serialize, serde::Deserialize, sqlx::FromRow)]
 pub struct PersistedNode {
@@ -1478,6 +1502,64 @@ impl RunStore {
              ORDER BY day DESC",
         )
         .bind(since)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Finished runs recorded since `since`, for the dashboard's metrics:
+    /// optionally one project's, never the harness's own `excluded` workflows.
+    pub async fn dashboard_runs(
+        &self,
+        since: DateTime<Utc>,
+        project: Option<&str>,
+        excluded: &[String],
+    ) -> Result<Vec<DashboardRun>, PersistError> {
+        let rows = sqlx::query_as::<_, DashboardRun>(
+            "SELECT r.id, r.workflow_name, r.title, r.status, r.recorded_at,
+                    EXTRACT(EPOCH FROM (MAX(n.ended_at) - MIN(n.started_at)))::float8 AS secs
+             FROM harness_workflow_runs r
+             LEFT JOIN harness_run_nodes n ON n.run_id = r.id
+             WHERE r.recorded_at >= $1
+               AND r.status IN ('completed', 'failed', 'cancelled')
+               AND ($2::text IS NULL OR r.project = $2)
+               AND NOT (r.workflow_name = ANY($3))
+             GROUP BY r.id",
+        )
+        .bind(since)
+        .bind(project)
+        .bind(excluded)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows)
+    }
+
+    /// Token usage per (run, model) for the runs [`Self::dashboard_runs`]
+    /// returns with the same arguments.
+    pub async fn dashboard_tokens(
+        &self,
+        since: DateTime<Utc>,
+        project: Option<&str>,
+        excluded: &[String],
+    ) -> Result<Vec<RunModelTokens>, PersistError> {
+        let rows = sqlx::query_as::<_, RunModelTokens>(
+            "SELECT n.run_id, n.model,
+                    COALESCE(SUM(n.input_tokens), 0)::BIGINT  AS input_tokens,
+                    COALESCE(SUM(n.output_tokens), 0)::BIGINT AS output_tokens,
+                    COALESCE(SUM(n.cache_read), 0)::BIGINT    AS cache_read,
+                    COALESCE(SUM(n.cache_write), 0)::BIGINT   AS cache_write
+             FROM harness_run_nodes n
+             JOIN harness_workflow_runs r ON r.id = n.run_id
+             WHERE r.recorded_at >= $1
+               AND r.status IN ('completed', 'failed', 'cancelled')
+               AND ($2::text IS NULL OR r.project = $2)
+               AND NOT (r.workflow_name = ANY($3))
+               AND n.model IS NOT NULL
+             GROUP BY n.run_id, n.model",
+        )
+        .bind(since)
+        .bind(project)
+        .bind(excluded)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows)
