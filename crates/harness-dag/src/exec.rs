@@ -24,7 +24,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::DagError;
 use crate::graph::topological_layers;
-use crate::model::{ContextMode, Node, NodeKind, ScriptRuntime, TriggerRule, Workflow};
+use crate::model::{
+    ContextMode, LinearAction, Node, NodeKind, ScriptRuntime, TriggerRule, Workflow,
+};
 use crate::signal::detect_signal;
 use crate::vars::{substitute, VarContext};
 
@@ -70,6 +72,10 @@ pub enum NodeBody {
         runtime: ScriptRuntime,
         deps: Vec<String>,
     },
+    /// A Linear operation on the run's issue. Deterministic, like `Bash`: the
+    /// runner calls the server's run-scoped Linear endpoint rather than an AI
+    /// provider. Vars are already substituted by the time it arrives.
+    Linear(LinearAction),
 }
 
 /// One execution request for a single node body invocation.
@@ -829,6 +835,69 @@ async fn dispatch_node_body<R: NodeRunner>(
                 progress,
                 1,
                 NodeBody::Command(name.clone()),
+            )
+            .await
+        }
+
+        NodeKind::Linear(action) => {
+            // No issue to act on: a prebuilt workflow ships with these steps and
+            // has to stay usable in a project that never connected Linear, and
+            // in a run started by hand rather than from an issue. `ISSUE_ID` is
+            // empty in both cases.
+            //
+            // A **no-op success**, deliberately, not `Skipped`. The default
+            // trigger rule is `AllSuccess`, which requires every dependency to
+            // be `Success` — so a skipped first step would skip the whole
+            // workflow behind it, which is the opposite of carrying these steps
+            // harmlessly. The note is what says nothing happened; authors
+            // should not have to reach for `trigger_rule` to tolerate a Linear
+            // step they didn't opt out of.
+            if vars.get("ISSUE_ID").is_none_or(str::is_empty) {
+                let note = format!(
+                    "no Linear issue for this run — did not {}",
+                    action.summary()
+                );
+                return NodeRunResult {
+                    run: NodeRun {
+                        id: node.id.clone(),
+                        status: NodeStatus::Success,
+                        provider: provider.map(str::to_string),
+                        model: model.map(str::to_string),
+                        output: note.clone(),
+                        usage: Usage::default(),
+                        iterations: 1,
+                        converged: None,
+                        note: Some(note),
+                        artifact_content: None,
+                        started_at: None,
+                        ended_at: None,
+                    },
+                    session: None,
+                    cancel: None,
+                };
+            }
+            // Substituted here rather than in the runner, so a comment can
+            // carry `$TASK_TITLE` or an upstream node's output like any other
+            // body text.
+            let sub = |t: &String| substitute(t, vars).unwrap_or_else(|_| t.clone());
+            let action = match action {
+                LinearAction::MoveState(s) => LinearAction::MoveState(sub(s)),
+                LinearAction::Comment(s) => LinearAction::Comment(sub(s)),
+                LinearAction::AddLabels(l) => LinearAction::AddLabels(l.iter().map(sub).collect()),
+                LinearAction::RemoveLabels(l) => {
+                    LinearAction::RemoveLabels(l.iter().map(sub).collect())
+                }
+            };
+            execute_body(
+                runner,
+                node,
+                provider,
+                model,
+                vars,
+                session,
+                progress,
+                1,
+                NodeBody::Linear(action),
             )
             .await
         }

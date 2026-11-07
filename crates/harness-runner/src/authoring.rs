@@ -223,6 +223,7 @@ pub fn kind_label(kind: &NodeKind) -> &'static str {
         NodeKind::Loop(_) => "loop",
         NodeKind::Approval(_) => "approval",
         NodeKind::Cancel(_) => "cancel",
+        NodeKind::Linear(_) => "linear",
     }
 }
 

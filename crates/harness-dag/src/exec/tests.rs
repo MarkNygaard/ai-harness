@@ -86,6 +86,7 @@ impl NodeRunner for MockRunner {
             NodeBody::Bash(t) => format!("bash:{t}"),
             NodeBody::Command(n) => format!("command:{n}"),
             NodeBody::Script { script, .. } => format!("script:{script}"),
+            NodeBody::Linear(a) => format!("linear:{}", a.summary()),
         };
         self.calls.lock().unwrap().push(Recorded {
             node_id: req.node_id.to_string(),
@@ -663,4 +664,68 @@ nodes:
     assert_eq!(report.status, RunStatus::Failed);
     assert_eq!(report.node("v").unwrap().status, NodeStatus::Failed);
     assert_eq!(runner.calls_for("v").len(), 1);
+}
+
+#[tokio::test]
+async fn a_linear_step_no_ops_when_the_run_has_no_issue() {
+    // The point of the feature: a prebuilt workflow can carry Linear steps and
+    // still run in a project that never connected Linear, or from a manual
+    // start.
+    //
+    // Success-with-a-note rather than Skipped, because the default trigger
+    // rule is AllSuccess: a skipped first step would skip everything behind
+    // it. This test exists to catch that regression specifically.
+    let yaml = r#"
+name: chain
+nodes:
+  - id: start
+    linear:
+      move_state: In Progress
+  - id: work
+    depends_on: [start]
+    bash: "echo work"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new();
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    assert_eq!(report.status, RunStatus::Completed);
+    assert_eq!(report.node("start").unwrap().status, NodeStatus::Success);
+    assert_eq!(report.node("work").unwrap().status, NodeStatus::Success);
+    // It says which action it declined to take, not just "skipped".
+    let note = report
+        .node("start")
+        .unwrap()
+        .note
+        .clone()
+        .unwrap_or_default();
+    assert!(note.contains("no Linear issue"), "note was: {note}");
+    assert!(
+        note.contains("move the issue to In Progress"),
+        "note was: {note}"
+    );
+    // And nothing reached the runner.
+    assert!(runner.calls_for("start").is_empty());
+}
+
+#[tokio::test]
+async fn a_linear_step_runs_and_substitutes_when_an_issue_is_present() {
+    let yaml = r#"
+name: chain
+nodes:
+  - id: note
+    linear:
+      comment: "working on $TASK_TITLE"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new();
+    let vars = VarContext::new()
+        .set("ISSUE_ID", "AIH-42")
+        .set("TASK_TITLE", "a title");
+    let report = run_workflow(&wf, &runner, &vars).await.unwrap();
+
+    assert_eq!(report.node("note").unwrap().status, NodeStatus::Success);
+    let calls = runner.calls_for("note");
+    assert_eq!(calls.len(), 1, "the step reached the runner once");
+    assert_eq!(calls[0].body, "linear:comment on the issue");
 }
