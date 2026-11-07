@@ -301,6 +301,12 @@ nodes:
       new abstractions — but "minimal" means no needless scope, not skipping
       robustness the task implies. Honor CLAUDE.md / AGENTS.md.
 
+      **The pull request's base is the run's, not the repo's.** It targets
+      `$BASE_BRANCH` (in a multi-repo run, each repo's `base_branch` in
+      `$HARNESS_REPOS`), even where CLAUDE.md / AGENTS.md name another branch:
+      the harness may be building on an epic's branch. Opening the pull request
+      is a later step's job, so the plan doesn't include it.
+
       ## When there's a real fork, optimize for the outcome
       Some tasks hit a genuine decision point — a quick path that compromises
       versus a more involved path that's clearly better. ALWAYS choose the path
@@ -506,6 +512,22 @@ nodes:
       # Verify every PR this run opened targets its intended base; re-target if
       # drifted. `.pr-list` has one entry per PR ({folder, number, url, base,
       # head}); single-repo is a 1-entry list with folder ".".
+      #
+      # The intended base is the run's, never `.pr-list`'s: the agent that
+      # opened the PR also wrote that file. One followed a repo's own "PRs go
+      # to development" for a piece of an epic, recorded `development`, and
+      # this check then confirmed its own mistake. So: the folder's
+      # `base_branch` in $HARNESS_REPOS, else $BASE_BRANCH.
+      intended_base() {
+        b=""
+        if [ -n "${HARNESS_REPOS:-}" ]; then
+          b=$(printf '%s' "$HARNESS_REPOS" \
+            | jq -r --arg f "$1" '.[] | select(.folder == $f) | .base_branch // empty' 2>/dev/null \
+            | head -n1)
+        fi
+        [ -n "$b" ] || b="$BASE_BRANCH"
+        printf '%s' "$b"
+      }
       check_pr_base() {
         ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
           # Multirepo roots and the "." fallback below aren't git repos —
@@ -527,8 +549,7 @@ nodes:
       if [ -s "$LIST" ]; then
         while read -r entry; do
           folder=$(echo "$entry" | jq -r '.folder')
-          base=$(echo "$entry" | jq -r '.base')
-          check_pr_base "$folder" "$base"
+          check_pr_base "$folder" "$(intended_base "$folder")"
         done < <(jq -c '.[]' "$LIST")
       else
         # No list (e.g. nothing changed) — verify the current-dir PR if present.
@@ -907,12 +928,47 @@ nodes:
       while read -r entry; do
         folder=$(echo "$entry" | jq -r '.folder')
         number=$(echo "$entry" | jq -r '.number')
-        ( cd "$folder" && gh pr merge "$number" --squash --delete-branch ) || {
-          echo "Could not merge PR #$number in $folder" >&2
+        url=$(echo "$entry" | jq -r '.url // empty')
+        out=$( (cd "$folder" && gh pr merge "$number" --squash --delete-branch) 2>&1 ) || {
+          # Kept for `report-merge-refused`, which tells the epic why.
+          printf -- '- %s: %s\n' "${url:-PR #$number}" "$(printf '%s' "$out" | head -n1)" \
+            >> "$ARTIFACTS_DIR/merge-refused.md"
+          echo "Could not merge PR #$number in $folder: $out" >&2
           rc=1
         }
       done < <(jq -c '.[]' "$LIST")
       exit $rc
+
+  # GitHub refused the merge: a rule on the epic branch, a conflict, a failing
+  # check. Stop where a person sees it, as a stuck piece does, rather than
+  # leave the piece In Progress and the epic waiting with nothing said.
+  - id: merge-refused
+    category: linear
+    depends_on: [merge-piece]
+    trigger_rule: one_failed
+    linear:
+      move_state: In Review
+
+  - id: report-merge-refused
+    category: delivery
+    depends_on: [merge-piece]
+    trigger_rule: one_failed
+    bash: |
+      set -uo pipefail
+      parent="$classify.output.parent"
+      note="$ARTIFACTS_DIR/note.md"
+      [ -s "$ARTIFACTS_DIR/merge-refused.md" ] \
+        || echo "- No pull request was recorded for this piece." > "$ARTIFACTS_DIR/merge-refused.md"
+      {
+        echo "**Stopped on $classify.output.identifier.** It passed its grade, but"
+        echo "GitHub would not merge its pull request into \`$BASE_BRANCH\`, so the"
+        echo "piece is in review for a person. Merge it by hand, move the piece to"
+        echo "Done and the next piece to Todo, and the epic carries on."
+        echo
+        cat "$ARTIFACTS_DIR/merge-refused.md"
+      } > "$note"
+      harness linear comment --issue "$parent" --body-file "$note" || true
+      cat "$note"
 
   - id: piece-done
     category: linear

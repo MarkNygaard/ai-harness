@@ -71,7 +71,8 @@ have to be wired in a ring:
   check on each piece, and the finished feature is reviewed once, as the epic's
   own pull request. Merge that one as you would any other: approve it, and
   move the epic to Ready for merge if a `task-merge` trigger watches that
-  column.
+  column. If GitHub refuses a piece's merge, the piece stops in In Review and
+  the epic gets a comment saying why.
 - **A sub-issue is a piece only once its epic has started**, which is when
   `epic/<EPIC>` exists. Any other sub-issue is built as an ordinary issue.
 

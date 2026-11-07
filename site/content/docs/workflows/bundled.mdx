@@ -70,7 +70,10 @@ one of four ways:
   start.
 
 A piece that fails its grade twice stops. Its pull request stays open, and it
-moves to In Review for a person to look at. One Todo trigger runs the whole
+moves to In Review for a person to look at. So does a piece GitHub won't
+merge, and the epic gets a comment with GitHub's reason. A piece's pull request
+always targets the epic branch, whatever the repository's own docs name as the
+base. One Todo trigger runs the whole
 thing; see [Linear epics](/docs/setup/linear-epics).
 
 ## Working on an existing PR
