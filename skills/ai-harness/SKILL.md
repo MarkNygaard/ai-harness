@@ -119,10 +119,10 @@ set, or three unrelated bug fixes.
 
 ### If it is an epic
 
-- **Create the sub-issues in reverse build order.** Linear gives newer issues the
-  *lower* `sortOrder` and the harness builds ascending, so create the piece that
-  should run **last** first. Otherwise the board reads backwards and somebody has
-  to drag them.
+- **Order the sub-issues on the epic.** The harness builds them in the order of
+  the epic's own sub-issue list (Linear's `subIssueSortOrder`), top first. That
+  order shows when the list is sorted manually. Check that the first piece is on
+  top, and drag it there if not. Board position doesn't matter.
 - **Delegate every sub-issue *and* the epic** to the harness's app user. The
   harness cannot delegate an issue to itself, so an undelegated piece is never
   picked up no matter which column it reaches. Then put the epic in the build

@@ -121,7 +121,9 @@ pub struct SubIssue {
     /// epic finishes it reflects where the cards ended up on the board rather
     /// than what happened first.
     pub completed_at: Option<String>,
-    /// Linear's own ordering within the parent. Ascending is board order.
+    /// Build order: the piece's place in the epic's own sub-issue list, top
+    /// first. Falls back to its board position (`sortOrder`) only when Linear
+    /// gives no sub-issue order for every piece.
     pub sort_order: f64,
 }
 
@@ -278,6 +280,8 @@ struct ChildNode {
     labels: Option<Conn<IssueLabelNode>>,
     #[serde(rename = "sortOrder", default)]
     sort_order: f64,
+    #[serde(rename = "subIssueSortOrder", default)]
+    sub_issue_sort_order: Option<f64>,
     #[serde(rename = "completedAt", default)]
     completed_at: Option<String>,
 }
@@ -553,7 +557,7 @@ query Children($id: String!) {
   issue(id: $id) {
     children(first: 100) {
       nodes {
-        id identifier title url description sortOrder completedAt
+        id identifier title url description sortOrder subIssueSortOrder completedAt
         state { id name type }
         labels { nodes { name } }
       }
@@ -721,17 +725,21 @@ pub fn parse_attachments(json: &[u8]) -> Result<Vec<LinkedResource>, LinearError
         .collect())
 }
 
-/// Parse an epic's `children` connection into board-ordered [`SubIssue`]s.
+/// Parse an epic's `children` connection into build-ordered [`SubIssue`]s.
 ///
 /// Sorted here rather than trusted from the response: Linear returns children in
 /// creation order, and the orchestrator's whole model is "build them in the
-/// order the plan set", which is `sortOrder`.
+/// order the plan set". That is the order of the epic's own sub-issue list
+/// (`subIssueSortOrder`), which a person reads and drags on the epic. Not
+/// `sortOrder`: that is the card's place on the board, which Linear gives a
+/// newer issue the lower of, so pieces written 1, 2, 3 would build 3, 2, 1.
+/// The board order is used only when a piece has no sub-issue order, and then
+/// for every piece, since the two scales do not mix.
 pub fn parse_children(json: &[u8]) -> Result<Vec<SubIssue>, LinearError> {
     let data: ChildrenData = gql_data(json)?;
-    let mut out: Vec<SubIssue> = data
-        .issue
-        .map(|i| i.children.nodes)
-        .unwrap_or_default()
+    let nodes = data.issue.map(|i| i.children.nodes).unwrap_or_default();
+    let by_list = nodes.iter().all(|c| c.sub_issue_sort_order.is_some());
+    let mut out: Vec<SubIssue> = nodes
         .into_iter()
         .map(|c| {
             let (state_id, state, state_type) = c
@@ -751,7 +759,10 @@ pub fn parse_children(json: &[u8]) -> Result<Vec<SubIssue>, LinearError> {
                     .labels
                     .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
                     .unwrap_or_default(),
-                sort_order: c.sort_order,
+                sort_order: match c.sub_issue_sort_order {
+                    Some(o) if by_list => o,
+                    _ => c.sort_order,
+                },
                 completed_at: c.completed_at,
             }
         })
@@ -3411,6 +3422,49 @@ mod tests {
         // The next piece to build is the first one not yet finished.
         let next = list.iter().find(|c| c.state == "Queued").unwrap();
         assert_eq!(next.identifier, "AIH-2");
+    }
+
+    #[test]
+    fn pieces_build_in_the_epics_own_sub_issue_order_not_the_boards() {
+        // Written 1, 2, 3, so Linear gave the newest the lowest board order:
+        // by `sortOrder` the epic would build 3/3 first. The sub-issue list on
+        // the epic still reads 1, 2, 3, and that is what a person checks.
+        let list = children(
+            r#"[
+              {"id":"a","identifier":"N-1","title":"1/3","url":"u","sortOrder":-1.0,
+               "subIssueSortOrder":1.0,"state":{"id":"s","name":"Todo"},"labels":{"nodes":[]}},
+              {"id":"b","identifier":"N-2","title":"2/3","url":"u","sortOrder":-2.0,
+               "subIssueSortOrder":2.0,"state":{"id":"s","name":"Todo"},"labels":{"nodes":[]}},
+              {"id":"c","identifier":"N-3","title":"3/3","url":"u","sortOrder":-3.0,
+               "subIssueSortOrder":3.0,"state":{"id":"s","name":"Todo"},"labels":{"nodes":[]}}
+            ]"#,
+        );
+        assert_eq!(
+            list.iter()
+                .map(|c| c.identifier.as_str())
+                .collect::<Vec<_>>(),
+            ["N-1", "N-2", "N-3"]
+        );
+    }
+
+    #[test]
+    fn without_a_sub_issue_order_for_every_piece_the_board_order_decides() {
+        // The two scales do not mix: one piece missing its list position puts
+        // every piece back on board order rather than interleaving the two.
+        let list = children(
+            r#"[
+              {"id":"a","identifier":"N-1","title":"a","url":"u","sortOrder":2.0,
+               "subIssueSortOrder":-50.0,"state":{"id":"s","name":"Todo"},"labels":{"nodes":[]}},
+              {"id":"b","identifier":"N-2","title":"b","url":"u","sortOrder":1.0,
+               "state":{"id":"s","name":"Todo"},"labels":{"nodes":[]}}
+            ]"#,
+        );
+        assert_eq!(
+            list.iter()
+                .map(|c| c.identifier.as_str())
+                .collect::<Vec<_>>(),
+            ["N-2", "N-1"]
+        );
     }
 
     #[test]

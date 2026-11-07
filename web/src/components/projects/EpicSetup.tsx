@@ -319,8 +319,9 @@ export function EpicSetupForm({
       />
 
       <p className="text-[11px] text-muted-foreground">
-        To run an epic: create its sub-issues in reverse build order, delegate
-        the epic and every sub-issue to the harness, then move the epic to{" "}
+        To run an epic: order its sub-issues on the epic (manual ordering, top
+        builds first), delegate the epic and every sub-issue to the harness,
+        then move the epic to{" "}
         <strong>{buildColumn ?? "the build column"}</strong>.
       </p>
 
