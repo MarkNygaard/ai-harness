@@ -198,7 +198,8 @@ export type NodeKindId =
   | "script"
   | "approval"
   | "cancel"
-  | "linear";
+  | "linear"
+  | "route";
 
 export type ContextMode = "fresh" | "shared";
 export type TriggerRule =
@@ -232,6 +233,26 @@ export interface EditorLinear {
   comment?: string;
   add_labels?: string[];
   remove_labels?: string[];
+}
+
+/** One way out of a route node (mirrors `RouteOption`). */
+export interface EditorRouteOption {
+  /** What downstream steps compare against: `$id.output.route == 'name'`. */
+  name: string;
+  /** Read by the model when it chooses; ignored by rules. */
+  description?: string;
+  /** A rule that picks this route without asking a model. */
+  when?: string;
+}
+
+/**
+ * Route body config (mirrors `RouteConfig`): rules first, then the model
+ * (when there is a prompt), then the default.
+ */
+export interface EditorRoute {
+  prompt?: string;
+  routes: EditorRouteOption[];
+  default?: string;
 }
 
 /** Approval body config (mirrors `ApprovalConfig`, editor-relevant fields). */
@@ -284,6 +305,7 @@ export interface EditorNode {
   approval?: EditorApproval;
   cancel?: string;
   linear?: EditorLinear;
+  route?: EditorRoute;
 }
 
 /** A whole workflow in the flat editor shape (round-trips to YAML via js-yaml). */

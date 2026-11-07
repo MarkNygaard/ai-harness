@@ -227,6 +227,7 @@ pub fn kind_label(kind: &NodeKind) -> &'static str {
         NodeKind::Approval(_) => "approval",
         NodeKind::Cancel(_) => "cancel",
         NodeKind::Linear(_) => "linear",
+        NodeKind::Route(_) => "route",
     }
 }
 
@@ -1138,6 +1139,15 @@ pub fn catalog(project_root: &Path, creds: ConnectedCreds) -> Catalog {
                               from a Linear issue.",
                 ai: false,
             },
+            NodeKindInfo {
+                kind: "route",
+                label: "Route",
+                description: "Send the run down one of several routes. Rules are checked first, \
+                              then a prompt (if set) asks a model to pick by the routes' \
+                              descriptions, then the default.",
+                // Only with a prompt; a rules-only route runs no agent.
+                ai: true,
+            },
         ],
         providers: build_providers(creds),
         commands: list_commands(project_root),
@@ -1621,7 +1631,7 @@ nodes:
                 cursor: false,
             },
         );
-        assert_eq!(cat.node_kinds.len(), 8);
+        assert_eq!(cat.node_kinds.len(), 9);
         assert!(cat.node_kinds.iter().any(|k| k.kind == "loop" && k.ai));
         assert!(cat.node_kinds.iter().any(|k| k.kind == "cancel"));
         assert!(cat.node_kinds.iter().any(|k| k.kind == "approval"));

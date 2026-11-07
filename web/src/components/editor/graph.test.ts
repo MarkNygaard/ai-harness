@@ -5,6 +5,8 @@ import {
   toGraph,
   layout,
   makeNode,
+  routeWhen,
+  syncRouteExits,
   type EditorNodeData,
 } from "./graph";
 import type { EditorWorkflow } from "@/types/authoring";
@@ -83,6 +85,89 @@ describe("fromGraph", () => {
     expect(back.nodes.find((n) => n.id === "b")?.depends_on).toEqual(["a"]);
   });
 });
+describe("route exits", () => {
+  const routed: EditorWorkflow = {
+    name: "r",
+    nodes: [
+      {
+        id: "kind",
+        route: {
+          prompt: "epic or task?",
+          routes: [{ name: "epic" }, { name: "task" }],
+          default: "task",
+        },
+      },
+      {
+        id: "supervise",
+        depends_on: ["kind"],
+        when: "$kind.output.route == 'epic'",
+        prompt: "x",
+      },
+      {
+        id: "build",
+        depends_on: ["kind"],
+        when: "$kind.output.route == 'task'",
+        prompt: "y",
+      },
+      // Depends on the route without going through an exit: always runs.
+      { id: "log", depends_on: ["kind"], bash: "echo" },
+    ],
+  };
+
+  it("loads each edge onto the exit its step's when: names", () => {
+    const { edges } = toGraph(routed);
+    const handle = (t: string) =>
+      edges.find((e) => e.target === t)?.sourceHandle;
+    expect(handle("supervise")).toBe("epic");
+    expect(handle("build")).toBe("task");
+    expect(handle("log")).toBeUndefined();
+  });
+
+  it("writes the when: a downstream step compares against", () => {
+    expect(routeWhen("kind", "epic")).toBe("$kind.output.route == 'epic'");
+  });
+
+  it("keeps edges on a renamed route and rewrites the steps behind it", () => {
+    const { nodes, edges } = toGraph(routed);
+    const prev = routed.nodes[0];
+    const next = {
+      ...prev,
+      route: { ...prev.route!, routes: [{ name: "epic" }, { name: "single" }] },
+    };
+    const out = syncRouteExits(prev, next, nodes, edges);
+    expect(out.edges.find((e) => e.target === "build")?.sourceHandle).toBe(
+      "single",
+    );
+    const build = out.nodes.find((n) => n.id === "build")!.data.node;
+    expect(build.when).toBe("$kind.output.route == 'single'");
+    const sup = out.nodes.find((n) => n.id === "supervise")!.data.node;
+    expect(sup.when).toBe("$kind.output.route == 'epic'");
+  });
+
+  it("drops the edges of a removed route and clears their when:", () => {
+    const { nodes, edges } = toGraph(routed);
+    const prev = routed.nodes[0];
+    // Fewer routes than before: a removal, not a rename by position.
+    const next = {
+      ...prev,
+      route: { ...prev.route!, routes: [{ name: "task" }] },
+    };
+    const out = syncRouteExits(prev, next, nodes, edges);
+    expect(out.edges.some((e) => e.target === "supervise")).toBe(false);
+    expect(out.edges.some((e) => e.target === "log")).toBe(true);
+    const sup = out.nodes.find((n) => n.id === "supervise")!.data.node;
+    expect(sup.when).toBeUndefined();
+  });
+
+  it("follows a renamed route node", () => {
+    const { nodes, edges } = toGraph(routed);
+    const prev = routed.nodes[0];
+    const out = syncRouteExits(prev, { ...prev, id: "classify" }, nodes, edges);
+    const sup = out.nodes.find((n) => n.id === "supervise")!.data.node;
+    expect(sup.when).toBe("$classify.output.route == 'epic'");
+  });
+});
+
 describe("makeNode", () => {
   it("sets source handle to Bottom and target handle to Top", () => {
     const node = { id: "n", bash: "echo" };

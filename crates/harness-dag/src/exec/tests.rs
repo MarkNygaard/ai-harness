@@ -786,3 +786,137 @@ nodes:
     assert_eq!(calls.len(), 1, "the step reached the runner once");
     assert_eq!(calls[0].body, "linear:comment on the issue");
 }
+
+// ── route ───────────────────────────────────────────────────────────────────
+
+const ROUTED: &str = r#"
+name: routed
+nodes:
+  - id: fetch
+    prompt: "look up the issue"
+    output_format:
+      type: object
+  - id: kind
+    depends_on: [fetch]
+    route:
+      prompt: "Is this an epic or a single task? $ARGUMENTS"
+      routes:
+        - name: epic
+          description: The issue has sub-issues.
+          when: "$fetch.output.children > 0"
+        - name: task
+          description: A single piece of work.
+      default: task
+  - id: supervise
+    depends_on: [kind]
+    when: "$kind.output.route == 'epic'"
+    prompt: "supervise the epic"
+  - id: build
+    depends_on: [kind]
+    when: "$kind.output.route == 'task'"
+    prompt: "build the task"
+  - id: report
+    depends_on: [supervise, build]
+    trigger_rule: none_failed_min_one_success
+    prompt: "report"
+"#;
+
+fn args(text: &str) -> VarContext {
+    VarContext::new().set("ARGUMENTS", text)
+}
+
+#[tokio::test]
+async fn a_route_rule_decides_without_asking_a_model() {
+    let wf = parse_workflow(ROUTED).unwrap();
+    let runner = MockRunner::new().respond("fetch", ok(r#"{"children": 3}"#));
+    let report = run_workflow(&wf, &runner, &args("AIH-1")).await.unwrap();
+
+    let kind = report.node("kind").unwrap();
+    let out: serde_json::Value = serde_json::from_str(&kind.output).unwrap();
+    assert_eq!(out["route"], "epic");
+    assert_eq!(out["by"], "rule");
+    assert!(runner.calls_for("kind").is_empty(), "no model call");
+    assert_eq!(
+        report.node("supervise").unwrap().status,
+        NodeStatus::Success
+    );
+    assert_eq!(report.node("build").unwrap().status, NodeStatus::Skipped);
+    assert_eq!(report.node("report").unwrap().status, NodeStatus::Success);
+    assert_eq!(report.status, RunStatus::Completed);
+}
+
+#[tokio::test]
+async fn with_no_rule_matching_the_model_chooses_from_the_descriptions() {
+    let wf = parse_workflow(ROUTED).unwrap();
+    let runner = MockRunner::new()
+        .respond("fetch", ok(r#"{"children": 0}"#))
+        .respond("kind", ok(r#"{"route": "Task", "reason": "one change"}"#));
+    let report = run_workflow(&wf, &runner, &args("AIH-2")).await.unwrap();
+
+    let calls = runner.calls_for("kind");
+    assert_eq!(calls.len(), 1);
+    // The author's prompt, substituted, followed by the routes to pick from.
+    assert!(calls[0]
+        .body
+        .starts_with("prompt:Is this an epic or a single task? AIH-2"));
+    assert!(calls[0]
+        .body
+        .contains("- `epic` — The issue has sub-issues."));
+    assert!(calls[0].body.contains("- `task` — A single piece of work."));
+
+    let out: serde_json::Value =
+        serde_json::from_str(&report.node("kind").unwrap().output).unwrap();
+    assert_eq!(
+        out["route"], "task",
+        "matched case-insensitively, stored as declared"
+    );
+    assert_eq!(out["by"], "model");
+    assert_eq!(out["reason"], "one change");
+    assert_eq!(report.node("build").unwrap().status, NodeStatus::Success);
+    assert_eq!(
+        report.node("supervise").unwrap().status,
+        NodeStatus::Skipped
+    );
+}
+
+#[tokio::test]
+async fn an_answer_naming_no_route_falls_back_to_the_default() {
+    let wf = parse_workflow(ROUTED).unwrap();
+    let runner = MockRunner::new()
+        .respond("fetch", ok(r#"{"children": 0}"#))
+        .respond("kind", ok(r#"{"route": "spike"}"#));
+    let report = run_workflow(&wf, &runner, &args("x")).await.unwrap();
+    let out: serde_json::Value =
+        serde_json::from_str(&report.node("kind").unwrap().output).unwrap();
+    assert_eq!(
+        (out["route"].as_str(), out["by"].as_str()),
+        (Some("task"), Some("default"))
+    );
+}
+
+#[tokio::test]
+async fn without_a_prompt_the_default_is_taken_when_no_rule_holds() {
+    let yaml = r#"
+name: rules
+nodes:
+  - id: check
+    bash: "echo"
+  - id: approved
+    depends_on: [check]
+    route:
+      routes:
+        - name: merge
+          when: "$check.output.approved == 'true'"
+        - name: back-to-review
+      default: back-to-review
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new().respond("check", ok(r#"{"approved": false}"#));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+    let node = report.node("approved").unwrap();
+    let out: serde_json::Value = serde_json::from_str(&node.output).unwrap();
+    assert_eq!(out["route"], "back-to-review");
+    assert_eq!(out["by"], "default");
+    assert!(runner.calls_for("approved").is_empty());
+    assert_eq!(node.provider, None, "a rules-only route runs no agent");
+}

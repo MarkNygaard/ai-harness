@@ -1,10 +1,11 @@
 import React, { useState } from "react";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import { Markdown, ViewToggle } from "@/components/Markdown";
 import type {
   Catalog,
   EditorLinear,
   EditorNode,
+  EditorRoute,
   NodeKindId,
 } from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
@@ -18,6 +19,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -33,6 +35,7 @@ const BODY_KEYS = [
   "approval",
   "cancel",
   "linear",
+  "route",
 ] as const satisfies readonly (keyof EditorNode)[];
 
 /** Right drawer: edit the selected node's id, kind, body, and AI options. */
@@ -83,8 +86,12 @@ export function PropertiesDrawer({
   // script, approval or cancel node is given no provider even when the workflow
   // has one — so offering the fields here promised a setting that would be
   // ignored, and a Shell step showing "Agent" reads as though it runs one.
+  // A route asks a model only when it has a prompt; rules alone run none.
   const isAgentStep =
-    kind === "prompt" || kind === "command" || kind === "loop";
+    kind === "prompt" ||
+    kind === "command" ||
+    kind === "loop" ||
+    (kind === "route" && !!node.route?.prompt);
 
   const provider = node.provider ?? "";
   const providerModels =
@@ -277,6 +284,13 @@ export function PropertiesDrawer({
           <LinearBody
             value={node.linear ?? {}}
             onChange={(linear) => set({ linear })}
+          />
+        )}
+        {kind === "route" && node.route && (
+          <RouteBody
+            id={node.id}
+            value={node.route}
+            onChange={(route) => set({ route })}
           />
         )}
 
@@ -651,7 +665,7 @@ function LinearBody({
   onChange: (v: EditorLinear) => void;
 }) {
   const active: LinearActionId =
-    (LINEAR_ACTIONS.find((a) => value[a.id] !== undefined)?.id) ?? "move_state";
+    LINEAR_ACTIONS.find((a) => value[a.id] !== undefined)?.id ?? "move_state";
   const meta = LINEAR_ACTIONS.find((a) => a.id === active)!;
   const isLabels = active === "add_labels" || active === "remove_labels";
   const text = isLabels
@@ -702,12 +716,160 @@ function LinearBody({
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder={
-              active === "move_state" ? "In Progress" : "needs-review, automated"
+              active === "move_state"
+                ? "In Progress"
+                : "needs-review, automated"
             }
           />
         )}
         <span className="text-[10px] text-muted-foreground">{meta.help}</span>
       </Field>
+    </>
+  );
+}
+
+/** No default: every route's rule false and no model answer fails the step. */
+const NO_DEFAULT = "__none__";
+
+/**
+ * The `route:` body: the ways out, how each is chosen, and where to go when
+ * nothing chooses. Rules are checked in order first, then the prompt (if any)
+ * asks a model to pick by the descriptions, then the default.
+ */
+function RouteBody({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: EditorRoute;
+  onChange: (v: EditorRoute) => void;
+}) {
+  const setRoute = (
+    i: number,
+    patch: Partial<EditorRoute["routes"][number]>,
+  ) => {
+    const old = value.routes[i];
+    const routes = value.routes.map((r, j) =>
+      j === i ? { ...r, ...patch } : r,
+    );
+    // The default follows a rename of the route it names.
+    const renamedDefault =
+      patch.name !== undefined && value.default === old.name
+        ? patch.name
+        : value.default;
+    onChange({ ...value, routes, default: renamedDefault });
+  };
+  const remove = (i: number) => {
+    const gone = value.routes[i].name;
+    onChange({
+      ...value,
+      routes: value.routes.filter((_, j) => j !== i),
+      default: value.default === gone ? undefined : value.default,
+    });
+  };
+  const add = () => {
+    const names = new Set(value.routes.map((r) => r.name));
+    let n = value.routes.length + 1;
+    while (names.has(`route-${n}`)) n++;
+    onChange({ ...value, routes: [...value.routes, { name: `route-${n}` }] });
+  };
+
+  return (
+    <>
+      <Field label="Ask a model (optional)">
+        <Textarea
+          rows={3}
+          value={value.prompt ?? ""}
+          onChange={(e) =>
+            onChange({ ...value, prompt: e.target.value || undefined })
+          }
+          placeholder="Is this Linear issue an epic or a single task? $ARGUMENTS"
+        />
+        <span className="text-[10px] text-muted-foreground">
+          Asked only when no route&apos;s rule holds. The model picks a route by
+          its description.
+        </span>
+      </Field>
+
+      <div className="flex flex-col gap-2">
+        <span className="text-[11px] font-medium text-muted-foreground">
+          Routes
+        </span>
+        {value.routes.map((r, i) => (
+          <div
+            key={i}
+            className="flex flex-col gap-1.5 rounded-md border border-border p-2"
+          >
+            <div className="flex items-center gap-1.5">
+              <Input
+                className="font-mono"
+                value={r.name}
+                onChange={(e) => setRoute(i, { name: e.target.value })}
+                placeholder="name"
+                aria-label="Route name"
+              />
+              <Button
+                variant="ghost"
+                size="icon"
+                title={
+                  value.routes.length <= 2
+                    ? "A route needs at least two ways out"
+                    : "Remove route"
+                }
+                disabled={value.routes.length <= 2}
+                onClick={() => remove(i)}
+              >
+                <X />
+              </Button>
+            </div>
+            <Input
+              value={r.description ?? ""}
+              onChange={(e) =>
+                setRoute(i, { description: e.target.value || undefined })
+              }
+              placeholder="What belongs here (read by the model)"
+              aria-label="Route description"
+            />
+            <Input
+              className="font-mono"
+              value={r.when ?? ""}
+              onChange={(e) =>
+                setRoute(i, { when: e.target.value || undefined })
+              }
+              placeholder="Rule, e.g. $fetch.output.children > 0"
+              aria-label="Route rule"
+            />
+          </div>
+        ))}
+        <Button variant="outline" size="sm" onClick={add}>
+          <Plus />
+          Add route
+        </Button>
+        <span className="text-[10px] text-muted-foreground">
+          Connect a step from a route&apos;s exit on the canvas to put it on
+          that route. It then runs when{" "}
+          <code className="font-mono">{`$${id || "id"}.output.route`}</code>{" "}
+          names it.
+        </span>
+      </div>
+
+      <SelectField
+        label="Default"
+        value={value.default ?? NO_DEFAULT}
+        onValueChange={(v) =>
+          onChange({ ...value, default: v === NO_DEFAULT ? undefined : v })
+        }
+      >
+        <SelectItem value={NO_DEFAULT}>None (fail the step)</SelectItem>
+        {value.routes
+          .filter((r) => r.name)
+          .map((r, i) => (
+            <SelectItem key={`${i}-${r.name}`} value={r.name}>
+              {r.name}
+            </SelectItem>
+          ))}
+      </SelectField>
     </>
   );
 }

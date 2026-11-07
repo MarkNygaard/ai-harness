@@ -29,7 +29,7 @@ pub enum DagError {
     InvalidCondition { expr: String, reason: String },
 
     /// A node declares no executable body (no `prompt`/`bash`/`command`/…).
-    #[error("node `{0}` has no body: expected exactly one of prompt, bash, command, script, loop, approval, cancel")]
+    #[error("node `{0}` has no body: expected exactly one of prompt, bash, command, script, loop, approval, cancel, linear, route")]
     NoNodeKind(String),
 
     /// A node declares more than one mutually exclusive body.
@@ -72,6 +72,11 @@ pub enum DagError {
     /// A workflow's `ui.report.verdict_node` names a node that doesn't exist.
     #[error("workflow `ui.report.verdict_node` references unknown node `{0}`")]
     ReportVerdictNodeUnknown(String),
+
+    /// A route node that can't always choose a route, or names its routes
+    /// badly.
+    #[error("route node `{node}`: {reason}")]
+    InvalidRoute { node: String, reason: String },
 
     /// `improvements.every` outside [`crate::model::IMPROVEMENTS_EVERY`].
     #[error("`improvements.every` is {0}; it must be between 3 and 100 runs")]

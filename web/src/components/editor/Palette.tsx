@@ -3,6 +3,7 @@ import {
   FileCode2,
   GripVertical,
   Repeat,
+  Split,
   SquareTerminal,
   Terminal,
   Trash2,
@@ -25,6 +26,7 @@ const ICON: Record<string, typeof Bot> = {
   loop: Repeat,
   script: Terminal,
   linear: Zap,
+  route: Split,
 };
 
 /** Drag payload types, read back by the canvas's drop handler. */

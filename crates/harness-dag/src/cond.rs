@@ -8,13 +8,15 @@
 //! expr := or
 //! or   := and ('||' and)*
 //! and  := cmp ('&&' cmp)*
-//! cmp  := value (('=='|'!=') value)?
+//! cmp  := value (('=='|'!='|'>'|'>='|'<'|'<=') value)?
 //! value := $node.output[.field…] | $HARNESS_VAR | 'literal' | "literal" | bareword
 //! ```
 //!
 //! A lone `value` (no operator) is **truthy** when it resolves to a non-empty
-//! string other than `false`, `0`, or `null`. Comparisons are string equality
-//! after resolution (operand values are compared as their rendered strings).
+//! string other than `false`, `0`, or `null`. `==` / `!=` compare the
+//! operands as their rendered strings. `>` `>=` `<` `<=` compare them as
+//! numbers, and are false when either side isn't one — a missing value doesn't
+//! satisfy "more than zero".
 //! Operators bind looser than comparison: `||` < `&&` < `==`/`!=`.
 //!
 //! Resolution is lenient (a missing node ref → empty string), matching
@@ -82,9 +84,19 @@ fn eval_cmp(s: &str, ctx: &VarContext, full: &str) -> Result<bool, DagError> {
     if let Some((lhs, op, rhs)) = split_comparison(s) {
         let l = resolve(lhs.trim(), ctx, full)?;
         let r = resolve(rhs.trim(), ctx, full)?;
+        let num = |v: &str| v.trim().parse::<f64>().ok();
         return Ok(match op {
             Op::Eq => l == r,
             Op::Ne => l != r,
+            Op::Gt | Op::Ge | Op::Lt | Op::Le => match (num(&l), num(&r)) {
+                (Some(a), Some(b)) => match op {
+                    Op::Gt => a > b,
+                    Op::Ge => a >= b,
+                    Op::Lt => a < b,
+                    _ => a <= b,
+                },
+                _ => false,
+            },
         });
     }
     // No operator: a lone operand is truthy unless it's a falsey value.
@@ -96,15 +108,21 @@ fn eval_cmp(s: &str, ctx: &VarContext, full: &str) -> Result<bool, DagError> {
 enum Op {
     Eq,
     Ne,
+    Gt,
+    Ge,
+    Lt,
+    Le,
 }
 
-/// Find a top-level (not quote-enclosed) `==` or `!=`, returning the operands.
+/// Find a top-level (not quote-enclosed) comparison operator, returning the
+/// operands. Two-character operators are matched before `>` / `<`.
 fn split_comparison(s: &str) -> Option<(&str, Op, &str)> {
     let bytes = s.as_bytes();
     let mut quote: Option<u8> = None;
     let mut i = 0;
-    while i + 1 < bytes.len() {
+    while i < bytes.len() {
         let c = bytes[i];
+        let next = bytes.get(i + 1).copied();
         match quote {
             Some(q) => {
                 if c == q {
@@ -112,12 +130,21 @@ fn split_comparison(s: &str) -> Option<(&str, Op, &str)> {
                 }
             }
             None => {
+                let two = match (c, next) {
+                    (b'=', Some(b'=')) => Some(Op::Eq),
+                    (b'!', Some(b'=')) => Some(Op::Ne),
+                    (b'>', Some(b'=')) => Some(Op::Ge),
+                    (b'<', Some(b'=')) => Some(Op::Le),
+                    _ => None,
+                };
                 if c == b'\'' || c == b'"' {
                     quote = Some(c);
-                } else if c == b'=' && bytes[i + 1] == b'=' {
-                    return Some((&s[..i], Op::Eq, &s[i + 2..]));
-                } else if c == b'!' && bytes[i + 1] == b'=' {
-                    return Some((&s[..i], Op::Ne, &s[i + 2..]));
+                } else if let Some(op) = two {
+                    return Some((&s[..i], op, &s[i + 2..]));
+                } else if c == b'>' {
+                    return Some((&s[..i], Op::Gt, &s[i + 1..]));
+                } else if c == b'<' {
+                    return Some((&s[..i], Op::Lt, &s[i + 1..]));
                 }
             }
         }
@@ -191,6 +218,29 @@ fn invalid(expr: &str, why: &str) -> DagError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numbers_compare_as_numbers() {
+        let c = VarContext::new().set_node_output("f", r#"{"children":3,"none":0,"s":"x"}"#);
+        let t = |e: &str| eval_when(e, &c).unwrap();
+        assert!(t("$f.output.children > 0"));
+        assert!(
+            !t("$f.output.none > 0"),
+            "0 > 0 is false, not a truthy string"
+        );
+        assert!(t("$f.output.children >= 3"));
+        assert!(
+            t("$f.output.children < 10"),
+            "numerically, not as text (\"3\" > \"10\")"
+        );
+        assert!(t("$f.output.none <= 0"));
+        assert!(!t("$f.output.s > 0"), "not a number: false, not an error");
+        assert!(!t("$f.output.missing > 0"), "missing: false");
+        assert!(t("$f.output.children > 0 && $f.output.s == 'x'"));
+        // An operator inside quotes is text, not a comparison.
+        assert!(t("'a > b' == 'a > b'"));
+        assert!(validate_syntax("$f.output.children >").is_err());
+    }
 
     fn ctx() -> VarContext {
         VarContext::new()
