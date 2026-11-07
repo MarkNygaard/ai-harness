@@ -3,7 +3,6 @@ import {
   IconBolt,
   IconClipboardCheck,
   IconGitCompare,
-  IconHexagonalPrism,
   IconLayoutDashboard,
   IconMessageCircle,
   IconReportSearch,
@@ -13,6 +12,7 @@ import {
   IconWorldSearch,
   IconZoomCode,
 } from "@tabler/icons-react";
+import { Factory } from "lucide-react";
 import { useHiddenNav } from "@/lib/nav-prefs";
 import { useRuns } from "@/lib/runs";
 import { useWorkflowList } from "@/lib/authoring";
@@ -162,10 +162,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton
               render={<Link to="/" />}
-              className="data-[slot=sidebar-menu-button]:p-1.5!"
+              className="w-fit data-[slot=sidebar-menu-button]:p-1.5!"
+              title="Dashboard"
             >
-              <IconHexagonalPrism className="size-5!" />
-              <span className="text-base font-semibold">ai-harness</span>
+              {/* A mark, not a wordmark: the harness is a factory for work,
+                  and the name is in the browser tab already. */}
+              <Factory className="size-5!" aria-hidden="true" />
+              <span className="sr-only">ai-harness</span>
             </SidebarMenuButton>
           </SidebarMenuItem>
         </SidebarMenu>

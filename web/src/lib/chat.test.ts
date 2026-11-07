@@ -13,11 +13,16 @@ describe("contextFromPath", () => {
     expect(contextFromPath("/editor/idea-to-pr")).toEqual({
       workflow: "idea-to-pr",
     });
+    expect(contextFromPath("/settings/workflows/idea-to-pr")).toEqual({
+      workflow: "idea-to-pr",
+    });
   });
 
   it("ignores pages that are not one run or one workflow", () => {
     expect(contextFromPath("/runs/pair/p1")).toEqual({});
     expect(contextFromPath("/editor/new")).toEqual({});
+    expect(contextFromPath("/settings/workflows/new")).toEqual({});
+    expect(contextFromPath("/settings/workflows")).toEqual({});
     expect(contextFromPath("/runs")).toEqual({});
     expect(contextFromPath("/")).toEqual({});
   });

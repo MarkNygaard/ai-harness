@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import {
   addEdge,
   Background,
@@ -27,7 +27,8 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
-import { AppShell } from "@/components/AppShell";
+import { SettingsShell } from "@/components/SettingsShell";
+import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -315,7 +316,10 @@ function Editor() {
       { name: trimmed, yaml: toYaml({ ...currentWorkflow(), name: trimmed }) },
       // Follow the copy: staying on the original would leave the editor showing
       // a workflow that is not the one just saved.
-      { onSuccess: () => navigate(`/editor/${encodeURIComponent(trimmed)}`) },
+      {
+        onSuccess: () =>
+          navigate(`/settings/workflows/${encodeURIComponent(trimmed)}`),
+      },
     );
   }, [save, meta.name, currentWorkflow, navigate, taken]);
 
@@ -361,20 +365,16 @@ function Editor() {
     [deleteNode, selectedId],
   );
 
+  // The `Settings / Workflows /` trail comes from the settings frame; the
+  // last crumb is the name itself, editable in place.
   const editorTitle = (
-    <div className="flex min-w-0 items-center gap-2">
-      <Link
-        to="/settings/workflows"
-        className="shrink-0 font-semibold text-muted-foreground hover:text-foreground"
-      >
-        Workflows
-      </Link>
-      <span className="shrink-0 text-muted-foreground">/</span>
-      <input
-        className="h-7 w-56 rounded-md border border-input bg-transparent px-2.5 font-mono text-[12px] outline-none focus:ring-2 focus:ring-ring"
+    <span className="flex min-w-0 items-center gap-2">
+      <Input
+        className="h-7 w-56 font-mono text-[12px]"
         value={meta.name}
         onChange={(e) => setMeta((m) => ({ ...m, name: e.target.value }))}
         placeholder="workflow-name"
+        aria-label="Workflow name"
       />
       {source.data?.source === "bundled" && (
         <Badge
@@ -388,7 +388,7 @@ function Editor() {
           bundled
         </Badge>
       )}
-    </div>
+    </span>
   );
 
   const editorActions = (
@@ -506,7 +506,11 @@ function Editor() {
   );
 
   return (
-    <AppShell title={editorTitle} actions={editorActions}>
+    <SettingsShell
+      title={editorTitle}
+      parents={[{ label: "Workflows", to: "/settings/workflows" }]}
+      actions={editorActions}
+    >
       <div className="flex h-full min-h-0 flex-col">
         {save.isError && (
           <div className="flex-none border-b border-border bg-destructive/10 px-4 py-1.5 text-xs text-destructive">
@@ -582,7 +586,7 @@ function Editor() {
           ) : null}
         </div>
       </div>
-    </AppShell>
+    </SettingsShell>
   );
 }
 

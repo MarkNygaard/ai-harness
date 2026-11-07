@@ -1147,6 +1147,7 @@ pub fn catalog(project_root: &Path, creds: ConnectedCreds) -> Catalog {
             "one_success",
             "none_failed_min_one_success",
             "all_done",
+            "one_failed",
         ],
         prebuilt_steps: prebuilt_steps(),
     }

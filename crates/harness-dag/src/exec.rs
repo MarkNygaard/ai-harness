@@ -441,7 +441,7 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
                 .run;
                 emit(events, RunEvent::NodeFinished { node: run.clone() });
                 finalize(&mut statuses, &mut runs, &mut outputs, run);
-            } else if !trigger_satisfied(node, &statuses) {
+            } else if !trigger_satisfied(workflow, node, &statuses) {
                 let run = skipped_run(
                     node,
                     "dependencies not satisfied (trigger_rule)".to_string(),
@@ -600,7 +600,11 @@ fn skipped_run(node: &Node, note: String, status: NodeStatus) -> NodeRunResult {
 /// Evaluate a node's `trigger_rule` against its dependencies' finalized
 /// statuses. Dependencies are guaranteed finalized because they sit in strictly
 /// earlier topological layers.
-fn trigger_satisfied(node: &Node, statuses: &HashMap<String, NodeStatus>) -> bool {
+fn trigger_satisfied(
+    workflow: &Workflow,
+    node: &Node,
+    statuses: &HashMap<String, NodeStatus>,
+) -> bool {
     if node.depends_on.is_empty() {
         return true;
     }
@@ -616,7 +620,26 @@ fn trigger_satisfied(node: &Node, statuses: &HashMap<String, NodeStatus>) -> boo
         TriggerRule::OneSuccess => any_success,
         TriggerRule::NoneFailedMinOneSuccess => !any_failed && any_success,
         TriggerRule::AllDone => true,
+        TriggerRule::OneFailed => upstream(workflow, node)
+            .iter()
+            .any(|id| statuses.get(id.as_str()) == Some(&NodeStatus::Failed)),
     }
+}
+
+/// Every node `node` depends on, directly or through its dependencies.
+fn upstream(workflow: &Workflow, node: &Node) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut stack: Vec<&str> = node.depends_on.iter().map(String::as_str).collect();
+    while let Some(id) = stack.pop() {
+        if seen.iter().any(|s| s == id) {
+            continue;
+        }
+        seen.push(id.to_string());
+        if let Some(dep) = workflow.node(id) {
+            stack.extend(dep.depends_on.iter().map(String::as_str));
+        }
+    }
+    seen
 }
 
 /// Resolve and execute a single node. Loop nodes iterate internally; cancel and

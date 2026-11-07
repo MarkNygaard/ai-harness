@@ -185,6 +185,63 @@ nodes:
 }
 
 #[tokio::test]
+async fn one_failed_runs_after_a_failure_anywhere_upstream() {
+    // `implement` fails, so `verify` is skipped — the cleanup step's direct
+    // dependency never *failed*. It still has to run.
+    let yaml = r#"
+name: cleanup
+nodes:
+  - id: implement
+    prompt: "build it"
+  - id: verify
+    depends_on: [implement]
+    prompt: "check it"
+  - id: mark-failed
+    depends_on: [verify]
+    trigger_rule: one_failed
+    prompt: "label the issue"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new()
+        .respond("implement", fail("boom"))
+        .respond("mark-failed", ok("labelled"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+    assert_eq!(report.node("verify").unwrap().status, NodeStatus::Skipped);
+    assert_eq!(
+        report.node("mark-failed").unwrap().status,
+        NodeStatus::Success
+    );
+    assert_eq!(
+        report.status,
+        RunStatus::Failed,
+        "handling a failure doesn't hide it"
+    );
+}
+
+#[tokio::test]
+async fn one_failed_is_skipped_when_nothing_failed() {
+    let yaml = r#"
+name: cleanup
+nodes:
+  - id: implement
+    prompt: "build it"
+  - id: mark-failed
+    depends_on: [implement]
+    trigger_rule: one_failed
+    prompt: "label the issue"
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new().respond("implement", ok("done"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+    assert_eq!(
+        report.node("mark-failed").unwrap().status,
+        NodeStatus::Skipped
+    );
+    assert!(runner.calls_for("mark-failed").is_empty());
+    assert_eq!(report.status, RunStatus::Completed);
+}
+
+#[tokio::test]
 async fn failure_skips_dependents_and_fails_run() {
     let yaml = r#"
 name: failchain

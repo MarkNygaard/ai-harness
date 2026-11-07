@@ -76,7 +76,7 @@ export function WorkflowsList() {
         <>
           <ViewToggle view={view} onChange={setView} />
           <LibraryDialog />
-          <Button size="sm" render={<Link to="/editor/new" />}>
+          <Button size="sm" render={<Link to="/settings/workflows/new" />}>
             <IconPlus className="size-4" />
             New workflow
           </Button>
@@ -316,7 +316,7 @@ function WorkflowCard({
     // navigates away from it.
     <div className="group relative">
       <Link
-        to={`/editor/${encodeURIComponent(wf.name)}`}
+        to={`/settings/workflows/${encodeURIComponent(wf.name)}`}
         className="block"
         title={description || title}
       >

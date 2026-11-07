@@ -244,7 +244,9 @@ export function LinearTriggerForm({
       <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-[12px] text-muted-foreground">
         This trigger only starts the run. To move the issue — to In Progress
         when work begins, to In Review once the pull request is open — give the
-        workflow <code className="font-mono">linear:</code> steps.
+        workflow <code className="font-mono">linear:</code> steps. To label it
+        when the run fails, add a last step with{" "}
+        <code className="font-mono">trigger_rule: one_failed</code>.
       </p>
 
       <label className="flex items-center gap-2 text-sm">
