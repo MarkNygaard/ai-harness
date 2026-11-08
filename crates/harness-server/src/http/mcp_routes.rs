@@ -479,6 +479,12 @@ pub(crate) async fn call_tool(
             }
         }
         // ── Triggers: every kind, one interface ─────────────────────────────
+        "facts_list" | "guard_report" => {
+            match super::facts_routes::mcp_call(state, name, args).await {
+                Ok((summary, body)) => to_result(summary, &body),
+                Err(e) => tool_error(e),
+            }
+        }
         "improvements_list" | "improvements_act" => {
             match super::improvements_routes::mcp_call(state, actor, name, args).await {
                 Ok((summary, body)) => to_result(summary, &body),
@@ -1356,6 +1362,7 @@ fn mcp_tools() -> Vec<Value> {
     .into_iter()
     .chain(super::trigger_tools::tool_defs())
     .chain(super::improvements_routes::mcp_tool_defs())
+    .chain(super::facts_routes::mcp_tool_defs())
     .collect()
 }
 
@@ -1771,6 +1778,9 @@ mod tests {
             // What recent runs suggest changing.
             "improvements_list",
             "improvements_act",
+            // Whether learned facts and the loop guard are working.
+            "facts_list",
+            "guard_report",
         ] {
             assert!(by_name(expected).is_some(), "missing tool `{expected}`");
         }
@@ -1954,7 +1964,10 @@ fn connection_body(state: &Arc<RunsState>, token: Option<String>) -> Value {
         "linear_tools": LINEAR_TOOLS,
         "schedule_tools": SCHEDULE_TOOLS,
         "trigger_tools": super::trigger_tools::TRIGGER_TOOLS,
-        "improvement_tools": super::improvements_routes::IMPROVEMENT_TOOLS,
+        "improvement_tools": super::improvements_routes::IMPROVEMENT_TOOLS
+            .iter()
+            .chain(super::facts_routes::FACT_TOOLS)
+            .collect::<Vec<_>>(),
         "authoring_tools": AUTHORING_TOOLS,
     })
 }

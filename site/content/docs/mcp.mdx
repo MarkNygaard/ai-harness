@@ -191,6 +191,16 @@ What a workflow's recent runs suggest changing — see
 
 In the built-in chat, `improvements_act` waits for you to confirm.
 
+### Learned facts and the loop guard
+
+Whether [learned facts](/docs/learned-facts) and the
+[loop guard](/docs/loop-guard) are paying off.
+
+| Tool | What it does |
+| --- | --- |
+| `facts_list` | A project's facts: live, forming and retired. Each one shows how many runs hit its failure before it went live and since, and the recent `learn-facts` runs and how they ended |
+| `guard_report` | Each step the loop guard redirected in the last `days` (default 7), and whether that step still hit the same failure afterwards |
+
 ### Schedules
 
 The same [schedules](/docs/schedules) as on the Triggers page: workflows that

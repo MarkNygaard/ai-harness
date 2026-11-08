@@ -25,9 +25,9 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use harness_persist::{
-    error_fingerprint, ErrorLine, FactReview, ProjectFact, RunDetail, ACTIVE_AFTER_RUNS,
-    FACT_ACTIVE, FACT_FORMING, FACT_LEARNED, FACT_RETIRED, FACT_REVIEW_DONE, FACT_REVIEW_FAILED,
-    FACT_REVIEW_RUNNING,
+    error_fingerprint, informative_failure, ErrorLine, FactReview, ProjectFact, RunDetail,
+    ACTIVE_AFTER_RUNS, FACT_ACTIVE, FACT_FORMING, FACT_LEARNED, FACT_RETIRED, FACT_REVIEW_DONE,
+    FACT_REVIEW_FAILED, FACT_REVIEW_RUNNING,
 };
 use harness_runner::FACTS_WORKFLOW;
 use serde::Deserialize;
@@ -88,6 +88,10 @@ pub(crate) fn index(lines: &[ErrorLine]) -> BTreeMap<String, Failure> {
     let mut out: BTreeMap<String, Failure> = BTreeMap::new();
     // Lines arrive newest first.
     for line in lines {
+        // `(no output)` in five runs is not a fact waiting to be learned.
+        if !informative_failure(&line.message) {
+            continue;
+        }
         let f = out.entry(error_fingerprint(&line.message)).or_default();
         if f.sample.is_empty() {
             f.sample = line.message.clone();
@@ -631,6 +635,150 @@ pub(crate) async fn facts_env(state: &Arc<RunsState>, project: &str) -> Option<S
     serde_json::to_string(&texts).ok()
 }
 
+// ── MCP: is it working? ─────────────────────────────────────────────────────
+
+pub(crate) const FACT_TOOLS: &[&str] = &["facts_list", "guard_report"];
+
+pub(crate) fn mcp_tool_defs() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "facts_list",
+            "description": "A project's learned facts: what its runs kept failing on, written down and put at the top of every prompt there. Each fact has `text`, `status` (forming | active | retired), `source` (learned | manual), `retire_reason`, `activated_at`, and from the last 30 days of failures: `runs` (runs that hit the failures it answers), `runs_before_live` and `runs_since_live`. A live fact whose failures stopped showing up after it went live is working; one whose failures keep coming is retired automatically after 3 such runs. Also lists recent `learn-facts` reviews and how they ended. Read-only.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "project": { "type": "string" } },
+                "required": ["project"],
+            }
+        }),
+        json!({
+            "name": "guard_report",
+            "description": "What the loop guard did: each step it redirected after the same failure came back 3 times, and whether that step still hit the failure 3 more times afterwards (`still_stuck`). `recovered` counts redirected steps that didn't. Optional `project`, and `days` (default 7). Read-only.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "project": { "type": "string" },
+                    "days": { "type": "integer" }
+                },
+            }
+        }),
+    ]
+}
+
+pub(crate) async fn mcp_call(
+    state: &Arc<RunsState>,
+    name: &str,
+    args: &Value,
+) -> Result<(String, Value), String> {
+    let project = args
+        .get("project")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    match name {
+        "facts_list" => {
+            let project = project.ok_or("`facts_list` needs `project`")?;
+            let facts_store = state.fact_store().await?;
+            let runs = state.store().await?;
+            let failures = index(
+                &runs
+                    .project_error_lines(&project, WINDOW_DAYS, SCAN_LIMIT)
+                    .await
+                    .map_err(|e| e.to_string())?,
+            );
+            let facts = facts_store
+                .list(&project)
+                .await
+                .map_err(|e| e.to_string())?;
+            let rows: Vec<Value> = facts
+                .iter()
+                .map(|f| {
+                    let mut v = view(f, &failures);
+                    if let Some(live) = f.activated_at {
+                        let since = runs_hitting(&f.fingerprints, &failures, Some(live)).len();
+                        let total = runs_hitting(&f.fingerprints, &failures, None).len();
+                        v["runs_since_live"] = json!(since);
+                        v["runs_before_live"] = json!(total - since);
+                    }
+                    v
+                })
+                .collect();
+            let reviews = facts_store
+                .recent_reviews(&project, WINDOW_DAYS)
+                .await
+                .map_err(|e| e.to_string())?;
+            let live = facts.iter().filter(|f| f.status == FACT_ACTIVE).count();
+            Ok((
+                format!("{} fact(s), {live} live", facts.len()),
+                json!({ "facts": rows, "reviews": reviews }),
+            ))
+        }
+        "guard_report" => {
+            let days = args
+                .get("days")
+                .and_then(Value::as_i64)
+                .unwrap_or(7)
+                .clamp(1, 90) as i32;
+            let runs = state.store().await?;
+            let lines = runs
+                .guard_lines(project.as_deref(), days)
+                .await
+                .map_err(|e| e.to_string())?;
+            let steps = guard_steps(&lines);
+            let stuck = steps
+                .iter()
+                .filter(|s| s["still_stuck"] == json!(true))
+                .count();
+            Ok((
+                format!(
+                    "{} redirect(s) in {days} day(s); {} recovered, {stuck} still stuck",
+                    steps.len(),
+                    steps.len() - stuck
+                ),
+                json!({
+                    "days": days,
+                    "redirects": steps.len(),
+                    "recovered": steps.len() - stuck,
+                    "still_stuck": stuck,
+                    "steps": steps,
+                }),
+            ))
+        }
+        other => Err(format!("unknown facts tool `{other}`")),
+    }
+}
+
+/// One row per redirected step, from the guard's activity lines.
+pub(crate) fn guard_steps(lines: &[harness_persist::GuardLine]) -> Vec<Value> {
+    type Seen<'a> = (Option<&'a harness_persist::GuardLine>, bool);
+    let mut by_step: BTreeMap<(String, String), Seen> = BTreeMap::new();
+    for l in lines {
+        let e = by_step
+            .entry((l.run_id.clone(), l.node_id.clone()))
+            .or_insert((None, false));
+        if l.text == super::loop_guard::REDIRECTED_LINE {
+            e.0 = Some(l);
+        } else if l.text.starts_with(super::loop_guard::STILL_STUCK_PREFIX) {
+            e.1 = true;
+        }
+    }
+    by_step
+        .into_iter()
+        .filter_map(|((run, node), (redirect, stuck))| {
+            let r = redirect?;
+            Some(json!({
+                "run_id": run,
+                "node": node,
+                "project": r.project,
+                "redirected_at": r.created_at,
+                "still_stuck": stuck,
+            }))
+        })
+        .collect()
+}
+
 // ── The project page ────────────────────────────────────────────────────────
 
 /// A fact as the project page shows it: with how many runs back it up.
@@ -930,6 +1078,52 @@ mod tests {
         );
         let old_failure = review(FACT_REVIEW_FAILED, &[], 120, now);
         assert_eq!(due(&fps, &[old_failure], now), fps);
+    }
+
+    #[test]
+    fn failures_that_say_nothing_are_not_learned() {
+        let failures = index(&[
+            line(1, "r1", "(no output)", 1),
+            line(2, "r2", "(no output)", 2),
+            line(3, "r3", "---", 3),
+            line(4, "r4", "1", 4),
+        ]);
+        assert!(
+            failures.is_empty(),
+            "{:?}",
+            failures.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn the_guard_report_pairs_redirects_with_what_came_after() {
+        let gl = |run: &str, node: &str, text: &str| harness_persist::GuardLine {
+            run_id: run.into(),
+            node_id: node.into(),
+            project: Some("niles".into()),
+            text: text.into(),
+            created_at: at(0),
+        };
+        let stuck_line = format!(
+            "{} the same failure after its redirect (6 times in all).",
+            super::super::loop_guard::STILL_STUCK_PREFIX
+        );
+        let lines = vec![
+            gl("r1", "fix", &stuck_line),
+            gl("r1", "fix", super::super::loop_guard::REDIRECTED_LINE),
+            gl("r2", "implement", super::super::loop_guard::REDIRECTED_LINE),
+        ];
+        let steps = guard_steps(&lines);
+        assert_eq!(steps.len(), 2);
+        let stuck: Vec<bool> = steps
+            .iter()
+            .map(|s| s["still_stuck"] == json!(true))
+            .collect();
+        assert_eq!(
+            stuck,
+            [true, false],
+            "r1/fix stayed stuck, r2/implement recovered"
+        );
     }
 
     #[test]

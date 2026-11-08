@@ -44,6 +44,15 @@ after it, the guard adds a line to the step's activity saying it still looks
 stuck. It never stops a step itself: the step's own timeout and iteration
 limits do that.
 
+Failures that carry no message, such as `(no output)` or `---`, don't count.
+There's nothing in them to redirect over.
+
+## Is it working?
+
+Each redirect leaves a line in the step's activity feed. Over MCP,
+`guard_report` lists the steps redirected in the last week, and which of them
+still hit the same failure afterwards.
+
 ## Limits
 
 The guard only runs inside runs the server started, because the hook asks the
