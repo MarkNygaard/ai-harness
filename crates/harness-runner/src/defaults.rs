@@ -1036,6 +1036,57 @@ mod tests {
         assert_eq!(moves(&runner), ["In Progress", "In Review"]);
     }
 
+    #[tokio::test]
+    async fn a_piece_github_will_not_merge_stops_for_a_person_and_says_why() {
+        // NIL-73: graded and passed, but its PR was into a branch that
+        // requires a review. The run failed and nothing on the board moved.
+        let (report, runner) = run_task(&[
+            ("classify", PIECE),
+            ("grade", r#"{"passed":true,"summary":"ok"}"#),
+            ("merge-piece", "FAIL:base branch policy prohibits the merge"),
+        ])
+        .await;
+        assert_eq!(report.status, harness_dag::RunStatus::Failed);
+        assert!(runner.ran("merge-refused") && runner.ran("report-merge-refused"));
+        assert!(!runner.ran("piece-done") && !runner.ran("advance"));
+        assert_eq!(moves(&runner), ["In Progress", "In Review"]);
+    }
+
+    #[tokio::test]
+    async fn a_merged_piece_reports_no_refusal() {
+        let (_, runner) = run_task(&[
+            ("classify", PIECE),
+            ("grade", r#"{"passed":true,"summary":"ok"}"#),
+        ])
+        .await;
+        assert!(!runner.ran("merge-refused") && !runner.ran("report-merge-refused"));
+    }
+
+    /// The base a PR must target is the run's. `.pr-list` is written by the
+    /// agent that opened the PR, so checking against it only confirms the
+    /// agent's own choice, which is how a piece of NIL-72 went to
+    /// `development` instead of `epic/NIL-72`.
+    #[test]
+    fn verify_pr_base_checks_against_the_runs_base_not_the_agents() {
+        for name in ["task", "idea-to-pr"] {
+            let wf = harness_dag::parse_workflow(default_workflow(name).unwrap()).unwrap();
+            let verify = wf
+                .nodes
+                .iter()
+                .find(|n| n.id == "verify-pr-base")
+                .and_then(|n| match &n.kind {
+                    harness_dag::NodeKind::Bash(b) => Some(b.as_str()),
+                    _ => None,
+                })
+                .expect("verify-pr-base is a bash node");
+            assert!(
+                !verify.contains(".base'"),
+                "{name} reads the base from .pr-list"
+            );
+            assert!(verify.contains("intended_base"), "{name}");
+        }
+    }
+
     const OPEN_PR: &str =
         r#"{"pr":"42","base":"main","title":"t","state":"OPEN","mergeable":"MERGEABLE"}"#;
 
