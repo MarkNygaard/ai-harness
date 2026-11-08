@@ -69,6 +69,13 @@ are listed as live, forming and retired, with how many runs hit each one.
 - **Edit** a fact's wording. Its evidence stays the same.
 - **Remove** a fact. It's retired, and its failures aren't learned again.
 
+## Is it working?
+
+A live fact is working when its failure stops showing up. Over MCP,
+`facts_list` shows each fact with the runs that hit its failure before it went
+live and since. Failures that carry no message, such as `(no output)`, are
+never learned from.
+
 ## Facts or project rules
 
 Facts and [project rules](/docs/project-rules) both reach every run, but they

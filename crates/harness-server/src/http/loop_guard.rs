@@ -36,6 +36,13 @@ pub(crate) const REPEATS: u32 = 3;
 /// How much of the failing message the note quotes.
 const SAMPLE_CHARS: usize = 400;
 
+/// The activity line written when a step picks up its redirect. Counted by
+/// `guard_report`, so its wording is part of that contract.
+pub(crate) const REDIRECTED_LINE: &str =
+    "Loop guard: redirected this step after the same failure came back 3 times.";
+/// How the still-stuck line starts. Also counted by `guard_report`.
+pub(crate) const STILL_STUCK_PREFIX: &str = "Loop guard: this step still hits";
+
 #[derive(Debug, Default)]
 struct Watch {
     /// fingerprint → times seen in this step.
@@ -98,8 +105,8 @@ impl LoopGuard {
             .as_deref()
             .filter(|d| !d.trim().is_empty())
             .unwrap_or(activity.text.as_str());
-        if message.trim().is_empty() {
-            return None;
+        if !harness_persist::informative_failure(message) {
+            return None; // `(no output)` three times is nothing to redirect over
         }
         let fp = harness_persist::error_fingerprint(message);
         let mut nodes = self.nodes.lock().ok()?;
@@ -122,8 +129,8 @@ impl LoopGuard {
                 if w.after >= REPEATS {
                     w.flagged = true;
                     Some(Noticed::StillStuck(format!(
-                        "Loop guard: this step still hits the same failure after its redirect \
-                         ({n} times in all). It is left to its own limits; consider stopping it."
+                        "{STILL_STUCK_PREFIX} the same failure after its redirect ({n} times in \
+                         all). It is left to its own limits; consider stopping it."
                     )))
                 } else {
                     None
@@ -175,7 +182,16 @@ pub async fn get_guard(
         Err((s, m)) => return (s, Json(json!({ "error": m }))).into_response(),
     };
     match state.loop_guard.take(&grant.run_id, &q.node) {
-        Some(note) => Json(json!({ "note": note })).into_response(),
+        Some(note) => {
+            // Logged in the step's feed, so a redirect is visible on the run
+            // and countable afterwards, whether or not it helped.
+            if let Ok(store) = state.store().await {
+                let _ = store
+                    .record_activity(&grant.run_id, &q.node, &Activity::text(REDIRECTED_LINE))
+                    .await;
+            }
+            Json(json!({ "note": note })).into_response()
+        }
         None => (StatusCode::OK, Json(json!({}))).into_response(),
     }
 }
@@ -215,6 +231,10 @@ mod tests {
             );
             assert_eq!(g.observe("r", "build", &Activity::text("thinking")), None);
         }
+        // Failures that say nothing are nothing to redirect over.
+        for empty in ["(no output)", "---", "1", "(no output)", "---", "1"] {
+            assert_eq!(g.observe("r", "build", &fail(empty)), None);
+        }
         g.observe("r", "build", &fail("a: not found"));
         g.observe("r", "build", &fail("b: permission denied"));
         g.observe("r", "other", &fail("a: not found"));
@@ -243,8 +263,8 @@ mod tests {
     fn a_finished_run_is_forgotten() {
         let g = LoopGuard::default();
         for _ in 0..3 {
-            g.observe("r", "a", &fail("x failed"));
-            g.observe("r", "b", &fail("x failed"));
+            g.observe("r", "a", &fail("x build failed"));
+            g.observe("r", "b", &fail("x build failed"));
         }
         g.forget_node("r", "a");
         assert!(g.take("r", "a").is_none());

@@ -260,6 +260,31 @@ struct ActivityErrorRow {
     created_at: DateTime<Utc>,
 }
 
+/// Whether a failure message says anything a person or a model could act on.
+///
+/// Some tool results are flagged as errors while carrying nothing: `(no
+/// output)`, `---`, a bare `1`. They still group by fingerprint, so without
+/// this a project's most "recurring failure" is an empty one, which starts a
+/// fact review with nothing to learn and redirects a step over nothing.
+pub fn informative_failure(message: &str) -> bool {
+    let m = message.trim();
+    if m.eq_ignore_ascii_case("(no output)") {
+        return false;
+    }
+    m.chars().filter(|c| c.is_alphanumeric()).count() >= 8
+}
+
+/// One line the loop guard wrote into a step's activity, for
+/// [`RunStore::guard_lines`].
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct GuardLine {
+    pub run_id: String,
+    pub node_id: String,
+    pub project: Option<String>,
+    pub text: String,
+    pub created_at: DateTime<Utc>,
+}
+
 /// One failing tool call in a project, for [`RunStore::project_error_lines`].
 /// `id` is the activity row's, so the lines after it in the same node (what
 /// the agent did next) can be read with `activity_since`.
@@ -1163,6 +1188,30 @@ impl RunStore {
         Ok(out)
     }
 
+    /// The lines the loop guard wrote (activity text starting `Loop guard:`),
+    /// newest first: what `guard_report` counts.
+    pub async fn guard_lines(
+        &self,
+        project: Option<&str>,
+        days: i32,
+    ) -> Result<Vec<GuardLine>, PersistError> {
+        Ok(sqlx::query_as::<_, GuardLine>(
+            "SELECT a.run_id, a.node_id, r.project, a.activity AS text, a.created_at
+                 FROM harness_run_activity a
+                 JOIN harness_workflow_runs r ON r.id = a.run_id
+                 WHERE a.kind = 'text'
+                   AND a.activity LIKE 'Loop guard:%'
+                   AND a.created_at >= now() - make_interval(days => $1)
+                   AND ($2::text IS NULL OR r.project = $2)
+                 ORDER BY a.created_at DESC
+                 LIMIT 2000",
+        )
+        .bind(days.max(1))
+        .bind(project)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// A project's failing tool calls, one per line, newest first: what
     /// learned facts are judged by. The same rows as
     /// [`Self::activity_error_groups`], ungrouped, because a fact needs to know
@@ -1767,6 +1816,23 @@ mod fingerprint_tests {
             fp("trailing and leading")
         );
     }
+
+    /// The empty "failures" seen in real runs say nothing to learn from or
+    /// redirect over; real ones, however short, do.
+    #[test]
+    fn a_failure_that_says_nothing_is_not_informative() {
+        use super::informative_failure as info;
+        for empty in ["(no output)", "  (No Output) ", "---", "1", "", "ok."] {
+            assert!(!info(empty), "{empty:?}");
+        }
+        for real in [
+            "error: command not found: bunx",
+            "permission denied: .env",
+            "exploration.md",
+        ] {
+            assert!(info(real), "{real:?}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2329,6 +2395,23 @@ mod tests {
         for a in &acts {
             store.record_activity(&run_id, "build", a).await.unwrap();
         }
+
+        // The loop guard's own lines, and only those, are what it reports on.
+        store
+            .record_activity(
+                &run_id,
+                "build",
+                &harness_dag::Activity::text("Loop guard: redirected this step"),
+            )
+            .await
+            .unwrap();
+        store
+            .record_activity(&run_id, "build", &harness_dag::Activity::text("thinking"))
+            .await
+            .unwrap();
+        let guard = store.guard_lines(Some(&project), 1).await.unwrap();
+        assert_eq!(guard.len(), 1, "{guard:?}");
+        assert_eq!(guard[0].project.as_deref(), Some(project.as_str()));
 
         // Ungrouped, for learned facts: every failure line with its message,
         // newest first, the blank and the passing ones left out.
