@@ -1,0 +1,52 @@
+---
+title: "Loop guard"
+description: "How the harness steps in when a running step keeps hitting the same failure."
+---
+
+An agent that hits a failure often tries the same thing again, and again. Each
+try costs a full turn, and a step can burn through its time that way without
+getting anywhere. The loop guard watches for that and steps in once.
+
+## What it watches
+
+Every tool result a step produces passes through the harness on its way to the
+run's activity feed. The guard counts the failing ones per step, grouping them
+by message the same way [learned facts](/docs/learned-facts) do, so numbers and
+ids don't make two failures look different.
+
+When one failure has come back **three times in a step**, the guard holds a
+redirect for that step.
+
+## How the agent gets it
+
+At its next tool call, the agent picks up the redirect through a hook. The
+model sees a short note:
+
+```text
+Loop guard (from the harness): this step has now hit the same failure 3 times:
+
+    error: script "test" not found
+
+Repeating the same approach won't get past it. Stop and work out why it fails:
+read the whole error, check how this repository does it (its scripts, README,
+AGENTS.md or CLAUDE.md), and try a different approach. If it can't be fixed
+from here, say so in your answer instead of retrying.
+```
+
+- **Claude Code** steps get it through a PostToolUse hook, which runs
+  `harness guard` after each tool call.
+- **Pi (omp)** steps get it through the harness's hook extension, which asks
+  only after a failing tool call.
+- **Cursor** steps aren't covered yet.
+
+A step gets one redirect. If the same failure comes back three more times
+after it, the guard adds a line to the step's activity saying it still looks
+stuck. It never stops a step itself: the step's own timeout and iteration
+limits do that.
+
+## Limits
+
+The guard only runs inside runs the server started, because the hook asks the
+server with the run's own token. A slow or unreachable server means no note,
+and the step carries on as if the guard weren't there. What it counts lives in
+memory, so a server restart forgets it.

@@ -94,6 +94,40 @@ pub fn claude_settings(
     (settings, payloads)
 }
 
+/// The env var naming the running step, for the loop guard's hooks.
+pub const NODE_ID_ENV: &str = "HARNESS_NODE_ID";
+
+/// What Claude Code runs after each tool call to pick up a loop-guard
+/// redirect. Guarded so a machine without the `harness` binary on PATH (a
+/// local run outside the image) gets no hook error, only no guard.
+pub const LOOP_GUARD_COMMAND: &str =
+    "command -v harness >/dev/null 2>&1 && harness guard --format claude || true";
+
+/// Whether a step can reach the loop guard: it runs inside a server-started
+/// run (with a grant) and knows which step it is.
+pub fn loop_guard_reachable(env: &std::collections::HashMap<String, String>) -> bool {
+    ["HARNESS_RUN_URL", "HARNESS_RUN_TOKEN", NODE_ID_ENV]
+        .iter()
+        .all(|k| env.get(*k).is_some_and(|v| !v.trim().is_empty()))
+}
+
+/// Add the loop guard's PostToolUse hook to a Claude Code settings value
+/// built by [`claude_settings`].
+pub fn add_loop_guard(settings: &mut Value) {
+    let entry = json!({
+        "matcher": "",
+        "hooks": [{
+            "type": "command",
+            "command": LOOP_GUARD_COMMAND,
+            "timeout": 5,
+        }]
+    });
+    match settings["hooks"]["PostToolUse"].as_array_mut() {
+        Some(post) => post.push(entry),
+        None => settings["hooks"]["PostToolUse"] = json!([entry]),
+    }
+}
+
 /// Serialize [`NodeHooks`] to JSON for delivery to the omp hook extension via
 /// the `HARNESS_HOOKS` environment variable.
 pub fn omp_hooks_env(hooks: &NodeHooks) -> String {
@@ -199,6 +233,47 @@ mod tests {
         let dir = std::path::Path::new("/tmp/d");
         let (settings, _) = claude_settings(&hooks, dir);
         assert_eq!(settings["hooks"]["PreToolUse"][0]["matcher"], "");
+    }
+
+    #[test]
+    fn the_loop_guard_rides_along_with_a_steps_own_hooks() {
+        let hooks = NodeHooks {
+            pre_tool_use: vec![],
+            post_tool_use: vec![HookRule {
+                matcher: Some("Bash".into()),
+                decision: None,
+                reason: None,
+                additional_context: Some("ran bash".into()),
+                system_message: None,
+            }],
+        };
+        let dir = std::path::Path::new("/tmp/hooks");
+        let (mut settings, _) = claude_settings(&hooks, dir);
+        add_loop_guard(&mut settings);
+        let post = settings["hooks"]["PostToolUse"].as_array().unwrap();
+        assert_eq!(post.len(), 2, "the step's own hook stays");
+        assert_eq!(post[1]["matcher"], "");
+        assert_eq!(post[1]["hooks"][0]["command"], LOOP_GUARD_COMMAND);
+
+        let mut bare = json!({});
+        add_loop_guard(&mut bare);
+        assert_eq!(
+            bare["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            LOOP_GUARD_COMMAND
+        );
+    }
+
+    #[test]
+    fn only_a_step_inside_a_run_can_reach_the_guard() {
+        let mut env = std::collections::HashMap::new();
+        assert!(!loop_guard_reachable(&env));
+        env.insert("HARNESS_RUN_URL".to_string(), "https://h.test".to_string());
+        env.insert("HARNESS_RUN_TOKEN".to_string(), "t".to_string());
+        assert!(!loop_guard_reachable(&env), "needs to know its step");
+        env.insert(NODE_ID_ENV.to_string(), "implement".to_string());
+        assert!(loop_guard_reachable(&env));
+        env.insert("HARNESS_RUN_TOKEN".to_string(), " ".to_string());
+        assert!(!loop_guard_reachable(&env));
     }
 
     #[test]

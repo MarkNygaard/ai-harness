@@ -106,12 +106,19 @@ impl PromptAgent for CodeAgentRunner {
                 .ok_or_else(|| AgentError("no default agent registered".to_string()))?,
         };
 
-        let _hooks_dir = if let Some(hooks) = req.hooks.as_ref() {
+        // Settings are written when the step declares hooks, and for every
+        // step that can reach the loop guard, whose hook rides along.
+        let guard = crate::hooks::loop_guard_reachable(&req.env_vars);
+        let _hooks_dir = if req.hooks.is_some() || guard {
+            let hooks = req.hooks.clone().unwrap_or_default();
             let dir = tempfile::Builder::new()
                 .prefix("harness-claude-hooks-")
                 .tempdir()
                 .map_err(|e| AgentError(e.to_string()))?;
-            let (settings, payloads) = crate::hooks::claude_settings(hooks, dir.path());
+            let (mut settings, payloads) = crate::hooks::claude_settings(&hooks, dir.path());
+            if guard {
+                crate::hooks::add_loop_guard(&mut settings);
+            }
             for (path, body) in payloads {
                 std::fs::write(&path, body).map_err(|e| AgentError(e.to_string()))?;
             }
@@ -404,6 +411,81 @@ mod tests {
 
         let env = agent.last_env.lock().unwrap().take().unwrap();
         assert!(env.contains_key("HARNESS_CLAUDE_SETTINGS"));
+    }
+
+    #[tokio::test]
+    async fn a_step_inside_a_run_gets_the_loop_guard_hook_without_hooks_of_its_own() {
+        use std::sync::Mutex;
+
+        /// Reads the settings file while it exists (it is a temp file).
+        struct SettingsReader {
+            seen: Mutex<Option<String>>,
+        }
+        #[async_trait]
+        impl CodeAgent for SettingsReader {
+            fn name(&self) -> &str {
+                "claude"
+            }
+            fn capabilities(&self) -> Vec<Capability> {
+                vec![]
+            }
+            async fn execute(
+                &self,
+                req: AgentRequest,
+            ) -> harness_core::error::Result<AgentResponse> {
+                *self.seen.lock().unwrap() = req
+                    .env_vars
+                    .get("HARNESS_CLAUDE_SETTINGS")
+                    .and_then(|p| std::fs::read_to_string(p).ok());
+                Ok(AgentResponse {
+                    output: "ok".into(),
+                    stderr: String::new(),
+                    items: vec![],
+                    token_usage: TokenUsage {
+                        input_tokens: 1,
+                        output_tokens: 1,
+                        total_tokens: 2,
+                        cache_read_tokens: 0,
+                        cache_creation_tokens: 0,
+                        cost_usd: 0.0,
+                    },
+                    model: "x".into(),
+                    exit_code: Some(0),
+                })
+            }
+            async fn execute_stream(
+                &self,
+                _req: AgentRequest,
+                _tx: tokio::sync::mpsc::Sender<StreamItem>,
+            ) -> harness_core::error::Result<()> {
+                Ok(())
+            }
+        }
+
+        let agent = Arc::new(SettingsReader {
+            seen: Mutex::new(None),
+        });
+        let mut reg = AgentRegistry::new("claude");
+        reg.register("claude", agent.clone());
+        let runner = CodeAgentRunner::new(Arc::new(reg));
+
+        let mut req = request(Some("claude"));
+        for (k, v) in [
+            ("HARNESS_RUN_URL", "https://h.test"),
+            ("HARNESS_RUN_TOKEN", "t"),
+            ("HARNESS_NODE_ID", "implement"),
+        ] {
+            req.env_vars.insert(k.into(), v.into());
+        }
+        runner.run(req).await.unwrap();
+
+        let settings: serde_json::Value =
+            serde_json::from_str(&agent.seen.lock().unwrap().take().expect("settings written"))
+                .unwrap();
+        assert_eq!(
+            settings["hooks"]["PostToolUse"][0]["hooks"][0]["command"],
+            crate::hooks::LOOP_GUARD_COMMAND
+        );
     }
 
     #[tokio::test]

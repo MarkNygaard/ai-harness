@@ -363,6 +363,11 @@ impl LocalRunner {
         // image's global identity for the node's own commits.
         let mut env_vars = self.env_vars.clone();
         apply_commit_identity(&mut env_vars, req.node_id, req.provider, req.model);
+        // Which step this is, for the loop guard's hook to ask about.
+        env_vars.insert(
+            crate::hooks::NODE_ID_ENV.to_string(),
+            req.node_id.to_string(),
+        );
         let result = self
             .agent
             .run(PromptRequest {

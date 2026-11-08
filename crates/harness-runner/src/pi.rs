@@ -240,7 +240,10 @@ impl PromptAgent for PiAgent {
             None => None,
         };
 
-        let _hooks_dir = if let Some(_hooks) = req.hooks.as_ref() {
+        // The extension also carries the loop guard, so it is loaded for every
+        // step that can reach it, not only one that declares hooks.
+        let _hooks_dir = if req.hooks.is_some() || crate::hooks::loop_guard_reachable(&req.env_vars)
+        {
             let dir = tempfile::Builder::new()
                 .prefix("harness-omp-hooks-")
                 .tempdir()

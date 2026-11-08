@@ -217,6 +217,14 @@ pub enum Command {
         #[command(subcommand)]
         action: LinearAction,
     },
+    /// Ask the harness's loop guard whether this step has a redirect waiting
+    /// (used by the agents' tool hooks inside a run; prints nothing otherwise)
+    Guard {
+        /// `claude` prints a Claude Code PostToolUse hook answer; `plain`
+        /// prints the note itself.
+        #[arg(long, default_value = "plain")]
+        format: String,
+    },
     /// Upload to the project's S3 folder (used by workflow steps)
     S3 {
         #[command(subcommand)]
@@ -744,6 +752,13 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             // the server holds the credentials. See `harness_server::linear_cli`.
             let message = run_linear_action(action).await?;
             println!("{message}");
+        }
+        Command::Guard { format } => {
+            // A hook must never break the step it runs in: no note, no
+            // output, and every failure is silent. See `harness_server::guard_cli`.
+            if let Some(out) = harness_server::guard_cli::answer(&format).await {
+                println!("{out}");
+            }
         }
         Command::S3 {
             action: S3Action::Upload { file, name },
