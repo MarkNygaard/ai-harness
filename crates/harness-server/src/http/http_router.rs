@@ -606,6 +606,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/run/facts/evidence",
             get(super::facts_routes::get_evidence),
         )
+        .route("/api/run/guard", get(super::loop_guard::get_guard))
         .route(
             "/api/projects/{name}/cache-size",
             get(super::projects_routes::get_cache_size),

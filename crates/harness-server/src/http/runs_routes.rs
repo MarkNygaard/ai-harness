@@ -111,6 +111,8 @@ pub struct RunsState {
     pr_store: OnceCell<harness_persist::PrStore>,
     improvement_store: OnceCell<harness_persist::ImprovementStore>,
     fact_store: OnceCell<harness_persist::FactStore>,
+    /// Running steps that keep hitting the same failure (see `loop_guard`).
+    pub(crate) loop_guard: super::loop_guard::LoopGuard,
     saved_step_store: OnceCell<harness_persist::SavedStepStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     trash_store: OnceCell<harness_persist::TrashStore>,
@@ -225,6 +227,7 @@ impl RunsState {
             pr_store: OnceCell::new(),
             improvement_store: OnceCell::new(),
             fact_store: OnceCell::new(),
+            loop_guard: Default::default(),
             saved_step_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
             trash_store: OnceCell::new(),
@@ -2856,9 +2859,13 @@ async fn execute_run_task(
                     RunEvent::NodeFinished { node } => {
                         let ord = ordinals.get(&node.id).copied().unwrap_or(0);
                         let _ = store.record_node(&persist_run_id, ord, node).await;
+                        persist_state
+                            .loop_guard
+                            .forget_node(&persist_run_id, &node.id);
                     }
                     RunEvent::RunFinished { status } => {
                         let _ = store.finish_run(&persist_run_id, *status).await;
+                        persist_state.loop_guard.forget_run(&persist_run_id);
                     }
                     // Append to the durable activity log so a late/refreshed/
                     // cross-process viewer can replay it (the frontend polls
@@ -2868,6 +2875,20 @@ async fn execute_run_task(
                         let _ = store
                             .record_activity(&persist_run_id, node_id, activity)
                             .await;
+                        // A step failing the same way again and again gets a
+                        // redirect at its next tool call (see `loop_guard`).
+                        if let Some(super::loop_guard::Noticed::StillStuck(line)) = persist_state
+                            .loop_guard
+                            .observe(&persist_run_id, node_id, activity)
+                        {
+                            let _ = store
+                                .record_activity(
+                                    &persist_run_id,
+                                    node_id,
+                                    &harness_dag::Activity::text(line),
+                                )
+                                .await;
+                        }
                     }
                 }
             }

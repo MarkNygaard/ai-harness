@@ -18,6 +18,7 @@ pub mod assets;
 pub(crate) mod billing_calibration;
 pub mod dashboard;
 pub mod db;
+pub mod guard_cli;
 pub mod handlers;
 pub mod http;
 pub mod linear_cli;

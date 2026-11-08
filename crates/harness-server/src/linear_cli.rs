@@ -25,13 +25,13 @@ use serde::Serialize;
 
 /// Where to ask, and with what.
 #[derive(Debug)]
-struct Grant {
-    base: String,
-    token: String,
+pub(crate) struct Grant {
+    pub(crate) base: String,
+    pub(crate) token: String,
 }
 
 /// Read the grant out of the environment.
-fn grant() -> Result<Grant, String> {
+pub(crate) fn grant() -> Result<Grant, String> {
     from_parts(
         std::env::var("HARNESS_RUN_URL").ok(),
         std::env::var("HARNESS_RUN_TOKEN").ok(),
