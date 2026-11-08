@@ -595,6 +595,18 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             post(super::projects_routes::restore_trash),
         )
         .route(
+            "/api/projects/{name}/facts",
+            get(super::facts_routes::list).post(super::facts_routes::add),
+        )
+        .route(
+            "/api/projects/{name}/facts/{id}",
+            put(super::facts_routes::update).delete(super::facts_routes::remove),
+        )
+        .route(
+            "/api/run/facts/evidence",
+            get(super::facts_routes::get_evidence),
+        )
+        .route(
             "/api/projects/{name}/cache-size",
             get(super::projects_routes::get_cache_size),
         )

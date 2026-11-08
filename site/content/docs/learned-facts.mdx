@@ -1,0 +1,78 @@
+---
+title: "Learned facts"
+description: "What a project's runs keep failing on, written down by the harness and told to every later run there."
+---
+
+Every run in a project starts from nothing. When the test command isn't
+`bun test`, or a build step has to run first, each run finds out the same way:
+it tries, fails, and works around it. Learned facts end that loop. When runs
+keep failing the same way, the harness writes down what would have prevented
+it, and puts it at the top of every prompt in that project.
+
+## Where facts come from
+
+The harness records every failing tool call a run makes. After each run it
+groups a project's failures from the last 30 days by message, ignoring numbers
+and ids, so "took 1243ms" and "took 87ms" count as one failure.
+
+When a failure has happened in two or more runs and no fact covers it, the
+harness starts an internal run, `learn-facts`, in the project's checkout. It
+reads the failures, what the agent did right after each one, and the facts
+already known. Then it writes short facts, such as:
+
+> Run tests with `bun run test`. `bun test` skips the test database setup.
+
+It checks each fact against the repository before writing it, and leaves out
+failures that a sentence couldn't have prevented, like a flaky network call or
+a test that failed because the change was wrong.
+
+`learn-facts` runs don't appear in run lists or on the dashboard. A failure it
+has already been shown isn't shown to it again for 14 days.
+
+## When a fact goes live
+
+A model proposes facts, but counting decides what reaches prompts:
+
+- A learned fact is **forming** until its failure has shown up in three
+  different runs. Then it goes **live**: from the next run on, every prompt
+  in the project starts with it.
+- A live fact is **retired** if its failure shows up in three more runs after
+  it went live. It's in every prompt and the failure happens anyway, so it
+  isn't helping.
+
+A retired fact keeps its failures, so the same failures are never learned
+again.
+
+## What a run sees
+
+Live facts go at the top of every prompt step, in every workflow, on every
+agent:
+
+```text
+## What earlier runs in this repository learned
+
+Earlier runs here kept failing on these, so they were written down. Follow them
+unless what you see now says otherwise.
+
+- Run tests with `bun run test`. `bun test` skips the test database setup.
+```
+
+The list is capped at 12 facts of up to 300 characters each, because every step
+of every run reads it. A project with no live facts gets no block.
+
+## Managing them
+
+Open the project under **Settings → Projects**, then **Learned facts**. Facts
+are listed as live, forming and retired, with how many runs hit each one.
+
+- **Add** a fact by hand. It's live at once, and only you can remove it.
+- **Edit** a fact's wording. Its evidence stays the same.
+- **Remove** a fact. It's retired, and its failures aren't learned again.
+
+## Facts or project rules
+
+Facts and [project rules](/docs/project-rules) both reach every run, but they
+are for different things. Facts are short, specific and learned from what went
+wrong. Project rules are how you want the work done. If a fact has stayed live
+for a long time, it probably belongs in `AGENTS.md`. Move it there and remove
+the fact.

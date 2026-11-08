@@ -110,6 +110,7 @@ pub struct RunsState {
     trigger_store: OnceCell<harness_persist::TriggerStore>,
     pr_store: OnceCell<harness_persist::PrStore>,
     improvement_store: OnceCell<harness_persist::ImprovementStore>,
+    fact_store: OnceCell<harness_persist::FactStore>,
     saved_step_store: OnceCell<harness_persist::SavedStepStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     trash_store: OnceCell<harness_persist::TrashStore>,
@@ -223,6 +224,7 @@ impl RunsState {
             trigger_store: OnceCell::new(),
             pr_store: OnceCell::new(),
             improvement_store: OnceCell::new(),
+            fact_store: OnceCell::new(),
             saved_step_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
             trash_store: OnceCell::new(),
@@ -516,6 +518,21 @@ impl RunsState {
         self.improvement_store
             .get_or_try_init(|| async {
                 harness_persist::ImprovementStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the store of learned project facts.
+    pub(crate) async fn fact_store(&self) -> Result<&harness_persist::FactStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.fact_store
+            .get_or_try_init(|| async {
+                harness_persist::FactStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -1592,7 +1609,9 @@ pub async fn list_runs(
     match result {
         Ok(mut runs) => {
             if !q.internal {
-                runs.retain(|r| r.workflow_name != harness_runner::IMPROVEMENTS_WORKFLOW);
+                runs.retain(|r| {
+                    !harness_runner::INTERNAL_WORKFLOWS.contains(&r.workflow_name.as_str())
+                });
             }
             Json(runs).into_response()
         }
@@ -2360,7 +2379,11 @@ async fn start_run_inner(
     // The harness's own machinery is started by the harness, never by a
     // person, an editor or a trigger.
     if workflow.internal
-        && req.trigger_source.as_deref() != Some(super::improvements_routes::SOURCE_IMPROVEMENTS)
+        && !matches!(
+            req.trigger_source.as_deref(),
+            Some(super::improvements_routes::SOURCE_IMPROVEMENTS)
+                | Some(super::facts_routes::SOURCE_FACTS)
+        )
     {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -2629,6 +2652,12 @@ async fn execute_run_task(
         if let Ok(json) = serde_json::to_string(&repo_layout) {
             run_env.insert("HARNESS_REPOS".to_string(), json);
         }
+    }
+
+    // What earlier runs here kept failing on: the runner puts these at the top
+    // of every prompt. Absent when the project has no live facts.
+    if let Some(facts) = super::facts_routes::facts_env(&state, &project).await {
+        run_env.insert(harness_runner::PROJECT_FACTS_ENV.to_string(), facts);
     }
 
     // Keep that shared cache from ballooning (it grew to ~128 GB on the cluster).

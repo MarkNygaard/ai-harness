@@ -3,6 +3,7 @@ import {
   IconArrowLeft,
   IconBolt,
   IconBraces,
+  IconBulb,
   IconDatabase,
   IconExternalLink,
   IconFolderCog,
@@ -19,6 +20,7 @@ import { ProjectLinearPanel } from "@/components/projects/ProjectLinear";
 import { ProjectCredentialsPanel } from "@/components/projects/ProjectCredentials";
 import { ProjectEnvPanel } from "@/components/projects/ProjectEnv";
 import { ProjectCachePanel } from "@/components/projects/ProjectCache";
+import { ProjectFactsPanel } from "@/components/projects/ProjectFacts";
 import { useDeleteProject, useProjects } from "@/lib/projects";
 import type { Project } from "@/types/project";
 
@@ -27,6 +29,7 @@ const TABS = [
   { value: "linear", label: "Linear", icon: IconBolt },
   { value: "credentials", label: "Credentials", icon: IconKey },
   { value: "environment", label: "Environment", icon: IconBraces },
+  { value: "facts", label: "Learned facts", icon: IconBulb },
   { value: "cache", label: "Cache", icon: IconDatabase },
 ] as const;
 type Tab = (typeof TABS)[number]["value"];
@@ -110,6 +113,9 @@ export function ProjectPage() {
               </TabsContent>
               <TabsContent value="environment">
                 <ProjectEnvPanel project={project.name} />
+              </TabsContent>
+              <TabsContent value="facts">
+                <ProjectFactsPanel project={project.name} />
               </TabsContent>
               <TabsContent value="cache">
                 <ProjectCachePanel project={project} />

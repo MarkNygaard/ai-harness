@@ -14,6 +14,14 @@ use std::path::Path;
 /// server, never offered to a person.
 pub const IMPROVEMENTS_WORKFLOW: &str = "improvements-analysis";
 
+/// The harness's own fact learning (`internal: true`): started by the server
+/// when a project's runs keep failing the same way, never offered to a person.
+pub const FACTS_WORKFLOW: &str = "learn-facts";
+
+/// Every workflow that is the harness's own machinery: hidden from run lists
+/// and the dashboard, and started only by the server.
+pub const INTERNAL_WORKFLOWS: &[&str] = &[IMPROVEMENTS_WORKFLOW, FACTS_WORKFLOW];
+
 pub const DEFAULT_WORKFLOW: &str = "idea-to-pr";
 
 /// Bundled workflows by name.
@@ -54,6 +62,10 @@ const WORKFLOWS: &[(&str, &str)] = &[
     (
         IMPROVEMENTS_WORKFLOW,
         include_str!("../defaults/workflows/improvements-analysis.yaml"),
+    ),
+    (
+        FACTS_WORKFLOW,
+        include_str!("../defaults/workflows/learn-facts.yaml"),
     ),
 ];
 
@@ -746,6 +758,22 @@ mod tests {
     fn resolve_unknown_name_errors() {
         let err = resolve_workflow_source("ghost-workflow", &std::env::temp_dir()).unwrap_err();
         assert!(err.contains("ghost-workflow"));
+    }
+
+    #[test]
+    fn learning_facts_is_internal_and_answers_in_the_shape_the_server_reads() {
+        let wf =
+            harness_dag::parse_workflow(default_workflow(FACTS_WORKFLOW).unwrap()).expect("parses");
+        assert!(wf.internal, "hidden from every workflow list");
+        assert!(INTERNAL_WORKFLOWS.contains(&FACTS_WORKFLOW));
+        let evidence = wf.node("evidence").expect("fetches the failures first");
+        assert!(
+            matches!(&evidence.kind, harness_dag::NodeKind::Bash(b) if b.contains("/api/run/facts/evidence"))
+        );
+        // The server reads the `learn` step's `facts[].failures` labels.
+        let learn = wf.node("learn").expect("learn step");
+        let schema = learn.output_format.as_ref().expect("structured answer");
+        assert!(schema["properties"]["facts"]["items"]["properties"]["failures"].is_object());
     }
 
     #[test]
