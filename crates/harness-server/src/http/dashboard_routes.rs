@@ -365,7 +365,10 @@ pub async fn metrics(
         .expect("midnight")
         .and_utc();
     // The harness's own reviews are machinery, not work done for anyone.
-    let excluded = vec![harness_runner::IMPROVEMENTS_WORKFLOW.to_string()];
+    let excluded: Vec<String> = harness_runner::INTERNAL_WORKFLOWS
+        .iter()
+        .map(|w| w.to_string())
+        .collect();
     let fail = |e: harness_persist::PersistError| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,

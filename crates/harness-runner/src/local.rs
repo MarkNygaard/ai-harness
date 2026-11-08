@@ -327,6 +327,14 @@ impl LocalRunner {
         } else {
             format!("{layout}\n\n{prompt}")
         };
+        // What earlier runs here kept tripping over, before the task for the
+        // same reason as the layout.
+        let facts = project_facts_preamble(&self.env_vars);
+        let prompt = if facts.is_empty() {
+            prompt
+        } else {
+            format!("{facts}\n\n{prompt}")
+        };
         // MCP servers the step asked for: attached when this run's project has
         // them and the step's agent can take them, otherwise said in the
         // prompt so the agent doesn't hunt for tools that aren't there.
@@ -482,6 +490,50 @@ fn apply_commit_identity(
 ///
 /// Deliberately silent for single-repo runs, where the root *is* the repository
 /// and the whole block would be a warning about a hazard that does not exist.
+/// The env var a run's learned project facts arrive in: a JSON array of
+/// strings, set by the server for a project that has live facts.
+pub const PROJECT_FACTS_ENV: &str = "HARNESS_PROJECT_FACTS";
+
+/// Bounds on the facts block. It is read by every step of every run, so it
+/// stays a short list, not a manual.
+const FACTS_MAX: usize = 12;
+const FACT_MAX_CHARS: usize = 300;
+
+/// The learned-facts block every prompt in a project starts with: what earlier
+/// runs there kept failing on, and what works instead. Empty when the project
+/// has none, so a prompt without facts is byte-identical to before.
+fn project_facts_preamble(env: &HashMap<String, String>) -> String {
+    let Some(raw) = env.get(PROJECT_FACTS_ENV).filter(|v| !v.trim().is_empty()) else {
+        return String::new();
+    };
+    let Ok(facts) = serde_json::from_str::<Vec<String>>(raw) else {
+        return String::new();
+    };
+    let lines: Vec<String> = facts
+        .iter()
+        .map(|f| f.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|f| !f.is_empty())
+        .take(FACTS_MAX)
+        .map(|f| {
+            if f.chars().count() > FACT_MAX_CHARS {
+                let cut: String = f.chars().take(FACT_MAX_CHARS).collect();
+                format!("- {cut}…")
+            } else {
+                format!("- {f}")
+            }
+        })
+        .collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!(
+        "## What earlier runs in this repository learned\n\n\
+         Earlier runs here kept failing on these, so they were written down. \
+         Follow them unless what you see now says otherwise.\n\n{}",
+        lines.join("\n")
+    )
+}
+
 fn workspace_layout_preamble(env: &HashMap<String, String>) -> String {
     let Some(raw) = env.get("HARNESS_REPOS").filter(|v| !v.trim().is_empty()) else {
         return String::new();
@@ -854,6 +906,52 @@ mod tests {
                 "expected no block for {raw:?}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_projects_learned_facts_lead_every_prompt() {
+        let dir = TempDir::new().unwrap();
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        let facts = serde_json::json!(["Run tests with `bun run test`, not `bun test`."]);
+        let runner = runner.with_env_vars(HashMap::from([(
+            super::PROJECT_FACTS_ENV.to_string(),
+            facts.to_string(),
+        )]));
+        let vars = VarContext::new();
+        runner
+            .execute(request(NodeBody::Prompt("do the thing".into()), &vars))
+            .await
+            .unwrap();
+        let sent = agent.last_prompt.lock().unwrap().clone().unwrap();
+        let block = sent
+            .find("## What earlier runs in this repository learned")
+            .unwrap();
+        let fact = sent.find("- Run tests with `bun run test`").unwrap();
+        let task = sent.find("do the thing").unwrap();
+        assert!(block < fact && fact < task, "got: {sent:?}");
+    }
+
+    #[test]
+    fn facts_are_bounded_and_unusable_ones_produce_no_block() {
+        for raw in ["", "not json", "[]", r#"["  ", ""]"#, r#"{"a":1}"#] {
+            let env = HashMap::from([(super::PROJECT_FACTS_ENV.to_string(), raw.to_string())]);
+            assert_eq!(super::project_facts_preamble(&env), "", "{raw:?}");
+        }
+        let many: Vec<String> = (0..20).map(|i| format!("fact {i}\nwrapped")).collect();
+        let long = "x".repeat(400);
+        let mut all = many.clone();
+        all.insert(0, long);
+        let env = HashMap::from([(
+            super::PROJECT_FACTS_ENV.to_string(),
+            serde_json::to_string(&all).unwrap(),
+        )]);
+        let block = super::project_facts_preamble(&env);
+        assert_eq!(block.lines().filter(|l| l.starts_with("- ")).count(), 12);
+        assert!(
+            block.contains("- fact 0 wrapped"),
+            "whitespace folds into one line"
+        );
+        assert!(block.contains('…'), "a long fact is cut");
     }
 
     /// The layout is context, the schema directive is an instruction about the

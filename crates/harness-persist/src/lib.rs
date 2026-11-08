@@ -62,6 +62,11 @@ pub use improvements::{
 pub use triggers::{RunTrigger, TriggerInput, TriggerStore, KIND_LINEAR, KIND_WEBHOOK};
 mod pull_requests;
 pub use pull_requests::{PrStore, RunPr, PR_CLOSED, PR_MERGED, PR_OPEN};
+mod facts;
+pub use facts::{
+    FactReview, FactStore, ProjectFact, ACTIVE_AFTER_RUNS, FACT_ACTIVE, FACT_FORMING, FACT_LEARNED,
+    FACT_MANUAL, FACT_RETIRED, FACT_REVIEW_DONE, FACT_REVIEW_FAILED, FACT_REVIEW_RUNNING,
+};
 mod saved_steps;
 pub use saved_steps::{SaveStepError, SavedStep, SavedStepStore};
 
@@ -253,6 +258,18 @@ struct ActivityErrorRow {
     message: String,
     run_id: String,
     created_at: DateTime<Utc>,
+}
+
+/// One failing tool call in a project, for [`RunStore::project_error_lines`].
+/// `id` is the activity row's, so the lines after it in the same node (what
+/// the agent did next) can be read with `activity_since`.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ErrorLine {
+    pub id: i64,
+    pub run_id: String,
+    pub node_id: String,
+    pub message: String,
+    pub created_at: DateTime<Utc>,
 }
 
 /// One recurring agent-side failure, aggregated across runs.
@@ -1144,6 +1161,36 @@ impl RunStore {
                 .then_with(|| y.last_seen.cmp(&x.last_seen))
         });
         Ok(out)
+    }
+
+    /// A project's failing tool calls, one per line, newest first: what
+    /// learned facts are judged by. The same rows as
+    /// [`Self::activity_error_groups`], ungrouped, because a fact needs to know
+    /// *when* each run hit a failure (before or after the fact went live), not
+    /// only how often.
+    pub async fn project_error_lines(
+        &self,
+        project: &str,
+        days: i32,
+        scan_limit: i64,
+    ) -> Result<Vec<ErrorLine>, PersistError> {
+        Ok(sqlx::query_as::<_, ErrorLine>(
+            "SELECT a.id, a.run_id, a.node_id, a.created_at,
+                    NULLIF(btrim(COALESCE(NULLIF(a.activity, ''), a.detail, '')), '') AS message
+                 FROM harness_run_activity a
+                 JOIN harness_workflow_runs r ON r.id = a.run_id
+                 WHERE a.is_error
+                   AND NULLIF(btrim(COALESCE(NULLIF(a.activity, ''), a.detail, '')), '') IS NOT NULL
+                   AND a.created_at >= now() - make_interval(days => $1)
+                   AND r.project = $2
+                 ORDER BY a.created_at DESC
+                 LIMIT $3",
+        )
+        .bind(days.max(1))
+        .bind(project)
+        .bind(scan_limit.max(1))
+        .fetch_all(&self.pool)
+        .await?)
     }
 
     /// Mark a run's terminal status (run finished). Only updates a run that is
@@ -2282,6 +2329,16 @@ mod tests {
         for a in &acts {
             store.record_activity(&run_id, "build", a).await.unwrap();
         }
+
+        // Ungrouped, for learned facts: every failure line with its message,
+        // newest first, the blank and the passing ones left out.
+        let lines = store.project_error_lines(&project, 1, 1000).await.unwrap();
+        assert_eq!(lines.len(), 3, "{lines:?}");
+        assert!(lines[0].message.contains("permission denied"), "{lines:?}");
+        assert!(lines
+            .iter()
+            .all(|l| l.run_id == run_id && l.node_id == "build"));
+        assert!(lines[0].id > lines[2].id, "newest first");
 
         let groups = store
             .activity_error_groups(Some(&project), 1, 1000)

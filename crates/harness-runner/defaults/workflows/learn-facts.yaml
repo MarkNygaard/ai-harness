@@ -1,0 +1,97 @@
+name: learn-facts
+internal: true
+description: |
+  The harness's own fact learning. The server starts it when a project's runs
+  keep failing the same way and no learned fact covers the failure yet; a
+  person never does, so it is hidden from every workflow list.
+
+  It reads those failures, what the agents did next, and the facts already
+  known, and writes short facts about the repository that would have
+  prevented them. Whether a fact reaches prompts is decided by the server,
+  from how many runs hit its failures, not by this run. It runs in the
+  project's checkout so it can check a fact against what is there, and
+  changes nothing.
+
+provider: claude
+model: sonnet
+
+nodes:
+  - id: evidence
+    category: setup
+    bash: |
+      set -euo pipefail
+      if [ -z "${HARNESS_RUN_URL:-}" ] || [ -z "${HARNESS_RUN_TOKEN:-}" ]; then
+        echo "learn-facts: this run cannot reach the harness — set its public URL under Settings → General" >&2
+        exit 1
+      fi
+      curl -fsS --max-time 120 \
+        -H "Authorization: Bearer $HARNESS_RUN_TOKEN" \
+        "$HARNESS_RUN_URL/api/run/facts/evidence" \
+        -o "$ARTIFACTS_DIR/evidence.md"
+      echo "evidence: $(wc -c < "$ARTIFACTS_DIR/evidence.md") bytes"
+
+  - id: learn
+    category: planning
+    depends_on: [evidence]
+    context: fresh
+    output_format:
+      type: object
+      properties:
+        facts:
+          type: array
+          items:
+            type: object
+            properties:
+              text:
+                type: string
+                description: >-
+                  The fact, one or two sentences, as every later run will be
+                  told it.
+              failures:
+                type: array
+                items: { type: string }
+                description: The failure labels it answers, e.g. ["F1", "F3"].
+              same_as:
+                type: string
+                description: >-
+                  The id of a known fact that already says this. Then `text`
+                  may be empty: the failures are added to that fact.
+            required: [failures]
+      required: [facts]
+    prompt: |
+      Coding agents keep running into the same failures in this repository.
+      Write down what they should have known, as short facts. Every later run
+      in this repository is told the facts before it starts.
+
+      ## What to read
+
+      1. `$ARTIFACTS_DIR/evidence.md`: each recurring failure (labelled `F1`,
+         `F2`, …) with how many runs hit it, the steps it happened in, the
+         failing message, and what the agent did next in a couple of those
+         runs. Then the facts already known, including retired ones.
+      2. This repository, your working directory. Check a fact against it
+         before writing it: the script in `package.json`, the tool on `PATH`,
+         the file that exists. A fact that is wrong is worse than none.
+
+      ## What makes a good fact
+
+      - It would have **prevented** the failure: the command that works here,
+        the step that must run first, the path that exists, the environment
+        variable a command needs. Often the evidence shows it: the call that
+        succeeded right after the failing one.
+      - It is **specific to this repository**. Nothing that is true of every
+        repository ("read the error message", "run the tests").
+      - It is **short**: one or two sentences, with the exact command or path
+        in backticks. Several failures with one cause get one fact.
+      - It isn't already known. If a known fact says it, answer with that
+        fact's id in `same_as` and the failures; that strengthens it. Don't
+        repeat a **retired** fact in any wording: it was removed by a person
+        or didn't help.
+
+      Not every failure has a fact behind it. A test that failed because the
+      change under work was wrong, a flaky network call, a typo the agent
+      fixed at once: leave those out. No facts is the right answer when none
+      of the failures has a cause a sentence could prevent.
+
+      At most five facts, most useful first. Answer with `facts`, each naming
+      the failure labels it answers in `failures`.
