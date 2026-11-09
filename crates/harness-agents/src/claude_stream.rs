@@ -417,3 +417,90 @@ mod usage_limit_tests {
         );
     }
 }
+
+/// Real Claude Code output, recorded by `scripts/record-cli-fixture.mjs` and
+/// replayed through the parser. See `testdata/cli/README.md`.
+#[cfg(test)]
+mod recorded_fixtures {
+    use super::*;
+
+    const SIMPLE: &str = include_str!("../../../testdata/cli/claude/simple.jsonl");
+    const TOOL_CALL: &str = include_str!("../../../testdata/cli/claude/tool-call.jsonl");
+
+    /// The recording's own `result` line, so expectations follow a re-recording.
+    fn result_line(recording: &str) -> serde_json::Value {
+        recording
+            .lines()
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .find(|v| v["type"] == "result")
+            .expect("recording has a result line")
+    }
+
+    /// Every item the live stream path emits for a recording.
+    fn emitted(recording: &str) -> Vec<StreamItem> {
+        let mut parsed = ParsedClaudeStreamOutput::default();
+        let mut items = Vec::new();
+        for line in recording.lines() {
+            apply_claude_stream_line(line, &mut parsed, &mut items);
+        }
+        items
+    }
+
+    #[test]
+    fn simple_turn_yields_the_reply_and_its_usage() {
+        let parsed = parse_claude_stream_output(SIMPLE);
+        let result = result_line(SIMPLE);
+        assert_eq!(parsed.output.trim(), "pong");
+        assert_eq!(parsed.output, result["result"].as_str().unwrap());
+        assert_eq!(
+            parsed.token_usage.input_tokens,
+            result["usage"]["input_tokens"].as_u64().unwrap()
+        );
+        assert_eq!(
+            parsed.token_usage.output_tokens,
+            result["usage"]["output_tokens"].as_u64().unwrap()
+        );
+        assert_eq!(
+            parsed.token_usage.cache_read_tokens,
+            result["usage"]["cache_read_input_tokens"].as_u64().unwrap()
+        );
+        assert!(parsed.completed);
+    }
+
+    #[test]
+    fn tool_call_surfaces_the_read_and_the_answer_that_used_it() {
+        let parsed = parse_claude_stream_output(TOOL_CALL);
+        assert_eq!(parsed.output.trim(), "fixture-marker-7f3a");
+
+        let calls: Vec<(String, serde_json::Value)> = emitted(TOOL_CALL)
+            .into_iter()
+            .filter_map(|item| match item {
+                StreamItem::ItemCompleted {
+                    item: Item::ToolCall { name, input, .. },
+                } => Some((name, input)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(calls.len(), 1, "{calls:?}");
+        assert_eq!(calls[0].0, "Read");
+        assert!(
+            calls[0].1["file_path"]
+                .as_str()
+                .unwrap()
+                .ends_with("notes.txt"),
+            "{:?}",
+            calls[0].1
+        );
+    }
+
+    #[test]
+    fn an_allowed_rate_limit_event_is_not_a_limit() {
+        // Real events say `"status":"allowed"` next to `"overageStatus":"rejected"`
+        // on a plan without overage. Only `status` decides.
+        for recording in [SIMPLE, TOOL_CALL] {
+            assert!(recording.contains("\"rate_limit_event\""));
+            let parsed = parse_claude_stream_output(recording);
+            assert_eq!(parsed.limit_resets_at, None);
+        }
+    }
+}

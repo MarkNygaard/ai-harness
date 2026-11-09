@@ -28,6 +28,8 @@ sdk/typescript/bun.lock
 # stray omp capture files
 omp.jsonl
 *.jsonl
+# ...except the recorded CLI output the adapter tests replay.
+!testdata/cli/**/*.jsonl
 .vite/
 
 # internal planning notes (kept local, never pushed)
