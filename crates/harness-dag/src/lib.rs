@@ -33,6 +33,7 @@ pub mod graph;
 pub mod model;
 pub mod parse;
 pub mod signal;
+pub mod usage_limit;
 pub mod vars;
 
 pub use cond::eval_when;

@@ -22,3 +22,6 @@ sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+# Pins the usage-limit phrase in `claude_stream` to the one the DAG reads.
+harness-dag = { workspace = true }
+chrono = { workspace = true }

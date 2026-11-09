@@ -229,8 +229,11 @@ impl CodeAgent for ClaudeCodeAgent {
             };
             let stdout_tail = claude_stdout_tail(tail_source);
             return Err(harness_core::error::HarnessError::AgentExecution(format!(
-                "claude exited with {}: stderr=[{}] stdout_tail=[{}]",
-                output.status, stderr, stdout_tail
+                "claude exited with {}: stderr=[{}] stdout_tail=[{}]{}",
+                output.status,
+                stderr,
+                stdout_tail,
+                crate::claude_stream::usage_limit_suffix(&parsed)
             )));
         }
 
