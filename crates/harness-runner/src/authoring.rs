@@ -257,6 +257,13 @@ pub fn validate_workflow(yaml: &str) -> ValidationResult {
                     nodes: Vec::new(),
                 };
             }
+            if let Err(e) = check_mcp(&wf) {
+                return ValidationResult {
+                    valid: false,
+                    error: Some(e),
+                    nodes: Vec::new(),
+                };
+            }
             ValidationResult {
                 valid: true,
                 error: None,
@@ -897,9 +904,23 @@ pub fn validate_step(node: serde_json::Value) -> Result<serde_json::Value, Strin
     let doc = serde_json::json!({ "name": "saved-step", "nodes": [node.clone()] });
     let yaml = serde_yaml::to_string(&doc).map_err(|e| format!("convert node: {e}"))?;
     match parse_workflow(&yaml) {
-        Ok(_) | Err(harness_dag::DagError::UnknownNodeReference { .. }) => Ok(node),
+        Ok(wf) => {
+            check_mcp(&wf)?;
+            Ok(node)
+        }
+        Err(harness_dag::DagError::UnknownNodeReference { .. }) => Ok(node),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// Every AI step's `mcp:` against the install's MCP registry — see
+/// [`crate::mcp_servers::check_uses`]. Deterministic steps never get servers,
+/// so what they list is ignored rather than refused.
+fn check_mcp(wf: &Workflow) -> Result<(), String> {
+    for node in wf.nodes.iter().filter(|n| n.kind.is_ai()) {
+        crate::mcp_servers::check_uses(&node.id, node.provider.as_deref(), &node.mcp)?;
+    }
+    Ok(())
 }
 
 /// Set (or clear) the workflow-level `ui:` block — the declarative left-nav

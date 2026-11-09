@@ -154,6 +154,10 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             | "/api/run/improvements/evidence"
             | "/api/run/facts/evidence"
             | "/api/run/guard"
+            // An MCP server's OAuth redirect: a browser navigation, so no
+            // header. Authenticated by the single-use `state` nonce the server
+            // minted when an admin started the sign-in (see `mcp_registry`).
+            | "/api/mcp-servers/oauth/callback"
             // MCP-over-HTTP. Exempt from *this* middleware so an editor holding
             // only the MCP key can reach it — a key this middleware knows
             // nothing about. `handle_mcp` then authenticates every request
@@ -174,6 +178,11 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
         // session; each trigger verifies its own deliveries against its own
         // secret, and an unknown id is a 404 (see `triggers_routes`).
         || path.starts_with("/api/hooks/")
+        // A workflow step's MCP gateway. Opening a session authenticates with
+        // the run's grant; every other call with the step's own session token,
+        // which buys only that step's tools (see `mcp_gateway`). The server
+        // name is a path segment, hence a prefix.
+        || path.starts_with("/api/run/mcp/")
 }
 
 /// Bearer token authentication middleware.

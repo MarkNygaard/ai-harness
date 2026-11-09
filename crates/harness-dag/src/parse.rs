@@ -66,7 +66,7 @@ struct RawNode {
     #[serde(default)]
     hooks: Option<NodeHooks>,
     #[serde(default)]
-    mcp: Vec<String>,
+    mcp: Vec<crate::model::McpUse>,
     #[serde(default)]
     linear_comment: bool,
 
@@ -297,7 +297,7 @@ struct NodeKindParts {
     retries: u32,
     output_format: Option<serde_json::Value>,
     hooks: Option<NodeHooks>,
-    mcp: Vec<String>,
+    mcp: Vec<crate::model::McpUse>,
     linear_comment: bool,
 }
 
@@ -315,15 +315,16 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
         if !ids.insert(id.clone()) {
             return Err(DagError::DuplicateNodeId(id));
         }
-        if let Some(name) = parts
+        // Which servers exist is the install's registry, checked at save time;
+        // parsing only refuses what could never name one.
+        if let Some(u) = parts
             .mcp
             .iter()
-            .find(|n| !crate::model::KNOWN_MCP_SERVERS.contains(&n.as_str()))
+            .find(|u| !crate::model::is_valid_mcp_server_name(&u.server))
         {
-            return Err(DagError::UnknownMcpServer {
+            return Err(DagError::InvalidMcpServerName {
                 node: id,
-                name: name.clone(),
-                known: crate::model::KNOWN_MCP_SERVERS.join(", "),
+                name: u.server.clone(),
             });
         }
         nodes.push(Node {

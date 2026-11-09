@@ -80,6 +80,12 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // Generate the MCP key now, so `/mcp` is guarded from the first request
     // rather than from whenever someone first opens its settings page.
     super::mcp_key::spawn_ensure(runs_state.clone());
+    // Load the MCP server registry, so a workflow saved from the first request
+    // on is checked against the servers that exist.
+    {
+        let rs = runs_state.clone();
+        tokio::spawn(async move { super::mcp_registry::sync_catalog(&rs).await });
+    }
     // A stored public URL overrides the environment, so a typo is a form field
     // rather than a redeploy.
     super::settings_routes::spawn_load_public_url(runs_state.clone());
@@ -607,6 +613,40 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(super::facts_routes::get_evidence),
         )
         .route("/api/run/guard", get(super::loop_guard::get_guard))
+        // ── MCP servers: the registry, and the gateway steps reach them by ──
+        .route(
+            "/api/mcp-servers",
+            get(super::mcp_registry::list).post(super::mcp_registry::create),
+        )
+        .route(
+            "/api/mcp-servers/oauth/callback",
+            get(super::mcp_registry::oauth_callback),
+        )
+        .route(
+            "/api/mcp-servers/{name}",
+            put(super::mcp_registry::update).delete(super::mcp_registry::remove),
+        )
+        .route(
+            "/api/mcp-servers/{name}/tools",
+            put(super::mcp_registry::set_tools),
+        )
+        .route(
+            "/api/mcp-servers/{name}/refresh",
+            post(super::mcp_registry::refresh),
+        )
+        .route(
+            "/api/mcp-servers/{name}/oauth/start",
+            post(super::mcp_registry::oauth_start),
+        )
+        .route(
+            "/api/mcp-servers/{name}/oauth/disconnect",
+            post(super::mcp_registry::oauth_disconnect),
+        )
+        .route(
+            "/api/run/mcp/session",
+            post(super::mcp_gateway::open_session).delete(super::mcp_gateway::close_session),
+        )
+        .route("/api/run/mcp/{server}", post(super::mcp_gateway::handle))
         .route(
             "/api/projects/{name}/cache-size",
             get(super::projects_routes::get_cache_size),

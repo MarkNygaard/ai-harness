@@ -114,6 +114,7 @@ pub struct RunsState {
     /// Running steps that keep hitting the same failure (see `loop_guard`).
     pub(crate) loop_guard: super::loop_guard::LoopGuard,
     saved_step_store: OnceCell<harness_persist::SavedStepStore>,
+    mcp_server_store: OnceCell<harness_persist::McpServerStore>,
     workflow_author_store: OnceCell<harness_persist::WorkflowAuthorStore>,
     trash_store: OnceCell<harness_persist::TrashStore>,
     installed_workflow_store: OnceCell<harness_persist::InstalledWorkflowStore>,
@@ -229,6 +230,7 @@ impl RunsState {
             fact_store: OnceCell::new(),
             loop_guard: Default::default(),
             saved_step_store: OnceCell::new(),
+            mcp_server_store: OnceCell::new(),
             workflow_author_store: OnceCell::new(),
             trash_store: OnceCell::new(),
             installed_workflow_store: OnceCell::new(),
@@ -583,6 +585,23 @@ impl RunsState {
         self.saved_step_store
             .get_or_try_init(|| async {
                 harness_persist::SavedStepStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Lazily connect the MCP server registry (Settings → MCP servers).
+    pub(crate) async fn mcp_server_store(
+        &self,
+    ) -> Result<&harness_persist::McpServerStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.mcp_server_store
+            .get_or_try_init(|| async {
+                harness_persist::McpServerStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })

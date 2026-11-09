@@ -339,12 +339,17 @@ impl LocalRunner {
         // them and the step's agent can take them, otherwise said in the
         // prompt so the agent doesn't hunt for tools that aren't there.
         let mcp_supported = crate::mcp_servers::provider_supports_mcp(req.provider);
-        let (mcp_config, mut mcp_missing) = crate::mcp_servers::resolve(req.mcp, &self.env_vars);
-        let mcp_config = if mcp_supported {
-            mcp_config
+        let (mcp_config, mcp_missing, mcp_session) = if !mcp_supported {
+            (
+                None,
+                req.mcp.iter().map(|u| u.server.clone()).collect(),
+                None,
+            )
+        } else if req.mcp.is_empty() {
+            (None, Vec::new(), None)
         } else {
-            mcp_missing = req.mcp.to_vec();
-            None
+            let opened = crate::mcp_servers::open(req.mcp, req.node_id, &self.env_vars).await;
+            (opened.config, opened.missing, opened.session)
         };
         let prompt = match crate::mcp_servers::unavailable_note(&mcp_missing, mcp_supported) {
             Some(note) => format!("{note}\n\n{prompt}"),
@@ -383,8 +388,13 @@ impl LocalRunner {
                 mcp_config,
                 progress: req.progress.clone(),
             })
-            .await
-            .map_err(|e| RunnerError(e.to_string()))?;
+            .await;
+        // The step's gateway token stops working the moment the step ends,
+        // whether it succeeded or not.
+        if let Some(session) = mcp_session {
+            session.close().await;
+        }
+        let result = result.map_err(|e| RunnerError(e.to_string()))?;
         Ok(NodeOutput {
             text: result.text,
             session: result.session,

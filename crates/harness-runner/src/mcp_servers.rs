@@ -104,6 +104,239 @@ pub fn provider_supports_mcp(provider: Option<&str>) -> bool {
     provider.is_none_or(|p| MCP_PROVIDERS.contains(&p))
 }
 
+/// The servers built into the harness. Every other name is a server someone
+/// added in Settings → MCP servers, and a registry entry may not take one of
+/// these names.
+pub const BUILTIN_SERVERS: &[&str] = &["sentry", "grafana"];
+
+pub fn is_builtin(name: &str) -> bool {
+    BUILTIN_SERVERS.contains(&name)
+}
+
+// ── The registry, as save-time validation sees it ────────────────────────────
+
+/// Server name → the tools an admin enabled for it, for every server added in
+/// Settings. Kept here, process-wide, because a workflow is saved through many
+/// doors (the editor, the MCP tools one node at a time, the library) that all
+/// end in [`crate::authoring::validate_workflow`], and none of them carries a
+/// database handle. The server replaces it at start-up and on every registry
+/// change; until then only the built-in servers are known.
+static CATALOG: std::sync::LazyLock<std::sync::RwLock<HashMap<String, Vec<String>>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Replace the registry snapshot save-time validation checks against.
+pub fn set_catalog(servers: HashMap<String, Vec<String>>) {
+    *CATALOG.write().unwrap_or_else(|p| p.into_inner()) = servers;
+}
+
+/// The tools a step may name for `server`: a built-in's fixed set, or the ones
+/// an admin enabled for a registry server. `None` = no such server.
+fn allowed_tools(server: &str) -> Option<Vec<String>> {
+    if is_builtin(server) {
+        return Some(tool_names(server).iter().map(|t| t.to_string()).collect());
+    }
+    CATALOG
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(server)
+        .cloned()
+}
+
+fn known_servers() -> Vec<String> {
+    let mut names: Vec<String> = BUILTIN_SERVERS.iter().map(|s| s.to_string()).collect();
+    names.extend(
+        CATALOG
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .keys()
+            .cloned(),
+    );
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// Check one node's `mcp:` against the registry: the agent can take MCP
+/// servers, every server exists, and every tool it names is one the admin
+/// enabled. A step can narrow a server's tools but never widen them.
+pub fn check_uses(
+    node: &str,
+    provider: Option<&str>,
+    uses: &[harness_dag::McpUse],
+) -> Result<(), String> {
+    if uses.is_empty() {
+        return Ok(());
+    }
+    if !provider_supports_mcp(provider) {
+        return Err(format!(
+            "step `{node}` asks for MCP servers, but its provider `{}` cannot be limited to \
+             chosen tools; use one of: {}",
+            provider.unwrap_or_default(),
+            MCP_PROVIDERS.join(", ")
+        ));
+    }
+    let mut seen = std::collections::HashSet::new();
+    for u in uses {
+        if !seen.insert(u.server.as_str()) {
+            return Err(format!(
+                "step `{node}` lists MCP server `{}` twice; list it once",
+                u.server
+            ));
+        }
+        let Some(allowed) = allowed_tools(&u.server) else {
+            return Err(format!(
+                "step `{node}` asks for MCP server `{}`, which is not set up; known: {}",
+                u.server,
+                known_servers().join(", ")
+            ));
+        };
+        if let Some(tools) = &u.tools {
+            if tools.is_empty() {
+                return Err(format!(
+                    "step `{node}` gives MCP server `{}` an empty tool list; name at least \
+                     one tool, or list the server by name for all of its enabled tools",
+                    u.server
+                ));
+            }
+            let not_enabled: Vec<&str> = tools
+                .iter()
+                .filter(|t| !allowed.contains(t))
+                .map(String::as_str)
+                .collect();
+            if !not_enabled.is_empty() {
+                return Err(format!(
+                    "step `{node}` asks MCP server `{}` for {}, which {} not enabled for it \
+                     (enable tools under Settings → MCP servers)",
+                    u.server,
+                    not_enabled.join(", "),
+                    if not_enabled.len() == 1 { "is" } else { "are" }
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+// ── Opening a step's servers ─────────────────────────────────────────────────
+
+/// What a step gets: its agent's MCP config, the servers it asked for but
+/// can't have, and the gateway session to close when the step ends.
+pub struct OpenedMcp {
+    pub config: Option<Value>,
+    pub missing: Vec<String>,
+    pub session: Option<GatewaySession>,
+}
+
+/// A step's session on the server's MCP gateway; [`GatewaySession::close`]
+/// ends it so the token stops working as soon as the step does.
+pub struct GatewaySession {
+    base: String,
+    token: String,
+}
+
+impl GatewaySession {
+    pub async fn close(self) {
+        let _ = reqwest::Client::new()
+            .delete(format!("{}/api/run/mcp/session", self.base))
+            .bearer_auth(&self.token)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await;
+    }
+}
+
+/// The gateway's answer to opening a session.
+#[derive(serde::Deserialize)]
+struct SessionReply {
+    token: String,
+    /// Server name → the gateway URL serving it for this session.
+    servers: std::collections::BTreeMap<String, String>,
+    #[serde(default)]
+    missing: Vec<String>,
+}
+
+/// Give a step the servers it asked for.
+///
+/// A built-in server the step takes whole is started by the agent directly, as
+/// before. Everything else — a server added in Settings, or a built-in the step
+/// narrows to some tools — goes through the server's MCP gateway: the agent
+/// talks to `HARNESS_RUN_URL/api/run/mcp/<server>` with a token for this step
+/// alone, and the gateway, which holds the real credentials, lists and allows
+/// only the step's tools. The agent never sees a credential it could use to go
+/// around that list.
+pub async fn open(
+    uses: &[harness_dag::McpUse],
+    node: &str,
+    env: &HashMap<String, String>,
+) -> OpenedMcp {
+    let (direct, gated): (Vec<_>, Vec<_>) = uses
+        .iter()
+        .partition(|u| is_builtin(&u.server) && u.tools.is_none());
+    let direct_names: Vec<String> = direct.iter().map(|u| u.server.clone()).collect();
+    let (doc, mut missing) = resolve(&direct_names, env);
+    let mut servers = doc
+        .and_then(|d| d.get("mcpServers").and_then(Value::as_object).cloned())
+        .unwrap_or_default();
+    let mut session = None;
+    if !gated.is_empty() {
+        match open_session(&gated, node, env).await {
+            Ok(reply) => {
+                for (name, url) in reply.servers {
+                    servers.insert(
+                        name,
+                        json!({
+                            "type": "http",
+                            "url": url,
+                            "headers": { "Authorization": format!("Bearer {}", reply.token) },
+                        }),
+                    );
+                }
+                missing.extend(reply.missing);
+                session = Some(GatewaySession {
+                    base: run_url(env).unwrap_or_default(),
+                    token: reply.token,
+                });
+            }
+            Err(e) => {
+                tracing::warn!(node, "mcp gateway: {e}");
+                missing.extend(gated.iter().map(|u| u.server.clone()));
+            }
+        }
+    }
+    OpenedMcp {
+        config: (!servers.is_empty()).then(|| json!({ "mcpServers": servers })),
+        missing,
+        session,
+    }
+}
+
+fn run_url(env: &HashMap<String, String>) -> Option<String> {
+    env_value(env, "HARNESS_RUN_URL").map(|s| s.trim_end_matches('/').to_string())
+}
+
+async fn open_session(
+    uses: &[&harness_dag::McpUse],
+    node: &str,
+    env: &HashMap<String, String>,
+) -> Result<SessionReply, String> {
+    let base = run_url(env).ok_or("no HARNESS_RUN_URL (the server has no public URL set)")?;
+    let token = env_value(env, "HARNESS_RUN_TOKEN").ok_or("no HARNESS_RUN_TOKEN")?;
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/api/run/mcp/session"))
+        .bearer_auth(token)
+        .json(&json!({ "node": node, "uses": uses }))
+        .timeout(std::time::Duration::from_secs(60))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!("{status}: {body}"));
+    }
+    resp.json::<SessionReply>().await.map_err(|e| e.to_string())
+}
+
 fn env_value<'a>(env: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
     env.get(key)
         .map(String::as_str)
@@ -486,5 +719,49 @@ mod tests {
         assert!(provider_supports_mcp(Some("pi")));
         assert!(!provider_supports_mcp(Some("codex")));
         assert!(!provider_supports_mcp(Some("cursor")));
+    }
+
+    /// One test, because the catalog is process-wide and tests run in parallel.
+    #[test]
+    fn a_step_may_narrow_a_servers_enabled_tools_but_never_widen_them() {
+        use harness_dag::McpUse;
+        let narrowed = |server: &str, tools: &[&str]| McpUse {
+            server: server.into(),
+            tools: Some(tools.iter().map(|t| t.to_string()).collect()),
+        };
+        set_catalog(HashMap::from([(
+            "m365".to_string(),
+            vec!["outlook_email_search".to_string()],
+        )]));
+
+        // Built-ins are always known; registry servers once the catalog has them.
+        assert!(check_uses("s", None, &[McpUse::server("sentry")]).is_ok());
+        assert!(check_uses("s", None, &[McpUse::server("m365")]).is_ok());
+        assert!(check_uses("s", None, &[narrowed("m365", &["outlook_email_search"])]).is_ok());
+        assert!(check_uses("s", None, &[narrowed("sentry", &["search_issues"])]).is_ok());
+
+        let unknown = check_uses("s", None, &[McpUse::server("datadog")]).unwrap_err();
+        assert!(
+            unknown.contains("`datadog`") && unknown.contains("m365"),
+            "{unknown}"
+        );
+
+        let widened = check_uses("s", None, &[narrowed("m365", &["send_mail"])]).unwrap_err();
+        assert!(
+            widened.contains("send_mail") && widened.contains("not enabled"),
+            "{widened}"
+        );
+
+        assert!(check_uses("s", None, &[narrowed("m365", &[])]).is_err());
+        assert!(check_uses("s", None, &[McpUse::server("m365"), McpUse::server("m365")]).is_err());
+
+        let cursor = check_uses("s", Some("cursor"), &[McpUse::server("sentry")]).unwrap_err();
+        assert!(cursor.contains("cursor"), "{cursor}");
+        // No servers is fine for any provider.
+        assert!(check_uses("s", Some("cursor"), &[]).is_ok());
+
+        // A server removed from the registry is unknown again.
+        set_catalog(HashMap::new());
+        assert!(check_uses("s", None, &[McpUse::server("m365")]).is_err());
     }
 }

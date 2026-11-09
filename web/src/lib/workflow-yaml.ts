@@ -9,6 +9,7 @@ import yaml from "js-yaml";
 import type {
   EditorNode,
   EditorWorkflow,
+  McpEntry,
   NodeKindId,
   PrebuiltStep,
   ReportAction,
@@ -89,6 +90,23 @@ function clean<T extends Record<string, unknown>>(
     out[k] = v;
   }
   return out;
+}
+
+/**
+ * A node's `mcp:` list as written: bare names and `{ server, tools }` objects
+ * both pass through untouched, so a save from the canvas changes neither.
+ * Anything else (a number, a nameless object) is something the server would
+ * refuse anyway, and is left out.
+ */
+function mcpFromDoc(raw: unknown): McpEntry[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  return raw.filter(
+    (e): e is McpEntry =>
+      typeof e === "string" ||
+      (typeof e === "object" &&
+        e !== null &&
+        typeof (e as { server?: unknown }).server === "string"),
+  );
 }
 
 /** Serialize the `ui` block to a terse doc, or undefined when it declares
@@ -250,7 +268,7 @@ export function fromYaml(text: string): EditorWorkflow {
     output_format: n.output_format,
     retries: typeof n.retries === "number" ? n.retries : undefined,
     hooks: n.hooks ?? undefined,
-    mcp: Array.isArray(n.mcp) ? (n.mcp as string[]) : undefined,
+    mcp: mcpFromDoc(n.mcp),
     linear_comment: n.linear_comment === true ? true : undefined,
     prompt: n.prompt as string | undefined,
     bash: n.bash as string | undefined,

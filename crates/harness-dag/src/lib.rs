@@ -44,10 +44,10 @@ pub use exec::{
 };
 pub use graph::topological_layers;
 pub use model::{
-    ApprovalConfig, ContextMode, HookDecision, HookRule, ImprovementsConfig, LinearAction,
-    LoopConfig, Node, NodeHooks, NodeKind, ReportAction, ReportStatus, RouteConfig, RouteOption,
-    ScriptRuntime, TriggerRule, Workflow, WorkflowNav, WorkflowReport, WorkflowUi,
-    IMPROVEMENTS_EVERY,
+    is_valid_mcp_server_name, ApprovalConfig, ContextMode, HookDecision, HookRule,
+    ImprovementsConfig, LinearAction, LoopConfig, McpUse, Node, NodeHooks, NodeKind, ReportAction,
+    ReportStatus, RouteConfig, RouteOption, ScriptRuntime, TriggerRule, Workflow, WorkflowNav,
+    WorkflowReport, WorkflowUi, IMPROVEMENTS_EVERY,
 };
 pub use parse::parse_workflow;
 pub use signal::{detect_signal, validate_signal};
