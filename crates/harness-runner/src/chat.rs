@@ -377,6 +377,10 @@ async fn spawn(program: &Path, args: &[String], turn: &ChatTurn) -> Result<Outpu
     if let (Some(code), false) = (&turn.code_dir, claude) {
         cmd.env(OMP_CODE_ROOT_ENV, code);
     }
+    // A chat agent, and every MCP server it starts, runs what a model decides:
+    // it has no business with the control plane's database URL or secret key.
+    // The workflow spawn paths strip these; the chat path did not.
+    harness_agents::strip_control_plane_env(&mut cmd);
     cmd.args(args)
         .current_dir(cwd)
         .envs(turn.env.iter().map(|(k, v)| (k, v)))

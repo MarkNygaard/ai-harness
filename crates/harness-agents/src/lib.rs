@@ -20,6 +20,40 @@ pub(crate) fn strip_claude_env(cmd: &mut tokio::process::Command) {
     }
 }
 
+/// What a Claude Code session exports to the processes it starts. A `claude`
+/// spawned with these believes it is part of that session (its id, messaging
+/// socket and token) and traps. Not every `CLAUDE*` variable: the OAuth token
+/// and `CLAUDE_CONFIG_DIR` are credentials and configuration, not session
+/// markers. The list T3 Code strips for the same reason.
+pub const CLAUDE_SESSION_ENV: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_HOST_SESSION_ID",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_DESKTOP_APP_VERSION",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+    "CLAUDE_AGENT_SDK_VERSION",
+];
+
+/// Remove [`CLAUDE_SESSION_ENV`] from this process's own environment, so
+/// nothing it spawns inherits them: not only the `claude` adapters (which
+/// already strip them) but bash nodes, omp, cursor-agent, version probes and
+/// MCP servers, any of which can start `claude` in turn.
+///
+/// Call it first thing in `main`, before a runtime starts other threads:
+/// changing the environment while another thread reads it is unsound.
+pub fn scrub_claude_session_env() {
+    for key in CLAUDE_SESSION_ENV {
+        std::env::remove_var(key);
+    }
+}
+
 /// Control-plane secrets that must never reach a spawned task/agent process.
 /// A run executes untrusted, AI-generated code (and full test suites) inside the
 /// server's process tree — it has no business reading the control plane's
@@ -81,4 +115,27 @@ unsafe fn nix_kill(pid: i32, sig: i32) -> i32 {
         fn kill(pid: i32, sig: i32) -> i32;
     }
     kill(pid, sig)
+}
+
+#[cfg(test)]
+mod session_env_tests {
+    use super::CLAUDE_SESSION_ENV;
+
+    /// Scrubbed at startup, so the list must hold session markers only:
+    /// dropping the OAuth token or config dir would sign Claude out.
+    #[test]
+    fn the_session_scrub_leaves_credentials_and_config_alone() {
+        for kept in [
+            "CLAUDE_CODE_OAUTH_TOKEN",
+            "CLAUDE_CONFIG_DIR",
+            "ANTHROPIC_API_KEY",
+        ] {
+            assert!(
+                !CLAUDE_SESSION_ENV.contains(&kept),
+                "{kept} would be scrubbed"
+            );
+        }
+        assert!(CLAUDE_SESSION_ENV.contains(&"CLAUDECODE"));
+        assert!(CLAUDE_SESSION_ENV.contains(&"CLAUDE_CODE_ENTRYPOINT"));
+    }
 }
