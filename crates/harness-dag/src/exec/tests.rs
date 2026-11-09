@@ -920,3 +920,142 @@ nodes:
     assert!(runner.calls_for("approved").is_empty());
     assert_eq!(node.provider, None, "a rules-only route runs no agent");
 }
+
+// ── usage limits ─────────────────────────────────────────────────────────
+
+/// A failure saying the usage limit resets `mins` minutes from now.
+fn limited(mins: i64) -> NodeOutput {
+    let reset = Utc::now() + chrono::Duration::minutes(mins);
+    fail(&format!(
+        "claude exited with exit status: 1: stdout_tail=[You've hit your limit] ({}{})",
+        crate::usage_limit::RESETS_AT_UNIX,
+        reset.timestamp()
+    ))
+}
+
+const ONE_STEP: &str = r#"
+name: one
+nodes:
+  - id: a
+    prompt: "work"
+"#;
+
+/// Run `ONE_STEP`, returning the report and the live activity lines.
+async fn run_one(runner: &MockRunner) -> (RunReport, Vec<String>) {
+    use futures::StreamExt as _;
+    let wf = parse_workflow(ONE_STEP).unwrap();
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    let report = run_workflow_streaming(&wf, runner, &empty_vars(), Some(&tx))
+        .await
+        .unwrap();
+    drop(tx);
+    let events: Vec<RunEvent> = rx.collect().await;
+    let lines = events
+        .into_iter()
+        .filter_map(|e| match e {
+            RunEvent::NodeProgress { activity, .. } => Some(activity.text),
+            _ => None,
+        })
+        .collect();
+    (report, lines)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_step_that_hits_a_usage_limit_waits_for_the_reset_and_runs_again() {
+    let runner = MockRunner::new()
+        .respond("a", limited(30))
+        .respond("a", ok("done"));
+    let (report, lines) = run_one(&runner).await;
+
+    assert_eq!(report.status, RunStatus::Completed);
+    let a = report.node("a").unwrap();
+    assert_eq!(a.output, "done");
+    assert!(
+        a.note
+            .as_deref()
+            .unwrap()
+            .contains("waited for a usage limit"),
+        "{:?}",
+        a.note
+    );
+    assert_eq!(runner.calls_for("a").len(), 2);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("Usage limit reached. Waiting until")),
+        "{lines:?}"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_usage_limit_that_resets_too_late_fails_the_step() {
+    // A weekly limit: far past the default six-hour wait.
+    let runner = MockRunner::new().respond("a", limited(3 * 24 * 60));
+    let (report, lines) = run_one(&runner).await;
+
+    assert_eq!(report.status, RunStatus::Failed);
+    let note = report.node("a").unwrap().note.clone().unwrap();
+    assert!(note.contains("later than the 6h this run waits"), "{note}");
+    assert_eq!(runner.calls_for("a").len(), 1);
+    assert!(lines.is_empty(), "{lines:?}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_usage_limit_with_no_reset_time_fails_as_before() {
+    let runner = MockRunner::new().respond("a", fail("rate limit exceeded"));
+    let (report, _) = run_one(&runner).await;
+
+    assert_eq!(report.status, RunStatus::Failed);
+    assert_eq!(runner.calls_for("a").len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_limit_hit_after_every_reset_gives_up() {
+    let mut runner = MockRunner::new();
+    for _ in 0..5 {
+        runner = runner.respond("a", limited(10));
+    }
+    let (report, _) = run_one(&runner).await;
+
+    assert_eq!(report.status, RunStatus::Failed);
+    // The first try, then one more after each of the three waits.
+    assert_eq!(runner.calls_for("a").len(), 4);
+    let note = report.node("a").unwrap().note.clone().unwrap();
+    assert!(note.contains("again after 3 waits"), "{note}");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_loop_resumes_the_iteration_that_hit_the_limit() {
+    let yaml = r#"
+name: looped
+nodes:
+  - id: r
+    loop:
+      prompt: "review"
+      until: DONE
+      max_iterations: 3
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    let runner = MockRunner::new()
+        .respond("r", ok("first pass"))
+        .respond("r", limited(20))
+        .respond("r", ok("DONE"));
+    let report = run_workflow(&wf, &runner, &empty_vars()).await.unwrap();
+
+    assert_eq!(report.status, RunStatus::Completed);
+    let iterations: Vec<u32> = runner.calls_for("r").iter().map(|c| c.iteration).collect();
+    assert_eq!(iterations, vec![1, 2, 2]);
+}
+
+#[test]
+fn the_resume_time_reads_in_the_display_zone() {
+    use chrono::TimeZone as _;
+    let tz = chrono_tz::Europe::Copenhagen;
+    let now = Utc.with_ymd_and_hms(2026, 11, 9, 10, 0, 0).unwrap();
+    let later = Utc.with_ymd_and_hms(2026, 11, 9, 13, 5, 0).unwrap();
+    assert_eq!(clock_in(later, now, tz), "14:05 CET");
+    let tomorrow = Utc.with_ymd_and_hms(2026, 11, 10, 1, 0, 0).unwrap();
+    assert_eq!(clock_in(tomorrow, now, tz), "2026-11-10 02:00 CET");
+    assert_eq!(span(chrono::Duration::minutes(133)), "2h 13m");
+    assert_eq!(span(chrono::Duration::minutes(45)), "45m");
+}
