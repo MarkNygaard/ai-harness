@@ -42,19 +42,20 @@ nodes:
       it).
 
       Inspect it:
-        gh pr view <pr> --json number,state,mergeable,mergeStateStatus,baseRefName,headRefName,title
+        gh pr view <pr> --json number,url,state,mergeable,mergeStateStatus,baseRefName,headRefName,title
 
       Then emit ONLY this JSON verdict (no prose). If you cannot find a PR, set
-      `pr` to "" and `state` to "CLOSED".
+      `pr` and `url` to "" and `state` to "CLOSED".
     output_format:
       type: object
       properties:
         pr: { type: string, description: "PR number, or \"\" if none found" }
+        url: { type: string, description: "the PR's full GitHub URL, or \"\" if none found" }
         base: { type: string, description: "base branch (e.g. main)" }
         title: { type: string }
         state: { type: string, enum: ["OPEN", "MERGED", "CLOSED"] }
         mergeable: { type: string, enum: ["MERGEABLE", "CONFLICTING", "UNKNOWN"] }
-      required: [pr, state, mergeable]
+      required: [pr, url, state, mergeable]
 
   - id: abort-no-pr
     category: planning
@@ -63,7 +64,9 @@ nodes:
     cancel: "No open PR to merge for this input (not found, or already merged/closed)."
 
   # 2. GitHub's own word on the review. No reviewDecision means the repository
-  #    requires no review, which is as good as approved.
+  #    requires no review, which is as good as approved. The PR is named by its
+  #    URL: a bare number needs a git repo to say which GitHub repo it is in,
+  #    and a multi-repo project's workspace root is not one.
   - id: review
     category: validation
     depends_on: [resolve-pr]
@@ -71,7 +74,7 @@ nodes:
     timeout: 60000
     bash: |
       set -euo pipefail
-      decision=$(gh pr view "$resolve-pr.output.pr" --json reviewDecision --jq '.reviewDecision // ""')
+      decision=$(gh pr view "$resolve-pr.output.url" --json reviewDecision --jq '.reviewDecision // ""')
       case "$decision" in
         APPROVED|"") approved=true ;;
         *) approved=false ;;
@@ -147,31 +150,33 @@ nodes:
     trigger_rule: none_failed_min_one_success
     when: "$approval.output.route == 'merge'"
     prompt: |
-      Merge PR #$resolve-pr.output.pr into `$resolve-pr.output.base`. Its review
-      is already approved (or not required).
+      Merge PR #$resolve-pr.output.pr ($resolve-pr.output.url) into
+      `$resolve-pr.output.base`. Its review is already approved (or not
+      required). Name the PR by its URL in every `gh` command, as below: it
+      works from any folder, while a bare number needs to stand in its repo.
 
       1. Re-check its state now:
-         `gh pr view $resolve-pr.output.pr --json state,mergeable,mergeStateStatus`
+         `gh pr view $resolve-pr.output.url --json state,mergeable,mergeStateStatus`
          - If it is no longer OPEN, report that and stop (already merged).
          - If it is still CONFLICTING, do NOT merge — report the conflict.
       2. Bring the branch up to date with its base if it's behind — branch
          protection may require up-to-date branches, and CI should run against the
          post-merge state. This is a no-op when the branch is already current:
-           `gh pr update-branch $resolve-pr.output.pr`
+           `gh pr update-branch $resolve-pr.output.url`
          If it reports a conflict (the base moved in a conflicting way), do NOT
          merge — report it; a fresh conflict-resolution pass is needed.
       3. Wait for CI to finish and PASS before merging — never merge on
          in-progress or red checks:
-           `gh pr checks $resolve-pr.output.pr --watch --fail-fast`
+           `gh pr checks $resolve-pr.output.url --watch --fail-fast`
          - If a check failed or was cancelled: do NOT merge. Report the failing
            check(s) and stop.
          - If it reports that **no checks** exist ("no checks reported"), CI may
            simply not have registered yet after a fresh push. Wait 30 seconds
-           and run `gh pr checks $resolve-pr.output.pr` again, up to 4 times.
+           and run `gh pr checks $resolve-pr.output.url` again, up to 4 times.
            If checks appear, go back to watching them. If there are still none,
            the repository has no CI for this PR: continue and say so.
       4. Squash-merge and delete the branch:
-           `gh pr merge $resolve-pr.output.pr --squash --delete-branch`
+           `gh pr merge $resolve-pr.output.url --squash --delete-branch`
          If GitHub refuses, do NOT merge another way — report what it said.
       5. Never bypass branch protection, never admin-override, never `--no-verify`,
          and do not use `--auto`.
