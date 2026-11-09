@@ -291,10 +291,10 @@ async fn provision_omp_codex(
     let omp = std::env::var_os("OMP_CLI")
         .or_else(|| std::env::var_os("OMP_PATH"))
         .unwrap_or_else(|| std::ffi::OsString::from("omp"));
-    let out = tokio::process::Command::new(&omp)
-        .arg("auth-broker")
-        .arg("import")
-        .arg(&path)
+    let mut cmd = tokio::process::Command::new(&omp);
+    cmd.arg("auth-broker").arg("import").arg(&path);
+    harness_agents::strip_control_plane_env(&mut cmd);
+    let out = cmd
         .output()
         .await
         .map_err(|e| format!("spawn `omp auth-broker import`: {e}"))?;

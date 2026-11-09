@@ -64,7 +64,12 @@ impl ClaudeCodeAgent {
         if let (Some(budget), Some(phase)) = (&self.reasoning_budget, req.execution_phase) {
             return budget.model_for_phase(phase);
         }
-        req.model.as_deref().unwrap_or(&self.default_model)
+        // An empty model is "not set" (a hand-edited `model: ""`), not a model
+        // named "" — which reached the CLI as `--model ""`.
+        req.model
+            .as_deref()
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or(&self.default_model)
     }
 
     fn effective_sandbox_mode(&self, req: &AgentRequest) -> SandboxMode {

@@ -420,6 +420,8 @@ pub fn spawn_local_broker() {
             // Agent-session vars make spawned CLIs SIGTRAP — never propagate them.
             cmd.env_remove("CLAUDECODE");
             cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
+            // The broker holds subscription tokens, not the control plane's.
+            harness_agents::strip_control_plane_env(&mut cmd);
             match cmd.spawn() {
                 Ok(mut child) => {
                     backoff = Duration::from_secs(2);

@@ -198,10 +198,14 @@ tests are the source of truth.*
 
 ## Server operation
 
-- NEVER start `harness serve` from within a Claude Code / agent session — the
-  `CLAUDECODE` and `CLAUDE_CODE_ENTRYPOINT` env vars propagate to spawned
-  subprocesses and cause SIGTRAP. Start from a standalone terminal:
+- NEVER start `harness serve` from within a Claude Code / agent session.
+  Start it from a standalone terminal:
   `./target/release/harness serve --transport http --port 9800 --project-root <path>`.
+  The reason was that the session's `CLAUDECODE` / `CLAUDE_CODE_*` variables
+  reached every spawned `claude` and made it SIGTRAP. `main` now scrubs them
+  at startup (`harness_agents::scrub_claude_session_env`), but starting the
+  server from inside a session has not been tested since, so the rule stands
+  until it has.
 - If already running inside an agent session, only stop/kill the server — let
   the user start it manually.
 

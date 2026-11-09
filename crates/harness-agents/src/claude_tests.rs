@@ -198,6 +198,27 @@ fn resolve_model_uses_phase_when_budget_configured() {
 }
 
 #[test]
+fn an_empty_model_means_the_default_not_a_model_named_nothing() {
+    let agent = ClaudeCodeAgent::new(
+        PathBuf::from("claude"),
+        "default-model".to_string(),
+        SandboxMode::DangerFullAccess,
+    );
+    for empty in ["", "  "] {
+        let req = AgentRequest {
+            model: Some(empty.to_string()),
+            ..AgentRequest::default()
+        };
+        assert_eq!(agent.resolve_model(&req), "default-model");
+    }
+    let named = AgentRequest {
+        model: Some("opus".to_string()),
+        ..AgentRequest::default()
+    };
+    assert_eq!(agent.resolve_model(&named), "opus");
+}
+
+#[test]
 fn resolve_model_falls_back_to_req_model_when_no_budget() {
     let agent = ClaudeCodeAgent::new(
         PathBuf::from("claude"),

@@ -185,10 +185,12 @@ impl PiAgent {
     /// pass through anything already provider-qualified, prefix a bare Kimi
     /// model name, and fall back to the default.
     fn resolve_model(&self, model: Option<&str>) -> String {
-        match model {
+        match model.map(str::trim) {
+            // An empty model is "not set" (a hand-edited `model: ""`), not a
+            // Kimi model named "" — which reached omp as `kimi-code/`.
+            None | Some("") => self.default_model.clone(),
             Some(m) if m.contains('/') => m.to_string(),
             Some(m) => format!("{KIMI_PREFIX}{m}"),
-            None => self.default_model.clone(),
         }
     }
 
@@ -1323,6 +1325,28 @@ mod tests {
         );
         let resumed = agent.build_args("again", "kimi-code/kimi-k2.5", Some("sess-9"));
         assert!(resumed.windows(2).any(|w| w == ["--resume", "sess-9"]));
+    }
+
+    #[test]
+    fn an_empty_model_means_the_default_not_a_bare_kimi_prefix() {
+        let agent = PiAgent {
+            cli_path: PathBuf::from("omp"),
+            default_model: DEFAULT_MODEL.to_string(),
+            timeout: None,
+            idle_timeout: Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+            plugin_dirs: vec![],
+        };
+        assert_eq!(agent.resolve_model(Some("")), DEFAULT_MODEL);
+        assert_eq!(agent.resolve_model(Some("  ")), DEFAULT_MODEL);
+        assert_eq!(agent.resolve_model(None), DEFAULT_MODEL);
+        assert_eq!(
+            agent.resolve_model(Some("kimi-k2.5")),
+            "kimi-code/kimi-k2.5"
+        );
+        assert_eq!(
+            agent.resolve_model(Some("openai-codex/gpt-5.5")),
+            "openai-codex/gpt-5.5"
+        );
     }
 
     // The idle watchdog is exercised against a real `sh` process (unix only; CI
