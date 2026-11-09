@@ -1115,8 +1115,31 @@ mod tests {
         }
     }
 
-    const OPEN_PR: &str =
-        r#"{"pr":"42","base":"main","title":"t","state":"OPEN","mergeable":"MERGEABLE"}"#;
+    const OPEN_PR: &str = r#"{"pr":"42","url":"https://github.com/acme/shop/pull/42","base":"main","title":"t","state":"OPEN","mergeable":"MERGEABLE"}"#;
+
+    /// In a multi-repo project the workspace root is not a git repo, so
+    /// `gh pr view 42` fails there ("not a git repository") before it reaches
+    /// GitHub. The review check must name the PR by its URL, which works from
+    /// any folder.
+    #[tokio::test]
+    async fn task_merge_reads_the_review_by_pr_url() {
+        let (_, runner) = run_task_merge(&[
+            ("resolve-pr", OPEN_PR),
+            ("review", r#"{"approved":true,"decision":"APPROVED"}"#),
+            ("merge", r#"{"merged":true,"summary":"merged"}"#),
+        ])
+        .await;
+        let calls = runner.calls.lock().unwrap();
+        let review = calls
+            .iter()
+            .find(|(id, _)| id == "review")
+            .map(|(_, body)| body.as_str())
+            .expect("review ran");
+        assert!(
+            review.contains("gh pr view \\\"https://github.com/acme/shop/pull/42\\\""),
+            "{review}"
+        );
+    }
 
     /// "Ready for merge" with no approved review is not a failed run: the issue
     /// goes back to In Review and says why, and nothing is merged.
