@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   IconBinaryTree2,
+  IconBulb,
   IconLayoutGrid,
   IconLayoutList,
   IconPlus,
@@ -252,6 +253,24 @@ function OverrideBadge() {
 }
 
 /**
+ * This workflow has improvement suggestions switched on (`improvements:`).
+ *
+ * Without it there was no way to tell from the UI which workflows review their
+ * own runs — the setting lived only in the YAML.
+ */
+function ImprovementsBadge({ every }: { every: number }) {
+  return (
+    <span
+      className="inline-flex shrink-0 items-center gap-1 rounded-sm bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+      title={`Improvement suggestions are on: the harness reviews every ${every} finished runs per project and suggests changes`}
+    >
+      <IconBulb className="size-3" />
+      improves every {every}
+    </span>
+  );
+}
+
+/**
  * Who wrote this workflow, as one or two circles.
  *
  * The last editor only appears when they are not the creator — on a workflow
@@ -354,6 +373,9 @@ function WorkflowCard({
               <div className="mt-auto flex items-center gap-2 text-[11px] tabular-nums text-muted-foreground">
                 <span>{steps}</span>
                 {wf.overrides_bundled && <OverrideBadge />}
+                {wf.improvements?.every ? (
+                  <ImprovementsBadge every={wf.improvements.every} />
+                ) : null}
                 <Authors wf={wf} />
               </div>
             </CardContent>
@@ -376,6 +398,9 @@ function WorkflowCard({
                 )}
               </div>
               {wf.overrides_bundled && <OverrideBadge />}
+              {wf.improvements?.every ? (
+                <ImprovementsBadge every={wf.improvements.every} />
+              ) : null}
               <Authors wf={wf} />
               <div className="shrink-0 text-right text-[11px] tabular-nums text-muted-foreground">
                 {steps}

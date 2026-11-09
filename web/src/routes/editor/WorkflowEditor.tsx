@@ -24,6 +24,7 @@ import {
   RotateCcw,
   Save,
   FileText,
+  Lightbulb,
   Settings2,
   Trash2,
   TriangleAlert,
@@ -58,6 +59,7 @@ import {
 import { PropertiesDrawer } from "@/components/editor/PropertiesDrawer";
 import { VersionHistoryDialog } from "@/components/editor/VersionHistoryDialog";
 import { WorkflowDescriptionDrawer } from "@/components/editor/WorkflowDescriptionDrawer";
+import { WorkflowImprovementsDrawer } from "@/components/editor/WorkflowImprovementsDrawer";
 import { WorkflowSettingsDrawer } from "@/components/editor/WorkflowSettingsDrawer";
 import {
   type EditorNodeData,
@@ -82,8 +84,8 @@ interface Meta {
   provider?: string;
   model?: string;
   ui?: WorkflowUi | null;
-  // No controls for these yet; carried so a save from the canvas keeps them.
   improvements?: EditorWorkflow["improvements"];
+  // No control for this yet; carried so a save from the canvas keeps it.
   handles_epics?: boolean;
 }
 
@@ -111,10 +113,11 @@ function Editor() {
     name: routeName ?? "untitled-workflow",
   });
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  // The three right-hand panels (node inspector, description, UI block) are
-  // mutually exclusive — only one drawer is ever open.
+  // The right-hand panels (node inspector, description, UI block,
+  // improvements) are mutually exclusive — only one drawer is ever open.
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
+  const [improvementsOpen, setImprovementsOpen] = useState(false);
   const loadedFor = useRef<string | null>(null);
 
   // Load an existing workflow once its source arrives.
@@ -528,6 +531,7 @@ function Editor() {
         onClick={() => {
           setSelectedId(null);
           setSettingsOpen(false);
+          setImprovementsOpen(false);
           setDescriptionOpen((o) => !o);
         }}
         title="Read and edit this workflow's description (shown on its card)"
@@ -541,12 +545,36 @@ function Editor() {
         onClick={() => {
           setSelectedId(null);
           setDescriptionOpen(false);
+          setImprovementsOpen(false);
           setSettingsOpen((o) => !o);
         }}
         title="Edit this workflow's nav entry and report tab (the UI block)"
       >
         <Settings2 className="h-3.5 w-3.5" />
         UI
+      </Button>
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => {
+          setSelectedId(null);
+          setDescriptionOpen(false);
+          setSettingsOpen(false);
+          setImprovementsOpen((o) => !o);
+        }}
+        title={
+          meta.improvements?.every
+            ? `Improvement suggestions are on: a review every ${meta.improvements.every} finished runs per project`
+            : "Improvement suggestions are off for this workflow"
+        }
+      >
+        <Lightbulb className="h-3.5 w-3.5" />
+        Improvements
+        <span className="tabular-nums text-muted-foreground">
+          {meta.improvements?.every
+            ? `every ${meta.improvements.every}`
+            : "off"}
+        </span>
       </Button>
       <Button
         variant="outline"
@@ -669,6 +697,14 @@ function Editor() {
               nodeIds={nodes.map((n) => n.id)}
               onChange={(next) => setMeta((m) => ({ ...m, ui: next }))}
               onClose={() => setSettingsOpen(false)}
+            />
+          ) : improvementsOpen ? (
+            <WorkflowImprovementsDrawer
+              improvements={meta.improvements}
+              onChange={(next) =>
+                setMeta((m) => ({ ...m, improvements: next }))
+              }
+              onClose={() => setImprovementsOpen(false)}
             />
           ) : null}
         </div>
