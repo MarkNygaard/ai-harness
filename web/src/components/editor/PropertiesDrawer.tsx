@@ -95,12 +95,18 @@ export function PropertiesDrawer({
     (kind === "route" && !!node.route?.prompt);
 
   const provider = node.provider ?? "";
-  const providerModels =
-    catalog?.providers.find((p) => p.id === provider)?.models ?? [];
+  const providerInfo = catalog?.providers.find((p) => p.id === provider);
+  const providerModels = providerInfo?.models ?? [];
+  // Models this agent's installed CLI is too old for. Shown, but not
+  // selectable, so the list says which update would unlock them.
+  const unavailableModels = providerInfo?.unavailable ?? [];
   // Always include the node's current model, so a value not in the catalog
   // (a bundled workflow's model, or one whose agent isn't connected) still shows.
+  // One held back for its CLI version already shows, as unavailable.
   const modelOptions =
-    node.model && !providerModels.includes(node.model)
+    node.model &&
+    !providerModels.includes(node.model) &&
+    !unavailableModels.some((u) => u.id === node.model)
       ? [node.model, ...providerModels]
       : providerModels;
   // What this step will actually run on, following both inheritances — the
@@ -109,6 +115,10 @@ export function PropertiesDrawer({
   // workflow bills the same as one that names them.
   const effProvider = provider || workflowProvider;
   const effModel = node.model ?? workflowModel;
+  const effProviderInfo = catalog?.providers.find((p) => p.id === effProvider);
+  const effUnavailable = effProviderInfo?.unavailable?.find(
+    (u) => u.id === effModel,
+  );
 
   return (
     <div className="flex w-1/3 min-w-[20rem] flex-none flex-col border-l border-border bg-card">
@@ -353,7 +363,25 @@ export function PropertiesDrawer({
                     </span>
                   </SelectItem>
                 ))}
+                {unavailableModels.map((u) => (
+                  <SelectItem key={u.id} value={u.id} disabled>
+                    <span className="flex items-center gap-2">
+                      {u.id}
+                      <span className="text-[11px] text-muted-foreground">
+                        needs {providerInfo?.label ?? provider} {u.min_cli}
+                      </span>
+                    </span>
+                  </SelectItem>
+                ))}
               </SelectField>
+              {effUnavailable && (
+                <p className="text-[11px] text-destructive">
+                  {effProviderInfo?.label ?? effProvider}{" "}
+                  {effUnavailable.installed} is installed; this model needs{" "}
+                  {effUnavailable.min_cli}. Update the CLI or pick another
+                  model.
+                </p>
+              )}
               {/* The badge above is only visible while the list is open, and
                   this is the one property worth still knowing once it is
                   closed. */}

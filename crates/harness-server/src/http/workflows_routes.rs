@@ -97,7 +97,8 @@ pub async fn get_catalog(
     headers: axum::http::HeaderMap,
 ) -> Response {
     let creds = crate::http::credentials_routes::connected_clis().await;
-    let catalog = authoring::catalog(&state.core.project_root, creds);
+    let installed = crate::http::system_routes::installed_cli_versions().await;
+    let catalog = authoring::catalog_with(&state.core.project_root, creds, &installed);
     let mut out = match serde_json::to_value(&catalog) {
         Ok(v) => v,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),

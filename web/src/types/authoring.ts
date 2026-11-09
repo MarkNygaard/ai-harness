@@ -157,6 +157,16 @@ export interface ProviderInfo {
   id: string;
   label: string;
   models: string[];
+  /** Models the installed CLI is too old for; never also in `models`. */
+  unavailable?: UnavailableModel[];
+}
+
+export interface UnavailableModel {
+  id: string;
+  /** The oldest CLI version that knows the model. */
+  min_cli: string;
+  /** The version installed now. */
+  installed: string;
 }
 
 export interface CommandInfo {

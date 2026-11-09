@@ -176,7 +176,8 @@ fn running_activity(id: &str) -> Option<Vec<Activity>> {
 /// held to the harness's tools (see [`chat::CHAT_PROVIDERS`]).
 async fn chat_options() -> Vec<ProviderInfo> {
     let creds = super::credentials_routes::connected_clis().await;
-    harness_runner::authoring::providers(creds)
+    let installed = super::system_routes::installed_cli_versions().await;
+    harness_runner::authoring::providers_with(creds, &installed)
         .into_iter()
         .filter(|p| chat::supports_chat(p.id))
         .collect()
@@ -1327,6 +1328,7 @@ mod tests {
             id,
             label: id,
             models: models.to_vec(),
+            unavailable: Vec::new(),
         }
     }
 

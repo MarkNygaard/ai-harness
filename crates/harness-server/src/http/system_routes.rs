@@ -199,6 +199,39 @@ pub(crate) async fn providers(
     )
 }
 
+/// The installed version of each provider's CLI, for holding back a model the
+/// CLI is too old for (`min_cli` in the model catalog).
+///
+/// Cached for a few minutes: the editor asks on every catalog load, and each
+/// probe spawns a process. A CLI update lands within that window, which is
+/// also how long a stale "needs update" can last. A CLI that is missing or
+/// does not answer is left out, so its models are not held back on a guess.
+pub(crate) async fn installed_cli_versions() -> harness_runner::authoring::InstalledClis {
+    use std::sync::Mutex;
+    use std::time::Instant;
+    const TTL: Duration = Duration::from_secs(300);
+    static CACHE: Mutex<Option<(Instant, harness_runner::authoring::InstalledClis)>> =
+        Mutex::new(None);
+
+    if let Some((at, versions)) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if at.elapsed() < TTL {
+            return versions.clone();
+        }
+    }
+    let probes = futures::future::join_all(AGENT_CLIS.iter().map(|cli| async move {
+        let version = if which(cli.binary) {
+            cli_version(cli.binary).await
+        } else {
+            None
+        };
+        version.map(|v| (cli.provider.to_string(), v))
+    }))
+    .await;
+    let versions: harness_runner::authoring::InstalledClis = probes.into_iter().flatten().collect();
+    *CACHE.lock().unwrap_or_else(|e| e.into_inner()) = Some((Instant::now(), versions.clone()));
+    versions
+}
+
 /// Whether `binary` resolves on `PATH`, without spawning it.
 ///
 /// Deliberately not the `which` crate: this is a `PATH` split and a metadata
