@@ -43,13 +43,12 @@ pub enum DagError {
     #[error("only one node may set `linear_comment: true`; found: {0:?}")]
     MultipleLinearComments(Vec<String>),
 
-    /// A node's `mcp:` names a server the harness doesn't know how to start.
-    #[error("node `{node}` asks for MCP server `{name}`; known: {known}")]
-    UnknownMcpServer {
-        node: String,
-        name: String,
-        known: String,
-    },
+    /// A node's `mcp:` entry is not a usable server name.
+    #[error(
+        "node `{node}` asks for MCP server `{name}`, which is not a valid server name \
+         (lowercase letters, digits, `-` and `_`)"
+    )]
+    InvalidMcpServerName { node: String, name: String },
 
     /// A `script` node is missing its required `runtime`.
     #[error("script node `{0}` is missing `runtime` (expected `bun` or `uv`)")]

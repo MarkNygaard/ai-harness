@@ -70,6 +70,9 @@ pub use facts::{
 mod saved_steps;
 pub use saved_steps::{SaveStepError, SavedStep, SavedStepStore};
 
+mod mcp_servers;
+pub use mcp_servers::{credential_key as mcp_credential_key, McpServer, McpServerStore, McpTool};
+
 mod finding_state;
 pub use finding_state::{FindingState, FindingStateInput, FindingStateStore};
 

@@ -162,6 +162,37 @@ nodes:
     expect(toYaml(back)).not.toMatch(/plain[\s\S]*mcp/);
     expect(back.nodes[1].mcp).toBeUndefined();
   });
+
+  it("keeps both mcp shapes: a bare server and one narrowed to some tools", () => {
+    const src = `name: wf
+nodes:
+  - id: triage
+    prompt: look
+    mcp:
+      - sentry
+      - server: notion
+        tools: [search, fetch]
+`;
+    const wf = fromYaml(src);
+    const want = ["sentry", { server: "notion", tools: ["search", "fetch"] }];
+    expect(wf.nodes[0].mcp).toEqual(want);
+    const text = toYaml(wf);
+    expect(fromYaml(text).nodes[0].mcp).toEqual(want);
+    // Written back as the same mapping, not flattened to a name.
+    expect(text).toMatch(
+      /- server: notion\n\s+tools:\n\s+- search\n\s+- fetch/,
+    );
+  });
+
+  it("drops mcp entries the server could not read", () => {
+    const wf = fromYaml(`name: wf
+nodes:
+  - id: a
+    prompt: x
+    mcp: [sentry, 3, { tools: [x] }]
+`);
+    expect(wf.nodes[0].mcp).toEqual(["sentry"]);
+  });
 });
 
 describe("prebuiltNode", () => {

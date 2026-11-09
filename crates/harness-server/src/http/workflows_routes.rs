@@ -124,6 +124,7 @@ pub async fn get_catalog(
         })
         .collect();
     out["saved_steps"] = serde_json::Value::Array(saved);
+    out["mcp_servers"] = super::mcp_registry::catalog_entries(&runs).await;
     Json(out).into_response()
 }
 

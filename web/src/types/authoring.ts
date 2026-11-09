@@ -262,6 +262,9 @@ export interface EditorApproval {
   on_reject?: string;
 }
 
+/** One entry of a step's `mcp:` list: a server name, or a server and some of its tools. */
+export type McpEntry = string | { server: string; tools: string[] };
+
 /**
  * The flat, editor-facing node shape — mirrors the YAML node the parser accepts
  * (`RawNode`): an id, edges, AI options, and exactly one body field. The active
@@ -289,8 +292,11 @@ export interface EditorNode {
   retries?: number;
   /** Per-node tool hooks, kept as written (no editor UI yet). */
   hooks?: unknown;
-  /** External MCP servers for this step's agent, e.g. `["sentry"]`. */
-  mcp?: string[];
+  /**
+   * Outside MCP servers for this step's agent. A bare name gets every tool the
+   * admin enabled on that server; `{ server, tools }` narrows to some of them.
+   */
+  mcp?: McpEntry[];
   /** Post this step's output to the Linear issue when the run completes. */
   linear_comment?: boolean;
   // Mutually exclusive bodies:

@@ -16,6 +16,7 @@ import { IntegrationsPage } from "./routes/credentials/IntegrationsPage";
 import { CategoriesPage } from "./routes/categories/CategoriesPage";
 import { PreferencesPage } from "./routes/settings/PreferencesPage";
 import { EditorConnectionPage } from "./routes/settings/EditorConnectionPage";
+import { McpServersPage } from "./routes/settings/McpServersPage";
 import { MembersPage } from "./routes/settings/MembersPage";
 import { GeneralPage } from "./routes/settings/GeneralPage";
 import { EmailPage } from "./routes/settings/EmailPage";
@@ -102,6 +103,7 @@ export function App() {
             />
             <Route path="/settings/preferences" element={<PreferencesPage />} />
             <Route path="/settings/mcp" element={<EditorConnectionPage />} />
+            <Route path="/settings/mcp-servers" element={<McpServersPage />} />
             {/* Public: whoever holds one of these links has not signed in yet. */}
             <Route path="/invite/:token" element={<AcceptInvitePage />} />
             <Route path="/forgot" element={<ForgotPasswordPage />} />

@@ -4,6 +4,7 @@ import {
   IconArrowLeft,
   IconBinaryTree2,
   IconRobot,
+  IconServer2,
   IconFolderCog,
   IconKey,
   IconMail,
@@ -146,6 +147,15 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
         keywords: "dag yaml editor nodes commands",
       },
       {
+        // Not "Editor connection" above: that is an editor reaching this
+        // harness. These are outside tools the harness hands to steps.
+        href: "/settings/mcp-servers",
+        label: "MCP servers",
+        icon: IconServer2,
+        keywords:
+          "mcp server tools outside steps notion atlassian sentry grafana oauth",
+      },
+      {
         href: "/settings/categories",
         label: "Categories",
         icon: IconTags,
@@ -230,7 +240,10 @@ export function SettingsSidebar({
                   <SidebarMenuItem key={item.href}>
                     <SidebarMenuButton
                       render={<Link to={item.href} />}
-                      isActive={pathname.startsWith(item.href)}
+                      isActive={
+                        pathname === item.href ||
+                        pathname.startsWith(`${item.href}/`)
+                      }
                     >
                       <item.icon />
                       <span>{item.label}</span>

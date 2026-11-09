@@ -653,6 +653,7 @@ pub(crate) async fn call_tool(
                     })
                 })
                 .collect();
+            catalog["mcp_servers"] = super::mcp_registry::catalog_entries(state).await;
             to_result("catalog".to_string(), &catalog)
         }
         "workflow_list" => {
@@ -1280,7 +1281,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_set_node",
-            "description": "Add or replace (by id) one node — no YAML. `node` has `id` and exactly one body field (prompt | bash | command | script | loop | approval | cancel | linear | route) plus optional depends_on, when, category, provider, model, context, trigger_rule, timeout, output_format. Validates the whole DAG. A `route` node ({\"routes\":[{\"name\",\"description\",\"when\"}],\"prompt\",\"default\"}) picks one route: rules first, then the prompt asks a model, then the default; a downstream step runs on route X with when: \"$<id>.output.route == 'X'\".",
+            "description": "Add or replace (by id) one node — no YAML. `node` has `id` and exactly one body field (prompt | bash | command | script | loop | approval | cancel | linear | route) plus optional depends_on, when, category, provider, model, context, trigger_rule, timeout, output_format, mcp. `mcp` lists MCP servers from workflow_catalog `mcp_servers`: a name for all its enabled tools, or {\"server\",\"tools\":[...]} for fewer. Validates the whole DAG. A `route` node ({\"routes\":[{\"name\",\"description\",\"when\"}],\"prompt\",\"default\"}) picks one route: rules first, then the prompt asks a model, then the default; a downstream step runs on route X with when: \"$<id>.output.route == 'X'\".",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,

@@ -106,9 +106,78 @@ pub struct ApprovalConfig {
     pub on_reject: Option<String>,
 }
 
-/// The MCP servers a node may ask for with `mcp:`. The runner knows how to
-/// start each; an unknown name is a parse error rather than a silent no-op.
-pub const KNOWN_MCP_SERVERS: &[&str] = &["sentry", "grafana"];
+/// One entry of a node's `mcp:` list: a server by name, optionally narrowed to
+/// some of its tools.
+///
+/// Written as a bare name (`mcp: [sentry]` — every tool the admin enabled for
+/// that server) or as a map (`mcp: [{server: m365, tools: [mail_search]}]`).
+/// Whether the server exists, and whether the tools are ones the admin enabled,
+/// is checked when the workflow is saved, against the install's MCP registry —
+/// parsing cannot see it. A run that meets a server it can't start runs the
+/// step without it and says so in the prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McpUse {
+    pub server: String,
+    /// `None` = every tool the admin enabled for the server. `Some` narrows
+    /// that set; it can never widen it.
+    pub tools: Option<Vec<String>>,
+}
+
+impl McpUse {
+    pub fn server(name: impl Into<String>) -> Self {
+        Self {
+            server: name.into(),
+            tools: None,
+        }
+    }
+}
+
+impl Serialize for McpUse {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        match &self.tools {
+            None => s.serialize_str(&self.server),
+            Some(tools) => {
+                use serde::ser::SerializeMap;
+                let mut m = s.serialize_map(Some(2))?;
+                m.serialize_entry("server", &self.server)?;
+                m.serialize_entry("tools", tools)?;
+                m.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for McpUse {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Name(String),
+            Full {
+                server: String,
+                #[serde(default)]
+                tools: Option<Vec<String>>,
+            },
+        }
+        Ok(match Raw::deserialize(d)? {
+            Raw::Name(server) => McpUse {
+                server,
+                tools: None,
+            },
+            Raw::Full { server, tools } => McpUse { server, tools },
+        })
+    }
+}
+
+/// Whether `name` can name an MCP server: lowercase letters, digits, `-` and
+/// `_`, starting with a letter or digit, at most 40 long. The name becomes the
+/// prefix of the agent's tool names (`mcp__<name>__<tool>`), so it stays plain.
+pub fn is_valid_mcp_server_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
+        && name.len() <= 40
+        && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
+}
 
 /// Provider-agnostic per-node tool hooks. Translated by the runner into Claude
 /// Code settings.json hooks, the omp hook extension, or Cursor project hooks.
@@ -385,11 +454,11 @@ pub struct Node {
     /// Provider-agnostic tool hooks translated per provider at dispatch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hooks: Option<NodeHooks>,
-    /// External MCP servers this step's agent gets, by name — one of
-    /// [`KNOWN_MCP_SERVERS`]. Attached only when the project has that service
-    /// configured; otherwise the step runs without it. AI bodies only.
+    /// External MCP servers this step's agent gets, each optionally narrowed
+    /// to some of its tools (see [`McpUse`]). Attached only when the server is
+    /// connected; otherwise the step runs without it. AI bodies only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub mcp: Vec<String>,
+    pub mcp: Vec<McpUse>,
     /// When the run was started from a Linear issue, post this node's output
     /// to the issue when the run completes — in place of the bare "completed"
     /// note. At most one node per workflow.

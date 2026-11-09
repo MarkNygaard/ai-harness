@@ -413,8 +413,40 @@ nodes:
     prompt: "no tools"
 "#;
     let wf = parse_workflow(yaml).unwrap();
-    assert_eq!(wf.nodes[0].mcp, vec!["sentry".to_string()]);
+    assert_eq!(wf.nodes[0].mcp, vec![crate::McpUse::server("sentry")]);
     assert!(wf.nodes[1].mcp.is_empty());
+}
+
+#[test]
+fn a_step_can_narrow_a_server_to_some_of_its_tools() {
+    let yaml = r#"
+name: m
+nodes:
+  - id: explore
+    prompt: "look"
+    mcp:
+      - sentry
+      - server: m365
+        tools: [outlook_email_search]
+"#;
+    let wf = parse_workflow(yaml).unwrap();
+    assert_eq!(
+        wf.nodes[0].mcp,
+        vec![
+            crate::McpUse::server("sentry"),
+            crate::McpUse {
+                server: "m365".into(),
+                tools: Some(vec!["outlook_email_search".into()]),
+            },
+        ]
+    );
+    // A bare name stays a bare name when written back out, so a workflow that
+    // only ever said `mcp: [sentry]` round-trips unchanged.
+    let out = serde_json::to_value(&wf.nodes[0].mcp).unwrap();
+    assert_eq!(
+        out,
+        serde_json::json!(["sentry", {"server": "m365", "tools": ["outlook_email_search"]}])
+    );
 }
 
 #[test]
@@ -450,17 +482,26 @@ nodes:
 }
 
 #[test]
-fn rejects_an_unknown_mcp_server() {
-    let yaml = r#"
+fn any_well_formed_server_name_parses_and_a_malformed_one_does_not() {
+    // Which servers exist is the registry's business, checked at save time.
+    let ok = r#"
 name: m
 nodes:
   - id: explore
     prompt: "x"
     mcp: [datadog]
 "#;
+    assert!(parse_workflow(ok).is_ok());
+    let bad = r#"
+name: m
+nodes:
+  - id: explore
+    prompt: "x"
+    mcp: ["Data Dog"]
+"#;
     assert!(matches!(
-        parse_workflow(yaml),
-        Err(DagError::UnknownMcpServer { node, name, .. }) if node == "explore" && name == "datadog"
+        parse_workflow(bad),
+        Err(DagError::InvalidMcpServerName { node, name }) if node == "explore" && name == "Data Dog"
     ));
 }
 

@@ -11,6 +11,7 @@ import type {
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
 import { useCategories } from "@/lib/categories";
 import { SaveStepButton } from "./SaveStepDialog";
+import { McpPicker } from "./McpPicker";
 import { isMetered } from "@/lib/models";
 import {
   Select,
@@ -382,6 +383,14 @@ export function PropertiesDrawer({
                 </SelectItem>
               ))}
             </SelectField>
+            {/* A route's model only picks a way out; it gets no tools. */}
+            {kind !== "route" && (
+              <McpPicker
+                value={node.mcp ?? []}
+                provider={effProvider}
+                onChange={(mcp) => set({ mcp })}
+              />
+            )}
           </>
         )}
         {/* Trigger rule is about this step's dependencies and applies to every

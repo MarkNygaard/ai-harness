@@ -192,7 +192,7 @@ Every node has an `id` and exactly **one body** (`prompt` / `bash` / `command` /
 | `timeout` | Milliseconds, for `bash`/`script` bodies. |
 | `retries` | Re-run **this node only** on failure, up to N times, before the run fails (default `0` = run once). Same worktree/session — for transient failures (tests, builds, flaky network). Do **not** set on side-effecting steps (e.g. a push/PR step), where a retry could double-act. Capped at 10. |
 | `output_format` | JSON schema the AI body's output should match (see [output_format](#output_format)). |
-| `mcp` | External tools for this step's agent, e.g. `[sentry]` (see [External tools](#external-tools-mcp)). |
+| `mcp` | External tools for this step's agent: servers by name (`[sentry]`), or narrowed to some tools (`[{server: m365, tools: [outlook_email_search]}]`). See [External tools](#external-tools-mcp). |
 | `linear_comment` | `true` on one node: when a Linear issue started the run, this node's output is posted to the issue when the run completes (see [Reporting back to Linear](#reporting-back-to-linear)). |
 
 ### Node bodies
@@ -545,12 +545,15 @@ per provider at dispatch.
 ## External tools: `mcp:`
 
 A step can give its agent extra tools from an outside service with `mcp:`.
-There are two:
+Two are built in:
 
 - **`sentry`:** production errors, so a step that investigates or fixes a bug
   can read the error itself ([setup](/docs/setup/sentry)).
 - **`grafana`:** Prometheus metrics, Loki logs and dashboards, for reports and
   for investigating what happened around an error ([setup](/docs/setup/grafana)).
+
+Any other MCP server can be added under **Settings → MCP servers**
+([setup](/docs/setup/mcp-servers)), and is then asked for by its name.
 
 ```yaml
 - id: explore
@@ -558,19 +561,36 @@ There are two:
   mcp: [sentry, grafana]
 ```
 
-- **Only when it's connected.** The tools are attached when that service is
-  connected. Without it the step still runs, and its prompt says the service
-  isn't available. That way a shared workflow can ask for it without breaking
-  projects that don't use it.
-- **Read-only.** Agents can read Sentry issues, events and traces, and query
-  Grafana. They can't change anything in either.
-- **Claude and Pi steps.** `codex` and `cursor` steps run without it, and are
-  told so.
-- An unknown name is a validation error, not a silent no-op.
+A server listed by name gives the step every tool an admin switched on for it.
+To give the step fewer, name the tools:
 
-Ask for it only on the steps that need it. Every step that has it starts
-Sentry's server, and an agent with tools it has no use for may spend turns on
-them anyway.
+```yaml
+- id: find-customer-mail
+  prompt: Find the customer's last three emails about $TASK_TITLE.
+  mcp:
+    - server: m365
+      tools: [outlook_email_search, read_resource]
+```
+
+- **Only what an admin switched on.** A step can name fewer tools than the
+  admin switched on, never more. Saving a workflow that names an unknown server,
+  or a tool that isn't switched on, fails with a message naming it. The agent
+  sees only the step's tools, and a call to any other tool is refused.
+- **Only when it's connected.** Without the connection the step still runs, and
+  its prompt says the server isn't available. That way a shared workflow can ask
+  for it without breaking projects that don't use it. The same goes for a server
+  whose sign-in has expired, or that was removed after the workflow was saved.
+- **One shared account.** Every run uses the account the server was connected
+  with, whoever started the run. Give a step write tools (send, update,
+  delete) only when it needs them: text from a Linear issue can reach the agent.
+- **Read-only built-ins.** Agents can read Sentry issues, events and traces, and
+  query Grafana. They can't change anything in either.
+- **Claude and Pi steps.** A workflow that gives MCP servers to a `codex` or
+  `cursor` step can't be saved.
+
+Ask for it only on the steps that need it. Every step that has it starts the
+server, and an agent with tools it has no use for may spend turns on them
+anyway.
 
 ## Reporting back to Linear
 

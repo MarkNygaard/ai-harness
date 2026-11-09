@@ -100,7 +100,7 @@ pub struct NodeRequest<'a> {
     /// Provider-agnostic tool hooks translated per provider at dispatch.
     pub hooks: Option<&'a crate::model::NodeHooks>,
     /// External MCP servers the step asked for by name (e.g. `sentry`).
-    pub mcp: &'a [String],
+    pub mcp: &'a [crate::model::McpUse],
     /// Optional sink for live activity updates (AI bodies only; a streaming
     /// runner reports the node's latest line here). `None` = no live progress.
     pub progress: Option<ProgressSink>,

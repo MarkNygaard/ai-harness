@@ -177,6 +177,17 @@ tests are the source of truth.*
   `PUPPETEER_EXECUTABLE_PATH` point at it and `CHROMIUM_FLAGS` carries
   `--no-sandbox --disable-dev-shm-usage`, which is what a container needs. It is
   ~400 MB of the image — an all-backend install can drop that layer.
+- **Step MCP servers (`mcp:`)** — Sentry/Grafana are built in
+  (`harness-runner/src/mcp_servers.rs`); anything else is a registry row
+  (`harness-persist` `McpServerStore`, secrets in `CredentialStore` under
+  `mcp:<name>`), managed by `harness-server/src/http/mcp_registry.rs`. A
+  registry server, or a built-in narrowed to some tools, reaches the agent only
+  through the **gateway** (`mcp_gateway.rs`, `/api/run/mcp/*`): the server
+  holds the credentials and forwards only the step's allowed tools. Do NOT put
+  an MCP server's credentials in the run env or an agent-readable config —
+  an agent with a shell would then bypass the tool list. Save-time checks read
+  the process-wide snapshot `mcp_servers::set_catalog`, refreshed on every
+  registry change.
 - **Multi-repo prompts** — in a multi-repo run the workspace root is not a git
   repo, so `LocalRunner::run_prompt` prepends a workspace-layout block to every
   `prompt`/`command`/loop node (`workspace_layout_preamble`, keyed on

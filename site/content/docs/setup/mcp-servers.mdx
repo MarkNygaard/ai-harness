@@ -1,0 +1,90 @@
+---
+title: "MCP servers"
+description: "Add any MCP server once for the whole harness, choose which of its tools workflow steps may use, and give each step only the tools it needs."
+---
+
+An MCP server gives an agent tools for an outside service: a mailbox, a CRM,
+a ticket system. Add a server once, under **Settings → MCP servers**, and any
+workflow step can ask for it with [`mcp:`](/docs/workflows/authoring#external-tools-mcp).
+
+Sentry and Grafana are built in and are set up under
+[Integrations](/docs/setup/sentry). This page is about everything else.
+
+## One account for the whole harness
+
+Each server is connected **once**, with one account, and every run uses that
+account. It isn't connected per person.
+
+Most runs have nobody behind them: the Linear poller and schedules start
+them. So there is no person whose account a run could borrow, and a
+workflow that only worked for the people who had connected their own account
+would fail for everyone else.
+
+Use a **shared service account** for this, such as `harness@yourcompany.com`,
+and give it only the access the workflows need. Check that the service allows
+a shared account and has a licence for it.
+
+## Adding a server
+
+**Settings → MCP servers → Add server.** Give it a short name, like `m365` or
+`hubspot`. Steps use this name, and it can't be changed later.
+
+A server is either:
+
+- **A local command** the harness starts, such as `npx -y @acme/mcp-server`.
+  The command has to be available in the harness container. Secrets are passed
+  to it as environment variables.
+- **A remote URL**, for servers that run as a service. Secrets are sent as
+  request headers, for example `Authorization: Bearer …`.
+
+Secrets are stored encrypted. Settings shows only their names, never the
+values.
+
+### Signing in with OAuth
+
+Many remote servers sign in with OAuth instead of a key. Choose **OAuth**, save,
+then click **Connect** and sign in **as the shared account**.
+
+- The harness needs a [public URL](/docs/setup/deploy) to sign in. The
+  provider sends you back to `<public URL>/api/mcp-servers/oauth/callback`.
+- Most servers let the harness register itself with them. If a server doesn't,
+  create an OAuth client with the provider, register that callback URL, and
+  paste the client ID (and secret, if there is one) when you connect.
+- The harness renews the sign-in before each step uses it. If the provider
+  stops accepting it, for example because the password changed or access was
+  revoked, the server shows **Reconnect needed**. Steps that ask for it run
+  without it until someone reconnects.
+
+## Choosing the tools
+
+Once the harness reaches a server, Settings lists its tools. Only the tools you
+switch on can be used by a step.
+
+**A new server starts with only its read-only tools switched on.** A tool that
+can send, change or delete something is marked, and stays off until you switch
+it on. Switch a write tool on only if a workflow needs it.
+
+This list is what protects the shared account. Anyone who can put text in front
+of an agent, for example by writing a Linear issue that starts a run, can try to
+get the agent to use any tool it has. An agent can only call the tools switched
+on here, and only the ones its step asks for.
+
+When you refresh the tool list later, tools the server has added since stay off
+until you switch them on.
+
+## How a step reaches a server
+
+The agent never gets the server's credentials. It talks to the harness, and the
+harness forwards its calls to the real server:
+
+- The agent sees only the tools its step was given. A call to any other tool is
+  refused, and the refusal appears in the step's activity.
+- Its access ends when the step ends.
+- The harness logs which run and step called which tool. Outside the harness,
+  every call shows up as the shared account, so this log is how you trace a
+  call back to a run.
+
+## Which agents can use it
+
+Claude and Pi (omp, Kimi) steps. A workflow that gives MCP servers to a `codex`
+or `cursor` step can't be saved.
