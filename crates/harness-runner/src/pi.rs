@@ -1468,3 +1468,76 @@ mod tests {
         }
     }
 }
+
+/// Real omp output, recorded by `scripts/record-cli-fixture.mjs` and replayed
+/// through the parser. See `testdata/cli/README.md`.
+#[cfg(test)]
+mod recorded_fixtures {
+    use super::*;
+    use harness_dag::ActivityKind;
+
+    const SIMPLE: &str = include_str!("../../../testdata/cli/omp/simple.jsonl");
+    const TOOL_CALL: &str = include_str!("../../../testdata/cli/omp/tool-call.jsonl");
+
+    fn activities(recording: &str) -> Vec<Activity> {
+        recording.lines().flat_map(activities_from_line).collect()
+    }
+
+    #[test]
+    fn simple_turn_yields_the_reply_session_and_usage() {
+        let parsed = parse_omp_stream(SIMPLE);
+        assert_eq!(parsed.text.trim(), "pong");
+        assert!(parsed.saw_end);
+        assert!(parsed.session.is_some());
+        assert!(parsed.usage.input.unwrap_or(0) > 0, "{:?}", parsed.usage);
+        assert!(parsed.usage.output.unwrap_or(0) > 0, "{:?}", parsed.usage);
+        assert!(omp_run_succeeded(true, &parsed));
+    }
+
+    #[test]
+    fn tool_call_yields_the_answer_that_used_the_tool() {
+        let parsed = parse_omp_stream(TOOL_CALL);
+        assert_eq!(parsed.text.trim(), "fixture-marker-7f3a");
+        assert!(parsed.saw_end);
+        assert!(omp_run_succeeded(true, &parsed));
+    }
+
+    #[test]
+    fn tool_call_shows_the_call_and_its_result_paired_by_id() {
+        let acts = activities(TOOL_CALL);
+        let calls: Vec<&Activity> = acts
+            .iter()
+            .filter(|a| a.kind == ActivityKind::Tool)
+            .collect();
+        let results: Vec<&Activity> = acts
+            .iter()
+            .filter(|a| a.kind == ActivityKind::ToolResult)
+            .collect();
+        assert_eq!(calls.len(), 1, "{acts:?}");
+        assert_eq!(results.len(), 1, "{acts:?}");
+
+        assert_eq!(calls[0].text, "read");
+        assert!(calls[0].tool_id.is_some());
+        assert_eq!(calls[0].tool_id, results[0].tool_id);
+        assert!(
+            results[0]
+                .detail
+                .as_deref()
+                .unwrap_or("")
+                .contains("fixture-marker-7f3a"),
+            "{:?}",
+            results[0]
+        );
+        assert!(!results[0].is_error);
+    }
+
+    #[test]
+    fn the_simple_turn_shows_its_reply_and_no_tools() {
+        let acts = activities(SIMPLE);
+        assert!(
+            acts.iter().all(|a| a.kind == ActivityKind::Text),
+            "{acts:?}"
+        );
+        assert!(acts.iter().any(|a| a.text.trim() == "pong"), "{acts:?}");
+    }
+}
