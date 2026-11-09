@@ -632,11 +632,15 @@ pub(crate) async fn call_tool(
         // and resolve against the global root the editor authors into.
         "workflow_catalog" => {
             let creds = crate::http::credentials_routes::connected_clis().await;
-            let mut catalog =
-                match serde_json::to_value(authoring::catalog(&state.project_root, creds)) {
-                    Ok(v) => v,
-                    Err(e) => return tool_error(e.to_string()),
-                };
+            let installed = crate::http::system_routes::installed_cli_versions().await;
+            let mut catalog = match serde_json::to_value(authoring::catalog_with(
+                &state.project_root,
+                creds,
+                &installed,
+            )) {
+                Ok(v) => v,
+                Err(e) => return tool_error(e.to_string()),
+            };
             // Steps people saved in the builder: insert one with
             // `workflow_set_node`, giving it an id and its `depends_on`.
             let saved = match state.saved_step_store().await {

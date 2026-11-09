@@ -202,7 +202,8 @@
       "provider": "pi",
       "id": "openai-codex/gpt-6-astra",
       "family": "gpt-6",
-      "included": true
+      "included": true,
+      "min_cli": "18.1.12"
     },
     {
       "provider": "pi",

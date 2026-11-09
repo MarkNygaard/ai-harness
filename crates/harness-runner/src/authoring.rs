@@ -118,7 +118,26 @@ pub struct ProviderInfo {
     pub id: &'static str,
     pub label: &'static str,
     pub models: Vec<&'static str>,
+    /// Models the installed CLI is too old for. Listed rather than dropped so
+    /// the editor can say which update unlocks them; never in `models`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unavailable: Vec<UnavailableModel>,
 }
+
+/// A model held back because the installed CLI predates it.
+#[derive(Debug, Clone, Serialize)]
+pub struct UnavailableModel {
+    pub id: &'static str,
+    /// The oldest CLI version that knows the model.
+    pub min_cli: &'static str,
+    /// The version installed now.
+    pub installed: String,
+}
+
+/// The installed version of each provider's CLI, keyed by provider id (`pi`,
+/// not `omp`). A provider missing from the map is not held to any minimum:
+/// a model is only held back when its CLI is known to be too old.
+pub type InstalledClis = std::collections::HashMap<String, String>;
 
 /// Which agent CLIs have a credential connected right now. Drives the catalog's
 /// credential-gated model lists: a CLI's models are only offered once its
@@ -140,7 +159,7 @@ pub struct ConnectedCreds {
 /// connected. A subscription CLI is shown only once its credential is present
 /// (no point offering a CLI that can't run); Anthropic API stays listed as the
 /// always-available direct-key fallback.
-fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
+fn build_providers(creds: ConnectedCreds, installed: &InstalledClis) -> Vec<ProviderInfo> {
     // Which CLIs to offer, and under what label. The models come from
     // `models::MODELS` — one table, so adding a model is a row there rather
     // than an edit here *and* a matching one in the price table.
@@ -161,28 +180,50 @@ fn build_providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
     offered
         .iter()
         .filter(|(_, _, connected)| *connected)
-        .map(|(id, label, _)| ProviderInfo {
-            id,
-            label,
-            models: models::models_for(id)
-                .into_iter()
+        .map(|(id, label, _)| {
+            let mut models = Vec::new();
+            let mut unavailable = Vec::new();
+            for row in models::model_rows(id) {
                 // omp's list depends on which of its backends is connected:
                 // offering a Kimi model with no Kimi credential is a node that
                 // cannot run.
-                .filter(|m| {
-                    *id != "pi"
-                        || (m.starts_with("kimi-code/") && creds.kimi)
-                        || (m.starts_with("openai-codex/") && creds.codex)
-                })
-                .collect(),
+                if *id == "pi"
+                    && !((row.id.starts_with("kimi-code/") && creds.kimi)
+                        || (row.id.starts_with("openai-codex/") && creds.codex))
+                {
+                    continue;
+                }
+                match (row.min_cli, installed.get(*id)) {
+                    (Some(min), Some(have)) if !models::meets_min_cli(have, min) => unavailable
+                        .push(UnavailableModel {
+                            id: row.id,
+                            min_cli: min,
+                            installed: have.clone(),
+                        }),
+                    _ => models.push(row.id),
+                }
+            }
+            ProviderInfo {
+                id,
+                label,
+                models,
+                unavailable,
+            }
         })
         .collect()
 }
 
 /// The selectable CLIs and their models for the credentials connected now —
 /// the same list the editor offers, for anything else that picks an agent.
+/// Holds no model back for its CLI version; see [`providers_with`].
 pub fn providers(creds: ConnectedCreds) -> Vec<ProviderInfo> {
-    build_providers(creds)
+    build_providers(creds, &InstalledClis::new())
+}
+
+/// [`providers`], with each model whose `min_cli` the installed CLI does not
+/// meet moved from `models` to `unavailable`.
+pub fn providers_with(creds: ConnectedCreds, installed: &InstalledClis) -> Vec<ProviderInfo> {
+    build_providers(creds, installed)
 }
 
 /// A command available to `command:` nodes.
@@ -1107,7 +1148,18 @@ fn prebuilt_steps() -> Vec<PrebuiltStep> {
 
 /// The building-blocks catalog: the editor palette + the drawer's option lists.
 /// `creds` gates the per-CLI model lists to what's actually connected.
+/// Holds no model back for its CLI version; see [`catalog_with`].
 pub fn catalog(project_root: &Path, creds: ConnectedCreds) -> Catalog {
+    catalog_with(project_root, creds, &InstalledClis::new())
+}
+
+/// [`catalog`], with each model whose `min_cli` the installed CLI does not
+/// meet listed under its provider's `unavailable` rather than its `models`.
+pub fn catalog_with(
+    project_root: &Path,
+    creds: ConnectedCreds,
+    installed: &InstalledClis,
+) -> Catalog {
     Catalog {
         node_kinds: vec![
             NodeKindInfo {
@@ -1170,7 +1222,7 @@ pub fn catalog(project_root: &Path, creds: ConnectedCreds) -> Catalog {
                 ai: true,
             },
         ],
-        providers: build_providers(creds),
+        providers: build_providers(creds, installed),
         commands: list_commands(project_root),
         context_modes: vec!["fresh", "shared"],
         trigger_rules: vec![
@@ -1661,6 +1713,47 @@ nodes:
         assert!(cat.providers.iter().any(|p| p.id == "pi"));
         // Bundled commands surface in the catalog.
         assert!(cat.commands.iter().any(|c| c.name == "implement-tasks"));
+    }
+
+    #[test]
+    fn a_model_the_installed_cli_is_too_old_for_is_listed_as_unavailable() {
+        let tmp = tempfile::tempdir().unwrap();
+        let creds = ConnectedCreds {
+            codex: true,
+            ..Default::default()
+        };
+        let pi = |installed: &InstalledClis| {
+            catalog_with(tmp.path(), creds, installed)
+                .providers
+                .into_iter()
+                .find(|p| p.id == "pi")
+                .expect("pi offered with codex connected")
+        };
+        let astra = "openai-codex/gpt-6-astra";
+
+        // omp 18.1.9 predates Astra (18.1.12): held back, with both versions.
+        let old = pi(&InstalledClis::from([("pi".into(), "18.1.9".into())]));
+        assert!(!old.models.contains(&astra));
+        let held = old
+            .unavailable
+            .iter()
+            .find(|u| u.id == astra)
+            .expect("listed");
+        assert_eq!(
+            (held.min_cli, held.installed.as_str()),
+            ("18.1.12", "18.1.9")
+        );
+        // Models with no minimum are unaffected.
+        assert!(old.models.contains(&"openai-codex/gpt-5.6-sol"));
+
+        // New enough, or not known: offered as usual.
+        let new = pi(&InstalledClis::from([("pi".into(), "18.1.15".into())]));
+        assert!(new.models.contains(&astra));
+        assert!(new.unavailable.is_empty());
+        assert!(pi(&InstalledClis::new()).models.contains(&astra));
+        // Another provider's version does not apply to omp.
+        let other = pi(&InstalledClis::from([("codex".into(), "0.1.0".into())]));
+        assert!(other.models.contains(&astra));
     }
 
     #[test]

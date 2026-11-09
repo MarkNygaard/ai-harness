@@ -33,6 +33,7 @@ have to think about.
 | `HARNESS_DATABASE_POOL_MAX_CONNECTIONS` | none | Connection pool ceiling. |
 | `HARNESS_DATABASE_POOL_ACQUIRE_TIMEOUT_SECS` | none | How long to wait for a pooled connection. |
 | `HARNESS_DISPLAY_TZ` | none | Timezone for rendered timestamps. |
+| `HARNESS_MODEL_CATALOG` | `$HARNESS_DATA_DIR/model-catalog.json` if present | A file of extra models and prices, read without a restart. See [adding a model without a release](#adding-a-model-without-a-release). |
 | `HARNESS_USAGE_LIMIT_MAX_WAIT_MINS` | 360 | When an agent hits its subscription's usage limit and reports when the limit resets, the step waits for the reset and runs again rather than failing. This is the longest it waits. A later reset, such as a weekly limit, fails the step. `0` turns waiting off. |
 
 GitHub credentials are also read from the environment as a fallback:
@@ -55,6 +56,51 @@ Caches live on the data volume and are garbage-collected against these caps.
 `0` disables the corresponding sweep. Note that the per-project caps are *per
 project*, so the defaults add up quickly across several. See
 [sizing the volume](/docs/setup/deploy#sizing-the-volume).
+
+## Adding a model without a release
+
+The models the editor offers, and the prices runs are costed at, ship with the
+server. To offer a model that came out after your version, or to change a price,
+put a JSON file at `$HARNESS_DATA_DIR/model-catalog.json`, or point
+`HARNESS_MODEL_CATALOG` at one. The server checks the file every 30 seconds, so
+an edit needs no restart.
+
+```json
+{
+  "families": [
+    {
+      "id": "opus-6",
+      "lane": "claude",
+      "rates": { "input": 6.0, "output": 30.0, "cache_read": 0.6, "cache_write": 7.5 }
+    }
+  ],
+  "models": [
+    { "provider": "claude", "id": "claude-opus-6", "family": "opus-6", "included": true },
+    { "provider": "pi", "id": "kimi-code/kimi-k3", "family": "kimi", "included": true, "min_cli": "18.2.0" }
+  ]
+}
+```
+
+- A **family** prices models: USD per million tokens. `lane` is the
+  subscription it counts against: `claude`, `gpt`, `kimi`, `composer` or
+  `other`.
+- A **model** is an id as one agent takes it. `provider` is `claude`, `codex`,
+  `pi`, `cursor` or `anthropic-api`. `family` names a family from this file or
+  one the server ships with (`opus`, `sonnet`, `haiku`, `fable`, `gpt-6`,
+  `gpt-5`, `kimi`, `composer` and others). `included` says the agent's
+  subscription covers it rather than billing it at API price.
+- `min_cli` is optional: the oldest version of the agent's CLI that knows the
+  model. While the installed CLI is older, the editor lists the model as
+  unavailable and says which version it needs.
+
+A row with the same provider and id as a shipped one replaces it; anything else
+is added. The file is checked whole. If any row is wrong (an unknown provider or
+family, a negative price, a misspelt field), none of it is used, the server logs
+every problem, and the shipped list stays in force.
+
+The dashboard's per-run cost figures come from a copy of the shipped list built
+into the web app, so a model added this way is costed there by the shape of its
+id (`opus` in the name prices as Opus) until a release lists it.
 
 ## OAuth endpoints
 
