@@ -16,6 +16,40 @@ pub(crate) struct ParsedClaudeStreamOutput {
     pub(crate) output: String,
     pub(crate) token_usage: TokenUsage,
     completed: bool,
+    /// When the usage limit that rejected this run resets (unix seconds), from
+    /// a `rate_limit_event` with status `rejected`.
+    pub(crate) limit_resets_at: Option<i64>,
+}
+
+/// The phrase `harness_dag::usage_limit::RESETS_AT_UNIX` looks for. This crate
+/// does not depend on `harness-dag`, so it keeps its own copy;
+/// `usage_limit_tests::the_phrase_is_the_one_the_dag_reads` fails if they drift.
+const RESETS_AT_UNIX: &str = "usage limit reached, resets at unix ";
+
+/// What to append to a failed run's error so the DAG driver can wait for the
+/// reset: empty unless a `rate_limit_event` rejected the run.
+pub(crate) fn usage_limit_suffix(parsed: &ParsedClaudeStreamOutput) -> String {
+    match parsed.limit_resets_at {
+        Some(at) => format!(" ({RESETS_AT_UNIX}{at})"),
+        None => String::new(),
+    }
+}
+
+/// The reset time from a rejected `rate_limit_event` line:
+/// `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1762700000,…}}`.
+/// `None` for any other line, and for `allowed` / `allowed_warning` events,
+/// which report the window without stopping the run.
+fn rejected_limit_reset(line: &str) -> Option<i64> {
+    let v: serde_json::Value = serde_json::from_str(line).ok()?;
+    if v.get("type")?.as_str()? != "rate_limit_event" {
+        return None;
+    }
+    let info = v.get("rate_limit_info")?;
+    if info.get("status")?.as_str()? != "rejected" {
+        return None;
+    }
+    let at = info.get("resetsAt")?;
+    at.as_i64().or_else(|| at.as_f64().map(|f| f as i64))
 }
 
 pub(crate) fn claude_stdout_tail(s: &str) -> String {
@@ -49,6 +83,10 @@ fn apply_claude_stream_line(
     emitted_items: &mut Vec<StreamItem>,
 ) {
     if line.trim().is_empty() {
+        return;
+    }
+    if let Some(at) = rejected_limit_reset(line) {
+        parsed.limit_resets_at = Some(at);
         return;
     }
 
@@ -252,10 +290,11 @@ pub(crate) async fn stream_claude_code_output(
             &parsed.output
         };
         let stdout_tail = claude_stdout_tail(tail_source);
+        let limit = usage_limit_suffix(&parsed);
         return Err(HarnessError::AgentExecution(if stdout_tail.is_empty() {
-            format!("claude exited with {status}")
+            format!("claude exited with {status}{limit}")
         } else {
-            format!("claude exited with {status}: stdout_tail=[{stdout_tail}]")
+            format!("claude exited with {status}: stdout_tail=[{stdout_tail}]{limit}")
         }));
     }
 
@@ -324,5 +363,57 @@ mod tool_use_tests {
     fn text_only_assistant_line_has_no_tool_items() {
         let line = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"just thinking"}]}}"#;
         assert!(claude_tool_use_items(line).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod usage_limit_tests {
+    use super::*;
+
+    fn parse(lines: &[&str]) -> ParsedClaudeStreamOutput {
+        parse_claude_stream_output(&lines.join("\n"))
+    }
+
+    #[test]
+    fn a_rejected_rate_limit_event_puts_the_reset_in_the_error() {
+        let parsed = parse(&[
+            r#"{"type":"system","subtype":"init","session_id":"s1"}"#,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1762700000,"rateLimitType":"five_hour"},"session_id":"s1"}"#,
+            r#"{"type":"result","subtype":"success","is_error":true,"result":"You've hit your limit"}"#,
+        ]);
+        assert_eq!(parsed.limit_resets_at, Some(1_762_700_000));
+        assert_eq!(
+            usage_limit_suffix(&parsed),
+            " (usage limit reached, resets at unix 1762700000)"
+        );
+    }
+
+    #[test]
+    fn a_warning_rate_limit_event_is_not_a_limit() {
+        let parsed = parse(&[
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1762700000,"utilization":0.9}}"#,
+            r#"{"type":"result","subtype":"success","result":"Done"}"#,
+        ]);
+        assert_eq!(parsed.limit_resets_at, None);
+        assert_eq!(usage_limit_suffix(&parsed), "");
+        assert_eq!(parsed.output, "Done");
+    }
+
+    #[test]
+    fn the_phrase_is_the_one_the_dag_reads() {
+        assert_eq!(RESETS_AT_UNIX, harness_dag::usage_limit::RESETS_AT_UNIX);
+        let parsed = ParsedClaudeStreamOutput {
+            limit_resets_at: Some(1_762_700_000),
+            ..Default::default()
+        };
+        let error = format!(
+            "claude exited with exit status: 1{}",
+            usage_limit_suffix(&parsed)
+        );
+        let now = chrono::Utc::now();
+        assert_eq!(
+            harness_dag::usage_limit::reset_time(&error, now).map(|t| t.timestamp()),
+            Some(1_762_700_000)
+        );
     }
 }

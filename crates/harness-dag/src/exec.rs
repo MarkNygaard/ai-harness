@@ -1100,23 +1100,155 @@ async fn execute_body<R: NodeRunner>(
     iteration: u32,
     body: NodeBody,
 ) -> NodeRunResult {
-    let req = NodeRequest {
+    let (result, limit_note) = execute_through_limits(runner, &progress, || NodeRequest {
         node_id: &node.id,
         provider,
         model,
         effort: node.effort.as_deref(),
         context: node.context,
-        session: incoming_session,
+        session: incoming_session.clone(),
         iteration,
-        body,
+        body: body.clone(),
         timeout: node.timeout,
         vars,
         output_format: node.output_format.as_ref(),
         hooks: node.hooks.as_ref(),
         mcp: &node.mcp,
-        progress,
-    };
-    match runner.execute(req).await {
+        progress: progress.clone(),
+    })
+    .await;
+    let mut mapped = map_body_result(node, provider, model, iteration, result);
+    mapped.run.note = with_limit_note(limit_note, mapped.run.note.take());
+    mapped
+}
+
+/// Put a usage-limit note ahead of whatever note the step already has.
+fn with_limit_note(limit: Option<String>, existing: Option<String>) -> Option<String> {
+    match (limit, existing) {
+        (Some(limit), Some(existing)) => Some(format!("{limit}: {existing}")),
+        (limit, existing) => limit.or(existing),
+    }
+}
+
+/// Run one invocation, and when it fails on a usage limit that resets soon
+/// enough, wait for the reset and run it again. `make_req` builds the same
+/// request each time. Returns the last result and, when a limit was involved,
+/// a note saying what happened (waited, or why it did not).
+async fn execute_through_limits<'a, R, F>(
+    runner: &R,
+    progress: &Option<ProgressSink>,
+    make_req: F,
+) -> (Result<NodeOutput, RunnerError>, Option<String>)
+where
+    R: NodeRunner,
+    F: Fn() -> NodeRequest<'a>,
+{
+    let mut waited_until: Option<DateTime<Utc>> = None;
+    let mut waits = 0u32;
+    loop {
+        let result = runner.execute(make_req()).await;
+        let failure = match &result {
+            Ok(out) if !out.success => Some(out.text.as_str()),
+            Err(e) => Some(e.0.as_str()),
+            Ok(_) => None,
+        };
+        let now = Utc::now();
+        let Some(reset) = failure.and_then(|text| crate::usage_limit::reset_time(text, now)) else {
+            let note = waited_until
+                .map(|until| format!("waited for a usage limit to reset (until {})", clock(until)));
+            return (result, note);
+        };
+        // Resets are approximate; starting a minute late beats hitting the
+        // limit again and spending another wait.
+        let wait = (reset - now).max(chrono::Duration::zero()) + chrono::Duration::minutes(1);
+        let max_wait = max_usage_limit_wait();
+        if wait > max_wait {
+            let note = format!(
+                "usage limit reached; it resets at {}, later than the {} this run waits",
+                clock(reset),
+                span(max_wait)
+            );
+            return (result, Some(note));
+        }
+        if waits >= MAX_USAGE_LIMIT_WAITS {
+            let note = format!("usage limit reached again after {waits} waits; giving up");
+            return (result, Some(note));
+        }
+        waits += 1;
+        let resume = now + wait;
+        if let Some(sink) = progress {
+            sink.report(Activity::text(format!(
+                "Usage limit reached. Waiting until {} ({}), then running this step again.",
+                clock(resume),
+                span(wait)
+            )));
+        }
+        tokio::time::sleep(wait.to_std().unwrap_or_default()).await;
+        if let Some(sink) = progress {
+            sink.report(Activity::text(
+                "Usage limit reset. Running this step again.",
+            ));
+        }
+        waited_until = Some(resume);
+    }
+}
+
+/// How many times one step invocation waits for a usage limit before it fails.
+/// A limit that is still hit after several resets is not one waiting will fix.
+const MAX_USAGE_LIMIT_WAITS: u32 = 3;
+
+/// The longest a step waits for a usage limit to reset. Covers Claude's
+/// 5-hour window; a weekly limit is longer and fails the step as before.
+/// `HARNESS_USAGE_LIMIT_MAX_WAIT_MINS` overrides it (`0` disables waiting).
+fn max_usage_limit_wait() -> chrono::Duration {
+    const DEFAULT_MINS: i64 = 6 * 60;
+    let mins = std::env::var("HARNESS_USAGE_LIMIT_MAX_WAIT_MINS")
+        .ok()
+        .and_then(|v| v.trim().parse::<i64>().ok())
+        .filter(|m| *m >= 0)
+        .unwrap_or(DEFAULT_MINS);
+    chrono::Duration::minutes(mins)
+}
+
+/// `14:05 CET`, with the date when it is not today, in the same zone the
+/// Linear comments use: `HARNESS_DISPLAY_TZ`, else Danish time (see
+/// `display_tz` in harness-server's `linear_poller`).
+fn clock(t: DateTime<Utc>) -> String {
+    let tz = std::env::var("HARNESS_DISPLAY_TZ")
+        .ok()
+        .and_then(|name| name.parse().ok())
+        .unwrap_or(chrono_tz::Europe::Copenhagen);
+    clock_in(t, Utc::now(), tz)
+}
+
+fn clock_in(t: DateTime<Utc>, now: DateTime<Utc>, tz: chrono_tz::Tz) -> String {
+    let local = t.with_timezone(&tz);
+    if local.date_naive() == now.with_timezone(&tz).date_naive() {
+        local.format("%H:%M %Z").to_string()
+    } else {
+        local.format("%Y-%m-%d %H:%M %Z").to_string()
+    }
+}
+
+/// `2h 13m`, or `45m`.
+fn span(d: chrono::Duration) -> String {
+    let mins = (d.num_seconds() + 59) / 60;
+    match (mins / 60, mins % 60) {
+        (0, m) => format!("{m}m"),
+        (h, 0) => format!("{h}h"),
+        (h, m) => format!("{h}h {m}m"),
+    }
+}
+
+/// Map one runner invocation's result into a [`NodeRunResult`].
+fn map_body_result(
+    node: &Node,
+    provider: Option<&str>,
+    model: Option<&str>,
+    iteration: u32,
+    result: Result<NodeOutput, RunnerError>,
+) -> NodeRunResult {
+    match result {
         Ok(out) => {
             let status = if out.success {
                 NodeStatus::Success
@@ -1186,6 +1318,8 @@ async fn run_loop<R: NodeRunner>(
     let mut session = incoming_session;
     let mut converged = false;
     let mut iterations = 0u32;
+    // The latest usage-limit note from any iteration, kept for the node's note.
+    let mut limit_note: Option<String> = None;
 
     for i in 1..=cfg.max_iterations {
         iterations = i;
@@ -1208,28 +1342,33 @@ async fn run_loop<R: NodeRunner>(
             }
         };
 
-        let req = NodeRequest {
+        let iter_session = if cfg.fresh_context {
+            None
+        } else {
+            session.clone()
+        };
+        let (result, iter_note) = execute_through_limits(runner, &progress, || NodeRequest {
             node_id: &node.id,
             provider,
             model,
             effort: node.effort.as_deref(),
             context: node.context,
-            session: if cfg.fresh_context {
-                None
-            } else {
-                session.clone()
-            },
+            session: iter_session.clone(),
             iteration: i,
-            body: NodeBody::Prompt(rendered),
+            body: NodeBody::Prompt(rendered.clone()),
             timeout: node.timeout,
             vars: &iter_vars,
             output_format: node.output_format.as_ref(),
             hooks: node.hooks.as_ref(),
             mcp: &node.mcp,
             progress: progress.clone(),
-        };
+        })
+        .await;
+        if iter_note.is_some() {
+            limit_note = iter_note;
+        }
 
-        match runner.execute(req).await {
+        match result {
             Ok(out) => {
                 usage.add(&out.usage);
                 last_text = out.text;
@@ -1245,7 +1384,10 @@ async fn run_loop<R: NodeRunner>(
                             usage,
                             iterations,
                             converged: Some(false),
-                            note: Some("loop iteration failed".to_string()),
+                            note: with_limit_note(
+                                limit_note,
+                                Some("loop iteration failed".to_string()),
+                            ),
                             artifact_content: None,
                             started_at: None,
                             ended_at: None,
@@ -1306,11 +1448,15 @@ async fn run_loop<R: NodeRunner>(
                 }
             }
             Err(e) => {
+                let note = with_limit_note(limit_note, Some(e.to_string()));
                 return NodeRunResult {
-                    run: failed_run(node, provider, model, e.to_string()),
+                    run: NodeRun {
+                        note,
+                        ..failed_run(node, provider, model, String::new())
+                    },
                     session: None,
                     cancel: None,
-                }
+                };
             }
         }
     }
@@ -1323,6 +1469,7 @@ async fn run_loop<R: NodeRunner>(
             cfg.max_iterations, cfg.until
         ))
     };
+    let note = with_limit_note(limit_note, note);
     NodeRunResult {
         run: NodeRun {
             id: node.id.clone(),

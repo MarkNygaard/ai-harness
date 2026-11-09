@@ -15,6 +15,10 @@ regex = { workspace = true }
 async-trait = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
+# The zone a usage-limit wait names its resume time in.
+chrono-tz = { workspace = true }
+# Only `tokio::time::sleep`, to wait out a usage limit (see `usage_limit`).
+tokio = { workspace = true }
 
 [dev-dependencies]
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

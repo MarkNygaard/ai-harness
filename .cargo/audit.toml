@@ -10,9 +10,16 @@
 #   fxhash is used only for internal starlark map lookups; not exposed to untrusted input.
 # - RUSTSEC-2024-0436 (paste, proc-macro soundness): https://rustsec.org/advisories/RUSTSEC-2024-0436
 #   paste is a build-time proc-macro; it does not affect runtime behaviour.
+# - RUSTSEC-2026-0459 (libsqlite3-sys, bundled SQLite < 3.54.0 can expose memory when it
+#   opens a database with a crafted `-wal` file): https://rustsec.org/advisories/RUSTSEC-2026-0459
+#   Pulled by sqlx 0.8's `sqlite` feature; only sqlx 0.9 can use the patched libsqlite3-sys.
+#   We open SQLite only for the scratch database the harness creates in its own workspace
+#   (`LocalFileBackend`), so no less trusted party writes the files. Remove with the
+#   sqlx 0.9 upgrade: https://linear.app/mark-nygaard-leth/issue/AIH-44
 ignore = [
     "RUSTSEC-2023-0071",
     "RUSTSEC-2024-0388",
     "RUSTSEC-2025-0057",
     "RUSTSEC-2024-0436",
+    "RUSTSEC-2026-0459",
 ]

@@ -33,6 +33,7 @@ have to think about.
 | `HARNESS_DATABASE_POOL_MAX_CONNECTIONS` | none | Connection pool ceiling. |
 | `HARNESS_DATABASE_POOL_ACQUIRE_TIMEOUT_SECS` | none | How long to wait for a pooled connection. |
 | `HARNESS_DISPLAY_TZ` | none | Timezone for rendered timestamps. |
+| `HARNESS_USAGE_LIMIT_MAX_WAIT_MINS` | 360 | When an agent hits its subscription's usage limit and reports when the limit resets, the step waits for the reset and runs again rather than failing. This is the longest it waits. A later reset, such as a weekly limit, fails the step. `0` turns waiting off. |
 
 GitHub credentials are also read from the environment as a fallback:
 `GITHUB_TOKEN` or `GH_TOKEN`, and `GITHUB_WEBHOOK_SECRET`. Per-project
