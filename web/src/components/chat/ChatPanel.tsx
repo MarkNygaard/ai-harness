@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import {
   IconArrowsMaximize,
   IconCheck,
+  IconFolder,
   IconHistory,
   IconLoader2,
   IconPlus,
@@ -35,7 +36,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupTextarea,
+  InputGroupText,
+} from "@/components/ui/input-group";
 import { useProjects } from "@/lib/projects";
 import { agentLabel } from "@/lib/agents";
 import { ApiError } from "@/lib/api";
@@ -274,36 +281,6 @@ export function ChatView({ variant }: { variant: "panel" | "page" }) {
       />
 
       <div className="border-t p-3">
-        {!currentId && canReadCode && (projects.data ?? []).length > 0 && (
-          <div className="mb-2 flex items-center gap-2">
-            <span className="text-[11px] text-muted-foreground">
-              Read code from
-            </span>
-            <Select
-              value={project ?? NO_PROJECT}
-              onValueChange={(v) =>
-                v != null && setProject(v === NO_PROJECT ? null : v)
-              }
-            >
-              <SelectTrigger size="sm" className="min-w-36">
-                {/* Base UI shows the raw value unless told its label. */}
-                <SelectValue>
-                  {(v: string | null) =>
-                    !v || v === NO_PROJECT ? "No project" : v
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={NO_PROJECT}>No project</SelectItem>
-                {(projects.data ?? []).map((p) => (
-                  <SelectItem key={p.name} value={p.name}>
-                    {p.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
         {unavailable ? (
           <p className="text-[12px] text-muted-foreground">
             No agent can run the chat yet. Connect Claude Code or Pi under{" "}
@@ -318,6 +295,51 @@ export function ChatView({ variant }: { variant: "panel" | "page" }) {
             onSubmit={(text) => submit(text)}
             placeholder={
               running ? "Answering…" : "Ask about a run, a PR, or a workflow"
+            }
+            toolbar={
+              conv ? (
+                // A conversation's project is fixed when it starts: shown,
+                // not offered.
+                conv.context.project ? (
+                  <InputGroupText
+                    className="px-1.5 text-[12px]"
+                    title={`This conversation reads ${conv.context.project}'s code`}
+                  >
+                    <IconFolder />
+                    {conv.context.project}
+                  </InputGroupText>
+                ) : null
+              ) : canReadCode && (projects.data ?? []).length > 0 ? (
+                <Select
+                  value={project ?? NO_PROJECT}
+                  onValueChange={(v) =>
+                    v != null && setProject(v === NO_PROJECT ? null : v)
+                  }
+                >
+                  <SelectTrigger
+                    size="sm"
+                    aria-label="Project whose code to read"
+                    title="Project whose code the answer may read"
+                    className="h-6 gap-1 border-transparent bg-transparent px-1.5 text-[12px] text-muted-foreground shadow-none hover:bg-muted hover:text-foreground dark:bg-transparent dark:hover:bg-muted"
+                  >
+                    <IconFolder className="size-3.5" />
+                    {/* Base UI shows the raw value unless told its label. */}
+                    <SelectValue>
+                      {(v: string | null) =>
+                        !v || v === NO_PROJECT ? "No project" : v
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_PROJECT}>No project</SelectItem>
+                    {(projects.data ?? []).map((p) => (
+                      <SelectItem key={p.name} value={p.name}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : null
             }
           />
         )}
@@ -526,14 +548,20 @@ function ActionCard({
   );
 }
 
+/**
+ * The message box: one rounded field with the text on top and a toolbar
+ * below it — `toolbar` on the left (the project picker), send on the right.
+ */
 function Composer({
   disabled,
   placeholder,
   onSubmit,
+  toolbar,
 }: {
   disabled: boolean;
   placeholder: string;
   onSubmit: (text: string) => Promise<void>;
+  toolbar?: ReactNode;
 }) {
   const [text, setText] = useState("");
   const go = () => {
@@ -545,35 +573,45 @@ function Composer({
   };
   return (
     <form
-      className="flex items-end gap-2"
       onSubmit={(e) => {
         e.preventDefault();
         go();
       }}
     >
-      <Textarea
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={(e) => {
-          // Enter sends; Shift+Enter is a new line.
-          if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-            e.preventDefault();
-            go();
-          }
-        }}
-        placeholder={placeholder}
-        aria-label="Message"
-        className="max-h-40 min-h-9 resize-none text-[13px]"
-        rows={1}
-      />
-      <Button
-        type="submit"
-        size="icon"
-        aria-label="Send"
-        disabled={disabled || !text.trim()}
-      >
-        <IconSend />
-      </Button>
+      <InputGroup>
+        <InputGroupTextarea
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => {
+            // Enter sends; Shift+Enter is a new line.
+            if (
+              e.key === "Enter" &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing
+            ) {
+              e.preventDefault();
+              go();
+            }
+          }}
+          placeholder={placeholder}
+          aria-label="Message"
+          className="max-h-40 min-h-12 text-[13px]"
+          rows={2}
+        />
+        <InputGroupAddon align="block-end">
+          {toolbar}
+          <InputGroupButton
+            type="submit"
+            variant="default"
+            size="icon-xs"
+            className="ml-auto"
+            aria-label="Send"
+            disabled={disabled || !text.trim()}
+          >
+            <IconSend />
+          </InputGroupButton>
+        </InputGroupAddon>
+      </InputGroup>
     </form>
   );
 }
