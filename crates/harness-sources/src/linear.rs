@@ -1894,10 +1894,57 @@ impl LinearClient {
     /// Move an issue to a workflow state (write). `issue_id` is the Linear
     /// internal id (the `id` field from a previewed [`Issue`]), not the
     /// identifier (`COR-12`).
+    ///
+    /// Linear can assign an unassigned issue to whoever moves it into a started
+    /// status (a team setting). Under the app token that is the harness, which
+    /// then shows as the issue's *assignee*, its owner, rather than its
+    /// delegate; and the triggers, which select on the delegate, stop seeing
+    /// it. So an assignee that appears with the move is taken off again. One
+    /// the issue already had is never touched.
     pub async fn set_issue_state(&self, issue_id: &str, state_id: &str) -> Result<(), LinearError> {
+        // Unknown (the read failed) is not "unassigned": leave it alone then.
+        let before = self.issue_assignee(issue_id).await.ok();
         let body = serde_json::json!({
-            "query": "mutation($id:String!,$s:String!){ issueUpdate(id:$id, input:{stateId:$s}){ success } }",
+            "query": "mutation($id:String!,$s:String!){ issueUpdate(id:$id, input:{stateId:$s}){ success issue { assignee { id } } } }",
             "variables": { "id": issue_id, "s": state_id },
+        });
+        let resp = self.post(body).await?;
+        expect_mutation_success(&resp, "issueUpdate")?;
+        if assigned_by_the_move(before.as_ref(), &resp) {
+            // Best effort: the move itself succeeded, which is what the caller asked for.
+            let _ = self.clear_assignee(issue_id).await;
+        }
+        Ok(())
+    }
+
+    /// An issue's assignee id, `None` when it has none (read).
+    pub async fn issue_assignee(&self, issue_id: &str) -> Result<Option<String>, LinearError> {
+        let body = serde_json::json!({
+            "query": "query($id:String!){ issue(id:$id){ assignee { id } } }",
+            "variables": { "id": issue_id },
+        });
+        let data: serde_json::Value = gql_data(&self.post(body).await?)?;
+        Ok(data["issue"]["assignee"]["id"].as_str().map(str::to_string))
+    }
+
+    /// Take an issue's assignee off (write).
+    pub async fn clear_assignee(&self, issue_id: &str) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!){ issueUpdate(id:$id, input:{assigneeId:null}){ success } }",
+            "variables": { "id": issue_id },
+        });
+        expect_mutation_success(&self.post(body).await?, "issueUpdate")
+    }
+
+    /// Delegate an issue to `delegate_id`, the harness's own app user (write).
+    ///
+    /// For an issue a label started: delegation is what the triggers select on,
+    /// so an issue that never got it is invisible to every later column's
+    /// trigger (Ready for merge, Changes requested).
+    pub async fn set_delegate(&self, issue_id: &str, delegate_id: &str) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!,$d:String!){ issueUpdate(id:$id, input:{delegateId:$d}){ success } }",
+            "variables": { "id": issue_id, "d": delegate_id },
         });
         expect_mutation_success(&self.post(body).await?, "issueUpdate")
     }
@@ -2450,6 +2497,24 @@ impl LinearClient {
 pub const MAX_SCANNED: usize = 500;
 
 /// Check a mutation response reported `{ <field>: { success: true } }`.
+/// Whether a state move gave the issue an assignee it did not have: `before` is
+/// the assignee read just before the move (`None` when that read failed, which
+/// counts as unknown, not as unassigned), `resp` the move's response, which
+/// carries the assignee after it.
+fn assigned_by_the_move(before: Option<&Option<String>>, resp: &[u8]) -> bool {
+    let Some(None) = before else {
+        return false;
+    };
+    gql_data::<serde_json::Value>(resp)
+        .ok()
+        .and_then(|d| {
+            d["issueUpdate"]["issue"]["assignee"]["id"]
+                .as_str()
+                .map(str::to_string)
+        })
+        .is_some()
+}
+
 fn expect_mutation_success(json: &[u8], field: &str) -> Result<(), LinearError> {
     let data: serde_json::Value = gql_data(json)?;
     let ok = data
@@ -3644,5 +3709,46 @@ mod tests {
         let json = br#"{"errors":[{"message":"authentication required"}]}"#;
         let err = parse_comments(json).unwrap_err();
         assert!(err.0.contains("authentication required"));
+    }
+}
+
+#[cfg(test)]
+mod auto_assign_tests {
+    use super::assigned_by_the_move;
+
+    fn moved(assignee: Option<&str>) -> Vec<u8> {
+        let assignee = match assignee {
+            Some(id) => serde_json::json!({ "id": id }),
+            None => serde_json::Value::Null,
+        };
+        serde_json::to_vec(&serde_json::json!({
+            "data": { "issueUpdate": { "success": true, "issue": { "assignee": assignee } } }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn an_assignee_that_arrives_with_the_move_is_the_moves_doing() {
+        // Unassigned before, assigned after: Linear's auto-assign to the mover.
+        assert!(assigned_by_the_move(Some(&None), &moved(Some("app-user"))));
+    }
+
+    #[test]
+    fn an_assignee_the_issue_already_had_is_left_alone() {
+        let had = Some("henrik".to_string());
+        assert!(!assigned_by_the_move(Some(&had), &moved(Some("henrik"))));
+        // Even when the move changed it: that is not the auto-assign case.
+        assert!(!assigned_by_the_move(Some(&had), &moved(Some("app-user"))));
+    }
+
+    #[test]
+    fn nothing_is_cleared_when_unknown_or_still_unassigned() {
+        // The read before the move failed: unknown is not "unassigned".
+        assert!(!assigned_by_the_move(None, &moved(Some("app-user"))));
+        // Unassigned before and after.
+        assert!(!assigned_by_the_move(Some(&None), &moved(None)));
+        // A response without the issue.
+        let bare = br#"{"data":{"issueUpdate":{"success":true}}}"#;
+        assert!(!assigned_by_the_move(Some(&None), bare));
     }
 }
