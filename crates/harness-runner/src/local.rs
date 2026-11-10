@@ -54,6 +54,10 @@ pub struct LocalRunner {
     agent: Arc<dyn PromptAgent>,
     shell: Shell,
     env_vars: HashMap<String, String>,
+    /// The Chromium agent steps drive, or `None` for no browser. Chosen by
+    /// whoever builds the runner, not found here: a step's prompt must not
+    /// depend on what happens to be installed where the runner was built.
+    chromium: Option<PathBuf>,
 }
 
 impl LocalRunner {
@@ -70,7 +74,17 @@ impl LocalRunner {
             agent,
             shell: Shell::platform_default(),
             env_vars: HashMap::new(),
+            chromium: None,
         }
+    }
+
+    /// Give agent steps a browser on this Chromium: Claude through Playwright's
+    /// MCP server, omp through its own tool, both told when to use it. `None`
+    /// (the default) gives them none. The server passes
+    /// [`crate::mcp_servers::chromium_path`].
+    pub fn with_browser(mut self, chromium: Option<PathBuf>) -> Self {
+        self.chromium = chromium;
+        self
     }
 
     /// Add environment variables for every subprocess this runner starts.
@@ -364,15 +378,13 @@ impl LocalRunner {
             .get("ARTIFACTS_DIR")
             .filter(|d| !d.is_empty())
             .map(|d| PathBuf::from(d).join(SCREENSHOTS_DIR));
-        let has_browser = match &screenshots {
-            Some(dir) if is_claude(req.provider) => match crate::mcp_servers::browser_config(dir) {
-                Some(browser) => {
-                    mcp_config = Some(crate::mcp_servers::with_browser(mcp_config.take(), browser));
-                    true
-                }
-                None => false,
-            },
-            Some(_) if is_omp(req.provider) => crate::mcp_servers::chromium_path().is_some(),
+        let has_browser = match (&screenshots, &self.chromium) {
+            (Some(dir), Some(chromium)) if is_claude(req.provider) => {
+                let browser = crate::mcp_servers::browser_config(chromium, dir);
+                mcp_config = Some(crate::mcp_servers::with_browser(mcp_config.take(), browser));
+                true
+            }
+            (Some(_), Some(_)) => is_omp(req.provider),
             _ => false,
         };
         let prompt = match screenshots.filter(|_| has_browser) {
@@ -1119,6 +1131,32 @@ mod tests {
             agent.last_prompt.lock().unwrap().as_deref(),
             Some("plan in /run/9 now")
         );
+    }
+
+    /// The browser is the builder's choice, not the machine's: a runner given a
+    /// Chromium tells a Claude step about it and makes its screenshots folder;
+    /// one without (every test runner above, on CI too) adds nothing.
+    #[tokio::test]
+    async fn a_step_gets_a_browser_only_from_a_runner_given_one() {
+        let dir = TempDir::new().unwrap();
+        let artifacts = dir.path().join("artifacts");
+        let vars = VarContext::new().set("ARTIFACTS_DIR", artifacts.to_string_lossy());
+        let body = || NodeBody::Prompt("change the header".into());
+
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        runner.execute(request(body(), &vars)).await.unwrap();
+        assert_eq!(
+            agent.last_prompt.lock().unwrap().as_deref(),
+            Some("change the header")
+        );
+
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        let runner = runner.with_browser(Some(PathBuf::from("/usr/bin/chromium")));
+        runner.execute(request(body(), &vars)).await.unwrap();
+        let prompt = agent.last_prompt.lock().unwrap().clone().unwrap();
+        assert!(prompt.starts_with("## Browser"), "{prompt}");
+        assert!(prompt.ends_with("change the header"), "{prompt}");
+        assert!(artifacts.join(SCREENSHOTS_DIR).is_dir());
     }
 
     #[tokio::test]

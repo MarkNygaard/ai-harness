@@ -460,23 +460,16 @@ pub fn chromium_path() -> Option<std::path::PathBuf> {
 /// The browser every Claude step gets: Playwright's MCP server driving the
 /// image's own Chromium, headless, with a throwaway profile. Screenshots it
 /// saves without a path land in `screenshots_dir`, which the server keeps
-/// after the run. `None` when there is no Chromium to drive.
+/// after the run.
 ///
 /// omp steps are not given this: omp has its own browser tool on the same
 /// Chromium.
-pub fn browser_config(screenshots_dir: &std::path::Path) -> Option<Value> {
-    browser_config_with(chromium_path()?, screenshots_dir)
-}
-
-fn browser_config_with(
-    chromium: std::path::PathBuf,
-    screenshots_dir: &std::path::Path,
-) -> Option<Value> {
+pub fn browser_config(chromium: &std::path::Path, screenshots_dir: &std::path::Path) -> Value {
     let command = std::env::var("HARNESS_BROWSER_MCP")
         .ok()
         .filter(|v| !v.is_empty())
         .unwrap_or_else(|| "playwright-mcp".into());
-    Some(json!({
+    json!({
         "type": "stdio",
         "command": command,
         "args": [
@@ -495,7 +488,7 @@ fn browser_config_with(
             // It must never fetch a browser of its own at run time.
             "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1",
         }
-    }))
+    })
 }
 
 /// Add the browser to a step's MCP config document, creating the document when
@@ -866,11 +859,10 @@ mod tests {
     /// writes screenshots where the server keeps them.
     #[test]
     fn the_browser_drives_the_images_chromium_and_saves_to_the_run() {
-        let cfg = browser_config_with(
-            std::path::PathBuf::from("/usr/bin/chromium"),
+        let cfg = browser_config(
+            std::path::Path::new("/usr/bin/chromium"),
             std::path::Path::new("/w/.harness/artifacts/screenshots"),
-        )
-        .unwrap();
+        );
         assert_eq!(cfg["type"], "stdio");
         let args: Vec<&str> = cfg["args"]
             .as_array()

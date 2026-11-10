@@ -131,7 +131,8 @@ pub async fn execute_run(opts: RunOptions) -> Result<RunReport, String> {
     } else {
         Arc::new(EchoAgent)
     };
-    let runner = LocalRunner::new(workspace.clone(), command_dirs, agent);
+    let runner = LocalRunner::new(workspace.clone(), command_dirs, agent)
+        .with_browser(crate::mcp_servers::chromium_path());
 
     println!(
         "▶ running workflow `{}` in {}{} ({} agent)\n",

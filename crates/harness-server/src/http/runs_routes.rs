@@ -2805,7 +2805,10 @@ async fn execute_run_task(
     } else {
         Arc::new(EchoAgent)
     };
-    let runner = LocalRunner::new(workspace, command_dirs, agent).with_env_vars(run_env);
+    // A browser for every agent step, on the image's Chromium when it has one.
+    let runner = LocalRunner::new(workspace, command_dirs, agent)
+        .with_env_vars(run_env)
+        .with_browser(harness_runner::mcp_servers::chromium_path());
 
     // The task spec feeds `$ARGUMENTS`/`$USER_MESSAGE`/`$TASK_DESCRIPTION`; the
     // title is exposed separately as `$TASK_TITLE` (option 1).
