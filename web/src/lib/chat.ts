@@ -227,14 +227,24 @@ export function useConversation(id: string | null) {
   });
 }
 
+/**
+ * What a new conversation starts with. `provider` and `model` pick its agent;
+ * left out, it runs on what the chat setting names.
+ */
+export interface NewConversation {
+  context: ChatContext;
+  provider?: string | null;
+  model?: string | null;
+}
+
 export function useCreateConversation() {
   const qc = useQueryClient();
-  return useMutation<Conversation, Error, ChatContext>({
-    mutationFn: (context) =>
+  return useMutation<Conversation, Error, NewConversation>({
+    mutationFn: (body) =>
       apiJson<Conversation>("/api/chat/conversations", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ context }),
+        body: JSON.stringify(body),
       }),
     onSuccess: () =>
       qc.invalidateQueries({ queryKey: ["chat", "conversations"] }),

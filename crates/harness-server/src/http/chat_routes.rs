@@ -360,6 +360,56 @@ pub struct CreateConversationRequest {
     /// Where it was opened from: `{ run_id?, workflow?, project? }`.
     #[serde(default)]
     pub context: Option<Value>,
+    /// The agent to run on, in place of the chat setting's. Absent: the setting.
+    #[serde(default)]
+    pub provider: Option<String>,
+    /// The model to run on. Absent: the setting's when the agent is the
+    /// setting's, else the agent's first.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+/// The agent and model a new conversation runs on: what the request asks for,
+/// checked against what can run now, with the setting filling the gaps. A
+/// requested model must be one the agent offers — or the setting's own, which
+/// an admin may have typed in by hand.
+fn conversation_agent(
+    options: &[ProviderInfo],
+    eff: &Effective,
+    provider: Option<&str>,
+    model: Option<&str>,
+) -> Result<(String, Option<String>), String> {
+    let provider = match provider.filter(|p| !p.is_empty()) {
+        Some(p) => p,
+        None => eff.provider.as_deref().ok_or(
+            "no agent can run the chat yet — connect Claude Code or Pi under Settings → Agents",
+        )?,
+    };
+    let option = options
+        .iter()
+        .find(|o| o.id == provider)
+        .ok_or_else(|| format!("`{provider}` cannot run the chat right now"))?;
+    let default = if eff.provider.as_deref() == Some(provider) {
+        eff.model.clone()
+    } else {
+        option.models.first().map(|m| m.to_string())
+    };
+    let model = match model.filter(|m| !m.is_empty()) {
+        None => default,
+        Some(m) if option.models.contains(&m) || default.as_deref() == Some(m) => {
+            Some(m.to_string())
+        }
+        Some(m) => {
+            return Err(match option.unavailable.iter().find(|u| u.id == m) {
+                Some(u) => format!(
+                    "`{m}` needs {} {} or newer (installed: {})",
+                    option.label, u.min_cli, u.installed
+                ),
+                None => format!("{} does not offer `{m}`", option.label),
+            })
+        }
+    };
+    Ok((provider.to_string(), model))
 }
 
 /// Keep only the context keys the prompt knows how to describe, as short strings.
@@ -378,7 +428,8 @@ fn clean_context(ctx: Option<&Value>) -> Value {
     Value::Object(out)
 }
 
-/// `POST /api/chat/conversations` — start one on the agent the setting names.
+/// `POST /api/chat/conversations` — start one on the agent and model the
+/// request names, or else the ones the setting names.
 pub async fn create_conversation(
     Extension(state): Extension<Arc<RunsState>>,
     headers: HeaderMap,
@@ -386,12 +437,21 @@ pub async fn create_conversation(
 ) -> Response {
     let req = body.map(|Json(b)| b).unwrap_or_default();
     let (user, _) = caller_trigger(&state, &headers).await;
-    let (_, eff, _) = load_settings(&state).await;
-    let Some(provider) = eff.provider else {
+    let (options, eff, _) = load_settings(&state).await;
+    if eff.provider.is_none() {
         return err(
             StatusCode::CONFLICT,
             "no agent can run the chat yet — connect Claude Code or Pi under Settings → Agents",
         );
+    }
+    let (provider, model) = match conversation_agent(
+        &options,
+        &eff,
+        req.provider.as_deref(),
+        req.model.as_deref(),
+    ) {
+        Ok(chosen) => chosen,
+        Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
     let store = match state.chat_store().await {
         Ok(s) => s,
@@ -403,7 +463,7 @@ pub async fn create_conversation(
             &id,
             user.as_deref(),
             &provider,
-            eff.model.as_deref(),
+            model.as_deref(),
             &clean_context(req.context.as_ref()),
         )
         .await
@@ -1402,6 +1462,47 @@ mod tests {
 
         // Nothing connected: nothing to run on.
         assert_eq!(effective(&[], Some("claude"), None, None).provider, None);
+    }
+
+    #[test]
+    fn a_conversation_runs_on_what_it_asks_for_if_that_can_run() {
+        let mut claude = opt("claude", &["opus", "sonnet"]);
+        claude
+            .unavailable
+            .push(harness_runner::authoring::UnavailableModel {
+                id: "fable",
+                min_cli: "3.0.0",
+                installed: "2.1.0".into(),
+            });
+        let both = [claude, opt("pi", &["kimi-code/k2"])];
+        let eff = Effective {
+            provider: Some("claude".into()),
+            model: Some("my-pinned-id".into()),
+            effort: None,
+        };
+        let pick = |p: Option<&str>, m: Option<&str>| conversation_agent(&both, &eff, p, m);
+
+        // Nothing asked: the setting, hand-typed model and all.
+        assert_eq!(
+            pick(None, None),
+            Ok(("claude".into(), Some("my-pinned-id".into())))
+        );
+        // A model of the setting's agent.
+        assert_eq!(
+            pick(None, Some("sonnet")),
+            Ok(("claude".into(), Some("sonnet".into())))
+        );
+        // Another agent: its first model, not the setting's.
+        assert_eq!(
+            pick(Some("pi"), None),
+            Ok(("pi".into(), Some("kimi-code/k2".into())))
+        );
+        // Not on offer, or not runnable: refused, saying why.
+        assert!(pick(Some("pi"), Some("opus")).is_err());
+        assert!(pick(Some("codex"), None)
+            .unwrap_err()
+            .contains("cannot run"));
+        assert!(pick(None, Some("fable")).unwrap_err().contains("3.0.0"));
     }
 
     #[test]

@@ -1,10 +1,11 @@
-import { type ReactNode, useEffect, useState } from "react";
+import { Fragment, type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import {
   IconAlertTriangle,
   IconArrowsMaximize,
   IconCheck,
+  IconChevronDown,
   IconFolder,
   IconHistory,
   IconPlayerPlay,
@@ -47,7 +48,11 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -78,6 +83,8 @@ import {
   type ChatActivity,
   type ChatContext,
   type ChatMessage,
+  type ChatOption,
+  type ChatSettings,
   type ToolStep,
   contextFromPath,
   describeAction,
@@ -171,11 +178,20 @@ export function ChatView({ variant }: { variant: "panel" | "page" }) {
     }
   }, [detail.error]);
 
+  // The agent and model a *new* conversation runs on, when picked here rather
+  // than left to the chat setting. A pick that can no longer run (its agent
+  // disconnected since) falls back to the setting.
+  const [picked, setPicked] = useState<AgentChoice | null>(null);
+  const choice = validChoice(picked, settings.data);
+
   const conv = detail.data?.conversation;
   const running = detail.data?.running ?? null;
   const busy = !!running || create.isPending || send.isPending;
-  const provider = conv?.provider ?? settings.data?.provider ?? null;
-  const model = conv ? conv.model : (settings.data?.model ?? null);
+  const provider =
+    conv?.provider ?? choice?.provider ?? settings.data?.provider ?? null;
+  const model = conv
+    ? conv.model
+    : (choice?.model ?? settings.data?.model ?? null);
   const unavailable = settings.isSuccess && !settings.data.provider && !conv;
 
   async function submit(text: string) {
@@ -183,9 +199,11 @@ export function ChatView({ variant }: { variant: "panel" | "page" }) {
     if (!trimmed || busy) return;
     let id = currentId;
     if (!id) {
-      const created = await create.mutateAsync(
-        canReadCode && project ? { ...context, project } : context,
-      );
+      const created = await create.mutateAsync({
+        context: canReadCode && project ? { ...context, project } : context,
+        provider: choice?.provider,
+        model: choice?.model,
+      });
       id = created.id;
       setCurrentId(id);
     }
@@ -325,6 +343,25 @@ export function ChatView({ variant }: { variant: "panel" | "page" }) {
             onSubmit={(text) => submit(text)}
             placeholder={
               running ? "Answering…" : "Ask about a run, a PR, or a workflow"
+            }
+            model={
+              conv ? (
+                // Fixed once it starts, like the project: the agent keeps its
+                // own session, so switching mid-way would lose the thread.
+                <InputGroupText
+                  className="px-1.5 text-[12px]"
+                  title="This conversation's agent and model"
+                >
+                  {modelName(conv.provider, conv.model)}
+                </InputGroupText>
+              ) : settings.data && settings.data.options.length > 0 ? (
+                <ModelMenu
+                  options={settings.data.options}
+                  provider={provider}
+                  model={model}
+                  onPick={setPicked}
+                />
+              ) : null
             }
             toolbar={
               conv ? (
@@ -694,20 +731,113 @@ function ActionView({
   );
 }
 
+/** An agent and model picked for a new conversation. */
+interface AgentChoice {
+  provider: string;
+  model: string;
+}
+
+/** The pick, if the agent can still run it; else null (use the setting). */
+function validChoice(
+  picked: AgentChoice | null,
+  settings: ChatSettings | undefined,
+): AgentChoice | null {
+  if (!picked || !settings) return null;
+  const option = settings.options.find((o) => o.id === picked.provider);
+  if (!option) return null;
+  const isDefault =
+    settings.provider === picked.provider && settings.model === picked.model;
+  return option.models.includes(picked.model) || isDefault ? picked : null;
+}
+
+/** "Claude Code · opus", or just the agent when no model is named. */
+function modelName(provider: string, model: string | null): string {
+  return model ? `${agentLabel(provider)} · ${model}` : agentLabel(provider);
+}
+
+/**
+ * Which agent and model a new conversation runs on: every model the chat's
+ * agents offer, grouped by agent. Starts on the chat setting's choice.
+ */
+function ModelMenu({
+  options,
+  provider,
+  model,
+  onPick,
+}: {
+  options: ChatOption[];
+  provider: string | null;
+  model: string | null;
+  onPick: (choice: AgentChoice) => void;
+}) {
+  // Model ids repeat across agents, so a radio value names both. Ids may
+  // contain "/" (`kimi-code/k2`), so the separator is one they cannot.
+  const SEP = "\u0000";
+  const value = provider && model ? `${provider}${SEP}${model}` : "";
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <InputGroupButton
+            size="xs"
+            variant="ghost"
+            className="min-w-0 text-[12px] text-muted-foreground"
+            aria-label={`Model: ${provider ? modelName(provider, model) : "none"}`}
+            title="Agent and model for this conversation"
+          />
+        }
+      >
+        <span className="truncate">{model ?? "Model"}</span>
+        <IconChevronDown />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuRadioGroup
+          value={value}
+          onValueChange={(v: string) => {
+            const [p, m] = v.split(SEP);
+            if (p && m) onPick({ provider: p, model: m });
+          }}
+        >
+          {options.map((option, i) => (
+            <Fragment key={option.id}>
+              {i > 0 && <DropdownMenuSeparator />}
+              <DropdownMenuGroup>
+                <DropdownMenuLabel>{option.label}</DropdownMenuLabel>
+                {option.models.map((m) => (
+                  <DropdownMenuRadioItem
+                    key={m}
+                    value={`${option.id}${SEP}${m}`}
+                    closeOnClick
+                  >
+                    {m}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuGroup>
+            </Fragment>
+          ))}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /**
  * The message box: one rounded field with the text on top and a toolbar
- * below it — `toolbar` on the left (the project picker), send on the right.
+ * below it — `toolbar` on the left (the project picker), `model` and send on
+ * the right.
  */
 function Composer({
   disabled,
   placeholder,
   onSubmit,
   toolbar,
+  model,
 }: {
   disabled: boolean;
   placeholder: string;
   onSubmit: (text: string) => Promise<void>;
   toolbar?: ReactNode;
+  model?: ReactNode;
 }) {
   const [text, setText] = useState("");
   const go = () => {
@@ -746,16 +876,18 @@ function Composer({
         />
         <InputGroupAddon align="block-end">
           {toolbar}
-          <InputGroupButton
-            type="submit"
-            variant="default"
-            size="icon-xs"
-            className="ml-auto"
-            aria-label="Send"
-            disabled={disabled || !text.trim()}
-          >
-            <IconSend />
-          </InputGroupButton>
+          <div className="ml-auto flex min-w-0 items-center gap-1">
+            {model}
+            <InputGroupButton
+              type="submit"
+              variant="default"
+              size="icon-xs"
+              aria-label="Send"
+              disabled={disabled || !text.trim()}
+            >
+              <IconSend />
+            </InputGroupButton>
+          </div>
         </InputGroupAddon>
       </InputGroup>
     </form>
