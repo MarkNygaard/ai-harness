@@ -57,7 +57,7 @@ const TIMESTAMP_TOLERANCE_MS: i64 = 60 * 1000;
 
 /// Workflow fired for a delegated issue when the project has no binding to name
 /// a better one. Mirrors the default used when filing an issue from a finding.
-const DEFAULT_WORKFLOW: &str = "idea-to-pr";
+const DEFAULT_WORKFLOW: &str = harness_runner::DEFAULT_WORKFLOW;
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -325,7 +325,7 @@ static ISSUES_IN_FLIGHT: LazyLock<std::sync::Mutex<HashSet<String>>> =
 /// Held from *before* the eligibility decision until the claim row exists —
 /// which is the whole race, since the claim row is what every later check reads.
 /// Per workflow, not per issue: an issue legitimately flows through several
-/// bindings (`idea-to-pr` claims it in Todo, `merge-pr` in Ready for merge), and
+/// bindings (`task` claims it in Todo, `task-merge` in Ready for merge), and
 /// an epic is supervised by one workflow while its pieces are built by another.
 pub(crate) struct IssueGuard(String);
 
@@ -1117,7 +1117,7 @@ async fn resolve_target(
 /// without a database.
 ///
 /// **The status selects the binding.** A team normally has several — `Todo →
-/// idea-to-pr`, `Ready for merge → merge-pr`, `Changes requested → revise-pr` —
+/// task`, `Ready for merge → task-merge`, `Changes requested → revise-task` —
 /// so the issue's current status is what picks the workflow, exactly as it does
 /// for the column poller. (Checking the status against one arbitrarily-chosen
 /// binding of the team would let only that one workflow ever start.)

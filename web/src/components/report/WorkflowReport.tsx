@@ -4,7 +4,7 @@
  * - `scored` reports show a score dashboard, a per-dimension breakdown, and a
  *   score-history sparkline (GEO-style);
  * - all reports show the summary + findings list, where each finding can be
- *   acted on: "Build this" fires `idea-to-pr`, "Create issue" files it into
+ *   acted on: "Build this" fires `task`, "Create issue" files it into
  *   Linear (when configured), "Ignore" dims it. All three persist per run via
  *   the unified finding-state store, so state survives reloads.
  */
@@ -40,7 +40,7 @@ import {
 import type { ReportAction, ReportStatus } from "@/types/authoring";
 
 /** The workflow findings are filed/built against. */
-const IDEA_WORKFLOW = "idea-to-pr";
+const BUILD_WORKFLOW = "task";
 
 const SEVERITY_VARIANT: Record<string, "failed" | "running" | "secondary"> = {
   critical: "failed",
@@ -84,7 +84,7 @@ export function WorkflowReport({
       (SEVERITY_RANK[b.severity ?? ""] ?? 9),
   );
 
-  // "Create issue" needs Linear connected AND an idea-to-pr binding to file into.
+  // "Create issue" needs Linear connected AND a task binding to file into.
   //
   // Connectedness is read from the OAuth status, not from per-project
   // credentials. Linear is configured globally — the identity is the *app*, the
@@ -95,7 +95,7 @@ export function WorkflowReport({
   const linearStatus = useLinearOauthStatus();
   const linearSources = useLinearSources(project);
   const hasBinding = !!linearSources.data?.some(
-    (s) => s.workflow === IDEA_WORKFLOW,
+    (s) => s.workflow === BUILD_WORKFLOW,
   );
   // A button that simply vanishes teaches nobody anything — this gate read the
   // wrong source for months and went unreported because its failure mode was an
@@ -104,7 +104,7 @@ export function WorkflowReport({
   const issueBlocked = issueActionBlocked(
     linearStatus.data?.mode,
     hasBinding,
-    IDEA_WORKFLOW,
+    BUILD_WORKFLOW,
   );
   const linearEnabled = issueBlocked === null;
 
@@ -140,7 +140,7 @@ export function WorkflowReport({
     setBusy(findingKey(f));
     try {
       const res = await createRun.mutateAsync({
-        workflow: IDEA_WORKFLOW,
+        workflow: BUILD_WORKFLOW,
         project: project ?? undefined,
         real: true,
         title: f.title ?? f.summary ?? "Finding",
@@ -312,7 +312,7 @@ export function WorkflowReport({
         <div className="flex items-center justify-between gap-2">
           <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
             {verdict.findings.length === findings.length && canBuild
-              ? `Findings (${findings.length}) — “Build this” fixes it via idea-to-pr`
+              ? `Findings (${findings.length}) — “Build this” runs the task workflow to fix it`
               : `Findings (${findings.length})`}
           </h3>
           {canIssue && linearEnabled && untouched > 0 && (
@@ -454,7 +454,7 @@ function FindingRow({
     action === "checked" ||
     action === "passed";
   // An off-site finding ("earn a Wikipedia entity") has no code change behind it,
-  // so `idea-to-pr` would have nothing to implement. It stays filable as an issue
+  // so `task` would have nothing to implement. It stays filable as an issue
   // for a human, which is what such an item actually needs.
   const buildable = canBuild && !finding.offsite;
   const hasFixActions = buildable || canIssue || canIgnore;
@@ -597,7 +597,7 @@ function FindingRow({
                   </Button>
                 )}
                 {/* An off-site finding ("earn a Wikipedia entity") has no code
-                    change behind it, so idea-to-pr would have nothing to
+                    change behind it, so the task workflow would have nothing to
                     implement. It can still be filed as an issue for a human. */}
                 {buildable && (
                   <Button
@@ -605,7 +605,7 @@ function FindingRow({
                     size="sm"
                     variant="outline"
                     disabled={busy}
-                    title="Build a fix via idea-to-pr"
+                    title="Build a fix with the task workflow"
                     onClick={onBuild}
                   >
                     {busy ? "Working…" : "Build this"}

@@ -169,7 +169,7 @@ function NewRunForm() {
   const create = useCreateRun();
   const projects = useProjects();
   const [project, setProject] = useState("");
-  const [workflow, setWorkflow] = useState("idea-to-pr");
+  const [workflow, setWorkflow] = useState("task");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
 

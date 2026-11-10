@@ -30,6 +30,7 @@ import {
   triggerProject,
   triggerState,
   triggerWorkflow,
+  useTriggerChecks,
   useTriggerSystem,
   useTriggers,
 } from "@/lib/triggers";
@@ -207,6 +208,9 @@ function TriggerRow({
   const state = STATE_BADGE[triggerState(t, system)];
   const lastError = t.kind === "schedule" ? null : t.trigger.last_error;
   const shadowedBy = t.kind === "schedule" ? null : t.trigger.shadowed_by;
+  const checks = useTriggerChecks();
+  const missingStatus =
+    t.kind === "schedule" ? null : checks.data?.[t.trigger.id];
   return (
     <Link
       to={triggerHref(t)}
@@ -236,6 +240,15 @@ function TriggerRow({
                   className="shrink-0 border-destructive/50 text-[10px] text-destructive"
                 >
                   held back
+                </Badge>
+              )}
+              {missingStatus && (
+                <Badge
+                  variant="outline"
+                  title={missingStatus}
+                  className="shrink-0 border-destructive/50 text-[10px] text-destructive"
+                >
+                  missing status
                 </Badge>
               )}
               {lastError && (

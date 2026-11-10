@@ -35,7 +35,7 @@ export interface WorkflowFinding {
   /**
    * True when addressing this isn't a code change (an off-site or editorial
    * action, e.g. earning a Wikipedia entity). Such a finding can be filed, but
-   * handing it to `idea-to-pr` gives an implementer nothing to implement.
+   * handing it to `task` gives an implementer nothing to implement.
    */
   offsite?: boolean;
   /** Relative effort to address (e.g. `quick` | `medium` | `strategic`). */
@@ -152,7 +152,7 @@ export function findingKey(f: WorkflowFinding): string {
 }
 
 /**
- * The `idea-to-pr` task description for a finding — enough for the implementer
+ * The `task` task description for a finding — enough for the implementer
  * to find the problem again and land the fix as a PR in the right repo/folder.
  *
  * The page matters as much as the fix. A site audit that samples several pages

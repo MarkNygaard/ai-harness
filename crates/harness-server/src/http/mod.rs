@@ -32,6 +32,7 @@ pub(crate) mod linear_oauth;
 pub(crate) mod linear_poller;
 pub(crate) mod linear_routes;
 pub(crate) mod linear_source_routes;
+pub(crate) mod linear_status_check;
 pub(crate) mod loop_guard;
 pub(crate) mod mail;
 pub(crate) mod mcp_client;

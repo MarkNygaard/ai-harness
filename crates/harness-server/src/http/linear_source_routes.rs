@@ -202,7 +202,7 @@ fn trimmed_non_empty(s: String) -> Option<String> {
 
 #[derive(Debug, Deserialize)]
 pub struct CreateIssueBody {
-    /// The binding to file against (defaults to `idea-to-pr`). Determines the
+    /// The binding to file against (defaults to the default workflow, `task`). Determines the
     /// team and source status the issue is created in.
     #[serde(default = "default_issue_workflow")]
     pub workflow: String,
@@ -212,7 +212,7 @@ pub struct CreateIssueBody {
 }
 
 fn default_issue_workflow() -> String {
-    "idea-to-pr".to_string()
+    harness_runner::DEFAULT_WORKFLOW.to_string()
 }
 
 /// `POST /api/projects/{project}/linear-issues` — create a Linear issue from a

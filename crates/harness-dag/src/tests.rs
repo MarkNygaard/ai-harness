@@ -887,3 +887,29 @@ fn effort_must_be_a_known_level() {
         }
     }
 }
+
+/// The statuses a pre-run check compares with the issue's team: each once, a
+/// variable left out (it is only known at run time), comments and labels ignored.
+#[test]
+fn linear_target_states_lists_each_literal_move_once() {
+    let yaml = r#"
+name: demo
+nodes:
+  - id: start
+    linear: { move_state: In Progress }
+  - id: note
+    depends_on: [start]
+    linear: { comment: "hello" }
+  - id: back
+    depends_on: [note]
+    linear: { move_state: "  In Review " }
+  - id: again
+    depends_on: [back]
+    linear: { move_state: In Progress }
+  - id: chosen
+    depends_on: [again]
+    linear: { move_state: "$start.output" }
+"#;
+    let wf = parse_workflow(yaml).expect("parses");
+    assert_eq!(wf.linear_target_states(), vec!["In Progress", "In Review"]);
+}

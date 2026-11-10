@@ -92,7 +92,7 @@ fallback.
 ## 3. Trigger a run
 
 Pick a workflow, describe the task, and start it.
-[`idea-to-pr`](/docs/workflows/bundled#idea-to-pr) is the default pipeline. The
+[`task`](/docs/workflows/bundled#task) is the default workflow. The
 run page shows the DAG executing node by node, with each node's output,
 duration and cost, and the artifacts it produced.
 
@@ -131,7 +131,7 @@ way to iterate on a DAG. Without `--real` it uses a built-in echo agent, so
 shape, gating and `$node.output` wiring all execute for free:
 
 ```bash
-harness run idea-to-pr --workspace . --args "add a health endpoint"
+harness run task --workspace . --args "add a health endpoint"
 ```
 
 <Callout type="warn">

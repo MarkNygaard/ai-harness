@@ -966,14 +966,15 @@ async fn take_label_off(
 ///
 /// The identifier is stated up front *and* as an explicit PR-title directive so
 /// the `verify-pr-title` node carries it into the final title — that's what lets
-/// Linear link the PR back to this issue (and lets `merge-pr` find the PR via
+/// Linear link the PR back to this issue (and lets `task-merge` find the PR via
 /// `gh pr list --search`). We deliberately avoid close keywords ("Fixes"/
 /// "Closes") so Linear's GitHub integration links without auto-closing the
 /// issue, which would bypass the poller's own status transitions.
 ///
-/// Injected Linear comments give reviewers a feedback channel for `revise-pr`
-/// and a place to drop clarifications for `idea-to-pr`; the poller's own
-/// status comments are filtered out so they don't drown human feedback.
+/// Injected Linear comments give reviewers a feedback channel for `revise-task`
+/// and a place to drop clarifications for `task`; the poller's own status
+/// comments are filtered out so they don't drown human feedback, and the
+/// harness's other comments are marked `[harness]`.
 fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     let id = &issue.identifier;
     let mut task = format!(
@@ -993,8 +994,13 @@ fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     if !human.is_empty() {
         task.push_str("\n\n## Reviewer comments (Linear)\n\n");
         for (idx, c) in human.iter().enumerate() {
+            // The harness's own comments (plans, closing summaries) stay in,
+            // because a revision dates new feedback from the latest of them,
+            // but they are marked: the app's display name differs per
+            // install, so a workflow cannot recognise them by author.
+            let mark = if c.by_harness { " [harness]" } else { "" };
             task.push_str(&format!(
-                "**{}** ({}):\n{}\n",
+                "**{}** ({}){mark}:\n{}\n",
                 c.author, c.created_at, c.body
             ));
             if idx + 1 < human.len() {
@@ -2450,7 +2456,23 @@ mod tests {
             body: body.into(),
             author: author.into(),
             created_at: "2026-06-01T10:00:00Z".into(),
+            by_harness: false,
         }
+    }
+    /// `revise-task` dates new feedback from the harness's latest comment, and
+    /// has to recognise that comment whatever the Linear app is called.
+    #[test]
+    fn task_for_issue_marks_the_harness_own_comments() {
+        let comments = vec![
+            Comment {
+                by_harness: true,
+                ..sample_comment("### Plan\n\nDo the thing.", "Whatever The App Is Called")
+            },
+            sample_comment("Please add a toggle.", "Alice"),
+        ];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(task.contains("**Whatever The App Is Called** (2026-06-01T10:00:00Z) [harness]:"));
+        assert!(task.contains("**Alice** (2026-06-01T10:00:00Z):"));
     }
     #[test]
     fn task_for_issue_without_comments_omits_section() {

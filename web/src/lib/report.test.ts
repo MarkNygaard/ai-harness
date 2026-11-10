@@ -108,7 +108,7 @@ describe("findingKey", () => {
 });
 
 describe("issueActionBlocked", () => {
-  const IDEA = "idea-to-pr";
+  const IDEA = "task";
 
   it("allows filing once Linear is connected and a binding exists", () => {
     expect(issueActionBlocked("app", true, IDEA)).toBeNull();
@@ -131,7 +131,7 @@ describe("issueActionBlocked", () => {
 
   it("names the missing binding, since that is what supplies the team", () => {
     const why = issueActionBlocked("app", false, IDEA);
-    expect(why).toMatch(/idea-to-pr/);
+    expect(why).toMatch(/task/);
     expect(why).toMatch(/Linear settings/);
   });
 

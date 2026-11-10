@@ -41,7 +41,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   out. It pushes to the PR branch, so a fork the harness cannot push to will
   fail once a reviewer finds something.
 
+- **`revise-task`, a bundled workflow for reviewer feedback with the Linear
+  lifecycle in the graph.** It replaces `revise-pr` and pairs with `task` and
+  `task-merge`. The pipeline is revise-pr's (feedback since the last revision,
+  plan, implement, three review-and-fix passes, final validate, in-thread
+  replies). `linear:` steps move the issue to In Progress once real feedback is
+  found and to In Review once the revision is pushed. With no open PR, or no new
+  feedback, it comments and leaves the issue where it is. The PR branch is now
+  checked out by a bash step, and its dependencies are installed, before
+  anything reads the code.
+
+- **A missing Linear status is caught before a run starts.** A `linear:` step
+  names its status (`move_state: In Review`), and a team without it used to
+  fail that step only when it ran: for `In Review` or `Done`, after the pull
+  request was open and the tokens spent, with the issue left in In Progress.
+  Now a run on an issue whose team lacks any status the workflow moves to is
+  refused before it starts, with the missing status and the team's own
+  statuses in the error (in the issue's agent thread, or as the trigger's last
+  error). The Triggers page marks such a trigger **missing status**, and the
+  wiring check (`linear_check`, the project's Linear tab) lists it. The checks
+  match names the way the step does, skip a status written with a variable,
+  and stay quiet when Linear cannot be reached.
+
+### Removed
+
+- **The bundled `idea-to-pr`, `merge-pr` and `revise-pr` workflows.** `task`,
+  `task-merge` and `revise-task` replace them, and `task` is now the default
+  workflow: a run, CLI call or "Build this" that names no workflow runs `task`.
+  `task` has no GPT or Opus review pass; run `review-pr` on its PR for one.
+  A binding, trigger or schedule that still names one of the three fails with
+  "unknown workflow" unless the project has its own workflow of that name.
+- **The "Set up epics" wizard** (Project → Linear). It wired a binding relay
+  (build → `merge-pr` → `linear-epic-supervise`) that depended on merge-pr
+  merging on CI alone. `task` runs epics in its own graph. `linear-epic-supervise`
+  is still bundled.
+
 ### Changed
+
+- **The harness's own Linear comments reach a run marked `[harness]`.** The
+  poller already filtered its status comments out of the "Reviewer comments
+  (Linear)" section a run is given. Its plans and summaries stayed in, and a
+  workflow could only recognise them by the Linear app's display name, which
+  differs per install. They are now marked from Linear's `isMe`, so
+  `revise-task` can ignore them and date new feedback from the latest one.
 
 - **`sonnet-review-fix` is now `anthropic-review-fix`, and runs Opus.** The node
   id named a model while the pass beside it named a vendor (`gpt-review-fix`),
@@ -72,6 +114,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answer. 16000 is the recommended ceiling for a non-streaming request.
 
 ### Fixed
+
+- **`install-deps` generates code in a monorepo.** It looked for a `prebuild`,
+  `codegen`, `generate` or `db:generate` script in the root `package.json` only,
+  then ran it with `pnpm -r`, which skips the root. So a script defined only in a
+  package (`apps/web`) never ran, a script defined only in the root never ran
+  either, and nothing was logged. A fresh worktree then lacked every generated
+  file, and agents spent their runs on typecheck errors they could not fix. It
+  now looks in every `package.json` the repo tracks and logs where it found the
+  script, or that it found none. A root script runs on its own, because it
+  usually fans out by itself. Otherwise pnpm runs it one package at a time in
+  dependency order (`--workspace-concurrency=1`), so two packages that generate
+  into the same file no longer race, and npm, yarn and bun run it in each
+  package in turn.
+- **`review-pr` installs the PR's dependencies** after checking its branch out,
+  so the baseline verify and both reviewers no longer judge a tree with no
+  `node_modules` and no generated files.
 
 - **omp is pinned, in its own image layer — an unpinned install shipped a
   years-stale CLI.** `bun install -g @oh-my-pi/pi-coding-agent` carried no

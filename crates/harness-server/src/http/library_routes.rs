@@ -905,10 +905,10 @@ mod tests {
     #[test]
     fn a_bundled_name_is_taken_even_with_no_file_on_disk() {
         let dir = TempDir::new().unwrap();
-        match destination(dir.path(), "idea-to-pr", None, None) {
+        match destination(dir.path(), "task", None, None) {
             Destination::Taken { name, suggestion } => {
-                assert_eq!(name, "idea-to-pr");
-                assert_eq!(suggestion.as_deref(), Some("idea-to-pr-2"));
+                assert_eq!(name, "task");
+                assert_eq!(suggestion.as_deref(), Some("task-2"));
             }
             Destination::Free(n) => panic!("bundled name must not be free, got {n}"),
         }
@@ -959,7 +959,7 @@ mod tests {
             .as_deref(),
             Some("mine-ecommerce")
         );
-        assert!(free(destination(dir.path(), "mine", Some("idea-to-pr"), None)).is_none());
+        assert!(free(destination(dir.path(), "mine", Some("task"), None)).is_none());
     }
 
     /// An update keeps the name the workflow already has. Choosing a new one

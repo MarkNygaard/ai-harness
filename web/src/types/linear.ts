@@ -114,7 +114,7 @@ export interface CreatedLinearIssue {
 
 /** Body for creating a Linear issue from a task/finding. */
 export interface CreateLinearIssueInput {
-  /** Binding to file against; defaults to `idea-to-pr` server-side. */
+  /** Binding to file against; defaults to `task` server-side. */
   workflow?: string;
   title: string;
   description: string;

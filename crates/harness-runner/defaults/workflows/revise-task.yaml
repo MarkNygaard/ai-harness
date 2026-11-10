@@ -1,28 +1,48 @@
-name: revise-pr
+name: revise-task
 description: |
-  Address reviewer feedback on an existing PR branch and push updates. No new PR
-  is opened. Use this when a Linear card moves to "Changes requested", or an
-  equivalent trigger state, and the bound workflow is `revise-pr`.
+  Address reviewer feedback on an existing pull request and push updates,
+  keeping the Linear issue up to date with the workflow's own `linear:` steps.
+  The companion to `task` and `task-merge`: start it from a trigger on your
+  "Changes requested" status. No new PR is opened.
 
-  The binding needs two things for the poller to route correctly.
-  `ready_state_id` must be the review column, such as "Functional testing" or "In
-  Review", so that a successful run sends the card back to review rather than to
-  Done or merge. The trigger state is normally "Changes requested".
+  The run resolves the PR and gathers the feedback that is NEW since the last
+  completed revision: GitHub reviews and inline comments, plus Linear comments
+  from people. It checks the PR branch out, installs its dependencies, then
+  explores, plans, implements and validates. A Kimi self-review loop, a GPT-6
+  Astra pass and a Claude Opus review-and-fix pass follow, then a final
+  validate, in-thread replies to the reviewers and a summary comment on the PR.
 
-  Feedback comes from two places. GitHub PR reviews and inline comments are read
-  inside the workflow with `gh`, using the token available in the worktree.
-  Linear tester comments are injected by the poller into `$ARGUMENTS`, under a
-  "## Reviewer comments (Linear)" heading. That heading marks the only Linear
-  feedback the run should act on, because `$ARGUMENTS` always also carries the
-  issue's own description, which is the original report the PR was written to fix
-  rather than a reviewer saying it failed. When neither source produces anything,
-  the run cancels at `abort-no-feedback` and asks a human to move the card back,
-  so that moving a card by mistake does not trigger a speculative second fix.
+  The issue's lifecycle lives in the graph:
 
-  On completion the poller returns the card to the review column. On failure it
-  routes back to the source column under the existing retry cap.
+    * Once real feedback is found, `start` moves the issue to In Progress and
+      `ack` lists what will be addressed.
+    * `report-invalid` / `report-final-invalid` explain a failed validation.
+    * `in-review` moves the issue to In Review when the revision is pushed, and
+      `linear-summary` writes the closing comment (`linear_comment: true`).
+    * If a step fails, `run-failed` says so on the issue.
+
+  **No feedback, no move.** With no open PR, or no new feedback, the issue is
+  NOT moved: a comment explains why and the run cancels. This is the guard for
+  a card moved to "Changes requested" by mistake. Move the card out of the
+  trigger status and back to run it again.
+
+  **Linear feedback is only what is new and human.** The harness's own comments
+  (plans, summaries, triage notes) reach the run marked `[harness]` and are
+  never feedback. Only person-written comments newer than the harness's most
+  recent comment count, so a second revision does not redo the first.
+
+  **Epics** (`handles_epics`): an epic moved to Changes requested has its final
+  PR (`epic/<ID>` against the default branch) revised like any other, instead
+  of being sent to the epic supervisor.
+
+  Status names `In Progress` and `In Review` must exist on the issue's team.
+  Rename them here if your board calls them something else. If you bind it
+  under a project's Linear setup instead of a trigger, leave the binding's
+  status map empty so the poller and these steps don't both move the issue.
+  Started by hand, with no issue, every `linear:` step is a no-op.
 provider: pi
 model: kimi-code/kimi-for-coding
+handles_epics: true
 
 nodes:
   # 1. Resolve exactly which PR we're revising, and its current state.
@@ -61,14 +81,24 @@ nodes:
         mergeable: { type: string, enum: ["MERGEABLE", "CONFLICTING", "UNKNOWN"] }
       required: [pr, state, mergeable]
 
-  # 2. Nothing to do if there's no open PR to revise.
-  - id: abort-no-pr
-    category: planning
+  # 2. Nothing to do if there's no open PR to revise. Say so on the issue first,
+  #    and leave it where it is.
+  - id: report-no-pr
+    category: linear
     depends_on: [resolve-pr]
     when: "$resolve-pr.output.state != 'OPEN'"
+    linear:
+      comment: Changes were requested, but I found no open pull request for this issue (none linked, or it is already merged or closed), so nothing was revised. The issue has not been moved.
+
+  - id: abort-no-pr
+    category: planning
+    depends_on: [resolve-pr, report-no-pr]
+    trigger_rule: all_done
+    when: "$resolve-pr.output != '' && $resolve-pr.output.state != 'OPEN'"
     cancel: "No open PR to revise for this input (not found, or already merged/closed)."
 
-  # 3. Gather every piece of actionable PR feedback (reviews + inline comments).
+  # 3. Gather every piece of actionable feedback that is new since the last
+  #    completed revision.
   - id: gather-feedback
     category: planning
     provider: claude
@@ -83,7 +113,7 @@ nodes:
       handled.
 
       ## 0. Find where the previous revision ended
-      When a revise-pr run completes, its summary posts a top-level comment
+      When a revision completes, its summary posts a top-level comment
       containing the hidden marker `<!-- harness:revise-pr:complete -->`. From the
       `comments` array of `gh pr view $resolve-pr.output.pr --json comments`, find
       the MOST RECENT comment (by createdAt) whose body contains that marker, and
@@ -117,8 +147,22 @@ nodes:
 
       ## 2. Linear tester / reviewer comments (functionality feedback)
       Linear feedback is ONLY what appears under the literal heading
-      "## Reviewer comments (Linear)" in $ARGUMENTS. If present, include it (it
-      is already scoped to this run; no time filtering needed).
+      "## Reviewer comments (Linear)" in $ARGUMENTS. Each comment there starts with
+      `**<author>** (<created_at>):`, or `**<author>** (<created_at>) [harness]:`
+      when the harness wrote it. Keep only comments that are BOTH:
+
+      - **written by a person** — drop every comment marked `[harness]`. That is
+        the harness itself: its pick-up notes, plans, closing summaries, triage
+        verdicts and epic notes. None of them is a reviewer asking for a change,
+        even when it lists open questions or "left for a human" items.
+      - **newer than the harness's most recent comment** — find the latest
+        `created_at` among the `[harness]` comments and drop person-written
+        comments at or before it. The harness comments when it delivers or
+        revises the PR, so anything older was written before that delivery and
+        has already been seen. If there is no `[harness]` comment, keep every
+        person-written comment.
+
+      What survives both filters is the Linear feedback.
 
       **If that heading is absent there is no Linear feedback.** Everything
       before it — the issue title, its URL, the PR-title instruction, and the
@@ -149,10 +193,10 @@ nodes:
       - `has_github_feedback` — after the section-1 exclusions, do you still hold at
         least one GitHub review, top-level comment, or inline comment written by a
         person?
-      - `has_linear_feedback` — does the literal heading
-        "## Reviewer comments (Linear)" appear in $ARGUMENTS? That is the whole
-        question: a string is either there or it is not. The issue description is
-        not that heading.
+      - `has_linear_feedback` — after the two filters in section 2, does at least
+        one person-written Linear comment remain? The heading alone is not enough:
+        it is there whenever the harness has commented on the issue. The issue
+        description is never Linear feedback.
 
       Both false is a correct, expected outcome, not a failure to search hard
       enough — set `feedback` to "" and stop. The run cancels cleanly and a human is
@@ -170,7 +214,7 @@ nodes:
           description: "true if at least one person-authored GitHub review or comment survives the exclusions"
         has_linear_feedback:
           type: boolean
-          description: "true only if the literal heading \"## Reviewer comments (Linear)\" is present in the input"
+          description: "true only if at least one person-written Linear comment (not marked [harness]) newer than the harness's latest comment remains"
       required: [feedback, has_github_feedback, has_linear_feedback]
 
   # 4. Cancel when neither source produced anything — there should be something to
@@ -178,39 +222,176 @@ nodes:
   #    which is why `gather-feedback` reports the two sources separately: a single
   #    "is there feedback?" boolean let the issue's own bug report — present in
   #    $ARGUMENTS on every run — pass as a tester saying the fix had failed.
-  - id: abort-no-feedback
-    category: planning
+  - id: report-no-feedback
+    category: linear
     depends_on: [gather-feedback]
     when: "$gather-feedback.output.has_github_feedback != 'true' && $gather-feedback.output.has_linear_feedback != 'true'"
+    linear:
+      comment: |-
+        Changes were requested on PR #$resolve-pr.output.pr, but I found no new feedback to act on: no new GitHub review or comment, and no Linear comment from a person since my last update. Nothing was changed and the issue has not been moved.
+
+        If it was moved here by mistake, move it back. If something is still wrong, say what in a comment here or on the PR, then move it out of this status and back.
+
+  - id: abort-no-feedback
+    category: planning
+    depends_on: [gather-feedback, report-no-feedback]
+    trigger_rule: all_done
+    when: "$gather-feedback.output != '' && $gather-feedback.output.has_github_feedback != 'true' && $gather-feedback.output.has_linear_feedback != 'true'"
     cancel: "No actionable feedback found for PR #$resolve-pr.output.pr — no new GitHub reviews or comments, and no Linear reviewer comments. If this issue was moved to 'Changes requested' by mistake, move it back to the source column. If the bug does still reproduce, say so in a comment on the issue or the PR and move it across again."
 
-  # 5. Explore the code the feedback touches before planning the fix.
+  # 5. There is real feedback: the issue is being worked on again.
+  - id: start
+    category: linear
+    depends_on: [gather-feedback]
+    when: "$gather-feedback.output.has_github_feedback == 'true' || $gather-feedback.output.has_linear_feedback == 'true'"
+    linear:
+      move_state: In Progress
+
+  # 6. Get the PR branch into the worktree — deterministically, not by asking an
+  #    agent to remember. Everything after this reads the working tree, and the
+  #    install below must see the PR's lockfile, not the base branch's.
+  - id: checkout-pr
+    category: setup
+    depends_on: [start]
+    timeout: 300000
+    bash: |
+      set -uo pipefail
+      pr="$resolve-pr.output.pr"
+      base="$resolve-pr.output.base"
+      gh pr checkout "$pr" || { echo "ERROR: could not check out PR #$pr" >&2; exit 1; }
+      # The diffs later nodes read are taken against origin/<base>; a stale ref
+      # would show work that merged upstream long ago as this PR's.
+      git fetch --quiet origin "$base" 2>/dev/null || true
+      git rev-parse --verify --quiet "origin/$base" >/dev/null || {
+        echo "ERROR: no origin/$base to diff the PR against" >&2; exit 1; }
+      echo "PR #$pr checked out at $(git rev-parse --short HEAD) (base $base)"
+      git log --oneline "origin/$base..HEAD" | head -20
+
+  # 7. A revision starts in a fresh worktree: no node_modules and none of the
+  #    gitignored generated files. Install them for the PR's branch.
+  - id: install-deps
+    category: setup
+    depends_on: [checkout-pr]
+    timeout: 600000
+    bash: |
+      set -uo pipefail
+      # Generated sources are gitignored, so a fresh worktree never has them —
+      # and the scripts that write them are wired into `build`, not into
+      # `typecheck` / `lint` / `test`. Without this an agent runs a check that
+      # cannot pass in a tree nobody has built, reads the failure as its own,
+      # and starts hand-stubbing generated files. Run the first of these
+      # conventional script names that any package in the repo defines ($1 = pkg
+      # manager). Non-fatal: a project whose codegen needs credentials this
+      # container lacks should still get a run, with the reason on the record.
+      codegen_in() {
+        [ -f package.json ] || return 0
+        # Every package.json in the repo, root included. Tracked files only, so
+        # node_modules never shows up. In a monorepo the script usually lives in
+        # an app (apps/web), not in the root.
+        pkgs=$(git ls-files -- package.json '*/package.json' 2>/dev/null)
+        [ -n "$pkgs" ] || pkgs=package.json
+        for script in prebuild codegen generate db:generate; do
+          dirs=$(printf '%s\n' "$pkgs" | while IFS= read -r p; do
+            grep -q "\"$script\"[[:space:]]*:" "$p" 2>/dev/null && dirname "$p"
+          done)
+          [ -n "$dirs" ] || continue
+          echo "  ↳ codegen: $script in $(printf '%s' "$dirs" | tr '\n' ' ')"
+          failed=0
+          if printf '%s\n' "$dirs" | grep -qx '\.'; then
+            # The root defines it: that is the project's own entry point, and it
+            # usually fans out by itself (turbo, pnpm -r). Running the packages as
+            # well would run them twice, and in parallel.
+            "$1" run "$script" || failed=1
+          elif [ "$1" = pnpm ]; then
+            # One package at a time, in dependency order. Two packages that
+            # generate into the same file must not race.
+            pnpm -r --workspace-concurrency=1 --if-present run "$script" || failed=1
+          else
+            while IFS= read -r d; do
+              ( cd "$d" && "$1" run "$script" ) || failed=1
+            done <<< "$dirs"
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "  ↳ WARNING: \`$script\` failed. Generated sources are missing,"
+            echo "    so typecheck/lint/test may fail for reasons unrelated to the"
+            echo "    change. Do NOT hand-write or stub generated files — say so."
+          fi
+          return 0
+        done
+        echo "  ↳ codegen: no prebuild, codegen, generate or db:generate script in any package.json — skipping"
+      }
+      # Detect the lockfile in $1 and install. Runs in a subshell so the cd is
+      # scoped; returns the install command's exit code. Ordered most- to
+      # least-specific: a repo with several lockfiles gets its primary one.
+      install_in() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          if [ -f pnpm-lock.yaml ]; then
+            echo "[$1] pnpm"
+            pnpm install --frozen-lockfile || exit 1
+            codegen_in pnpm
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+            echo "[$1] bun"; bun install --frozen-lockfile || exit 1; codegen_in bun
+          elif [ -f yarn.lock ]; then
+            echo "[$1] yarn"; yarn install --immutable 2>/dev/null || yarn install --frozen-lockfile || exit 1
+            codegen_in yarn
+          elif [ -f package-lock.json ]; then
+            echo "[$1] npm"; npm ci || exit 1; codegen_in npm
+          elif [ -f Cargo.toml ]; then echo "[$1] cargo"; cargo fetch --locked || exit 1
+          elif [ -f uv.lock ]; then echo "[$1] uv"; uv sync --locked || exit 1
+          elif [ -f poetry.lock ]; then echo "[$1] poetry"; poetry install --no-interaction || exit 1
+          elif [ -f go.mod ]; then echo "[$1] go"; go mod download || exit 1
+          elif [ -f Gemfile.lock ]; then echo "[$1] bundler"; bundle install || exit 1
+          elif [ -f composer.lock ]; then echo "[$1] composer"; composer install --no-interaction || exit 1
+          # .NET pins versions in the project files, so there is no lockfile to
+          # match on — and the solution is as often under `src/` as at the root,
+          # so `dotnet restore` with no argument finds nothing. Locate it.
+          elif proj=$(find . -maxdepth 3 \( -name '*.sln' -o -name '*.slnx' \) -print -quit 2>/dev/null) && [ -n "$proj" ]; then
+            echo "[$1] dotnet ($proj)"; dotnet restore "$proj" || exit 1
+          elif proj=$(find . -maxdepth 3 \( -name '*.csproj' -o -name '*.fsproj' \) -print -quit 2>/dev/null) && [ -n "$proj" ]; then
+            echo "[$1] dotnet ($proj)"; dotnet restore "$proj" || exit 1
+          else
+            echo "[$1] no recognized lockfile — skipping. If this needs setup, \
+            add the command to its CLAUDE.md so downstream agents can run it."
+          fi )
+      }
+      # Multi-repo: install each repo's deps in its folder. Single-repo: root.
+      rc=0
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        while read -r folder; do
+          install_in "$folder" || rc=1
+        done < <(echo "$HARNESS_REPOS" | jq -r '.[].folder')
+      else
+        install_in . || rc=1
+      fi
+      exit $rc
+
+  # 8. Explore the code the feedback touches before planning the fix.
   - id: explore
     category: planning
     artifact: exploration.md
     provider: claude
     model: sonnet
     context: fresh
-    depends_on: [gather-feedback]
+    depends_on: [install-deps]
     when: "$gather-feedback.output.has_github_feedback == 'true' || $gather-feedback.output.has_linear_feedback == 'true'"
     prompt: |
       You are a codebase explorer for a PR REVISION. The PR already exists;
       reviewers asked for changes. Map the parts of the codebase the feedback
       touches. Do NOT propose the fix and do NOT edit anything — gather facts.
 
-      ## Get the PR branch into this worktree first
-      `gh pr checkout $resolve-pr.output.pr`
-      Then read the change set under review:
+      ## The PR branch is already checked out
+      Read the change set under review:
       `git diff origin/$resolve-pr.output.base...HEAD`
       `git log --oneline origin/$resolve-pr.output.base..HEAD`
 
       ## The feedback to address
       a) GitHub PR reviews / inline comments:
          $gather-feedback.output.feedback
-      b) Linear tester / reviewer comments (functionality feedback) — ONLY what is
-         under the literal heading "## Reviewer comments (Linear)"; if that heading
-         is absent there is none. The text before it is the original bug report
-         that this PR already addresses, not a reviewer saying the fix failed:
+      b) Linear tester / reviewer comments — already filtered into the digest
+         above (person-written, newer than the harness's last comment). Comments
+         marked `[harness]` in the input below are the harness's own notes,
+         never feedback, and the issue text is the original report this PR
+         addresses:
          $ARGUMENTS
 
       ## Capture (facts only)
@@ -227,7 +408,7 @@ nodes:
 
       Output a one-line confirmation and: <promise>EXPLORE-DONE</promise>
 
-  # 6. Plan the revision — every feedback point mapped to a concrete edit.
+  # 9. Plan the revision — every feedback point mapped to a concrete edit.
   - id: create-plan
     category: planning
     artifact: plan.md
@@ -244,9 +425,11 @@ nodes:
       ## Feedback to address
       a) GitHub PR reviews / inline comments:
          $gather-feedback.output.feedback
-      b) Linear tester / reviewer comments — ONLY what is under the literal heading
-         "## Reviewer comments (Linear)"; if that heading is absent there is none,
-         and the original bug report before it is not a substitute for it:
+      b) Linear tester / reviewer comments — already filtered into the digest
+         above (person-written, newer than the harness's last comment). Comments
+         marked `[harness]` in the input below are the harness's own notes,
+         never feedback, and the issue text is the original report this PR
+         addresses:
          $ARGUMENTS
 
       ## Exploration
@@ -282,10 +465,20 @@ nodes:
       After writing plan.md, output a one-line summary and:
       <promise>PLAN-DONE</promise>
 
-  # 7. Execute the plan and push fixes to the existing PR branch.
+  # 10. Tell the issue what is about to be addressed.
+  - id: ack
+    category: linear
+    depends_on: [create-plan]
+    linear:
+      comment: |-
+        Working on the requested changes to PR #$resolve-pr.output.pr.
+
+        $gather-feedback.output.feedback
+
+  # 11. Execute the plan and push fixes to the existing PR branch.
   - id: implement
     category: implementation
-    depends_on: [create-plan]
+    depends_on: [ack]
     loop:
       provider: pi
       model: kimi-code/kimi-for-coding
@@ -296,18 +489,19 @@ nodes:
         executing the plan. This may be one of up to 3 passes — read the commit
         history so you don't redo work already done.
 
-        1. Get the PR branch into this worktree:
-           `gh pr checkout $resolve-pr.output.pr`
-           `git log --oneline -5`  (see prior revision commits)
+        1. The PR branch is checked out in this worktree. See prior revision
+           commits: `git log --oneline -5`
 
         2. Read the plan — it is the contract for this revision:
            `cat $ARTIFACTS_DIR/plan.md`
            Implement EVERY item in the plan's feedback checklist. The feedback
            sources behind the plan are:
            a) GitHub PR reviews / inline comments: $gather-feedback.output.feedback
-           b) Linear tester / reviewer comments — ONLY what is under the literal
-              heading "## Reviewer comments (Linear)"; if absent there is none, and
-              the original bug report before it is not a stand-in: $ARGUMENTS
+           b) Linear tester / reviewer comments — already filtered into the
+              digest above (person-written, newer than the harness's last
+              comment). Comments marked `[harness]` in the input below are the
+              harness's own notes, never feedback, and the issue text is the
+              original report this PR addresses: $ARGUMENTS
 
         3. Make the code changes. Run the project's **scoped verify chain**
            (commands live in CLAUDE.md / AGENTS.md; use the narrowest scope
@@ -335,10 +529,10 @@ nodes:
         <promise>REVISION_DONE</promise>
         If something is genuinely blocked or unaddressable, end your turn
         WITHOUT the signal and explain what is blocked — the run then fails
-        (and the poller routes the card back to source under the retry cap)
-        rather than signaling a false "ready".
+        (and the issue is told the run failed) rather than signaling a false
+        "ready".
 
-  # 8. Scoped verify gate — fail loudly if the revision doesn't build/test clean.
+  # 12. Scoped verify gate — fail loudly if the revision doesn't build/test clean.
   - id: validate
     category: validation
     command: validate
@@ -353,14 +547,25 @@ nodes:
         summary: { type: string }
       required: [passed]
 
-  # 9. Abort if validation failed — never leave the PR red.
-  - id: abort-on-invalid
-    category: validation
+  # 13. Validation failed: say so on the issue, then stop — never leave the PR red.
+  - id: report-invalid
+    category: linear
     depends_on: [validate]
     when: "$validate.output.passed != 'true'"
+    linear:
+      comment: |-
+        The revision did not pass validation, so it was not pushed for review and PR #$resolve-pr.output.pr needs a person.
+
+        $validate.output.summary
+
+  - id: abort-on-invalid
+    category: validation
+    depends_on: [validate, report-invalid]
+    trigger_rule: all_done
+    when: "$validate.output != '' && $validate.output.passed != 'true'"
     cancel: "refusing to leave PR #$resolve-pr.output.pr red — validation did not return a pass. An empty summary below means its verdict could not be read, rather than a check having failed. $validate.output.summary"
 
-  # 10. Kimi self-review loop on the updated revision diff.
+  # 14. Kimi self-review loop on the updated revision diff.
   - id: pi-review-fix-loop
     category: validation
     depends_on: [validate]
@@ -454,7 +659,7 @@ nodes:
         the gpt-review-fix and Claude phases that follow. Emitting it on a clean
         PR is the goal.
 
-  # 11. Second-pass review via an OpenAI model — catch what Kimi rationalized.
+  # 15. Second-pass review via an OpenAI model — catch what Kimi rationalized.
   - id: gpt-review-fix
     category: validation
     depends_on: [pi-review-fix-loop]
@@ -508,7 +713,7 @@ nodes:
 
       When done, output: <promise>GPT-REVIEW-DONE</promise>
 
-  # 12. Third model-diverse review-and-fix pass — like gpt-review-fix, on a
+  # 16. Third model-diverse review-and-fix pass — like gpt-review-fix, on a
   #     different model. Reviews and fixes; posts no comment and sets no label.
   - id: anthropic-review-fix
     category: validation
@@ -572,7 +777,7 @@ nodes:
 
       When done, output: <promise>ANTHROPIC-REVIEW-DONE</promise>
 
-  # 13. Final scoped verify gate — review/fix nodes above may push commits
+  # 17. Final scoped verify gate — review/fix nodes above may push commits
   #     after the earlier validate node, so verify the branch HEAD again.
   - id: final-validate
     category: validation
@@ -588,14 +793,25 @@ nodes:
         summary: { type: string }
       required: [passed]
 
-  # 14. Abort if the final branch state is red after review fixes.
-  - id: abort-final-invalid
-    category: validation
+  # 18. Red at the end: say so on the issue, then stop.
+  - id: report-final-invalid
+    category: linear
     depends_on: [final-validate]
     when: "$final-validate.output.passed != 'true'"
+    linear:
+      comment: |-
+        After the review passes, PR #$resolve-pr.output.pr no longer passes validation, so it was not sent back for review. A person needs to look.
+
+        $final-validate.output.summary
+
+  - id: abort-final-invalid
+    category: validation
+    depends_on: [final-validate, report-final-invalid]
+    trigger_rule: all_done
+    when: "$final-validate.output != '' && $final-validate.output.passed != 'true'"
     cancel: "refusing to mark PR #$resolve-pr.output.pr ready — final validation did not return a pass. An empty summary below means its verdict could not be read, rather than a check having failed. $final-validate.output.summary"
 
-  # 15. Reply IN-THREAD to each reviewer's inline comment, so reviewers see how
+  # 19. Reply IN-THREAD to each reviewer's inline comment, so reviewers see how
   #     their point was handled — in the GitHub thread, not as new code comments
   #     or new top-level comments. Idempotent so re-runs don't duplicate.
   - id: reply-to-comments
@@ -643,9 +859,9 @@ nodes:
 
       When done, output a one-line summary and: <promise>REPLIES-DONE</promise>
 
-  # 16. Post a short summary on the PR and finish after final validation.
+  # 20. Post a short summary on the PR and finish after final validation.
   #     The completion marker this posts is the ONLY watermark the next
-  #     revise-pr run uses to ignore already-addressed feedback — a missed post
+  #     revision uses to ignore already-addressed feedback — a missed post
   #     silently re-surfaces old comments — so it runs on a capable model, is
   #     verified by re-fetching the comment, and retries once on failure.
   - id: summary
@@ -672,7 +888,7 @@ nodes:
           ✅ Revision complete
 
       The first line is a hidden marker (invisible in rendered GitHub). A future
-      revise-pr run uses the timestamp of this comment to ignore feedback it has
+      revision uses the timestamp of this comment to ignore feedback it has
       already addressed and only act on NEWER comments — so this exact marker is
       required on every completed revision. Put the summary after those lines.
 
@@ -689,11 +905,10 @@ nodes:
 
       The three-review chain (kimi self-review loop, gpt-review-fix,
       anthropic-review-fix) already ran in this same workflow, so do NOT suggest
-      running additional
-      review agents.
+      running additional review agents.
 
-      Do NOT change labels or title; the poller will move the Linear card back
-      to the review column on completion.
+      Do NOT change labels or title; this workflow moves the Linear issue to
+      In Review itself.
 
       ## Confirm the marker actually landed (critical)
       The completion marker is the next run's ONLY watermark — posting the
@@ -720,3 +935,47 @@ nodes:
           type: boolean
           description: "true if $implement.output contained REVISION_DONE"
       required: [marker_posted]
+
+  # 21. Back to review, and a closing comment on the issue.
+  - id: in-review
+    category: linear
+    depends_on: [summary, reply-to-comments]
+    linear:
+      move_state: In Review
+
+  - id: linear-summary
+    category: delivery
+    depends_on: [summary, reply-to-comments]
+    provider: claude
+    model: haiku
+    context: fresh
+    linear_comment: true
+    prompt: |-
+      Write the closing comment for the Linear issue whose pull request this run
+      revised: PR #$resolve-pr.output.pr.
+
+      Read `$ARTIFACTS_DIR/plan.md` (its feedback checklist) and run
+      `git log --oneline origin/$resolve-pr.output.base..HEAD` and
+      `gh pr view $resolve-pr.output.pr --json title,url`.
+
+      Did the revision converge? $summary.output.converged
+
+      Output Markdown, at most 10 lines, starting with exactly one of these lines:
+
+      - `**Revision complete.** Back in review.` when it converged, or
+      - `**Revision partly done.** Back in review, but needs a person.` when it did not.
+
+      Then the PR link, two or three bullets on what changed in terms the person
+      who asked for the changes understands, and any feedback item that was NOT
+      addressed, with why.
+
+      Output ONLY the comment. Do NOT post it yourself; the harness posts this
+      output to the issue when the run completes.
+
+  # 22. A step failed: say so on the issue.
+  - id: run-failed
+    category: linear
+    depends_on: [summary, reply-to-comments]
+    trigger_rule: one_failed
+    linear:
+      comment: This revision stopped at a failed step, so the requested changes may be only partly pushed to the pull request. See the run in the harness for which step broke.

@@ -50,7 +50,7 @@ Two paths apply those same gates:
   for issues that are delegated to the harness *and* in its source status. This is
   the safety net: if the harness was down or a webhook delivery failed, the
   delegated issue is still picked up on a later tick. It is also what drives
-  stage-to-stage pipelines (e.g. `merge-pr` watching *Ready for merge*).
+  stage-to-stage pipelines (e.g. `task-merge` watching *Ready for merge*).
 
 Because the poller now checks delegation, leaving `live` on is safe — it can no
 longer claim an issue nobody handed it. If the harness doesn't know its own app
@@ -129,8 +129,9 @@ workspace with a team per project doesn't need it.
   issue, the binding for its Linear project wins.
 - **Moving an issue to another Linear project** moves it to that project's
   binding.
-- **Epics:** the merge and supervisor bindings that epic setup creates watch
-  the same Linear project as the build binding.
+- **Epics:** `task` runs an epic under the binding that picked it up. A custom
+  setup that binds `linear-epic-supervise` and a merge workflow by hand should
+  give them the same Linear project as the build binding.
 
 Turning the switch off only hides the field. Bindings that already name a
 Linear project keep it, and their form still shows it so you can clear it.
@@ -154,7 +155,7 @@ A binding starts work that someone delegated to the harness. Set its **Also
 start on label** field, and the poller also claims issues in the source status
 that carry that label. A person or a workflow can set the label. For example, a
 nightly [triage workflow](/docs/workflows/authoring#triaging-issues) labels the
-issues it judges ready with `harness:ready`, and the idea-to-pr binding on Todo
+issues it judges ready with `harness:ready`, and the `task` binding on Todo
 builds them.
 
 - **Delegation still works.** The label is an extra way in, not a
@@ -226,8 +227,8 @@ Inside the agent session, as Linear agent activities rather than plain comments:
 | When | Activity |
 |---|---|
 | Immediately on delegation | `thought` — "Picking up COR-12…" (Linear marks a session unresponsive without one inside **10 seconds**, so this is emitted before any slower work) |
-| As each workflow step **starts** | `action` — "Running the validate step (6 of 15, started 13:14 CEST) of workflow idea-to-pr". Every node of a parallel layer is named, and each is announced once |
-| As each workflow step **finishes** | `action` — "Finished the validate step (6 of 15, took 1m 46s) of workflow idea-to-pr". A failure or cancellation says so rather than claiming it finished, and still reports how long it ran first |
+| As each workflow step **starts** | `action` — "Running the validate step (6 of 15, started 13:14 CEST) of workflow task". Every node of a parallel layer is named, and each is announced once |
+| As each workflow step **finishes** | `action` — "Finished the validate step (6 of 15, took 1m 46s) of workflow task". A failure or cancellation says so rather than claiming it finished, and still reports how long it ran first |
 | When the **poller** claims an issue | it opens a session of its own first, so a poller-claimed run reports into a thread rather than posting detached comments. Needs the app (OAuth) connection — a personal API key cannot open a session, so those runs still use plain comments |
 | Only after ~20 minutes with nothing else posted | `thought` — "Still working — the `implement-tasks` step (4 of 16) has been running for 22 minutes". Purely a keep-alive, not a progress channel — see below |
 | Delegated, but not in the source status | `error` — names the status it's in and what to do |
@@ -307,7 +308,7 @@ Reply in the thread to follow up; it is one conversation. It also appears in
 your **Chat** list in the dashboard.
 
 - **Asking never starts work.** Delegating the issue does that, as above. Ask
-  it to start something ("start idea-to-pr for this") and it says what it would
+  it to start something ("start task for this") and it says what it would
   do, then waits. Reply **yes** to go ahead; anything else cancels it.
 - **Only people with an ai-harness account.** The commenter is matched to an
   account by their [linked Linear account](#link-your-linear-account), else by

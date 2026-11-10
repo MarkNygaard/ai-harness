@@ -8,7 +8,7 @@ trigger below fires. **Owner:** build-perf.
 The cheap win — the lighter `validate` pre-check (PR #77) — shipped first and
 removed the single biggest cost (a full test compile+run dropped from `validate`,
 ~15–18 min). **Revisit this split only if, *after that deploy*, a typical
-`idea-to-pr` run's verify gates (`validate` + `final-verify-loop`) are still
+`task` run's verify gates (`validate` + `final-verify-loop`) are still
 painfully slow** (say > ~25 min combined). If they're acceptable, leave
 `harness-server` as-is — the split is a large, risky investment that isn't worth
 it just for tidiness.
@@ -66,7 +66,7 @@ workspace; ~80k of those LOC sit in files carrying `#[test]`/`#[cfg(test)]`).
 Because the frequently-edited **active surface** (the runs/MCP/authoring HTTP API)
 lives in the *same* crate as large, rarely-touched **legacy/engine** code, **any
 edit recompiles the entire crate plus its inline test code** — and the
-`idea-to-pr` pipeline pays that full recompile twice per run (`validate`, then
+`task` pipeline pays that full recompile twice per run (`validate`, then
 `final-verify-loop`). Measured: those two gates were ~19 min and ~22 min of a
 111-min run, almost entirely compile.
 

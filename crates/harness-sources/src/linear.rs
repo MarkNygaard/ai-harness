@@ -127,7 +127,7 @@ pub struct SubIssue {
     pub sort_order: f64,
 }
 
-/// A comment on a Linear issue (reviewer feedback fed to `revise-pr`).
+/// A comment on a Linear issue (reviewer feedback fed to `revise-task`).
 #[derive(Debug, Clone, Serialize)]
 pub struct Comment {
     /// Markdown body of the comment.
@@ -136,6 +136,10 @@ pub struct Comment {
     pub author: String,
     /// ISO-8601 creation timestamp (Linear `createdAt`).
     pub created_at: String,
+    /// Written by the account the harness authenticates as: its own plans,
+    /// summaries and status notes, never reviewer feedback. Matched on
+    /// Linear's `isMe`, because the app's display name varies per install.
+    pub by_harness: bool,
 }
 
 /// Something linked to an issue under **Resources**: a Sentry issue, a pull
@@ -314,6 +318,10 @@ struct CommentNode {
 #[derive(Deserialize)]
 struct CommentUserNode {
     name: String,
+    // True when the comment was written by the account this client
+    // authenticates as, i.e. the harness itself.
+    #[serde(rename = "isMe", default)]
+    is_me: bool,
 }
 
 #[derive(Deserialize)]
@@ -533,7 +541,7 @@ const COMMENTS_QUERY: &str = r#"
 query Comments($id: String!) {
   issue(id: $id) {
     comments(first: 50) {
-      nodes { body createdAt user { name } }
+      nodes { body createdAt user { name isMe } }
     }
   }
 }"#;
@@ -696,6 +704,7 @@ pub fn parse_comments(json: &[u8]) -> Result<Vec<Comment>, LinearError> {
         .into_iter()
         .map(|c| Comment {
             body: c.body,
+            by_harness: c.user.as_ref().is_some_and(|u| u.is_me),
             author: c.user.map(|u| u.name).unwrap_or_else(|| "unknown".into()),
             created_at: c.created_at,
         })
@@ -3640,10 +3649,16 @@ mod tests {
     fn parse_comments_maps_body_author_and_time() {
         let json = br#"{"data":{"issue":{"comments":{"nodes":[
             {"body":"First pass looks good","createdAt":"2026-06-01T10:00:00Z","user":{"name":"Alice"}},
-            {"body":"Please fix the edge case","createdAt":"2026-06-02T14:30:00Z","user":{"name":"Bob"}}
+            {"body":"Please fix the edge case","createdAt":"2026-06-02T14:30:00Z","user":{"name":"Bob"}},
+            {"body":"Plan: do the thing","createdAt":"2026-06-02T15:00:00Z","user":{"name":"Any App Name","isMe":true}}
         ]}}}}"#;
         let comments = parse_comments(json).unwrap();
-        assert_eq!(comments.len(), 2);
+        assert_eq!(comments.len(), 3);
+        assert!(!comments[0].by_harness, "isMe absent means a person");
+        assert!(
+            comments[2].by_harness,
+            "the harness's own comment is known by isMe, not by its name"
+        );
         assert_eq!(comments[0].author, "Alice");
         assert_eq!(comments[0].body, "First pass looks good");
         assert_eq!(comments[0].created_at, "2026-06-01T10:00:00Z");

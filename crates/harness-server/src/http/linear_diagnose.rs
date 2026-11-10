@@ -2,7 +2,7 @@
 //!
 //! A binding is a relay: an issue is claimed from one column, and on completion
 //! moved to another — where, if the setup is right, a *different* binding picks
-//! it up. `Todo → idea-to-pr → Ready for merge → merge-pr → Done → supervise`.
+//! it up. `Todo → task → Ready for merge → task-merge → Done`.
 //!
 //! Nothing enforces that the relay joins up. Point a ready state at a column no
 //! binding polls and the issue lands there and stops, with no error anywhere:
@@ -73,8 +73,48 @@ pub(crate) async fn check_project(
     let mine: Vec<_> = all.into_iter().filter(|b| b.project == project).collect();
     // Unlike the listing, this one needs the names: half the findings are about
     // a status that no longer exists, which cannot be told from an id alone.
-    let names = state_names(state, project).await?;
-    Ok(diagnose(&mine, &names))
+    let conn = super::linear_connections::resolve_for_project(state, project).await?;
+    let client = super::linear_oauth::linear_client(state, &conn).await?;
+    let teams = client.discover().await.map_err(|e| e.0)?.teams;
+    let names: States = teams
+        .iter()
+        .flat_map(|t| &t.states)
+        .map(|st| (st.id.clone(), st.name.clone()))
+        .collect();
+    let mut out = diagnose(&mine, &names);
+
+    // And whether each workflow's own `linear:` steps can move the issue where
+    // they say. Under the trigger system the Linear triggers stand for the
+    // bindings, so they are checked too.
+    let mut pairs: Vec<(String, String)> = mine
+        .iter()
+        .filter(|b| b.enabled)
+        .map(|b| (b.workflow.clone(), b.team_id.clone()))
+        .collect();
+    if super::triggers_routes::uses_triggers(state).await {
+        pairs.extend(
+            super::triggers_routes::linear_bindings(state)
+                .await
+                .into_iter()
+                .map(|(_, b)| b)
+                .filter(|b| b.project == project && b.enabled)
+                .map(|b| (b.workflow, b.team_id)),
+        );
+    }
+    pairs.sort();
+    pairs.dedup();
+    for (workflow, team_id) in pairs {
+        if let Some(message) =
+            super::linear_status_check::for_team(state, &teams, &team_id, &workflow)
+        {
+            out.push(Finding {
+                level: Level::Error,
+                workflow: Some(workflow),
+                message,
+            });
+        }
+    }
+    Ok(out)
 }
 
 fn name<'a>(states: &'a States, id: &'a str) -> &'a str {

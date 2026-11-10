@@ -81,9 +81,9 @@ than how fast one person builds it. See
 **Who reviews.** Ask an agent to review what it just wrote and it will generally
 approve it. The reasoning that produced the code is the reasoning being asked to
 judge it. The fix is not a better prompt, it is a different model:
-[`idea-to-pr`](/docs/workflows/bundled#idea-to-pr) has Claude plan, Kimi
-implement, then an OpenAI model and a Claude model each review and fix. None of
-the reviewers wrote the code.
+[`review-pr`](/docs/workflows/bundled#review-pr) and
+[`revise-task`](/docs/workflows/bundled#revise-task) have an OpenAI model and a
+Claude model each review and fix in turn. Neither wrote the code under review.
 
 **What is enforced.** A loop stops when the model decides it is finished. A
 build gate written as a node cannot be skipped by an agent that believes it is
@@ -114,16 +114,19 @@ weak model write good software.
 
 ## On human review
 
-The bundled workflows stop at a pull request. That is a default, not a
-constraint. Bind [`merge-pr`](/docs/workflows/bundled#merge-pr) to a column,
-have `idea-to-pr` move the issue there when it finishes, and the chain runs from
-ticket to merged with nobody in it. What `merge-pr` waits on is CI passing, not
-an approval.
+The bundled workflows stop at a pull request. Merging is a separate step:
+[`task-merge`](/docs/workflows/bundled#task-merge), started from a "Ready for
+merge" column. It asks GitHub whether the review is approved before it merges.
+If the repository requires a review and there is no approval yet, nothing
+merges, and the issue goes back to In Review with a comment saying why.
+
+That check is only as strong as the repository's settings. In a repository that
+requires no review, GitHub has nothing to withhold, so `task-merge` merges once
+CI passes, and the chain can run from ticket to merged with nobody in it.
 
 Whether to close that last gap is a decision about your codebase rather than
 about the tool. If you want review enforced, that is branch protection on the
-repository. The harness gives you a good place to put a human and does not check
-that you used it.
+repository. The harness respects it, and does not check that you set it.
 
 ## Why this rhymes with CI
 

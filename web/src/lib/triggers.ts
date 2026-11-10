@@ -144,6 +144,26 @@ export function useRunTrigger(id: string | null) {
   });
 }
 
+/**
+ * Linear triggers whose workflow moves issues to a status their team does not
+ * have, by trigger id, with the sentence to show. Such a trigger's runs are
+ * refused before they start. Read from Linear, so it loads after the list and
+ * a trigger it could not check has no entry.
+ */
+export function useTriggerChecks() {
+  return useQuery<Record<string, string>, Error>({
+    queryKey: ["triggers", "checks"],
+    staleTime: 60_000,
+    queryFn: async ({ signal }) =>
+      (
+        await apiJson<{ problems: Record<string, string> }>(
+          "/api/triggers/checks",
+          { signal },
+        )
+      ).problems,
+  });
+}
+
 export function useSaveTrigger() {
   const qc = useQueryClient();
   return useMutation<
