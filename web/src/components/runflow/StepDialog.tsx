@@ -8,6 +8,30 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Markdown } from "@/components/Markdown";
+import {
+  IconAlertTriangle,
+  IconCornerDownRight,
+  IconMessage,
+  IconTool,
+} from "@tabler/icons-react";
+import {
+  CodeBlock,
+  CodeBlockActions,
+  CodeBlockContent,
+  CodeBlockCopyButton,
+  CodeBlockLine,
+} from "@/components/ui/code-block";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceDescription,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "@/components/ui/trace";
+import { useHighlightedCode } from "@/hooks/use-highlighted-code";
 import type { Activity, NodeView } from "@/types/run";
 import {
   elapsedMs,
@@ -171,8 +195,8 @@ function ActivityFeed({ lines }: { lines: Activity[] }) {
         <span className="size-1.5 animate-pulse rounded-full bg-current" />
         Activity
       </div>
-      <div className="max-h-48 overflow-auto rounded-md bg-muted p-3">
-        <ul className="flex flex-col gap-1 text-[11px] leading-relaxed">
+      <div className="max-h-64 overflow-auto rounded-md border border-border p-3">
+        <Trace>
           {lines.map((line, i) => {
             if (
               line.kind === "tool_result" &&
@@ -187,77 +211,109 @@ function ActivityFeed({ lines }: { lines: Activity[] }) {
                 : undefined;
             return <ActivityRow key={i} line={line} result={result} />;
           })}
-        </ul>
+        </Trace>
         <div ref={endRef} />
       </div>
     </div>
   );
 }
 
-/** Elapsed label between a tool call and its result, or "" when not timeable. */
-function pairDuration(call: Activity, result: Activity): string {
-  if (!call.ts || !result.ts) return "";
+/** Elapsed label between a tool call and its result, or null when not timeable. */
+function pairDuration(call: Activity, result: Activity): string | null {
+  if (!call.ts || !result.ts) return null;
   const ms = Date.parse(result.ts) - Date.parse(call.ts);
-  return ms >= 0 ? ` ${formatDuration(ms)}` : "";
+  return ms >= 0 ? formatDuration(ms) : null;
 }
 
 /**
- * One activity line, styled by kind. A `tool` call shows its name + input and,
- * when `result` is paired in, a ✓ + elapsed time and the result snippet below.
+ * One activity line, by kind. A `tool` call is a line with its name and input
+ * that shimmers until its `result` is paired in; then it shows the elapsed
+ * time and opens to the full input and what came back.
  */
 function ActivityRow({ line, result }: { line: Activity; result?: Activity }) {
   if (line.kind === "tool") {
-    return (
-      <li className="font-mono text-muted-foreground">
-        <div className="flex items-start gap-1.5 break-all">
-          <span aria-hidden>🔧</span>
-          <span className="break-words">
-            <span className="font-medium text-foreground">{line.text}</span>
-            {line.detail ? <span> {line.detail}</span> : null}
-          </span>
-          {result ? (
-            <span
-              className={`ml-auto whitespace-nowrap pl-2 ${
-                result.is_error
-                  ? "text-red-600 dark:text-red-400"
-                  : "text-emerald-600 dark:text-emerald-400"
-              }`}
-            >
-              {result.is_error ? "✗" : "✓"}
-              {pairDuration(line, result)}
-            </span>
+    const error = !!result?.is_error;
+    const took = result ? pairDuration(line, result) : null;
+    const head = (
+      <TraceLine status={error ? "error" : result ? undefined : "running"}>
+        <TraceIcon>{error ? <IconAlertTriangle /> : <IconTool />}</TraceIcon>
+        <TraceTitle className="font-mono text-xs">
+          <span className="font-medium">{line.text}</span>
+          {line.detail ? (
+            <span className="opacity-70"> {line.detail}</span>
           ) : null}
-        </div>
-        {result?.detail ? (
-          <div
-            className={`flex items-start gap-1.5 break-all pl-[1.1rem] ${
-              result.is_error
-                ? "text-red-600/90 dark:text-red-400/90"
-                : "text-muted-foreground/80"
-            }`}
-          >
-            <span aria-hidden>↳</span>
-            <span className="break-words">{result.detail}</span>
-          </div>
-        ) : null}
-      </li>
+        </TraceTitle>
+        {took && (
+          <TraceDescription className="text-xs">{took}</TraceDescription>
+        )}
+      </TraceLine>
+    );
+    if (!line.detail && !result?.detail) return <div>{head}</div>;
+    return (
+      <TraceCollapsible>
+        <TraceCollapsibleTrigger>{head}</TraceCollapsibleTrigger>
+        <TraceCollapsibleContent className="flex flex-col gap-2 text-xs">
+          {line.detail && (
+            <p className="font-mono break-all whitespace-pre-wrap">
+              {line.detail}
+            </p>
+          )}
+          {result?.detail && (
+            <CodeBlock size="sm" variant={error ? "destructive" : "default"}>
+              <CodeBlockContent wrap className="max-h-48">
+                {result.detail}
+              </CodeBlockContent>
+            </CodeBlock>
+          )}
+        </TraceCollapsibleContent>
+      </TraceCollapsible>
     );
   }
   if (line.kind === "tool_result") {
     return (
-      <li
-        className={`flex items-start gap-1.5 break-all font-mono ${
-          line.is_error
-            ? "text-red-600/90 dark:text-red-400/90"
-            : "text-muted-foreground/80"
-        }`}
-      >
-        <span aria-hidden>{line.is_error ? "✗" : "↳"}</span>
-        <span className="break-words">{line.detail}</span>
-      </li>
+      <div>
+        <TraceLine status={line.is_error ? "error" : undefined}>
+          <TraceIcon>
+            {line.is_error ? <IconAlertTriangle /> : <IconCornerDownRight />}
+          </TraceIcon>
+          <TraceTitle className="font-mono text-xs">{line.detail}</TraceTitle>
+        </TraceLine>
+      </div>
     );
   }
-  return <li className="break-words text-muted-foreground">{line.text}</li>;
+  return (
+    <div>
+      <TraceLine className="items-start">
+        <TraceIcon className="mt-0.5">
+          <IconMessage />
+        </TraceIcon>
+        <TraceTitle className="text-xs whitespace-normal">
+          {line.text}
+        </TraceTitle>
+      </TraceLine>
+    </div>
+  );
+}
+
+/**
+ * Machine text (JSON, logs, a non-markdown artifact) as a code block, with a
+ * copy button and highlighting for the languages the highlighter knows; any
+ * other language shows plain. Lines wrap: this is read, not edited.
+ */
+function CodeView({ code, language }: { code: string; language: string }) {
+  const lines = useHighlightedCode(code, language);
+  return (
+    <CodeBlock size="sm">
+      <CodeBlockActions>
+        <CodeBlockCopyButton value={code} />
+      </CodeBlockActions>
+      <CodeBlockContent wrap>
+        {lines.map((line, i) => (
+          <CodeBlockLine key={i}>{line}</CodeBlockLine>
+        ))}
+      </CodeBlockContent>
+    </CodeBlock>
+  );
 }
 
 function Meta({ label, value }: { label: string; value: string }) {
@@ -293,9 +349,7 @@ function ArtifactView({
           <Markdown>{content}</Markdown>
         </div>
       ) : (
-        <pre className="whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
-          {content}
-        </pre>
+        <CodeView code={content} language={extension(name)} />
       )}
     </div>
   );
@@ -310,10 +364,8 @@ function ArtifactView({
  *
  * The line is prose versus machine text. An agent's summary and a rendered
  * `.md` artifact are what you came for: they sit on the surface, bounded by a
- * rule so you can see where the document starts and stops. Raw output, JSON and
- * the activity log are quoted material, and keep `bg-muted` — the same tint
- * `.markdown code` and `.markdown pre` already use, so an inline snippet inside
- * a prose block still reads as quoted.
+ * rule so you can see where the document starts and stops. Raw output and JSON
+ * are quoted material, shown as a code block (`CodeView`).
  */
 const PROSE = "rounded-md border border-border p-3";
 
@@ -332,18 +384,18 @@ function OutputView({ text }: { text: string | null }) {
     return <p className={EMPTY}>No textual output for this step.</p>;
   }
   const json = asPrettyJson(text);
-  if (json !== null) {
-    return (
-      <pre className="whitespace-pre-wrap break-words rounded-md bg-muted p-3 font-mono text-xs leading-relaxed">
-        {json}
-      </pre>
-    );
-  }
+  if (json !== null) return <CodeView code={json} language="json" />;
   return (
     <div className={PROSE}>
       <Markdown>{text}</Markdown>
     </div>
   );
+}
+
+/** A file name's extension, which the highlighter takes as its language. */
+function extension(name: string): string {
+  const dot = name.lastIndexOf(".");
+  return dot > 0 ? name.slice(dot + 1) : "";
 }
 
 /** Pretty-printed JSON when `text` is a JSON object/array, else null. */
