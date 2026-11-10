@@ -1,21 +1,49 @@
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import {
+  IconAlertTriangle,
   IconArrowsMaximize,
   IconCheck,
   IconFolder,
   IconHistory,
-  IconLoader2,
+  IconPlayerPlay,
   IconPlus,
   IconSend,
+  IconSparkles,
+  IconTool,
   IconTrash,
   IconX,
 } from "@tabler/icons-react";
 import { Markdown } from "@/components/Markdown";
-import { Badge } from "@/components/ui/badge";
+import { Bubble, BubbleContent } from "@/components/ui/bubble";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import {
+  Item,
+  ItemActions,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item";
+import { Message, MessageContent } from "@/components/ui/message";
+import {
+  MessageScroller,
+  MessageScrollerButton,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from "@/components/ui/message-scroller";
+import {
+  Trace,
+  TraceCollapsible,
+  TraceCollapsibleContent,
+  TraceCollapsibleTrigger,
+  TraceIcon,
+  TraceLine,
+  TraceTitle,
+} from "@/components/ui/trace";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -47,12 +75,14 @@ import { useProjects } from "@/lib/projects";
 import { agentLabel } from "@/lib/agents";
 import { ApiError } from "@/lib/api";
 import {
+  type ChatActivity,
   type ChatContext,
   type ChatMessage,
+  type ToolStep,
   contextFromPath,
   describeAction,
   describeContext,
-  toolCalls,
+  toolSteps,
   useChatSettings,
   useConversation,
   useConversations,
@@ -377,34 +407,29 @@ function MessageList({
   onSuggest,
 }: {
   messages: ChatMessage[];
-  running: { activity: { kind: string; text: string }[] } | null;
+  running: { activity: ChatActivity[] } | null;
   conversationId: string | null;
   context: ChatContext;
   empty: boolean;
   onSuggest: (text: string) => void;
 }) {
-  const end = useRef<HTMLDivElement>(null);
-  const lastActivity = running?.activity.at(-1);
-  useEffect(() => {
-    end.current?.scrollIntoView({ block: "end" });
-  }, [messages.length, running?.activity.length]);
-
   if (empty) {
     const open = describeContext(context);
     return (
-      <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 overflow-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col justify-end gap-3 p-4">
         <p className="text-[12px] text-muted-foreground">
           Ask why a run failed, which pull request to test for a Linear issue,
           why an issue didn't start, or have it build a workflow with you.
           {open && <> It can see you have {open} open.</>}
         </p>
-        <div className="flex flex-col items-start gap-1.5">
+        {/* Suggestions: one row that scrolls sideways rather than wraps. */}
+        <div className="flex scroll-fade-x scrollbar-none gap-2 overflow-x-auto overscroll-x-contain">
           {suggestions(context).map((s) => (
             <Button
               key={s}
               variant="outline"
               size="sm"
-              className="h-auto py-1.5 text-left whitespace-normal"
+              className="shrink-0"
               onClick={() => onSuggest(s)}
             >
               {s}
@@ -416,24 +441,39 @@ function MessageList({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-4">
-      {messages.map((m) => (
-        <Message key={m.id} message={m} conversationId={conversationId} />
-      ))}
-      {running && (
-        <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-          <IconLoader2 className="size-3.5 animate-spin" />
-          {lastActivity?.kind === "tool"
-            ? `Using ${lastActivity.text}…`
-            : "Thinking…"}
-        </div>
-      )}
-      <div ref={end} />
-    </div>
+    <MessageScrollerProvider autoScroll>
+      <MessageScroller className="flex-1">
+        <MessageScrollerViewport>
+          <MessageScrollerContent aria-busy={!!running} className="gap-5 p-4">
+            {messages.map((m) => (
+              <MessageScrollerItem
+                key={m.id}
+                messageId={String(m.id)}
+                // A question is where reading picks up: it is kept in view
+                // when sent, and the answer fills in below it.
+                scrollAnchor={m.role === "user"}
+              >
+                <ChatMessageView message={m} conversationId={conversationId} />
+              </MessageScrollerItem>
+            ))}
+            {running && (
+              <MessageScrollerItem messageId="running">
+                <Message>
+                  <MessageContent>
+                    <Steps steps={toolSteps(running.activity)} live />
+                  </MessageContent>
+                </Message>
+              </MessageScrollerItem>
+            )}
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton />
+      </MessageScroller>
+    </MessageScrollerProvider>
   );
 }
 
-function Message({
+function ChatMessageView({
   message,
   conversationId,
 }: {
@@ -443,26 +483,30 @@ function Message({
   switch (message.role) {
     case "user":
       return (
-        <div className="ml-8 self-end rounded-lg bg-muted px-3 py-2 text-[13px] whitespace-pre-wrap">
-          {message.body}
-        </div>
+        <Message align="end">
+          <MessageContent>
+            <Bubble align="end" variant="muted">
+              <BubbleContent className="text-[13px] whitespace-pre-wrap">
+                {message.body}
+              </BubbleContent>
+            </Bubble>
+          </MessageContent>
+        </Message>
       );
     case "assistant": {
-      const tools = toolCalls(message.activity);
+      const steps = toolSteps(message.activity);
       return (
-        <div className="flex flex-col gap-1">
-          <Markdown className="text-[13px]">{message.body}</Markdown>
-          {tools.length > 0 && (
-            <div className="text-[11px] text-muted-foreground">
-              Looked at: {[...new Set(tools.map((t) => t.text))].join(", ")}
-            </div>
-          )}
-        </div>
+        <Message>
+          <MessageContent className="gap-3">
+            {steps.length > 0 && <Steps steps={steps} />}
+            <Markdown className="text-[13px]">{message.body}</Markdown>
+          </MessageContent>
+        </Message>
       );
     }
     case "action":
       return message.action ? (
-        <ActionCard
+        <ActionView
           id={message.id}
           action={message.action}
           conversationId={conversationId}
@@ -470,14 +514,93 @@ function Message({
       ) : null;
     default:
       return (
-        <div className="text-[12px] text-destructive">
-          Couldn't answer: {message.body}
-        </div>
+        <Message>
+          <MessageContent>
+            <Trace>
+              <TraceLine status="error">
+                <TraceIcon>
+                  <IconAlertTriangle />
+                </TraceIcon>
+                <TraceTitle className="whitespace-normal">
+                  Couldn't answer: {message.body}
+                </TraceTitle>
+              </TraceLine>
+            </Trace>
+          </MessageContent>
+        </Message>
       );
   }
 }
 
-function ActionCard({
+/**
+ * The tool calls behind an answer, one line each; a line with something to
+ * show opens to the call's input and what came back. `live` is the answer
+ * still being written: the call that is out shimmers, and with none out it
+ * says it is thinking.
+ */
+function Steps({ steps, live = false }: { steps: ToolStep[]; live?: boolean }) {
+  const waiting = live && !steps.some((s) => !s.done);
+  return (
+    <Trace>
+      {steps.map((step, i) => (
+        <StepLine key={i} step={step} live={live} />
+      ))}
+      {waiting && (
+        <TraceLine status="running">
+          <TraceIcon>
+            <IconSparkles />
+          </TraceIcon>
+          <TraceTitle>Thinking…</TraceTitle>
+        </TraceLine>
+      )}
+    </Trace>
+  );
+}
+
+function StepLine({ step, live }: { step: ToolStep; live: boolean }) {
+  const status = step.error
+    ? "error"
+    : live && !step.done
+      ? "running"
+      : undefined;
+  const line = (
+    <TraceLine status={status}>
+      <TraceIcon>{step.error ? <IconAlertTriangle /> : <IconTool />}</TraceIcon>
+      <TraceTitle>
+        {live && !step.done ? `Using ${step.name}…` : step.name}
+      </TraceTitle>
+    </TraceLine>
+  );
+  if (!step.input && !step.output) return <div>{line}</div>;
+  return (
+    <TraceCollapsible>
+      <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
+      <TraceCollapsibleContent className="flex flex-col gap-1.5 text-[12px]">
+        {step.input && (
+          <p className="font-mono break-all whitespace-pre-wrap">
+            {step.input}
+          </p>
+        )}
+        {step.output && (
+          <pre
+            className={cn(
+              "max-h-48 overflow-auto font-mono text-[11px] whitespace-pre-wrap",
+              step.error && "text-destructive",
+            )}
+          >
+            {step.output}
+          </pre>
+        )}
+      </TraceCollapsibleContent>
+    </TraceCollapsible>
+  );
+}
+
+/**
+ * A tool call held for a yes or no. While it waits it asks, with Cancel and
+ * Confirm; once answered it is a plain line saying what became of it.
+ */
+function ActionView({
   id,
   action,
   conversationId,
@@ -487,64 +610,87 @@ function ActionCard({
   conversationId: string | null;
 }) {
   const resolve = useResolveAction(conversationId);
-  const pending = action.status === "pending";
-  return (
-    <Card size="sm">
-      <CardContent className="flex flex-col gap-2 px-3 py-2.5">
-        <div className="flex items-start gap-2">
-          <div className="min-w-0 flex-1 text-[13px] font-medium">
-            {describeAction(action)}
-          </div>
-          {!pending && (
-            <Badge
-              variant={
-                action.status === "confirmed"
-                  ? "secondary"
-                  : action.status === "failed"
-                    ? "destructive"
-                    : "outline"
-              }
-            >
-              {action.status}
-            </Badge>
+  const description =
+    typeof action.args?.description === "string"
+      ? action.args.description
+      : null;
+
+  if (action.status !== "pending") {
+    const failed = action.status === "failed";
+    const outcome =
+      action.status === "confirmed"
+        ? "Done"
+        : action.status === "cancelled"
+          ? "Cancelled"
+          : "Failed";
+    const line = (
+      <TraceLine status={failed ? "error" : undefined}>
+        <TraceIcon>
+          {failed ? (
+            <IconAlertTriangle />
+          ) : action.status === "cancelled" ? (
+            <IconX />
+          ) : (
+            <IconCheck />
           )}
-        </div>
-        {typeof action.args?.description === "string" && (
-          <p className="line-clamp-4 text-[12px] text-muted-foreground">
-            {action.args.description}
-          </p>
+        </TraceIcon>
+        <TraceTitle>
+          {outcome}: {describeAction(action)}
+        </TraceTitle>
+      </TraceLine>
+    );
+    return (
+      <Trace>
+        {action.result ? (
+          <TraceCollapsible>
+            <TraceCollapsibleTrigger>{line}</TraceCollapsibleTrigger>
+            <TraceCollapsibleContent className="text-[12px] whitespace-pre-wrap">
+              {action.result}
+            </TraceCollapsibleContent>
+          </TraceCollapsible>
+        ) : (
+          <div>{line}</div>
         )}
-        {action.result && !pending && (
-          <p className="text-[11px] text-muted-foreground">{action.result}</p>
-        )}
-        {pending && (
-          <div className="flex gap-2">
-            <Button
-              size="sm"
-              disabled={resolve.isPending}
-              onClick={() => resolve.mutate({ id, confirm: true })}
-            >
-              <IconCheck />
-              Confirm
-            </Button>
-            <Button
-              size="sm"
-              variant="ghost"
-              disabled={resolve.isPending}
-              onClick={() => resolve.mutate({ id, confirm: false })}
-            >
-              <IconX />
-              Cancel
-            </Button>
-          </div>
+      </Trace>
+    );
+  }
+
+  return (
+    <Item variant="outline" size="sm">
+      <ItemMedia variant="icon">
+        <IconPlayerPlay />
+      </ItemMedia>
+      <ItemContent>
+        <ItemTitle className="text-[13px]">{describeAction(action)}</ItemTitle>
+        {description && (
+          <ItemDescription className="line-clamp-4 text-[12px]">
+            {description}
+          </ItemDescription>
         )}
         {resolve.isError && (
-          <p className="text-[11px] text-destructive">
+          <ItemDescription className="text-[11px] text-destructive">
             {resolve.error.message}
-          </p>
+          </ItemDescription>
         )}
-      </CardContent>
-    </Card>
+      </ItemContent>
+      <ItemActions>
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={resolve.isPending}
+          onClick={() => resolve.mutate({ id, confirm: false })}
+        >
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          disabled={resolve.isPending}
+          onClick={() => resolve.mutate({ id, confirm: true })}
+        >
+          Confirm
+        </Button>
+      </ItemActions>
+    </Item>
   );
 }
 

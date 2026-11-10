@@ -108,12 +108,46 @@ export function describeContext(ctx: ChatContext): string | null {
   return null;
 }
 
+/** One tool call and, once it came back, what it returned. */
+export interface ToolStep {
+  name: string;
+  /** A short summary of what the call was asked. */
+  input?: string;
+  /** A snippet of what came back; absent while the call is still out. */
+  output?: string;
+  error: boolean;
+  done: boolean;
+}
+
 /**
- * The tool calls worth showing as "what it did": the calls themselves, not
- * their results or the prose between them.
+ * What it did, as tool calls each paired with its result: by call id where
+ * the agent gives one, else with the next result in line. The prose between
+ * them is left out.
  */
-export function toolCalls(activity: ChatActivity[]): ChatActivity[] {
-  return activity.filter((a) => a.kind === "tool");
+export function toolSteps(activity: ChatActivity[]): ToolStep[] {
+  const steps: ToolStep[] = [];
+  const byId = new Map<string, ToolStep>();
+  const open: ToolStep[] = [];
+  for (const a of activity) {
+    if (a.kind === "tool") {
+      const step: ToolStep = {
+        name: a.text,
+        input: a.detail || undefined,
+        error: false,
+        done: false,
+      };
+      steps.push(step);
+      if (a.tool_id) byId.set(a.tool_id, step);
+      else open.push(step);
+    } else if (a.kind === "tool_result") {
+      const step = (a.tool_id && byId.get(a.tool_id)) || open.shift();
+      if (!step) continue;
+      step.output = a.detail || undefined;
+      step.error = !!a.is_error;
+      step.done = true;
+    }
+  }
+  return steps;
 }
 
 /** What a held tool call will do, in words a confirmation card can use. */

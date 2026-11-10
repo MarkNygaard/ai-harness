@@ -4,7 +4,7 @@ import {
   contextFromPath,
   describeAction,
   describeContext,
-  toolCalls,
+  toolSteps,
 } from "./chat";
 
 describe("contextFromPath", () => {
@@ -71,14 +71,49 @@ describe("describeAction", () => {
   });
 });
 
-describe("toolCalls", () => {
-  it("keeps the calls, not their results", () => {
+describe("toolSteps", () => {
+  it("pairs each call with its result by call id", () => {
     expect(
-      toolCalls([
-        { kind: "tool", text: "issue_prs" },
-        { kind: "tool_result", text: "2 PRs" },
+      toolSteps([
+        { kind: "tool", text: "issue_prs", detail: "ECOM-1", tool_id: "a" },
+        { kind: "tool", text: "run_status", tool_id: "b" },
         { kind: "text", text: "thinking" },
+        {
+          kind: "tool_result",
+          text: "",
+          detail: "boom",
+          tool_id: "b",
+          is_error: true,
+        },
+        { kind: "tool_result", text: "", detail: "2 PRs", tool_id: "a" },
       ]),
-    ).toEqual([{ kind: "tool", text: "issue_prs" }]);
+    ).toEqual([
+      {
+        name: "issue_prs",
+        input: "ECOM-1",
+        output: "2 PRs",
+        error: false,
+        done: true,
+      },
+      {
+        name: "run_status",
+        input: undefined,
+        output: "boom",
+        error: true,
+        done: true,
+      },
+    ]);
+  });
+
+  it("pairs in order without ids, and leaves an unanswered call open", () => {
+    const steps = toolSteps([
+      { kind: "tool", text: "first" },
+      { kind: "tool", text: "second" },
+      { kind: "tool_result", text: "", detail: "one" },
+    ]);
+    expect(steps.map((s) => [s.name, s.output, s.done])).toEqual([
+      ["first", "one", true],
+      ["second", undefined, false],
+    ]);
   });
 });
