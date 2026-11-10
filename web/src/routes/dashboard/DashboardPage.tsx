@@ -8,7 +8,6 @@ import { PersonBadge } from "@/components/PersonBadge";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { PERIODS, type Period } from "@/lib/dashboard-metrics";
-import { distinctInitiators } from "@/lib/initiator";
 import { useRuns } from "@/lib/runs";
 import { useProjects } from "@/lib/projects";
 import type { RunSummary } from "@/types/run";
@@ -248,15 +247,17 @@ function FilterButton({
 /**
  * One line per task: finish time (left) · title (plain text) · project ·
  * workflow labels. Only the workflow labels navigate — to their run.
+ *
+ * Each workflow label carries who started that run, as initials tucked over
+ * its left edge. A task's runs can come from different people (one builds,
+ * another asks for changes), and initials gathered in one group could not say
+ * which run was whose.
  */
 function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
   const finishedTime = new Date(task.finishedAt).toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
   });
-  // Usually one person behind a task's build/review/merge runs; two when
-  // somebody else asked for the changes, which is the case worth seeing.
-  const people = distinctInitiators(task.runs);
   return (
     <div
       className={`flex items-center gap-3 px-1 py-1.5 text-sm hover:bg-muted/30 ${
@@ -267,31 +268,27 @@ function TaskRow({ task, divider }: { task: Task; divider: boolean }) {
         {finishedTime}
       </span>
       <span className="min-w-0 flex-1 truncate">{task.title}</span>
-      {people.length > 0 && (
-        <div className="flex shrink-0 items-center -space-x-1">
-          {people.map((p) => (
-            <PersonBadge
-              key={p.actor}
-              actor={p.actor}
-              source={p.source}
-              size="sm"
-              className="ring-1 ring-background"
-            />
-          ))}
-        </div>
-      )}
       {task.project && (
         <Badge variant="outline" className="shrink-0 text-[10px]">
           {task.project}
         </Badge>
       )}
-      <div className="flex shrink-0 items-center gap-1">
+      <div className="flex shrink-0 items-center gap-1.5">
         {task.runs.map((r) => (
           <Link
             key={r.id}
             to={`/runs/${r.id}`}
             title={`${r.workflow_name} — ${r.status}`}
+            className="flex items-center"
           >
+            {/* Over the label's left edge, above it, ringed so the overlap
+                reads as one person on one run rather than a clipped circle. */}
+            <PersonBadge
+              actor={r.trigger_actor}
+              source={r.trigger_source}
+              size="sm"
+              className="relative z-10 -mr-1.5 ring-2 ring-background"
+            />
             <Badge
               variant={RUN_STATUS_VARIANT[r.status] ?? "default"}
               className="font-mono text-[10px] hover:opacity-80"

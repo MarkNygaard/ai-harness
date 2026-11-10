@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { distinctInitiators, parseInitiator, sourceLabel } from "./initiator";
+import { parseInitiator, sourceLabel } from "./initiator";
 
 describe("parseInitiator", () => {
   it("reads a name and address written the way the server writes them", () => {
@@ -89,62 +89,5 @@ describe("sourceLabel", () => {
   it("says nothing for a source it does not know", () => {
     expect(sourceLabel(null)).toBeNull();
     expect(sourceLabel("carrier-pigeon")).toBeNull();
-  });
-});
-
-describe("distinctInitiators", () => {
-  const run = (
-    trigger_actor: string | null,
-    trigger_source: string | null,
-  ) => ({
-    trigger_actor,
-    trigger_source,
-  });
-
-  it("collapses one person's several runs into one circle", () => {
-    const got = distinctInitiators([
-      run("Andrius Mickus <a@x.com>", "linear-webhook"),
-      run("Andrius Mickus <a@x.com>", "linear-poller"),
-      run("Andrius Mickus <a@x.com>", "ui"),
-    ]);
-    expect(got).toHaveLength(1);
-    // The first run's source is kept: it is how the task actually began.
-    expect(got[0].source).toBe("linear-webhook");
-  });
-
-  it("keeps two people, because that is the fact worth seeing", () => {
-    const got = distinctInitiators([
-      run("Andrius Mickus <a@x.com>", "linear-webhook"),
-      run("Mark Leth <m@x.com>", "linear-poller"),
-      run("Andrius Mickus <a@x.com>", "ui"),
-    ]);
-    expect(got.map((g) => g.actor)).toEqual([
-      "Andrius Mickus <a@x.com>",
-      "Mark Leth <m@x.com>",
-    ]);
-  });
-
-  it("counts one account once, even under two labels", () => {
-    const got = distinctInitiators([
-      {
-        ...run("Mark Leth <mnl@work.test>", "linear-webhook"),
-        triggered_by: "user-1",
-      },
-      {
-        ...run("Mark Nygaard Leth <mark@private.test>", "ui"),
-        triggered_by: "user-1",
-      },
-      // Same label as the first, but no account: a different person to us.
-      run("Mark Leth <mnl@work.test>", "linear-poller"),
-    ]);
-    expect(got.map((g) => g.actor)).toEqual([
-      "Mark Leth <mnl@work.test>",
-      "Mark Leth <mnl@work.test>",
-    ]);
-  });
-
-  it("skips runs with nobody on them", () => {
-    expect(distinctInitiators([run(null, "ui"), run("  ", "mcp")])).toEqual([]);
-    expect(distinctInitiators([])).toEqual([]);
   });
 });
