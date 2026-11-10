@@ -215,6 +215,8 @@ impl CodeAgent for ClaudeCodeAgent {
         let child = cmd.spawn().map_err(|e| {
             harness_core::error::HarnessError::AgentExecution(format!("failed to run claude: {e}"))
         })?;
+        // A cancel drops this future; the guard takes Claude's tools with it.
+        let _group = crate::ProcessGroupGuard::new(&child);
 
         let output = child.wait_with_output().await.map_err(|e| {
             harness_core::error::HarnessError::AgentExecution(format!(
@@ -338,6 +340,8 @@ impl CodeAgent for ClaudeCodeAgent {
                 )));
             }
         };
+        // A cancel drops this future; the guard takes Claude's tools with it.
+        let _group = crate::ProcessGroupGuard::new(&child);
 
         let stderr_capture = Arc::new(Mutex::new(String::new()));
         let mut stderr_task = None;

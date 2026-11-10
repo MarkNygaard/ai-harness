@@ -122,8 +122,55 @@ pub const CODEX_KEYS: &[&str] = &["OPENAI_API_KEY"];
 /// process group to also terminate grandchild processes like `cargo test`
 /// binaries.
 #[cfg(unix)]
-pub(crate) fn set_process_group(cmd: &mut tokio::process::Command) {
+pub fn set_process_group(cmd: &mut tokio::process::Command) {
     cmd.process_group(0);
+}
+
+/// Kills a spawned agent's whole process group when dropped.
+///
+/// `kill_on_drop` kills the agent's own process only. The tools it started
+/// (`cargo test`, a shell, `gh`) are its children and keep running, and can
+/// keep editing the worktree after the run shows as cancelled. A cancel aborts
+/// the run's task, which drops the future holding the agent, so a guard held
+/// next to the `Child` is enough to take the whole tree down with it.
+///
+/// Create it right after spawning a command that [`set_process_group`] put in
+/// its own group. Dropped on every exit path, it also clears away anything
+/// the agent left running after it finished: a step's processes do not
+/// outlive the step. A no-op on Windows, which has no process groups.
+pub struct ProcessGroupGuard {
+    #[cfg(unix)]
+    pgid: Option<i32>,
+}
+
+impl ProcessGroupGuard {
+    pub fn new(child: &tokio::process::Child) -> Self {
+        #[cfg(unix)]
+        {
+            Self {
+                pgid: child.id().map(|pid| pid as i32),
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = child;
+            Self {}
+        }
+    }
+}
+
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(pgid) = self.pgid {
+            // ESRCH (the group is already gone) is the normal case after a
+            // clean exit, so the result is not worth a log line.
+            // SAFETY: standard POSIX signal, no memory unsafety.
+            unsafe {
+                nix_kill(-pgid, 9);
+            }
+        }
+    }
 }
 
 /// Kill the entire process group rooted at `child`.
@@ -223,5 +270,63 @@ mod inherited_secrets_tests {
     fn claude_does_not_take_the_oauth_token_from_the_environment() {
         assert!(!CLAUDE_KEYS.contains(&"CLAUDE_CODE_OAUTH_TOKEN"));
         assert!(PROVIDER_KEY_ENV.contains(&"CLAUDE_CODE_OAUTH_TOKEN"));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod process_group_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Whether `pid` is a live process, not merely a zombie awaiting reaping.
+    fn running(pid: u32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|stat| {
+                stat.rsplit_once(") ")
+                    .is_some_and(|(_, rest)| !rest.starts_with('Z'))
+            })
+            .unwrap_or(false)
+    }
+
+    #[tokio::test]
+    async fn dropping_the_guard_stops_what_the_child_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("tool.pid");
+        let mut cmd = tokio::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(format!(
+                "sleep 60 & echo $! > {}; sleep 60",
+                pidfile.display()
+            ))
+            .kill_on_drop(true);
+        set_process_group(&mut cmd);
+        let child = cmd.spawn().unwrap();
+        let guard = ProcessGroupGuard::new(&child);
+
+        let mut tool = None;
+        for _ in 0..250 {
+            tool = std::fs::read_to_string(&pidfile)
+                .ok()
+                .and_then(|s| s.trim().parse::<u32>().ok());
+            if tool.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let tool = tool.expect("the child started its tool");
+        assert!(running(tool));
+
+        // What a cancel does: drop the future that holds both.
+        drop(guard);
+        drop(child);
+        let mut stopped = false;
+        for _ in 0..250 {
+            if !running(tool) {
+                stopped = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        assert!(stopped, "the child's tool outlived the guard");
     }
 }

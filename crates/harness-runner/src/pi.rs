@@ -410,6 +410,10 @@ impl PiAgent {
         harness_agents::strip_inherited_secrets(&mut cmd);
         harness_agents::restore_own_keys(&mut cmd, &["MOONSHOT_API_KEY"]);
         cmd.envs(env_vars);
+        // Its own process group, so the guard below can stop the tools omp
+        // starts (`cargo`, `gh`, …) along with omp itself.
+        #[cfg(unix)]
+        harness_agents::set_process_group(&mut cmd);
 
         // Opt-in filesystem sandbox (`HARNESS_FS_SANDBOX`): confine the agent and
         // every tool it spawns to writing only under the worktree + build caches,
@@ -431,6 +435,9 @@ impl PiAgent {
                 self.cli_path.display()
             ))
         })?;
+        // Every way out of this attempt, a cancel, the idle watchdog and the
+        // wall-clock cap included, takes omp's tools down with omp.
+        let _group = harness_agents::ProcessGroupGuard::new(&child);
 
         // Drain stderr concurrently so a full stderr pipe can't deadlock stdout,
         // accumulating into a buffer the other paths can read *without* waiting
@@ -1401,6 +1408,93 @@ mod tests {
             }
             Attempt::Done { .. } => panic!("silent process should have stalled"),
         }
+    }
+
+    /// Whether `pid` is a live process. A killed child that nobody has reaped
+    /// yet still answers `kill(pid, 0)`, so this reads its state instead.
+    #[cfg(target_os = "linux")]
+    fn running(pid: u32) -> bool {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|stat| {
+                stat.rsplit_once(") ")
+                    .is_some_and(|(_, rest)| !rest.starts_with('Z'))
+            })
+            .unwrap_or(false)
+    }
+
+    /// A fake omp that starts a long-running tool in the background, writes
+    /// the tool's pid to a file, then works on in the foreground.
+    #[cfg(target_os = "linux")]
+    fn starts_a_tool(pidfile: &Path, then: &str) -> Vec<String> {
+        vec![
+            "-c".to_string(),
+            format!("sleep 60 & echo $! > {}; {then}", pidfile.display()),
+        ]
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn tool_pid(pidfile: &Path) -> u32 {
+        for _ in 0..250 {
+            if let Some(pid) = std::fs::read_to_string(pidfile)
+                .ok()
+                .and_then(|s| s.trim().parse().ok())
+            {
+                return pid;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("the fake agent never started its tool");
+    }
+
+    #[cfg(target_os = "linux")]
+    async fn gone(pid: u32) -> bool {
+        for _ in 0..250 {
+            if !running(pid) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        false
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn cancelling_a_step_stops_the_tools_omp_started() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("tool.pid");
+        let args = starts_a_tool(&pidfile, "sleep 60");
+        let agent = agent_with("sh", Duration::from_secs(60));
+        // A cancel aborts the run's task, which drops this future mid-attempt.
+        let attempt = tokio::spawn(async move {
+            agent
+                .run_attempt(&args, Path::new("."), &Default::default(), None)
+                .await
+        });
+        let tool = tool_pid(&pidfile).await;
+        assert!(
+            running(tool),
+            "the tool should be running before the cancel"
+        );
+
+        attempt.abort();
+        let _ = attempt.await;
+        assert!(gone(tool).await, "the tool omp started outlived the cancel");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn the_idle_watchdog_stops_the_tools_too() {
+        let dir = tempfile::tempdir().unwrap();
+        let pidfile = dir.path().join("tool.pid");
+        let args = starts_a_tool(&pidfile, "sleep 30");
+        let agent = agent_with("sh", Duration::from_millis(500));
+        let out = agent
+            .run_attempt(&args, Path::new("."), &Default::default(), None)
+            .await
+            .unwrap();
+        assert!(matches!(out, Attempt::Stalled { .. }));
+        let tool = tool_pid(&pidfile).await;
+        assert!(gone(tool).await, "the tool outlived the stalled attempt");
     }
 
     /// Grace period for the drain tests — short, so they don't idle for the
