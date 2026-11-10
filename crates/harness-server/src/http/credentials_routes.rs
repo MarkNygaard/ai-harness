@@ -10,7 +10,7 @@
 //! - `PUT    /api/credentials/{provider}` — set a provider's fields
 //! - `DELETE /api/credentials/{provider}` — clear a provider
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -141,10 +141,16 @@ pub async fn connected_clis() -> harness_runner::authoring::ConnectedCreds {
             .await;
     let kimi = crate::http::kimi_routes::agent_db_has_provider(agent_db, &["kimi-code"]).await;
     let claude = file_non_empty(home.join(".claude").join(".credentials.json"));
-    // Cursor CLI is usable when an API key is in the environment (materialized
-    // from the stored credential / set by the operator) or an interactive
-    // `cursor-agent login` left its config on disk.
-    let cursor = std::env::var_os("CURSOR_API_KEY").is_some_and(|v| !v.is_empty())
+    // Cursor CLI is usable when an API key was loaded from the store (by the
+    // last run or chat turn), the operator set one in the environment, or an
+    // interactive `cursor-agent login` left its config on disk.
+    let stored_cursor_key = LAST_MATERIALIZED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|s| s.cursor.is_some());
+    let cursor = stored_cursor_key
+        || std::env::var_os("CURSOR_API_KEY").is_some_and(|v| !v.is_empty())
         || file_non_empty(home.join(".cursor").join("cli-config.json"));
     harness_runner::authoring::ConnectedCreds {
         codex,
@@ -475,25 +481,86 @@ fn write_secret_file(path: PathBuf, contents: &str) {
     }
 }
 
-/// Inject stored credentials into the agent environment for a real run:
-/// - **claude**: `oauth_token` → `CLAUDE_CODE_OAUTH_TOKEN`; `credentials_json`
-///   → `$HOME/.claude/.credentials.json`.
-/// - **codex**: `auth_json` → `$HOME/.codex/auth.json`.
-/// - **pi**: `kimi_oauth` (from the "Connect Kimi" device login) → re-seeds omp's
-///   `~/.omp/agent/agent.db` if missing (for `kimi-code/*` models); `moonshot_api_key`
-///   → `MOONSHOT_API_KEY` (per-token Moonshot API, `moonshotai/*`).
-/// - **github**: `token` → `GH_TOKEN` + `GITHUB_TOKEN` (so `gh` + git push work).
+/// The credentials a run or chat turn hands to its agents, read from the store.
 ///
-/// Best-effort: missing providers/fields are skipped. Subprocesses spawned by
-/// the agent adapters inherit these (the control plane is single-operator, and
-/// materialization runs at the start of each real run).
-pub async fn materialize(store: &CredentialStore) {
+/// Returned rather than written into the server's environment, which every
+/// process it starts would inherit: the omp step would read the Claude token
+/// and a bash step every key. Each goes to its own agent only — see
+/// [`ProviderSecrets::agent_env`] and [`ProviderSecrets::github_env`].
+#[derive(Debug, Clone, Default)]
+pub struct ProviderSecrets {
+    /// Claude subscription token (`CLAUDE_CODE_OAUTH_TOKEN`), for chat.
+    pub claude_oauth: Option<String>,
+    /// Moonshot API key, for omp's `moonshotai/*` models.
+    pub moonshot: Option<String>,
+    /// Cursor API key, for `cursor-agent`.
+    pub cursor: Option<String>,
+    /// GitHub token, for `gh` and `git push` in any step.
+    pub github: Option<String>,
+}
+
+impl ProviderSecrets {
+    /// What each agent backend adds to a step's environment, keyed as
+    /// [`harness_runner::DispatchAgent::with_provider_env`] expects. Only
+    /// store-held keys: an operator's key in the server's own environment is
+    /// handed back by the spawn itself (`harness_agents::restore_own_keys`).
+    pub fn agent_env(&self) -> HashMap<String, HashMap<String, String>> {
+        let mut out = HashMap::new();
+        if let Some(key) = &self.moonshot {
+            out.insert(
+                "pi".to_string(),
+                HashMap::from([("MOONSHOT_API_KEY".to_string(), key.clone())]),
+            );
+        }
+        if let Some(key) = &self.cursor {
+            out.insert(
+                "cursor".to_string(),
+                HashMap::from([("CURSOR_API_KEY".to_string(), key.clone())]),
+            );
+        }
+        out
+    }
+
+    /// The GitHub token as `gh` and git read it. Every step of a run gets it:
+    /// opening the pull request is often a bash step, and it is the project's
+    /// repository credential rather than an agent's.
+    pub fn github_env(&self) -> Vec<(String, String)> {
+        match &self.github {
+            Some(token) => vec![
+                ("GH_TOKEN".to_string(), token.clone()),
+                ("GITHUB_TOKEN".to_string(), token.clone()),
+            ],
+            None => Vec::new(),
+        }
+    }
+}
+
+/// The secrets the last [`materialize`] read, for [`connected_clis`], which has
+/// no store to ask: Cursor counts as connected once its key has been loaded.
+static LAST_MATERIALIZED: std::sync::Mutex<Option<ProviderSecrets>> = std::sync::Mutex::new(None);
+
+/// Prepare stored credentials for a real run or chat turn:
+/// - **claude**: `credentials_json` → `$HOME/.claude/.credentials.json` (seeded
+///   if missing); `oauth_token` returned.
+/// - **codex**: `auth_json` → `$HOME/.codex/auth.json` (seeded if missing).
+/// - **pi**: `kimi_oauth` (from the "Connect Kimi" device login) → re-seeds omp's
+///   `~/.omp/agent/agent.db` if missing (for `kimi-code/*` models);
+///   `moonshot_api_key` returned (per-token Moonshot API, `moonshotai/*`).
+/// - **github**: `token` returned.
+/// - **cursor**: `api_key` returned.
+///
+/// Best-effort: missing providers/fields are skipped. Files are still shared
+/// through `$HOME`; keys are returned, never written into this process's
+/// environment, so each reaches only the agent it belongs to.
+pub async fn materialize(store: &CredentialStore) -> ProviderSecrets {
     let home = home_dir();
+    let mut secrets = ProviderSecrets::default();
+    let field = |fields: &BTreeMap<String, String>, k: &str| {
+        fields.get(k).filter(|v| !v.is_empty()).cloned()
+    };
 
     if let Ok(Some(claude)) = store.get("claude").await {
-        if let Some(token) = claude.get("oauth_token").filter(|v| !v.is_empty()) {
-            std::env::set_var("CLAUDE_CODE_OAUTH_TOKEN", token);
-        }
+        secrets.claude_oauth = field(&claude, "oauth_token");
         if let Some(json) = claude.get("credentials_json").filter(|v| !v.is_empty()) {
             // SEED ONLY IF MISSING — never clobber a file the CLI is already
             // managing. Claude Code refreshes the access token on each run and
@@ -528,22 +595,15 @@ pub async fn materialize(store: &CredentialStore) {
         // volume lost it (omp self-refreshes the tokens thereafter).
         crate::http::kimi_routes::reseed_agent_db_if_missing(&pi).await;
         // Per-token Moonshot API (moonshotai/* models) — a real API key.
-        if let Some(key) = pi.get("moonshot_api_key").filter(|v| !v.is_empty()) {
-            std::env::set_var("MOONSHOT_API_KEY", key);
-        }
+        secrets.moonshot = field(&pi, "moonshot_api_key");
     }
     if let Ok(Some(gh)) = store.get("github").await {
-        if let Some(token) = gh.get("token").filter(|v| !v.is_empty()) {
-            std::env::set_var("GH_TOKEN", token);
-            std::env::set_var("GITHUB_TOKEN", token);
-        }
+        secrets.github = field(&gh, "token");
     }
     if let Ok(Some(cursor)) = store.get("cursor").await {
         // Cursor CLI (`cursor-agent`) reads CURSOR_API_KEY for headless auth — a
         // user API key from the Cursor dashboard.
-        if let Some(key) = cursor.get("api_key").filter(|v| !v.is_empty()) {
-            std::env::set_var("CURSOR_API_KEY", key);
-        }
+        secrets.cursor = field(&cursor, "api_key");
     }
 
     // Keep the Claude subscription token fresh for this run: its OAuth access
@@ -551,6 +611,9 @@ pub async fn materialize(store: &CredentialStore) {
     // headless subscription runs, so an idle gap would otherwise 401 the run
     // mid-pipeline. No-op when there's no Claude credential or it's still valid.
     let _ = ensure_fresh_claude_token(store).await;
+
+    *LAST_MATERIALIZED.lock().unwrap_or_else(|e| e.into_inner()) = Some(secrets.clone());
+    secrets
 }
 
 // ── Claude OAuth token refresh (keep-warm) ───────────────────────────────────
@@ -806,5 +869,52 @@ mod tests {
             claude_oauth_client_id(),
             "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
         );
+    }
+}
+
+#[cfg(test)]
+mod provider_secrets_tests {
+    use super::ProviderSecrets;
+
+    fn all() -> ProviderSecrets {
+        ProviderSecrets {
+            claude_oauth: Some("cl".into()),
+            moonshot: Some("moon".into()),
+            cursor: Some("cur".into()),
+            github: Some("gh".into()),
+        }
+    }
+
+    #[test]
+    fn each_backend_gets_only_its_own_stored_key() {
+        let env = all().agent_env();
+        assert_eq!(
+            env.get("pi")
+                .and_then(|e| e.get("MOONSHOT_API_KEY"))
+                .map(String::as_str),
+            Some("moon")
+        );
+        assert_eq!(
+            env.get("cursor")
+                .and_then(|e| e.get("CURSOR_API_KEY"))
+                .map(String::as_str),
+            Some("cur")
+        );
+        assert_eq!(env["pi"].len(), 1);
+        assert_eq!(env["cursor"].len(), 1);
+        // Claude signs in from its credentials file, so no workflow backend
+        // receives the subscription token.
+        assert!(env
+            .values()
+            .all(|e| !e.contains_key("CLAUDE_CODE_OAUTH_TOKEN")));
+    }
+
+    #[test]
+    fn the_github_token_is_offered_under_both_names() {
+        let env = all().github_env();
+        assert!(env.contains(&("GH_TOKEN".into(), "gh".into())));
+        assert!(env.contains(&("GITHUB_TOKEN".into(), "gh".into())));
+        assert!(ProviderSecrets::default().github_env().is_empty());
+        assert!(ProviderSecrets::default().agent_env().is_empty());
     }
 }

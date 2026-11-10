@@ -293,7 +293,7 @@ async fn provision_omp_codex(
         .unwrap_or_else(|| std::ffi::OsString::from("omp"));
     let mut cmd = tokio::process::Command::new(&omp);
     cmd.arg("auth-broker").arg("import").arg(&path);
-    harness_agents::strip_control_plane_env(&mut cmd);
+    harness_agents::strip_inherited_secrets(&mut cmd);
     let out = cmd
         .output()
         .await

@@ -113,6 +113,34 @@ pub fn is_builtin(name: &str) -> bool {
     BUILTIN_SERVERS.contains(&name)
 }
 
+/// The run-environment keys each built-in server's config reads.
+const SERVER_ENV: &[(&str, &[&str])] = &[
+    (
+        "sentry",
+        &[SENTRY_TOKEN_ENV, SENTRY_ORG_ENV, SENTRY_PROJECT_ENV],
+    ),
+    ("grafana", &[GRAFANA_URL_ENV, GRAFANA_TOKEN_ENV]),
+];
+
+/// A step's environment: the run's, without the Sentry and Grafana
+/// credentials unless the step asked for that server in `mcp:`. The run
+/// carries them for the steps that do, and every other step, a bash step
+/// included, has no use for a token it was never meant to have.
+pub fn env_for_step(
+    env: &HashMap<String, String>,
+    requested: &[harness_dag::McpUse],
+) -> HashMap<String, String> {
+    let mut out = env.clone();
+    for (server, keys) in SERVER_ENV {
+        if !requested.iter().any(|u| u.server == *server) {
+            for key in *keys {
+                out.remove(*key);
+            }
+        }
+    }
+    out
+}
+
 // ── The registry, as save-time validation sees it ────────────────────────────
 
 /// Server name → the tools an admin enabled for it, for every server added in
@@ -763,5 +791,45 @@ mod tests {
         // A server removed from the registry is unknown again.
         set_catalog(HashMap::new());
         assert!(check_uses("s", None, &[McpUse::server("m365")]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod step_env_tests {
+    use super::*;
+
+    fn run_env() -> HashMap<String, String> {
+        [
+            (SENTRY_TOKEN_ENV, "sntry"),
+            (SENTRY_ORG_ENV, "org"),
+            (GRAFANA_URL_ENV, "https://g"),
+            (GRAFANA_TOKEN_ENV, "gfn"),
+            ("HARNESS_CACHE_DIR", "/cache"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect()
+    }
+
+    #[test]
+    fn a_step_gets_only_the_server_credentials_it_asked_for() {
+        let sentry_only = env_for_step(&run_env(), &[harness_dag::McpUse::server("sentry")]);
+        assert_eq!(
+            sentry_only.get(SENTRY_TOKEN_ENV).map(String::as_str),
+            Some("sntry")
+        );
+        assert!(!sentry_only.contains_key(GRAFANA_TOKEN_ENV));
+        assert!(!sentry_only.contains_key(GRAFANA_URL_ENV));
+
+        // A bash step, or an agent step without `mcp:`, gets neither.
+        let none = env_for_step(&run_env(), &[]);
+        assert!(!none.contains_key(SENTRY_TOKEN_ENV));
+        assert!(!none.contains_key(SENTRY_ORG_ENV));
+        assert!(!none.contains_key(GRAFANA_TOKEN_ENV));
+        // Everything else in the run's environment is untouched.
+        assert_eq!(
+            none.get("HARNESS_CACHE_DIR").map(String::as_str),
+            Some("/cache")
+        );
     }
 }

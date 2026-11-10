@@ -100,8 +100,8 @@ impl LocalRunner {
             .kill_on_drop(true);
         // `bash`/`script` nodes run task-authored commands — keep the control
         // plane's DB URL / secrets out of their environment.
-        harness_agents::strip_control_plane_env(&mut cmd);
-        cmd.envs(&self.env_vars);
+        harness_agents::strip_inherited_secrets(&mut cmd);
+        cmd.envs(crate::mcp_servers::env_for_step(&self.env_vars, &[]));
 
         let fut = cmd.output();
         let output = match timeout {
@@ -366,7 +366,7 @@ impl LocalRunner {
         // `gpt-review-fix` rescue apart from `implement-tasks` work. Git reads
         // GIT_AUTHOR_*/GIT_COMMITTER_* over config, so this overrides the
         // image's global identity for the node's own commits.
-        let mut env_vars = self.env_vars.clone();
+        let mut env_vars = crate::mcp_servers::env_for_step(&self.env_vars, req.mcp);
         apply_commit_identity(&mut env_vars, req.node_id, req.provider, req.model);
         // Which step this is, for the loop guard's hook to ask about.
         env_vars.insert(

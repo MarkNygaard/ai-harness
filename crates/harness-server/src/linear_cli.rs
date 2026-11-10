@@ -12,7 +12,7 @@
 //!   * **the blast radius is a project.** A grant recovered from a log buys the
 //!     five operations below on one project until it expires. The database URL
 //!     and encryption key it replaced would have bought every credential the
-//!     install holds — which is why `strip_control_plane_env` removes those at
+//!     install holds — which is why `strip_inherited_secrets` removes those at
 //!     every spawn point, and why putting them back was the wrong fix;
 //!   * **attribution.** The server writes as the `actor=app` install, so every
 //!     sub-issue and ledger entry is authored by the application rather than by
