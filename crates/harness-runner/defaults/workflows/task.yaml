@@ -1053,8 +1053,27 @@ nodes:
           }
         fi
         review="${EPIC_REVIEW_STATE:-In Review}"
-        harness linear move-state --issue "$parent" --state "$review" \
-          || echo "could not move the epic to $review" >&2
+        # Opening that pull request links it to the epic (by its title and
+        # branch), and Linear's own "pull request opened" automation then moves
+        # the epic a few seconds later -- NIL-72 went to In Review and was back
+        # in In Progress five seconds after. So move it, wait for that
+        # automation, check, and move it again if it won. It fires once per
+        # pull request, so a second move sticks.
+        moved=""
+        for try in 1 2 3; do
+          if harness linear move-state --issue "$parent" --state "$review" > /dev/null; then
+            sleep 20
+            now="$(harness linear issue --issue "$parent" 2>/dev/null | jq -r '.state_name // empty')"
+            if [ "$now" = "$review" ]; then
+              moved=yes
+              break
+            fi
+            echo "the epic is in ${now:-an unknown state} again after moving it to $review (try $try)" >&2
+          else
+            sleep 5
+          fi
+        done
+        [ -n "$moved" ] || echo "could not keep the epic in $review -- move it by hand" >&2
         {
           echo "**$classify.output.identifier passed, and it was the last piece.**"
           echo
