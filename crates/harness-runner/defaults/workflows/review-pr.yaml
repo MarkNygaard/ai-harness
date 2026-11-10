@@ -32,11 +32,11 @@ description: |
   - It pushes to the PR's branch. A PR from a fork the harness cannot push to will
     fail at the first review that finds something. Use `review-area` for a
     read-only assessment instead.
-  - Reviewing a PR this same harness just produced is redundant, because
-    `idea-to-pr` already ran these two passes on it.
+  - `task` runs no cross-family review, so this is how to add one to a PR it
+    opened.
 
   NOT for opening a PR, for addressing human review feedback, or for a read-only
-  assessment. Use `revise-pr` for feedback, which reads the reviews and cancels
+  assessment. Use `revise-task` for feedback, which reads the reviews and cancels
   when there are none, and `review-area` for an assessment.
 
 provider: pi
@@ -122,6 +122,106 @@ nodes:
       echo "$folder: PR #$pr checked out at $(git rev-parse --short HEAD) (base $base)"
       git log --oneline "origin/$base..HEAD" | head -20
 
+  # 3b. Install dependencies and generate the gitignored sources on the PR's
+  #     branch, so the baseline verify and both reviewers judge the PR and
+  #     not a tree nobody has built. After checkout: the PR may change the
+  #     lockfile.
+  - id: install-deps
+    category: setup
+    depends_on: [checkout-pr]
+    timeout: 600000
+    bash: |
+      set -uo pipefail
+      # Generated sources are gitignored, so a fresh worktree never has them —
+      # and the scripts that write them are wired into `build`, not into
+      # `typecheck` / `lint` / `test`. Without this an agent runs a check that
+      # cannot pass in a tree nobody has built, reads the failure as its own,
+      # and starts hand-stubbing generated files. Run the first of these
+      # conventional script names that any package in the repo defines ($1 = pkg
+      # manager). Non-fatal: a project whose codegen needs credentials this
+      # container lacks should still get a run, with the reason on the record.
+      codegen_in() {
+        [ -f package.json ] || return 0
+        # Every package.json in the repo, root included. Tracked files only, so
+        # node_modules never shows up. In a monorepo the script usually lives in
+        # an app (apps/web), not in the root.
+        pkgs=$(git ls-files -- package.json '*/package.json' 2>/dev/null)
+        [ -n "$pkgs" ] || pkgs=package.json
+        for script in prebuild codegen generate db:generate; do
+          dirs=$(printf '%s\n' "$pkgs" | while IFS= read -r p; do
+            grep -q "\"$script\"[[:space:]]*:" "$p" 2>/dev/null && dirname "$p"
+          done)
+          [ -n "$dirs" ] || continue
+          echo "  ↳ codegen: $script in $(printf '%s' "$dirs" | tr '\n' ' ')"
+          failed=0
+          if printf '%s\n' "$dirs" | grep -qx '\.'; then
+            # The root defines it: that is the project's own entry point, and it
+            # usually fans out by itself (turbo, pnpm -r). Running the packages as
+            # well would run them twice, and in parallel.
+            "$1" run "$script" || failed=1
+          elif [ "$1" = pnpm ]; then
+            # One package at a time, in dependency order. Two packages that
+            # generate into the same file must not race.
+            pnpm -r --workspace-concurrency=1 --if-present run "$script" || failed=1
+          else
+            while IFS= read -r d; do
+              ( cd "$d" && "$1" run "$script" ) || failed=1
+            done <<< "$dirs"
+          fi
+          if [ "$failed" -ne 0 ]; then
+            echo "  ↳ WARNING: \`$script\` failed. Generated sources are missing,"
+            echo "    so typecheck/lint/test may fail for reasons unrelated to the"
+            echo "    change. Do NOT hand-write or stub generated files — say so."
+          fi
+          return 0
+        done
+        echo "  ↳ codegen: no prebuild, codegen, generate or db:generate script in any package.json — skipping"
+      }
+      # Detect the lockfile in $1 and install. Runs in a subshell so the cd is
+      # scoped; returns the install command's exit code. Ordered most- to
+      # least-specific: a repo with several lockfiles gets its primary one.
+      install_in() {
+        ( cd "$1" 2>/dev/null || { echo "[$1] missing — skipping"; exit 0; }
+          if [ -f pnpm-lock.yaml ]; then
+            echo "[$1] pnpm"
+            pnpm install --frozen-lockfile || exit 1
+            codegen_in pnpm
+          elif [ -f bun.lock ] || [ -f bun.lockb ]; then
+            echo "[$1] bun"; bun install --frozen-lockfile || exit 1; codegen_in bun
+          elif [ -f yarn.lock ]; then
+            echo "[$1] yarn"; yarn install --immutable 2>/dev/null || yarn install --frozen-lockfile || exit 1
+            codegen_in yarn
+          elif [ -f package-lock.json ]; then
+            echo "[$1] npm"; npm ci || exit 1; codegen_in npm
+          elif [ -f Cargo.toml ]; then echo "[$1] cargo"; cargo fetch --locked || exit 1
+          elif [ -f uv.lock ]; then echo "[$1] uv"; uv sync --locked || exit 1
+          elif [ -f poetry.lock ]; then echo "[$1] poetry"; poetry install --no-interaction || exit 1
+          elif [ -f go.mod ]; then echo "[$1] go"; go mod download || exit 1
+          elif [ -f Gemfile.lock ]; then echo "[$1] bundler"; bundle install || exit 1
+          elif [ -f composer.lock ]; then echo "[$1] composer"; composer install --no-interaction || exit 1
+          # .NET pins versions in the project files, so there is no lockfile to
+          # match on — and the solution is as often under `src/` as at the root,
+          # so `dotnet restore` with no argument finds nothing. Locate it.
+          elif proj=$(find . -maxdepth 3 \( -name '*.sln' -o -name '*.slnx' \) -print -quit 2>/dev/null) && [ -n "$proj" ]; then
+            echo "[$1] dotnet ($proj)"; dotnet restore "$proj" || exit 1
+          elif proj=$(find . -maxdepth 3 \( -name '*.csproj' -o -name '*.fsproj' \) -print -quit 2>/dev/null) && [ -n "$proj" ]; then
+            echo "[$1] dotnet ($proj)"; dotnet restore "$proj" || exit 1
+          else
+            echo "[$1] no recognized lockfile — skipping. If this needs setup, \
+            add the command to its CLAUDE.md so downstream agents can run it."
+          fi )
+      }
+      # Multi-repo: install each repo's deps in its folder. Single-repo: root.
+      rc=0
+      if [ -n "${HARNESS_REPOS:-}" ]; then
+        while read -r folder; do
+          install_in "$folder" || rc=1
+        done < <(echo "$HARNESS_REPOS" | jq -r '.[].folder')
+      else
+        install_in . || rc=1
+      fi
+      exit $rc
+
   # 4. What the author says this change is for. NOT a plan, and not treated as
   #    one: it is the PR's own claims, written down so two reviewers read the
   #    same thing instead of each inferring their own version of the intent.
@@ -179,7 +279,7 @@ nodes:
   #    every other repo against its own.
   - id: scope
     category: setup
-    depends_on: [checkout-pr]
+    depends_on: [install-deps]
     timeout: 120000
     bash: |
       set -uo pipefail

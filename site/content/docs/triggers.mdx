@@ -90,6 +90,24 @@ The bundled [`task`](/docs/workflows/bundled#task) and
 way. Trigger `task` on your ready-to-start status and `task-merge` on your
 ready-to-merge status.
 
+The statuses are names, so they must exist on the issue's team. The bundled
+workflows use `In Progress`, `In Review` and `Done`. If your board calls them
+something else, copy the workflow and rename them. The harness checks this
+before anything is spent:
+
+- A trigger whose workflow moves issues to a status its team does not have is
+  marked **missing status** on the Triggers page, with the status it could not
+  find and the ones the team has.
+- A run on such an issue is refused before it starts. The reason appears in the
+  issue's agent thread, or as the trigger's last error.
+- The project's wiring check (the Linear tab, or `linear_check` over MCP) lists
+  it as an error.
+
+Without the check, the run would fail at that step, and for `In Review` that
+is after the pull request is already open. A status written with a variable
+(`move_state: $pick.output.state`) is only known at run time, so it is not
+checked in advance.
+
 There is no failed label on the trigger either. A workflow that should label
 its issue when a run fails ends with a `linear:` step using
 `trigger_rule: one_failed`, which runs only when a step before it failed — see

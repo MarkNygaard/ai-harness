@@ -661,6 +661,39 @@ pub async fn list_triggers(Extension(state): Extension<Arc<RunsState>>) -> Respo
     }
 }
 
+/// `GET /api/triggers/checks` — `{ problems: { <trigger id>: <sentence> } }`
+/// for each Linear trigger whose workflow moves issues to a status its team
+/// does not have. Such a trigger's runs are refused before they start (see
+/// `linear_status_check`); this says so on the Triggers page beforehand.
+///
+/// Separate from the listing because it reads Linear, once per project: the
+/// list has to render even when Linear is slow or down, and a trigger it
+/// cannot check simply has no entry.
+pub async fn list_trigger_checks(Extension(state): Extension<Arc<RunsState>>) -> Response {
+    let rows = match list(&state).await {
+        Ok(rows) => rows,
+        Err((s, m)) => return err(s, m),
+    };
+    let mut teams: HashMap<String, Option<Vec<harness_sources::linear::Team>>> = HashMap::new();
+    let mut problems = serde_json::Map::new();
+    for t in &rows {
+        let Some(b) = as_binding(t) else { continue };
+        if !teams.contains_key(&b.project) {
+            let read = super::linear_status_check::teams(&state, &b.project).await;
+            teams.insert(b.project.clone(), read);
+        }
+        let Some(Some(project_teams)) = teams.get(&b.project) else {
+            continue;
+        };
+        if let Some(problem) =
+            super::linear_status_check::for_team(&state, project_teams, &b.team_id, &b.workflow)
+        {
+            problems.insert(t.id.clone(), json!(problem));
+        }
+    }
+    Json(json!({ "problems": problems })).into_response()
+}
+
 /// Add `shadowed_by: {id, name}` to a trigger that an older one on the same
 /// source keeps from firing.
 pub(crate) fn with_shadow(

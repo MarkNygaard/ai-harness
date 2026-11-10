@@ -3,7 +3,7 @@ name: ai-harness
 description: >-
   Trigger and monitor ai-harness runs on the cluster over MCP — turn a task into
   a reviewed PR without leaving this project. Use when the user wants to "send
-  this to ai-harness / the harness", "trigger idea-to-pr", "run a GEO audit on
+  this to ai-harness / the harness", "trigger a task run", "run a GEO audit on
   the cluster", "kick off a harness run", "check a harness run's status", or
   A/B-compare two models on the same task. Also covers **authoring custom
   workflows** over MCP (the workflow_* tools — see authoring-workflows.md) when
@@ -24,9 +24,12 @@ description: >-
 
 **ai-harness** is a self-hosted orchestration cluster for AI coding agents. You
 give it a task (title + description) and a registered **project** (a git repo it
-has cloned); it runs a **workflow** — by default `idea-to-pr`: plan → implement →
-multi-pass review → build gate — in an isolated worktree and opens a **reviewed
-pull request**. Other bundled workflows include `merge-pr`, `revise-pr` and `review-pr`; more
+has cloned); it runs a **workflow** — by default `task`: explore → plan → implement →
+self-review → build gate — in an isolated worktree and opens a **reviewed
+pull request**, keeping the Linear issue up to date when there is one. Other
+bundled workflows include `revise-task` (address review feedback on the PR),
+`task-merge` (merge it once approved) and `review-pr` (cross-model review of any
+open PR); more
 (`geo-audit`, `review-area`, `bc-idea-to-pr`) are installable from the workflow
 library and must be installed on that harness before a run can name them. You interact
 with it purely through its MCP tools: trigger a run, then poll its status.
@@ -87,21 +90,21 @@ cluster has registered, not a local folder name.
 When you file work in Linear for the harness to pick up, this is the decision
 that costs the most to get wrong.
 
-**Default to a single issue.** `idea-to-pr` already explores, plans and
-decomposes internally — its plan step routinely produces ten numbered tasks with
-exact file paths, and a cheap model executes them. Splitting that same work
-across sub-issues buys nothing and multiplies the cost: **each piece is a full
-pipeline** (explore, plan, implement, simplify, three review passes, verify —
-call it 45 minutes) **plus a supervisor review**. Three pieces is roughly three
-times the work and three pull requests, for something one run would have done.
+**Default to a single issue.** `task` already explores, plans and decomposes
+internally — its plan step routinely produces ten numbered tasks with exact
+file paths, and a cheap model executes them. Splitting that same work across
+sub-issues buys nothing and multiplies the cost: **each piece is a full
+pipeline** (explore, plan, implement, self-review, verify) **plus a grade**.
+Three pieces is roughly three times the work and three pull requests, for
+something one run would have done.
 
 **Choose an epic only when one of these is true:**
 
 1. **The work exceeds one run's coherence.** Explore, plan, implement and review
    share a single context. Past some size the plan stops being specific enough
    to execute cheaply, which is the whole reason the pipeline is affordable.
-2. **Later pieces depend on earlier ones being *right*, not merely done.** The
-   supervisor grades each piece with fresh context against its own acceptance
+2. **Later pieces depend on earlier ones being *right*, not merely done.** Each
+   piece is graded with fresh context against its own acceptance
    criteria before the next starts. In one run, a wrong early step propagates
    and the review passes see the finished diff, where it is far easier to miss.
 
@@ -129,12 +132,13 @@ set, or three unrelated bug fixes.
   column.
 - **Give each piece its own acceptance criteria**, and a *Demonstrated by* line
   naming the command that proves it (`cargo test -p <crate>`, `bunx vitest run`).
-  The supervisor grades a piece against its own criteria and nothing else.
+  The grade judges a piece against its own description and nothing else.
 - **Say what is out of scope**, especially work that belongs to a later piece.
-  Criteria that overlap the next piece produce a corrective for something not yet
-  due.
-- Two corrective rounds per piece, fifteen per epic, then it stops. Vague
-  criteria burn those rounds.
+  Criteria that overlap the next piece produce a failed grade for something not
+  yet due.
+- A piece that falls short gets one round of fixes and a second grade. Failing
+  that, it stops in In Review with its pull request open, and the epic waits for
+  a person. Vague criteria burn that round.
 
 ## What triggers a run by itself (Linear bindings)
 
@@ -154,7 +158,11 @@ picked up on the next poll. Three read-only tools, all taking `{ project }`:
   A ready status nobody polls means the run succeeded, the move succeeded, and
   the work is parked forever with no error anywhere. Findings come back at
   `error` (work will be dropped or never start), `warn` (works, but probably not
-  as intended) and `ok` (the chain, so the report reads whole).
+  as intended) and `ok` (the chain, so the report reads whole). It also reports
+  a workflow whose `linear:` steps move issues to a status the team does not
+  have (`task` moves to `In Review`; a board with only "Code Review" needs a
+  copy with that renamed). Runs of such a workflow are refused before they
+  start, so this is the first thing to check when a trigger "does nothing".
 
 Read them before explaining a setup, and run `linear_check` after any binding
 changes. **None of these write anything** — changing a binding is done by a
@@ -162,10 +170,15 @@ person in the harness UI, and you should say which change to make rather than
 implying you can make it.
 
 An issue with **sub-issues** is an *epic*: the harness builds the sub-issues one
-at a time on a shared branch and opens a single pull request at the end. If the
-user is setting one up, `linear_check` reports the epic relay specifically —
-whether a merged piece can reach the supervisor, and whether pieces are stopping
-at a human gate meant for standalone issues.
+at a time on a shared branch and opens a single pull request at the end. The
+default `task` workflow does all of that in its own graph — creates
+`epic/<ID>`, builds and grades each piece, merges it into the epic branch,
+starts the next — so one trigger or binding on the build column is the whole
+setup. A piece that fails its grade twice, or that GitHub won't merge, stops in
+In Review with a comment on the epic. `linear_check` reports the epic relay only
+for a custom setup that binds `linear-epic-supervise` separately — whether a
+merged piece can reach the supervisor, and whether pieces are stopping at a
+human gate meant for standalone issues.
 
 ## Trigger a run
 
@@ -173,7 +186,7 @@ at a human gate meant for standalone issues.
 
 - Required: **`project`**, **`description`** (the task spec — what to build/do;
   fed to the workflow as `$ARGUMENTS`).
-- Optional: `workflow` (empty = the project's default, usually `idea-to-pr`),
+- Optional: `workflow` (empty = the project's default, usually `task`),
   `title` (human label), `base_branch` (empty = project default), `real`
   (default `true`; `false` = echo/dry-run for a wiring check).
 

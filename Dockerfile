@@ -35,7 +35,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 FROM debian:bookworm-slim AS runtime
 
 ENV DEBIAN_FRONTEND=noninteractive
-# `jq` is used by the multi-repo idea-to-pr bash nodes (install-deps,
+# `jq` is used by the bundled workflows' multi-repo bash nodes (install-deps,
 # verify-pr-base) to parse the `.pr-list` / `$HARNESS_REPOS` JSON — a plain
 # `bash:` node hard-fails without it (same rationale as `gh` below).
 # `libicu72` is the ICU runtime the .NET SDK needs for globalization — without
@@ -70,7 +70,7 @@ RUN apt-get update \
         build-essential pkg-config \
     && rm -rf /var/lib/apt/lists/*
 
-# GitHub CLI. The idea-to-pr pipeline's finalize / verify-pr-base / verify-pr-title
+# GitHub CLI. The bundled workflows' finalize / verify-pr-base / verify-pr-title
 # / review / summary steps all shell out to `gh` (pr create/edit/view/comment,
 # labels). Agent nodes could improvise around a missing `gh`, but plain `bash:`
 # nodes (e.g. verify-pr-base, `set -euo pipefail`) hard-fail with

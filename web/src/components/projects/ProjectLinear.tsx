@@ -1,12 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useTriggerSystem } from "@/lib/triggers";
-import {
-  IconChevronRight,
-  IconHierarchy2,
-  IconPlus,
-  IconTrash,
-} from "@tabler/icons-react";
+import { IconChevronRight, IconPlus, IconTrash } from "@tabler/icons-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,8 +36,10 @@ import type {
   LinearTeam,
 } from "@/types/linear";
 import type { WorkflowSummary } from "@/types/authoring";
-import { MERGE_WORKFLOW, SUPERVISOR_WORKFLOW } from "@/lib/epic-setup";
-import { EpicSetupForm, WiringCheck } from "./EpicSetup";
+import { WiringCheck } from "./WiringCheck";
+
+/** Grades an epic's pieces and starts the next; its state moves are its own. */
+const SUPERVISOR_WORKFLOW = "linear-epic-supervise";
 
 // `w-full min-w-0` is load-bearing: a bare `<select>` sizes itself to its
 // widest option, so three status dropdowns in one grid row refuse to shrink and
@@ -310,7 +307,6 @@ export function ProjectLinearBindings({
 
   // `null` = closed, "" = new binding, otherwise the workflow being edited.
   const [editing, setEditing] = useState<string | null>(null);
-  const [settingUpEpics, setSettingUpEpics] = useState(false);
 
   const teams = discovery.data?.teams ?? [];
   const bound = new Set((sources.data ?? []).map((s) => s.workflow));
@@ -338,22 +334,6 @@ export function ProjectLinearBindings({
       </div>
     );
   }
-
-  if (settingUpEpics) {
-    return (
-      <EpicSetupForm
-        project={project}
-        sources={sources.data ?? []}
-        teams={teams}
-        onDone={() => setSettingUpEpics(false)}
-      />
-    );
-  }
-
-  const epicsWired =
-    bound.has(MERGE_WORKFLOW) &&
-    bound.has(SUPERVISOR_WORKFLOW) &&
-    (sources.data ?? []).some((s) => s.piece_ready_state_id);
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -508,7 +488,7 @@ export function ProjectLinearBindings({
           />
         </div>
       )}
-      <div className="grid grid-cols-2 gap-2">
+      <div>
         <Button
           size="sm"
           variant="outline"
@@ -522,16 +502,6 @@ export function ProjectLinearBindings({
         >
           <IconPlus className="size-4" />{" "}
           {editing === "" ? "Cancel" : "Add binding"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={() => setSettingUpEpics(true)}
-          disabled={!discovery.data || !sources.data}
-          title="Write the bindings that build an epic piece by piece"
-        >
-          <IconHierarchy2 className="size-4" />
-          {epicsWired ? "Epic columns" : "Set up epics"}
         </Button>
       </div>
     </div>

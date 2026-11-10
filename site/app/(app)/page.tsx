@@ -74,9 +74,9 @@ const loop = [
 ]
 
 const workflows = [
-  ["idea-to-pr", "a task becomes a reviewed PR"],
-  ["revise-pr", "address review feedback on an open PR"],
-  ["merge-pr", "resolve conflicts and merge a ready PR"],
+  ["task", "a Linear issue becomes a reviewed PR"],
+  ["revise-task", "address review feedback on an open PR"],
+  ["task-merge", "merge an approved PR, move the issue to Done"],
   ["architect", "behaviour-preserving codebase health sweep"],
   ["judge-ab", "score an A/B model comparison"],
 ]

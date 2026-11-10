@@ -455,6 +455,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             get(super::triggers_routes::get_system).put(super::triggers_routes::put_system),
         )
         .route(
+            "/api/triggers/checks",
+            get(super::triggers_routes::list_trigger_checks),
+        )
+        .route(
             "/api/triggers",
             get(super::triggers_routes::list_triggers).post(super::triggers_routes::create_trigger),
         )

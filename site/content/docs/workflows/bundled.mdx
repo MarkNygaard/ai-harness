@@ -17,24 +17,12 @@ is the answer if you need to know exactly what runs.
 
 ## Task to pull request
 
-### `idea-to-pr`
-
-The default pipeline: a task (title and description, or a path to a PRD) becomes
-a reviewed pull request.
-
-Claude plans, with a cheap read-only `explore` pass feeding a leaner
-`create-plan` pass on a stronger model. Kimi implements and self-reviews up to
-five times. Then two more review passes by *different* models: an OpenAI model
-via Pi, then Claude, each fixing what it finds. A final build gate, and a workflow-summary comment carrying the
-diff and a commit breakdown across the three review-fix passes.
-
-19 nodes. Mixing the models is the point. The reviewer never wrote the code.
-
 ### `task`
 
-A leaner `idea-to-pr` for a Linear issue, which keeps the issue up to date as
-the run goes. Start it from a [trigger](/docs/triggers) on your "Todo" or
-"Ready" status.
+The default workflow: a Linear issue becomes a reviewed pull request, and the
+issue stays up to date as the run goes. Start it from a
+[trigger](/docs/triggers) on your "Todo" or "Ready" status, or by hand with a
+task description.
 
 The issue's lifecycle is in the workflow itself, as
 [`linear:` steps](/docs/triggers#a-trigger-only-starts-the-run):
@@ -45,9 +33,18 @@ The issue's lifecycle is in the workflow itself, as
 - The issue moves to In Review once the pull request is open.
 - A closing comment links the PR.
 
-Claude explores and plans, and Kimi implements, validates and reviews its own
-work, followed by a final build gate. There are no review passes by other
-vendors. Use `idea-to-pr` when you want those.
+Claude explores and plans: a cheap read-only `explore` pass feeds a
+`create-plan` pass on a stronger model. Kimi implements, validates and reviews
+its own work, and a final build gate runs last. There are no review passes by
+other vendors. Run [`review-pr`](#review-pr) on the PR when you want those.
+
+A fresh worktree has no installed dependencies and none of the gitignored
+generated files. The `install-deps` step installs them from the lockfile, then
+runs the first codegen script it finds (`prebuild`, `codegen`, `generate` or
+`db:generate`) in any `package.json` in the repository, not only the root one.
+If the root defines the script, only the root's runs. Otherwise pnpm runs it
+one package at a time in dependency order, and npm, yarn and bun run it in each
+package in turn. The log names the packages that have it, or says none do.
 
 Started by hand, with no issue, every `linear:` step does nothing and the run
 behaves like any other. Status names must exist on the issue's team, so rename
@@ -58,8 +55,8 @@ one of four ways:
 
 - **An ordinary issue** goes through the pipeline above.
 - **An epic** (an issue with sub-issues) is started, not built. The run creates
-  the branch `epic/<ID>` and moves the first sub-issue to Todo, where it starts
-  its own run.
+  the branch `epic/<ID>` and moves the first sub-issue that hasn't begun to
+  Todo, where it starts its own run.
 - **A piece** (a sub-issue of a started epic) is built on the epic's branch,
   then graded against its own description, with fresh context. If it falls
   short, it gets one round of fixes and a second grade. When it passes, its
@@ -78,16 +75,44 @@ thing; see [Linear epics](/docs/setup/linear-epics).
 
 ## Working on an existing PR
 
-### `revise-pr`
+### `revise-task`
 
-Address reviewer feedback on an existing PR branch and push updates. No new PR
-is opened.
+Address reviewer feedback on an existing pull request and push updates. No new
+PR is opened. It is the companion to `task`: start it from a trigger on your
+"Changes requested" status.
 
-<Callout type="warn">
-Binding configuration matters here. `ready_state_id` must be the **review
-column**, so a successful run loops the card back to review rather than to
-Done. The trigger state is typically "Changes requested".
-</Callout>
+The run finds the PR and gathers the feedback that is new since the last
+revision: GitHub reviews and inline comments, and Linear comments written by
+people. It checks the PR's branch out, installs its dependencies the same way
+`task` does, then explores, plans, implements and validates. Kimi reviews its
+own work, then two review-and-fix passes run on other vendors' models, an
+OpenAI model and then Claude. A final validate follows. The run replies to the
+reviewers in their own threads and posts a summary comment on the PR.
+
+The issue's lifecycle is in the workflow, as `linear:` steps:
+
+- Once real feedback is found, the issue moves to In Progress, and a comment
+  lists what will be addressed.
+- If validation fails, it says why on the issue.
+- The issue moves to In Review when the revision is pushed, and a closing
+  comment follows.
+- If a step fails, the run says so on the issue.
+
+**No feedback, no move.** With no open PR, or no new feedback, the issue is not
+moved. A comment explains why and the run ends cancelled. This guards against a
+card moved to "Changes requested" by mistake. To run it again, move the card
+out of that status and back.
+
+Only person-written Linear comments count as feedback. The harness's own
+comments (plans, summaries, triage notes) reach the run marked `[harness]` and
+are ignored, whatever name the Linear app shows. Only comments newer than the
+harness's most recent one count, so a second revision does not redo the first.
+
+An epic moved to "Changes requested" has its final pull request (`epic/<ID>`
+against the default branch) revised like any other.
+
+Started by hand, with no issue, every `linear:` step does nothing. Rename
+`In Progress` and `In Review` in a fork if your board uses other names.
 
 ### `review-pr`
 
@@ -96,8 +121,10 @@ simplify pass over the changed files, then two review-and-fix passes on
 different vendors' frontier models. Commits go to the PR's own branch, and one
 summary comment collects what was fixed and what was flagged. `$ARGUMENTS`
 names the PR as a number, a URL, or a Linear issue whose linked PR to review.
+After checking the branch out, it installs dependencies the same way `task`
+does.
 
-Unlike `revise-pr`, it needs no human feedback to act on — it produces the
+Unlike `revise-task`, it needs no human feedback to act on — it produces the
 review rather than addressing one.
 
 **It has no planning step, deliberately.** The PR was not planned here, so
@@ -117,26 +144,12 @@ plan there is no record of what the author deliberately left out, so an
 [`review-area`](/docs/workflows/library#review-area).
 </Callout>
 
-### `merge-pr`
-
-Merge a ready pull request, resolving conflicts against its base branch first if
-needed, then squash-merging. `$ARGUMENTS` names the PR as a number, a URL, or a
-Linear issue whose linked PR should be merged.
-
-Linear-agnostic: works from a manual trigger or a "Ready for merge" binding.
-
-It waits for the PR's CI checks and merges only when they pass. A repository
-with no CI at all is merged anyway, after a short wait to rule out checks that
-are slow to register. A PR it does not merge ends the run cancelled, so the
-issue stays where it is instead of moving on to its ready column.
-Project rules about merge strategy and verification live in the project's
-`CLAUDE.md` / `AGENTS.md` and are loaded into every agent's context
-automatically.
-
 ### `task-merge`
 
 Merge the pull request of a Linear issue that is ready to merge. It is the
 companion to `task`: start it from a trigger on your "Ready for merge" status.
+`$ARGUMENTS` names the PR as a number, a URL, or a Linear issue whose linked
+PR should be merged.
 
 It checks the PR's review before anything else:
 
@@ -150,7 +163,9 @@ It checks the PR's review before anything else:
 If GitHub refuses the merge for another reason, such as a red check, the run
 says so on the issue and ends cancelled, leaving the issue where it is. The
 review check is a [route node](/docs/workflows/authoring#node-bodies), so the
-decision is a rule rather than a model's judgement. Rename `In Review` and
+decision is a rule rather than a model's judgement. Project rules about merge
+strategy and verification live in the project's `CLAUDE.md` / `AGENTS.md` and
+are loaded into every agent's context automatically. Rename `In Review` and
 `Done` in a fork if your board uses other names.
 
 ## Review and analysis
@@ -185,14 +200,16 @@ Pair it with `run_trigger_pair` over [MCP](/docs/mcp).
 Grades a merged epic piece against its own acceptance criteria, then advances
 the next one, or files a corrective.
 
-Bind it to the column a piece lands in once its PR is merged. It reads the
-sub-issue's acceptance criteria, judges the code now on the base branch, and
-does one of three things: start the next piece, file a corrective sub-issue, or
-stop and ask for a human.
+[`task`](#task) runs epics in its own graph, so the usual setup does not need
+this, and nothing wires it up for you. It is there for a custom setup in which
+separate workflows build and merge the pieces. Bind it to the column a piece
+lands in once its PR is merged. It reads the sub-issue's acceptance criteria,
+judges the code now on the base branch, and does one of three things: start the
+next piece, file a corrective sub-issue, or stop and ask for a human.
 
 **The verdict is the gate.** A piece that was built but built wrong does not
 advance the epic, because everything after it is written against what it was
-supposed to do. See [Linear epics](/docs/setup/linear-epics).
+supposed to do.
 
 ## Bundled commands
 

@@ -63,8 +63,9 @@ per-project one wherever a run should push as somebody else.
 [MCP](/docs/mcp). See [triggering runs](/docs/triggers).
 
 **Merging.** The bundled workflows stop at a pull request.
-[`merge-pr`](/docs/workflows/bundled#merge-pr) merges one when you ask it to,
-and gates on CI passing rather than on a review.
+[`task-merge`](/docs/workflows/bundled#task-merge) merges one when you ask it
+to. It merges only a pull request with an approved review, or one in a
+repository that requires no review, and waits for CI.
 
 **Branch protection.** If you want a human approval enforced before anything
 merges, that is a repository setting rather than a harness one, and the harness

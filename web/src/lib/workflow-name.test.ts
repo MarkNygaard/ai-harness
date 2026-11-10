@@ -4,20 +4,24 @@ import { slugify, titleFromSlug } from "./workflow-name";
 /** Every workflow bundled with the harness today. */
 const BUNDLED = [
   "architect",
-  "bc-idea-to-pr",
-  "geo-audit",
-  "idea-to-pr",
   "judge-ab",
-  "merge-pr",
-  "review-area",
-  "revise-pr",
+  "linear-epic-supervise",
+  "review-pr",
+  "revise-task",
+  "task",
+  "task-merge",
 ];
 
 describe("titleFromSlug", () => {
   it("titles the bundled workflows readably", () => {
+    expect(titleFromSlug("task")).toBe("Task");
+    expect(titleFromSlug("task-merge")).toBe("Task Merge");
+    expect(titleFromSlug("revise-task")).toBe("Revise Task");
+    expect(titleFromSlug("review-pr")).toBe("Review PR");
+  });
+
+  it("titles project workflows readably", () => {
     expect(titleFromSlug("idea-to-pr")).toBe("Idea to PR");
-    expect(titleFromSlug("merge-pr")).toBe("Merge PR");
-    expect(titleFromSlug("revise-pr")).toBe("Revise PR");
     expect(titleFromSlug("bc-idea-to-pr")).toBe("BC Idea to PR");
     expect(titleFromSlug("geo-audit")).toBe("GEO Audit");
     expect(titleFromSlug("judge-ab")).toBe("Judge AB");

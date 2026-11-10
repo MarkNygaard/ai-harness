@@ -9,7 +9,6 @@
 
 use std::path::Path;
 
-/// The workflow run when a request doesn't name one.
 /// The harness's own improvement review (`internal: true`): started by the
 /// server, never offered to a person.
 pub const IMPROVEMENTS_WORKFLOW: &str = "improvements-analysis";
@@ -22,26 +21,22 @@ pub const FACTS_WORKFLOW: &str = "learn-facts";
 /// and the dashboard, and started only by the server.
 pub const INTERNAL_WORKFLOWS: &[&str] = &[IMPROVEMENTS_WORKFLOW, FACTS_WORKFLOW];
 
-pub const DEFAULT_WORKFLOW: &str = "idea-to-pr";
+/// The workflow run when a request doesn't name one.
+pub const DEFAULT_WORKFLOW: &str = "task";
 
 /// Bundled workflows by name.
 const WORKFLOWS: &[(&str, &str)] = &[
     (
         DEFAULT_WORKFLOW,
-        include_str!("../defaults/workflows/idea-to-pr.yaml"),
+        include_str!("../defaults/workflows/task.yaml"),
     ),
-    (
-        "merge-pr",
-        include_str!("../defaults/workflows/merge-pr.yaml"),
-    ),
-    ("task", include_str!("../defaults/workflows/task.yaml")),
     (
         "task-merge",
         include_str!("../defaults/workflows/task-merge.yaml"),
     ),
     (
-        "revise-pr",
-        include_str!("../defaults/workflows/revise-pr.yaml"),
+        "revise-task",
+        include_str!("../defaults/workflows/revise-task.yaml"),
     ),
     (
         "architect",
@@ -167,9 +162,16 @@ mod tests {
 
     #[test]
     fn bundled_workflow_and_commands_are_present() {
-        assert!(default_workflow(DEFAULT_WORKFLOW)
-            .unwrap()
-            .contains("idea-to-pr"));
+        assert_eq!(
+            default_workflow(DEFAULT_WORKFLOW).unwrap().lines().next(),
+            Some("name: task")
+        );
+        for gone in ["idea-to-pr", "merge-pr", "revise-pr"] {
+            assert!(
+                default_workflow(gone).is_none(),
+                "`{gone}` was replaced by task / task-merge / revise-task"
+            );
+        }
         for name in [
             "plan-setup",
             "confirm-plan",
@@ -234,11 +236,7 @@ mod tests {
     /// the multi-repo root) answers with something plausible instead of nothing.
     #[test]
     fn the_changed_file_set_is_computed_once_and_read_not_rederived() {
-        let yaml = super::WORKFLOWS
-            .iter()
-            .find(|(name, _)| *name == "idea-to-pr")
-            .expect("bundled")
-            .1;
+        let yaml = default_workflow("review-pr").expect("bundled");
         let wf = harness_dag::parse_workflow(yaml).expect("parses");
         let body = |id: &str| {
             wf.nodes
@@ -311,63 +309,8 @@ mod tests {
             "the guard runs after the step that wanders"
         );
         assert!(
-            after("validate").contains(&"guard-scope".to_string()),
-            "validate must see the reverted tree, not the wandered one"
-        );
-    }
-
-    /// A prose "the title MUST end with the identifier" was applied to the first
-    /// PR of a run and skipped on the second, so Linear never linked it.
-    #[test]
-    fn every_pr_title_is_gated_not_merely_requested() {
-        let yaml = super::WORKFLOWS
-            .iter()
-            .find(|(name, _)| *name == "idea-to-pr")
-            .expect("bundled")
-            .1;
-        let wf = harness_dag::parse_workflow(yaml).expect("parses");
-        let gate = wf
-            .nodes
-            .iter()
-            .find(|n| n.id == "gate-pr-titles")
-            .expect("gate exists");
-        let script = match &gate.kind {
-            harness_dag::NodeKind::Bash(b) => b.clone(),
-            _ => panic!("the gate must be bash — an agent cannot gate itself"),
-        };
-        assert!(
-            script.contains(".pr-list"),
-            "the gate must check every PR the run opened, not one"
-        );
-        assert!(
-            script.contains("harness linear issue --issue"),
-            "the identifier must come from Linear, not from matching the task text"
-        );
-        assert!(
-            script.contains("feat|fix|chore|ci|docs|refactor|perf|test"),
-            "the gate must check the conventional-commits format"
-        );
-        assert!(
-            script.contains("gh api -X PATCH"),
-            "appending a missing identifier is mechanical, so the gate fixes it \
-             (and `gh pr edit` needs a token scope this one lacks)"
-        );
-        assert!(
-            script.contains("exit 1"),
-            "a title needing a type/scope judgement must fail the node"
-        );
-        assert!(
-            gate.depends_on.contains(&"verify-pr-title".to_string()),
-            "the gate runs after the step it checks"
-        );
-        assert!(
-            wf.nodes
-                .iter()
-                .find(|n| n.id == "pi-review-fix-loop")
-                .expect("review loop")
-                .depends_on
-                .contains(&"gate-pr-titles".to_string()),
-            "nothing proceeds past a wrong title"
+            after("gpt-review-fix").contains(&"guard-scope".to_string()),
+            "the reviewers must see the reverted tree, not the wandered one"
         );
     }
 
@@ -377,8 +320,8 @@ mod tests {
     /// grades it and starts the next one: ERP-141 was declined for having no
     /// checks, still reached Done, and the epic advanced without it.
     #[test]
-    fn merge_pr_merges_without_ci_and_cancels_when_it_does_not_merge() {
-        let yaml = default_workflow("merge-pr").expect("registered");
+    fn task_merge_merges_without_ci_and_cancels_when_it_does_not_merge() {
+        let yaml = default_workflow("task-merge").expect("registered");
         let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow must parse");
         let node = |id: &str| wf.nodes.iter().find(|n| n.id == id).expect(id);
 
@@ -396,8 +339,13 @@ mod tests {
 
         let gate = node("not-merged");
         assert!(matches!(gate.kind, harness_dag::NodeKind::Cancel(_)));
-        assert_eq!(gate.when.as_deref(), Some("$merge.output.merged != 'true'"));
-        assert!(gate.depends_on.contains(&"merge".to_string()));
+        assert!(
+            gate.when
+                .as_deref()
+                .is_some_and(|w| w.contains("$merge.output.merged != 'true'")),
+            "a merge that did not happen must cancel: {:?}",
+            gate.when
+        );
     }
 
     #[test]
@@ -530,7 +478,13 @@ mod tests {
     /// commands belong in the project's `CLAUDE.md`, which every agent node reads.
     #[test]
     fn bundled_workflows_name_no_concrete_verify_chain() {
-        for name in ["idea-to-pr", "architect", "revise-pr", "merge-pr"] {
+        for name in [
+            "task",
+            "task-merge",
+            "revise-task",
+            "review-pr",
+            "architect",
+        ] {
             let yaml = default_workflow(name).unwrap_or_else(|| panic!("bundled {name}"));
             // `cargo clippy` is deliberately absent from this list: architect's
             // metrics node runs it behind its own `HAS_RUST` stack detection,
@@ -568,15 +522,168 @@ mod tests {
 
     #[test]
     fn bundled_gpt_review_uses_subscription_codex_namespace() {
-        let yaml = default_workflow(DEFAULT_WORKFLOW).unwrap();
-        let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow must parse");
-        let node = wf
+        for name in ["revise-task", "review-pr"] {
+            let yaml = default_workflow(name).unwrap();
+            let wf = harness_dag::parse_workflow(yaml).expect("bundled workflow must parse");
+            let node = wf
+                .nodes
+                .iter()
+                .find(|n| n.id == "gpt-review-fix")
+                .unwrap_or_else(|| panic!("`{name}` has a gpt review node"));
+            assert_eq!(node.provider.as_deref(), Some("pi"));
+            assert_eq!(node.model.as_deref(), Some("openai-codex/gpt-6-astra"));
+        }
+    }
+
+    /// Generated sources are gitignored, so a fresh worktree has none, and in a
+    /// pnpm monorepo the script that writes them lives in a package, not the
+    /// root. The step used to look for it only in the root and then run it with
+    /// `pnpm -r`, which skips the root: it ran in neither case, silently, and
+    /// two packages generating into one file ran in parallel. Every bundled copy
+    /// of the step is the same script, so this pins all of them.
+    #[test]
+    fn install_deps_is_one_script_everywhere() {
+        let bodies: Vec<(&str, String)> = ["task", "revise-task", "review-pr"]
+            .into_iter()
+            .map(|name| {
+                let wf = harness_dag::parse_workflow(default_workflow(name).unwrap()).unwrap();
+                let node = wf
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == "install-deps")
+                    .unwrap_or_else(|| panic!("`{name}` has an install-deps step"));
+                let harness_dag::NodeKind::Bash(body) = &node.kind else {
+                    panic!("`{name}` install-deps is a bash step");
+                };
+                (name, body.replace("\r\n", "\n"))
+            })
+            .collect();
+        for (name, body) in &bodies[1..] {
+            assert_eq!(
+                body, &bodies[0].1,
+                "`{name}` install-deps has drifted from `task`'s"
+            );
+        }
+        let body = &bodies[0].1;
+        assert!(body.contains("git ls-files -- package.json '*/package.json'"));
+        assert!(body.contains("pnpm -r --workspace-concurrency=1 --if-present run"));
+        assert!(body.contains("no prebuild, codegen, generate or db:generate script"));
+    }
+
+    /// Runs the step's script against fake workspaces, with stand-in `pnpm` and
+    /// `npm` that record how they were called. Skipped where there is no bash.
+    #[test]
+    fn install_deps_runs_codegen_where_the_script_lives() {
+        use std::process::Command;
+        // Windows may resolve `bash` to WSL's launcher with no distro behind it,
+        // which starts but cannot run anything.
+        let usable = Command::new("bash")
+            .arg("-c")
+            .arg("exit 0")
+            .output()
+            .is_ok_and(|o| o.status.success());
+        if !usable {
+            eprintln!("no usable bash on PATH: skipping");
+            return;
+        }
+        let wf = harness_dag::parse_workflow(default_workflow("task").unwrap()).unwrap();
+        let harness_dag::NodeKind::Bash(script) = &wf
             .nodes
             .iter()
-            .find(|n| n.id == "gpt-review-fix")
-            .expect("gpt review node exists");
-        assert_eq!(node.provider.as_deref(), Some("pi"));
-        assert_eq!(node.model.as_deref(), Some("openai-codex/gpt-6-astra"));
+            .find(|n| n.id == "install-deps")
+            .unwrap()
+            .kind
+        else {
+            panic!("install-deps is a bash step");
+        };
+        let script = script.replace("\r\n", "\n");
+
+        // `lock` picks the package manager; each package is (dir, has prebuild).
+        let run = |lock: &str, packages: &[(&str, bool)]| -> (String, String) {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path();
+            let bin = root.join("bin");
+            std::fs::create_dir_all(&bin).unwrap();
+            std::fs::write(root.join(lock), "").unwrap();
+            for pm in ["pnpm", "npm"] {
+                std::fs::write(
+                    bin.join(pm),
+                    format!("#!/bin/sh\necho \"{pm} $* (in ${{PWD##*/}})\" >> \"$CALLS\"\n"),
+                )
+                .unwrap();
+            }
+            for (pkg, has) in packages {
+                let p = root.join(pkg);
+                std::fs::create_dir_all(&p).unwrap();
+                let scripts = if *has {
+                    r#"{"prebuild":"gen"}"#
+                } else {
+                    r#"{"build":"b"}"#
+                };
+                std::fs::write(
+                    p.join("package.json"),
+                    format!(r#"{{"name":"x","scripts":{scripts}}}"#),
+                )
+                .unwrap();
+            }
+            std::fs::write(root.join("install-deps.sh"), &script).unwrap();
+            let sh = |cmd: &str| {
+                Command::new("bash")
+                    .arg("-c")
+                    .arg(cmd)
+                    .current_dir(root)
+                    .env_remove("HARNESS_REPOS")
+                    .output()
+                    .unwrap()
+            };
+            sh("git init -q && git add -A");
+            let out = sh(
+                r#"chmod +x bin/*; export CALLS="$PWD/calls.log"; : > "$CALLS"; PATH="$PWD/bin:$PATH" bash install-deps.sh"#,
+            );
+            let calls = std::fs::read_to_string(root.join("calls.log")).unwrap_or_default();
+            (String::from_utf8_lossy(&out.stdout).into_owned(), calls)
+        };
+
+        // The script lives only in a package (ECOM's case): it runs, serially.
+        let (log, calls) = run(
+            "pnpm-lock.yaml",
+            &[(".", false), ("apps/web", true), ("apps/studio", true)],
+        );
+        assert!(
+            log.contains("codegen: prebuild in apps/studio apps/web"),
+            "{log}"
+        );
+        assert!(
+            calls.contains("pnpm -r --workspace-concurrency=1 --if-present run prebuild"),
+            "{calls}"
+        );
+
+        // Only the root, or the root and a package: the root's script runs, once.
+        for packages in [
+            &[(".", true), ("apps/web", false)][..],
+            &[(".", true), ("apps/web", true)][..],
+        ] {
+            let (_, calls) = run("pnpm-lock.yaml", packages);
+            let codegen: Vec<_> = calls.lines().filter(|l| l.contains(" run ")).collect();
+            assert_eq!(codegen.len(), 1, "{calls}");
+            assert!(codegen[0].starts_with("pnpm run prebuild"), "{calls}");
+        }
+
+        // Nobody defines one: it says so, rather than nothing.
+        let (log, calls) = run("pnpm-lock.yaml", &[(".", false), ("apps/web", false)]);
+        assert!(
+            log.contains("no prebuild, codegen, generate or db:generate script"),
+            "{log}"
+        );
+        assert!(!calls.contains(" run "), "{calls}");
+
+        // npm has no `-r`: each package that defines it runs in turn.
+        let (_, calls) = run(
+            "package-lock.json",
+            &[(".", false), ("apps/web", true), ("apps/api", true)],
+        );
+        assert!(calls.contains("npm run prebuild (in web)"), "{calls}");
+        assert!(calls.contains("npm run prebuild (in api)"), "{calls}");
     }
 
     /// `review-pr` reviews code that was never planned here, so it must judge
@@ -647,9 +754,9 @@ mod tests {
     }
 
     #[test]
-    fn revise_pr_revalidates_after_review_fixes() {
-        let yaml = default_workflow("revise-pr").expect("revise-pr bundled");
-        let wf = harness_dag::parse_workflow(yaml).expect("revise-pr must parse");
+    fn revise_task_revalidates_after_review_fixes() {
+        let yaml = default_workflow("revise-task").expect("revise-task bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("revise-task must parse");
         let node = |id: &str| {
             wf.nodes
                 .iter()
@@ -671,15 +778,29 @@ mod tests {
                  $gather-feedback.output.has_linear_feedback == 'true'"
             )
         );
+        // A revision starts in a fresh worktree: the PR branch is checked out by
+        // a bash step (not an agent asked to remember), and its dependencies
+        // installed, before anyone reads the code.
+        assert!(matches!(
+            node("checkout-pr").kind,
+            harness_dag::NodeKind::Bash(_)
+        ));
+        assert_eq!(deps("checkout-pr"), vec!["start"]);
+        assert_eq!(deps("install-deps"), vec!["checkout-pr"]);
+        assert_eq!(deps("explore"), vec!["install-deps"]);
+
         assert_eq!(deps("final-validate"), vec!["anthropic-review-fix"]);
         assert!(
             matches!(&node("final-validate").kind, harness_dag::NodeKind::Command(name) if name == "validate")
         );
         assert!(node("final-validate").output_format.is_some());
-        assert_eq!(deps("abort-final-invalid"), vec!["final-validate"]);
+        assert_eq!(
+            deps("abort-final-invalid"),
+            vec!["final-validate", "report-final-invalid"]
+        );
         assert_eq!(
             node("abort-final-invalid").when.as_deref(),
-            Some("$final-validate.output.passed != 'true'")
+            Some("$final-validate.output != '' && $final-validate.output.passed != 'true'")
         );
         assert_eq!(deps("summary"), vec!["final-validate"]);
         assert_eq!(
@@ -697,9 +818,9 @@ mod tests {
     /// booleans exist so the model must attribute feedback to a source, and the
     /// Linear one is a question about a string's presence rather than a judgement.
     #[test]
-    fn revise_pr_aborts_when_neither_feedback_source_has_anything() {
-        let yaml = default_workflow("revise-pr").expect("revise-pr bundled");
-        let wf = harness_dag::parse_workflow(yaml).expect("revise-pr must parse");
+    fn revise_task_aborts_when_neither_feedback_source_has_anything() {
+        let yaml = default_workflow("revise-task").expect("revise-task bundled");
+        let wf = harness_dag::parse_workflow(yaml).expect("revise-task must parse");
         let gather = wf
             .nodes
             .iter()
@@ -726,9 +847,27 @@ mod tests {
         assert_eq!(
             abort.when.as_deref(),
             Some(
-                "$gather-feedback.output.has_github_feedback != 'true' && \
+                "$gather-feedback.output != '' && \
+                 $gather-feedback.output.has_github_feedback != 'true' && \
                  $gather-feedback.output.has_linear_feedback != 'true'"
             )
+        );
+        // The issue is told why nothing happened, and is not moved.
+        let report = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "report-no-feedback")
+            .expect("report-no-feedback exists");
+        assert!(matches!(report.kind, harness_dag::NodeKind::Linear(_)));
+        assert!(
+            wf.nodes
+                .iter()
+                .find(|n| n.id == "start")
+                .expect("start exists")
+                .when
+                .as_deref()
+                .is_some_and(|w| w.contains("== 'true'")),
+            "the issue moves to In Progress only once there is real feedback"
         );
 
         // The prompt has to say that the text before the Linear heading is the
@@ -738,6 +877,10 @@ mod tests {
         };
         assert!(prompt.contains("If that heading is absent there is no Linear feedback"));
         assert!(prompt.contains("ORIGINAL bug report"));
+        // The harness's own comments are recognised by the poller's mark, not
+        // by an app name that differs per install.
+        assert!(prompt.contains("[harness]"));
+        assert!(!prompt.contains("AI Harness"));
     }
 
     #[test]
@@ -745,7 +888,7 @@ mod tests {
         let tmp = std::env::temp_dir();
         let (yaml, label) = resolve_workflow_source(DEFAULT_WORKFLOW, &tmp).unwrap();
         assert_eq!(label, DEFAULT_WORKFLOW);
-        assert!(yaml.contains("idea-to-pr"));
+        assert_eq!(yaml.lines().next(), Some("name: task"));
     }
 
     #[test]
@@ -795,12 +938,11 @@ mod tests {
                 .unwrap_or_else(|e| panic!("bundled workflow `{name}` failed to parse: {e}"));
             assert!(!wf.nodes.is_empty(), "`{name}` has no nodes");
         }
-        // The default, merge-pr, and revise-pr workflows are all present.
+        // The default, and the Linear lifecycle around it, are all present.
         let names = list_default_workflows();
         assert!(names.contains(&DEFAULT_WORKFLOW));
-        assert!(names.contains(&"merge-pr"));
         assert!(names.contains(&"architect"));
-        assert!(names.contains(&"revise-pr"));
+        assert!(names.contains(&"revise-task"));
         assert!(names.contains(&"task"));
         assert!(names.contains(&"task-merge"));
     }
@@ -901,7 +1043,8 @@ mod tests {
     /// verdict — hiding the real cause.
     #[tokio::test]
     async fn a_failure_before_validation_is_not_reported_as_a_failed_validation() {
-        for name in ["task", "idea-to-pr"] {
+        {
+            let name = "task";
             let wf = harness_dag::parse_workflow(default_workflow(name).unwrap()).unwrap();
             let roots: Vec<&'static str> = wf
                 .nodes
@@ -1096,7 +1239,8 @@ mod tests {
     /// `development` instead of `epic/NIL-72`.
     #[test]
     fn verify_pr_base_checks_against_the_runs_base_not_the_agents() {
-        for name in ["task", "idea-to-pr"] {
+        {
+            let name = "task";
             let wf = harness_dag::parse_workflow(default_workflow(name).unwrap()).unwrap();
             let verify = wf
                 .nodes

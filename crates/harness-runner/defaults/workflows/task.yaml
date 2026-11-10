@@ -1,8 +1,8 @@
 name: task
 description: |
   Turn a Linear issue into a reviewed pull request, keeping the issue up to date
-  as the run goes. A leaner sibling of `idea-to-pr`, and the reference example of
-  `linear:` steps.
+  as the run goes. The default workflow, and the reference example of `linear:`
+  steps.
 
   The issue's lifecycle lives in the graph instead of the binding's status map.
   `start` moves the issue to In Progress before any tokens are spent, `ack` and
@@ -12,7 +12,7 @@ description: |
 
   Sonnet explores, Opus plans, Haiku summarises the plan for the issue, Kimi
   implements, validates and self-reviews, and a final build gate runs last. No
-  cross-family review passes; use `idea-to-pr` when you want those.
+  cross-family review passes; run `review-pr` on the PR when you want those.
 
   Start it from a trigger on the Triggers page. If you bind it under a project's
   Linear setup instead, leave the binding's status map empty (no In-progress or
@@ -352,36 +352,53 @@ nodes:
   - id: install-deps
     category: setup
     depends_on: [post-plan]
-    timeout: 300000
+    timeout: 600000
     bash: |
       set -uo pipefail
       # Generated sources are gitignored, so a fresh worktree never has them —
       # and the scripts that write them are wired into `build`, not into
       # `typecheck` / `lint` / `test`. Without this an agent runs a check that
       # cannot pass in a tree nobody has built, reads the failure as its own,
-      # and starts hand-stubbing generated files. Run whichever of these
-      # conventional script names the project actually defines ($1 = pkg
+      # and starts hand-stubbing generated files. Run the first of these
+      # conventional script names that any package in the repo defines ($1 = pkg
       # manager). Non-fatal: a project whose codegen needs credentials this
       # container lacks should still get a run, with the reason on the record.
       codegen_in() {
         [ -f package.json ] || return 0
+        # Every package.json in the repo, root included. Tracked files only, so
+        # node_modules never shows up. In a monorepo the script usually lives in
+        # an app (apps/web), not in the root.
+        pkgs=$(git ls-files -- package.json '*/package.json' 2>/dev/null)
+        [ -n "$pkgs" ] || pkgs=package.json
         for script in prebuild codegen generate db:generate; do
-          grep -q "\"$script\"[[:space:]]*:" package.json 2>/dev/null || continue
-          echo "  ↳ codegen: $script"
-          case "$1" in
-            # -r reaches a workspace package (the script often lives in the app,
-            # not the root); --if-present keeps the other packages quiet.
-            pnpm) pnpm -r --if-present run "$script" ;;
-            npm)  npm run --if-present "$script" ;;
-            *)    "$1" run "$script" ;;
-          esac
-          if [ $? -ne 0 ]; then
+          dirs=$(printf '%s\n' "$pkgs" | while IFS= read -r p; do
+            grep -q "\"$script\"[[:space:]]*:" "$p" 2>/dev/null && dirname "$p"
+          done)
+          [ -n "$dirs" ] || continue
+          echo "  ↳ codegen: $script in $(printf '%s' "$dirs" | tr '\n' ' ')"
+          failed=0
+          if printf '%s\n' "$dirs" | grep -qx '\.'; then
+            # The root defines it: that is the project's own entry point, and it
+            # usually fans out by itself (turbo, pnpm -r). Running the packages as
+            # well would run them twice, and in parallel.
+            "$1" run "$script" || failed=1
+          elif [ "$1" = pnpm ]; then
+            # One package at a time, in dependency order. Two packages that
+            # generate into the same file must not race.
+            pnpm -r --workspace-concurrency=1 --if-present run "$script" || failed=1
+          else
+            while IFS= read -r d; do
+              ( cd "$d" && "$1" run "$script" ) || failed=1
+            done <<< "$dirs"
+          fi
+          if [ "$failed" -ne 0 ]; then
             echo "  ↳ WARNING: \`$script\` failed. Generated sources are missing,"
             echo "    so typecheck/lint/test may fail for reasons unrelated to the"
             echo "    change. Do NOT hand-write or stub generated files — say so."
           fi
           return 0
         done
+        echo "  ↳ codegen: no prebuild, codegen, generate or db:generate script in any package.json — skipping"
       }
       # Detect the lockfile in $1 and install. Runs in a subshell so the cd is
       # scoped; returns the install command's exit code. Ordered most- to

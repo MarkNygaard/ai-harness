@@ -2413,6 +2413,24 @@ async fn start_run_inner(
         ));
     }
 
+    // A run on a Linear issue whose team lacks a status the workflow moves it
+    // to would fail at that step — for "In Review", after the pull request is
+    // open. Refuse it now, before a worktree, a queue slot or a token, and say
+    // which status is missing. Whoever started it hears the reason: the issue's
+    // agent thread, the trigger's last error, or the caller of this API.
+    if let Some(issue) = req
+        .issue_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|i| !i.is_empty())
+    {
+        if let Some(problem) =
+            super::linear_status_check::for_issue(state, &project, issue, &workflow).await
+        {
+            return Err((StatusCode::BAD_REQUEST, problem));
+        }
+    }
+
     // A/B substitution: swap one integration model for another wherever the
     // workflow pins it, leaving every other step constant. Both halves required.
     if let (Some(from), Some(to)) = (req.swap_from.as_ref(), req.swap_to.as_ref()) {
@@ -3371,8 +3389,8 @@ mod tests {
     fn ab_swap_replaces_every_kimi_occurrence_and_leaves_others() {
         // Real bundled workflow: kimi as the default + many node pins + a loop
         // body, with gpt-6-astra and sonnet pinned on specialist review steps.
-        let yaml = harness_runner::default_workflow("idea-to-pr").expect("bundled idea-to-pr");
-        let mut wf = parse_workflow(yaml).expect("idea-to-pr parses");
+        let yaml = harness_runner::default_workflow("revise-task").expect("bundled revise-task");
+        let mut wf = parse_workflow(yaml).expect("revise-task parses");
 
         let before = workflow_model_pairs(&wf);
         let has =

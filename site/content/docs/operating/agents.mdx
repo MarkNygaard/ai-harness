@@ -91,9 +91,10 @@ held still.
 
 ## Why the bundled workflows mix models
 
-In [`idea-to-pr`](/docs/workflows/bundled#idea-to-pr), Claude plans, Kimi
+In [`revise-task`](/docs/workflows/bundled#revise-task), Claude plans, Kimi
 implements, and then **an OpenAI model and a Claude model each review and fix in
-turn**.
+turn**. [`review-pr`](/docs/workflows/bundled#review-pr) runs the same two
+passes on any open pull request.
 That is deliberate: a model reviewing its own output tends to agree with it. A
 reviewer that did not write the code catches a different class of mistake, which
 is why the bundled pipelines pay for a second and third pass rather than looping

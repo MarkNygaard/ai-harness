@@ -7,8 +7,8 @@ tools are used here.
 
 An **ai-harness workflow** is a DAG of `nodes` joined by `depends_on` edges. The
 cluster runs the nodes in topological layers (same layer → parallel) inside an
-isolated git worktree. The bundled `idea-to-pr` (plan → implement → review →
-gated PR) is the default; this is for building your **own** workflows or variants
+isolated git worktree. The bundled `task` (explore → plan → implement →
+self-review → gated PR, with `linear:` steps for the issue) is the default; this is for building your **own** workflows or variants
 — entirely through MCP tools, so you never hand-write or commit YAML and every
 change is validated atomically.
 
@@ -40,7 +40,7 @@ file:
 `workflow_set_node` per step (each returns the node summaries — your
 build→validate→fix loop) → `workflow_connect` for any extra edges. To edit an
 existing **custom** workflow, `workflow_get` it then `workflow_set_node` /
-`workflow_connect` / `workflow_remove_node`. Bundled defaults like `idea-to-pr`
+`workflow_connect` / `workflow_remove_node`. Bundled defaults like `task`
 have no file — to customize one, `workflow_get` its YAML and `workflow_save` it
 under a new name.
 
@@ -294,7 +294,7 @@ mcp__harness__workflow_set_ui({
 | `report.label` | Tab label on the run detail page (e.g. `Findings`). |
 | `report.verdict_node` | Node whose JSON output is the verdict; if omitted the UI scans nodes. Must name a real node. |
 | `report.scored` | `true` → score + rating + per-dimension bars + score-history sparkline; `false` (default) → findings list only. |
-| `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (idea-to-pr), `issue` (Linear), `ignore`. A bug report uses `[build, issue, ignore]`. |
+| `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (the default workflow, `task`), `issue` (Linear), `ignore`. A bug report uses `[build, issue, ignore]`. |
 | `report.status` | Per-item status control: `none` (default), `check` (a "tested" checkbox), or `pass_fail` (Passed / Failed) — for manual test checklists. |
 
 The report renders a node's JSON output shaped as

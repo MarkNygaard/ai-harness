@@ -64,7 +64,7 @@ export function AbTestForm() {
   const projects = useProjects();
   const [open, setOpen] = useState(false);
   const [project, setProject] = useState("");
-  const [workflow, setWorkflow] = useState("idea-to-pr");
+  const [workflow, setWorkflow] = useState("task");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [swapIdx, setSwapIdx] = useState(0);

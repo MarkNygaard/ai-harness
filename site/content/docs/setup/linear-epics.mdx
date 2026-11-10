@@ -1,12 +1,12 @@
 ---
 title: "Linear epics"
-description: "Delegate an issue with sub-issues: how each is built in turn on a shared branch, the columns the relay needs, and what stalls it."
+description: "Delegate an issue with sub-issues: how task builds each in turn on a shared branch, how to write the epic, and what stalls it."
 ---
 
 An **epic** is a Linear issue with sub-issues. Delegate it to the harness and it
-builds the sub-issues one at a time, each on a shared branch, each reviewed
-against its own acceptance criteria before the next begins. The default branch
-sees the feature once, finished, as a single pull request.
+builds the sub-issues one at a time, each on a shared branch, each graded
+against its own description before the next begins. The default branch sees the
+feature once, finished, as a single pull request.
 
 This page is about **setting that up**. For writing the workflows themselves see
 [Authoring workflows](/docs/workflows/authoring); for connecting a Linear
@@ -14,22 +14,21 @@ account see [Connecting Linear](/docs/setup/linear).
 
 ## When an epic is the wrong shape
 
-Most work is not an epic. `idea-to-pr` already explores, plans and decomposes
-inside one run — its plan step routinely produces ten numbered tasks with exact
-file paths, executed by a cheap model. Splitting the same work across sub-issues
+Most work is not an epic. `task` already explores, plans and decomposes inside
+one run — its plan step routinely produces ten numbered tasks with exact file
+paths, executed by a cheap model. Splitting the same work across sub-issues
 multiplies the cost rather than the quality: **each piece is a full pipeline**
-(explore, plan, implement, simplify, three review passes, verify) **plus a
-supervisor review**.
+(explore, plan, implement, self-review, verify) **plus a grade**.
 
 An epic earns that when one of two things is true:
 
 1. **The work exceeds one run's coherence** — explore, plan, implement and review
    share a single context, and past some size the plan stops being specific
    enough to execute cheaply.
-2. **Later pieces depend on earlier ones being *right*, not merely done** — the
-   supervisor grades each piece with fresh context before the next starts, where
-   a single run's review sees the finished diff and a wrong early step has
-   already propagated.
+2. **Later pieces depend on earlier ones being *right*, not merely done** — each
+   piece is graded with fresh context before the next starts, where a single
+   run's review sees the finished diff and a wrong early step has already
+   propagated.
 
 The test: *if you cannot say what would break if two pieces were built in the
 other order, it does not need to be an epic.*
@@ -43,10 +42,10 @@ in parallel.
 Good epic: a frontend where component B imports component A. Poor epic: a docs
 set, or three unrelated bug fixes.
 
-## With triggers: one workflow
+## How `task` runs an epic
 
-On the [Triggers page](/docs/triggers), the bundled `task` workflow runs an
-epic by itself. One trigger, Todo → `task`, is the whole setup:
+The bundled [`task`](/docs/workflows/bundled#task) workflow runs an epic in its
+own graph. One [trigger](/docs/triggers), Todo → `task`, is the whole setup:
 
 ```
 Todo  →  task
@@ -58,123 +57,57 @@ Todo  →  task
            └ a task    → builds it as usual
 ```
 
-Each piece is still its own run with fresh context, started from the board, so
-an epic survives a restart and you can follow it on the board. What changes is
-that the hand-offs are steps in one workflow rather than three bindings that
-have to be wired in a ring:
+The first step reads the issue and decides which it is:
 
-- **The grade comes before the merge.** A piece that falls short gets one
-  round of fixes and a second grade. If it fails again it stops, with its pull
-  request open and the piece in In Review, rather than filing correctives.
-- **Pieces merge without a person approving them.** That's safe only if your
-  repository doesn't require reviews on `epic/*` branches. The grade is the
-  check on each piece, and the finished feature is reviewed once, as the epic's
-  own pull request. Merge that one as you would any other: approve it, and
-  move the epic to Ready for merge if a `task-merge` trigger watches that
-  column. If GitHub refuses a piece's merge, the piece stops in In Review and
-  the epic gets a comment saying why.
-- **A sub-issue is a piece only once its epic has started**, which is when
-  `epic/<EPIC>` exists. Any other sub-issue is built as an ordinary issue.
+- **An epic** is an issue with sub-issues and no parent. The run creates the
+  branch `epic/<EPIC>` from the base branch and pushes it, then moves the first
+  sub-issue that hasn't begun to the column pieces start in. It comments on the
+  epic to say which piece it started. It builds nothing itself.
+- **A piece** is a sub-issue whose epic has started, which is when
+  `epic/<EPIC>` exists. Its run is based on the epic branch, so piece N+1
+  starts from a tree that already contains 1..N. It goes through the pipeline,
+  then a grade with fresh context judges it against its own description.
+- **An ordinary issue** goes through the pipeline and opens a pull request
+  against the base branch. So does a sub-issue of an epic nobody started.
+- **An epic whose pieces have all begun** is skipped: there is nothing to start.
 
-Writing the epic is the same as below: delegate the epic and every sub-issue,
-put the sub-issues in build order on the epic, and give each one its own
-acceptance criteria. The project env vars `EPIC_READY_STATE`, `EPIC_REVIEW_STATE` and
-`EPIC_BLOCKED_STATE` still override where pieces start, where the finished epic
-goes, and where a stuck one goes.
+Each piece is its own run with fresh context, started from the board, so an
+epic survives a restart and you can follow it on the board.
 
-The rest of this page describes the classic setup, with project bindings.
+**The grade comes before the merge.** A piece that falls short gets one round
+of fixes and a second grade. When it passes, its pull request is squash-merged
+into the epic branch, the piece moves to Done, and the next piece that hasn't
+begun moves to the start column. The epic gets a comment with the grade's
+summary. The list of pieces is read again at that point, so a piece added or
+reordered while the last one was building is respected.
 
-## The relay
+**After the last piece**, the run opens `epic/<EPIC>` as one pull request
+against the default branch and moves the epic to In Review. That pull request is
+the first review of the whole change. Merge it as you would any other: approve
+it, and move the epic to Ready for merge if a
+[`task-merge`](/docs/workflows/bundled#task-merge) trigger watches that column.
 
-Nothing in the harness "runs an epic". Bindings hand an issue from one column to
-the next, and the epic is what falls out of them being wired in a ring:
+**Pieces merge without a person approving them.** That's safe only if your
+repository doesn't require reviews on `epic/*` branches. The grade is the check
+on each piece, and the finished feature is reviewed once, as the epic's own
+pull request.
 
-```
-Todo             --> idea-to-pr         builds the piece, opens a PR
-   |  Ready (epic piece)
-Ready for merge  --> merge-pr           merges it into epic/<EPIC>
-   |  Ready
-Done             --> linear-epic-supervise
-                                        reviews it, releases it,
-                                        moves the next piece to Todo
-   |
-Todo             --> the next piece
-```
+## Where issues go
 
-Three couplings have to line up, and **nothing enforces them**. A binding whose
-ready status no other binding claims from means the run succeeds, the move
-succeeds, and the work is parked forever with no error anywhere. Use
-`linear_check` (below) rather than discovering it by an epic stopping overnight.
+Optional project env vars override the columns:
 
-## What each part does
+| env var | what it sets | default |
+|---|---|---|
+| `EPIC_READY_STATE` | where a piece starts | the column the epic was picked up from, else Todo |
+| `EPIC_REVIEW_STATE` | where the finished epic goes | In Review |
+| `EPIC_BLOCKED_STATE` | where the epic goes when a piece is stuck | the epic stays where it is |
 
-**`idea-to-pr`** builds one piece. When the piece belongs to an epic, the poller
-bases the run on `epic/<EPIC>` instead of the binding's base branch, so piece
-N+1 starts from a tree that already contains 1..N.
+Whatever column pieces start in, something must start `task` from it. With the
+default, that is the same trigger that picked up the epic.
 
-**`merge-pr`** merges the piece's PR into the epic branch. **The supervisor does
-not merge** — a common misreading. It reviews what has already landed.
-
-**`linear-epic-supervise`** does three different jobs depending on what it is
-handed:
-
-| handed | it does |
-|---|---|
-| an epic (sub-issues, no parent) | creates `epic/<EPIC>`, starts the first piece |
-| a merged piece | grades it; advances, or files a corrective |
-| the last piece, passing | opens `epic/<EPIC>` → default branch as one PR |
-
-It **releases** each piece when it is finished with it — clears the delegate —
-because a merged piece rests in the column the supervisor triggers from, and
-nothing else would stop the poller offering it again on the next tick.
-
-Nothing merges the final epic PR. It is the whole feature, and the one review
-that was never a piece.
-
-## Setting it up
-
-**The short way.** Add the binding that builds issues, then press **Set up
-epics** on the project's Linear tab. Choose where a built piece waits to be
-merged, where a merged piece goes, and (optionally) where the finished epic
-goes. It writes the `merge-pr` and supervisor bindings and the build binding's
-**Ready (epic piece)**. The dialog's **Wiring** panel then shows whether every
-column hands its work on, which is the same check as `linear_check`.
-
-The rest of this section is what that writes, for setting it up by hand.
-
-**1. Three bindings on the team.** On the project's Linear tab:
-
-| claims from | workflow | Ready | Ready (epic piece) |
-|---|---|---|---|
-| Todo | `idea-to-pr` | wherever standalone issues should stop | Ready for merge |
-| Ready for merge | `merge-pr` | Done | — |
-| Done | `linear-epic-supervise` | — | — |
-
-The supervisor's binding takes one field of its own: **Ready (finished epic)**,
-where the epic goes once every piece is in and its pull request is open — the
-point a person picks it up. Its `Ready` and `Ready (epic piece)` are never read:
-the poller suppresses every state move for a supervise run, so an epic's columns
-stay the supervisor's business.
-
-**`Ready (epic piece)` is the field that makes epics and ordinary work
-coexist.** A team that will not merge without a human review sets `Ready` to
-something like *Functional testing*, so standalone issues stop there. A piece of
-an epic is not finished work heading for the default branch — it is heading for
-the epic's own branch, where the supervisor grades it and the whole feature is
-reviewed once. Leave it empty and both behave the same, which is how every
-binding behaved before the field existed.
-
-**2. Nothing else.** The column a piece starts in is derived from the claims the
-poller already records. `EPIC_READY_STATE` remains as a project env var for a
-board that wants pieces somewhere else, but it is an override, not setup.
-
-Optional, all project env vars and all overrides rather than setup:
-`EPIC_BLOCKED_STATE` (where a stalled epic goes), `EPIC_REVIEW_STATE` (the older
-way to say **Ready (finished epic)**), `EPIC_CORRECTIVE_LABEL`.
-
-**3. Check it.** The **Wiring** panel on the project's Linear tab, or over
-MCP: `linear_check({ project })`. It walks the relay and reports what breaks,
-in column names rather than state ids.
+You can also bind `task` under a project's Linear setup instead of a trigger.
+Leave the binding's status map empty, so the poller and the workflow's own
+`linear:` steps don't both move the issue.
 
 ## Writing the epic
 
@@ -188,32 +121,48 @@ Their place on the board doesn't matter.
 column. The harness cannot delegate an issue to itself, so a piece nobody
 delegated is never picked up no matter which column it reaches.
 
-**Give each piece its own acceptance criteria.** The supervisor grades a piece
-against the criteria in its own description and nothing else — not against what
-it would have built, and not against work the criteria assign to a later piece.
-Vague criteria produce a pass on work that does not hold up; criteria that
-overlap the next piece produce a corrective for something not yet due.
-
-## Bounds
-
-Deliberate, and not configurable:
-
-- **2 corrective rounds per piece.** Three failures is a specification problem,
-  and a fourth attempt spends money to prove it again.
-- **15 correctives per epic**, as a runaway backstop.
-
-On either limit the epic stops and says so on the epic's own comments, which are
-its only memory — there is no epic state stored anywhere. The board is the
-ledger: the pieces, their columns, and a `Corrects: AIH-12` line in each
-corrective's body, which is what counts rounds.
+**Give each piece its own acceptance criteria.** The grade judges a piece
+against its own description and nothing else — not against what it would have
+built, and not against work the criteria leave to a later piece. Vague criteria
+produce a pass on work that does not hold up. Criteria that overlap the next
+piece produce a failure for something not yet due.
 
 ## When an epic stops
 
-Run `linear_check` first; most stalls are a column nothing polls. Otherwise:
+A piece stops for a person in two cases, and the epic waits until someone acts:
 
-- **A piece sits delegated in a column with no binding** — that column is the
-  end of the relay. Check `Ready` and `Ready (epic piece)`.
-- **A piece sits undelegated** — the supervisor released it (finished) or it was
-  never delegated. Delegate it to restart.
+- **It failed its grade twice**, once after a round of fixes. Its pull request
+  stays open and the piece moves to In Review. The epic and the piece both get
+  a comment with what the second grade found, and the epic moves to
+  `EPIC_BLOCKED_STATE` if you set one.
+- **GitHub would not merge it** into the epic branch: a branch rule, a conflict
+  or a failing check. The piece moves to In Review and the epic gets a comment
+  with GitHub's reason.
+
+Either way, merge the piece's pull request by hand, move the piece to Done and
+the next piece to the start column, and the epic carries on.
+
+Otherwise:
+
+- **A piece sits in the start column and nothing happens** — nothing starts
+  `task` from that column, or the piece was never delegated. Check the trigger,
+  or `EPIC_READY_STATE` if you set it, and delegate the piece.
 - **The epic sits in the build column and nothing happens** — it needs
-  sub-issues; an issue without them is built, not supervised.
+  sub-issues. An issue without them is built as an ordinary issue. An epic whose
+  pieces have all begun is skipped on purpose.
+- **A sub-issue was built against the default branch** — its epic had not
+  started, because `epic/<EPIC>` did not exist yet. Start the epic first.
+
+## With `linear-epic-supervise`
+
+The bundled [`linear-epic-supervise`](/docs/workflows/bundled#linear-epic-supervise)
+workflow grades a merged piece, then advances the next one or files a
+corrective sub-issue. `task` does not use it, and nothing wires it up for you.
+It is for a custom setup in which separate project bindings build and merge the
+pieces, with the supervisor bound to the column a merged piece lands in. Once a
+supervisor binding exists on the team, the poller sends an epic to it rather
+than to a build workflow that does not run epics itself, and builds each piece
+on `epic/<ID>`. The
+binding form's **Ready (epic piece)** and **Ready (finished epic)** fields, and
+the **Wiring** panel under the binding list (`linear_check` over MCP), exist for
+setups like that.

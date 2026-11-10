@@ -34,7 +34,7 @@ function dayLabel(iso: string, now: Date): string {
 
 /**
  * A task = all runs sharing a title — i.e. the same Linear issue moving through
- * its workflows (`idea-to-pr` builds it, then `merge-pr` merges it, etc.). We
+ * its workflows (`task` builds it, then `task-merge` merges it, etc.). We
  * collapse them to one row so a task's whole journey is a single line.
  */
 interface Task {

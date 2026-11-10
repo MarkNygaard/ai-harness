@@ -172,7 +172,7 @@ export function ProjectForm({
           <Input
             value={defaultWorkflow}
             onChange={edit(setDefaultWorkflow)}
-            placeholder="idea-to-pr"
+            placeholder="task"
             className="font-mono"
           />
         </Field>

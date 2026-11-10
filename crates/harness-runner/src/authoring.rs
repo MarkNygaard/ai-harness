@@ -1096,7 +1096,7 @@ pub fn list_commands(project_root: &Path) -> Vec<CommandInfo> {
 }
 
 /// Curated node templates for the editor's "Prebuilt steps" palette section,
-/// distilled from the bundled `idea-to-pr` pipeline so the prompts/configs stay
+/// distilled from the bundled default (`task`) pipeline so the prompts/configs stay
 /// a single source of truth.
 static PREBUILT_CURATED: &[(&str, &str, &str)] = &[
     (
@@ -1149,7 +1149,7 @@ static PREBUILT_STEPS_CACHE: LazyLock<Vec<PrebuiltStep>> = LazyLock::new(|| {
     let doc: serde_yaml::Value = match serde_yaml::from_str(yaml) {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!("failed to parse bundled idea-to-pr.yaml: {e}");
+            tracing::warn!("failed to parse the bundled default workflow: {e}");
             return Vec::new();
         }
     };
@@ -1415,14 +1415,14 @@ nodes:
         let yaml = "name: x\nnodes:\n  - id: a\n    bash: echo hi\n";
 
         // Shadowing a bundled name.
-        save_workflow(root, "idea-to-pr", yaml).unwrap();
+        save_workflow(root, "task", yaml).unwrap();
         // Not shadowing anything.
         save_workflow(root, "something-of-my-own", yaml).unwrap();
 
         let listed = list_workflows(root);
         let by = |n: &str| listed.iter().find(|w| w.name == n).expect(n).clone();
 
-        let override_row = by("idea-to-pr");
+        let override_row = by("task");
         assert_eq!(override_row.source, Source::Project);
         assert!(
             override_row.overrides_bundled,
@@ -1435,13 +1435,13 @@ nodes:
         // The bundled row is gone rather than listed twice — which is exactly
         // why the flag has to carry the information.
         assert_eq!(
-            listed.iter().filter(|w| w.name == "idea-to-pr").count(),
+            listed.iter().filter(|w| w.name == "task").count(),
             1,
             "the shadowed built-in must not also be listed"
         );
 
         // A bundled workflow does not override anything; it *is* the default.
-        let bundled = by("merge-pr");
+        let bundled = by("task-merge");
         assert_eq!(bundled.source, Source::Bundled);
         assert!(!bundled.overrides_bundled);
     }
@@ -1475,19 +1475,19 @@ nodes:
         assert!(!get_workflow(root, "my-custom").unwrap().has_bundled_default);
 
         // Override a bundled workflow: resettable, and shadows the bundled one.
-        save_workflow(root, "idea-to-pr", good).unwrap();
-        let overridden = get_workflow(root, "idea-to-pr").unwrap();
+        save_workflow(root, "task", good).unwrap();
+        let overridden = get_workflow(root, "task").unwrap();
         assert!(overridden.has_bundled_default);
         assert!(matches!(overridden.source, Source::Project));
 
         // Reset removes the override and reverts to the bundled default.
-        assert!(delete_project_workflow(root, "idea-to-pr").unwrap());
+        assert!(delete_project_workflow(root, "task").unwrap());
         assert!(matches!(
-            get_workflow(root, "idea-to-pr").unwrap().source,
+            get_workflow(root, "task").unwrap().source,
             Source::Bundled
         ));
         // A second reset is a harmless no-op (nothing left to remove).
-        assert!(!delete_project_workflow(root, "idea-to-pr").unwrap());
+        assert!(!delete_project_workflow(root, "task").unwrap());
         // Unsafe names are refused.
         assert!(delete_project_workflow(root, "../escape").is_err());
     }

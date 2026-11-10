@@ -203,7 +203,7 @@ struct Placement {
 }
 
 /// Match `wanted` against an id exactly, or a key/name ignoring case.
-fn matches(wanted: &str, id: &str, names: &[&str]) -> bool {
+pub(crate) fn matches(wanted: &str, id: &str, names: &[&str]) -> bool {
     let w = wanted.trim();
     w == id || names.iter().any(|n| n.eq_ignore_ascii_case(w))
 }

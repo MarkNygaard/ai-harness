@@ -665,4 +665,24 @@ impl Workflow {
     pub fn node(&self, id: &str) -> Option<&Node> {
         self.nodes.iter().find(|n| n.id == id)
     }
+
+    /// The Linear statuses this workflow's `linear:` steps move an issue to, as
+    /// written, each once, in node order. A status that uses a variable is left
+    /// out: what it names is only known once the run has started.
+    ///
+    /// The point is to check them against the issue's team before a run spends
+    /// anything: a move to a status the team lacks fails only when its step is
+    /// reached, which for "In Review" is after the pull request is open.
+    pub fn linear_target_states(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = Vec::new();
+        for node in &self.nodes {
+            if let NodeKind::Linear(LinearAction::MoveState(state)) = &node.kind {
+                let state = state.trim();
+                if !state.is_empty() && !state.contains('$') && !out.contains(&state) {
+                    out.push(state);
+                }
+            }
+        }
+        out
+    }
 }

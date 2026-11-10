@@ -46,7 +46,7 @@ operates on a *registered cluster project*).
 single `POST /mcp` (JSON-RPC over HTTPS). Point your client straight at it; the
 bearer token is the cluster API token. This transport also exposes **run
 control** — `run_trigger`, `run_status`, `run_list` — so you can kick off and
-monitor a run (e.g. `idea-to-pr`) from the editor, not just author:
+monitor a run (e.g. `task`) from the editor, not just author:
 
 ```json
 {
@@ -112,8 +112,10 @@ computes topological layers; nodes in the same layer run in parallel.
 
 ### `handles_epics:` — a workflow that runs epics itself
 
-By default the server never hands a Linear epic (an issue with sub-issues) to
-the workflow a trigger names. It goes to `linear-epic-supervise` instead. With
+When the team has an enabled `linear-epic-supervise` binding, the server does
+not hand a Linear epic (an issue with sub-issues) to the workflow a trigger
+names. It goes to the supervisor instead. Without that binding, an epic is built
+like any other issue, as one pull request. With
 `handles_epics: true` the workflow gets the epic itself and decides what to do
 with it, usually with a [route node](#node-bodies) on the issue's shape. A
 sub-issue is then based on `epic/<PARENT>` when that branch exists, and
@@ -132,7 +134,7 @@ for a plain workflow.
 | `report.label` | Tab label on the run detail page (e.g. `Findings`, `Review`). |
 | `report.verdict_node` | Node whose JSON output is the **verdict**; if omitted the UI scans nodes for one matching the shape. Must reference a real node. |
 | `report.scored` | `true` → show a score + rating + per-dimension bars + score-history sparkline (GEO-style); `false` (default) → findings list only. |
-| `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (fire idea-to-pr), `issue` (file into Linear), `ignore`. A bug/finding report uses `[build, issue, ignore]`. |
+| `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (fire the default workflow, `task`), `issue` (file into Linear), `ignore`. A bug/finding report uses `[build, issue, ignore]`. |
 | `report.status` | Per-item status control: `none` (default), `check` (a "tested" checkbox), or `pass_fail` (Passed / Failed) — for manual test checklists. |
 
 The report renders a node's JSON output shaped as
@@ -490,7 +492,7 @@ the agent to respond with **only** conforming JSON, so the node's output is a
 stable shape that `$node.output.field` and `when:` can read. The schema is not
 hard-validated against the reply — it shapes the agent, it doesn't reject it.
 Use it on any node whose output a downstream `when:` reads, and on verdict nodes
-(see the `validate` → `finalize-pr` gate in `idea-to-pr.yaml`).
+(see the `validate` → `finalize-pr` gate in `task.yaml`).
 
 ## Per-node hooks
 

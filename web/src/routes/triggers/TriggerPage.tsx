@@ -44,6 +44,7 @@ import {
   triggerState,
   useDeleteTrigger,
   useRotateSecret,
+  useTriggerChecks,
   useRunTrigger,
   useTriggerSystem,
 } from "@/lib/triggers";
@@ -292,6 +293,7 @@ export function RunTriggerPage() {
 
 /** When the trigger last started a run, or why it last couldn't. */
 function LastFired({ trigger: t }: { trigger: RunTrigger }) {
+  const missingStatus = useTriggerChecks().data?.[t.id];
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-muted-foreground">
       <span>
@@ -304,6 +306,11 @@ function LastFired({ trigger: t }: { trigger: RunTrigger }) {
           "never"
         )}
       </span>
+      {missingStatus && (
+        <span className="text-destructive">
+          Runs will not start: {missingStatus}
+        </span>
+      )}
       {t.last_error && (
         <span className="text-destructive">
           Last attempt failed: {t.last_error}

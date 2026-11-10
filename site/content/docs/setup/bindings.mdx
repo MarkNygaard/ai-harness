@@ -102,23 +102,29 @@ A common arrangement:
 
 | Column | Binding | Fires |
 | --- | --- | --- |
-| Ready to build | `idea-to-pr` | builds the feature, opens a PR |
+| Ready to build | `task` | builds the feature, opens a PR |
 | In review | none | a human looks at it |
-| Changes requested | `revise-pr` | updates the existing PR |
-| Ready for merge | `merge-pr` | merges once CI passes |
+| Changes requested | `revise-task` | updates the existing PR |
+| Ready for merge | `task-merge` | merges once the review is approved and CI passes |
 
 Cards move right as work completes, and a card dropped into *Changes requested*
 by a reviewer starts a revision without anyone re-delegating.
 
 <Callout type="warn">
-On the `revise-pr` binding, set **ready** to the *review* column, not to Done.
-The workflow updates an existing pull request rather than finishing the work, so
-a card that lands in Done has skipped the review it was just revised for.
+These three [bundled workflows](/docs/workflows/bundled) move the issue
+themselves, with `linear:` steps. `task` and `revise-task` move it to In
+Progress and then to In Review; `task-merge` moves it to Done, or back to In
+Review. On their bindings, set only the **source status** and leave the rest of
+the status map empty, so the poller and the workflow don't both move the issue.
 </Callout>
 
-Note what the last row means. With `merge-pr` bound, the chain runs from ticket
-to merged with no human in it, gated only on CI. That is a decision about your
-codebase rather than a default. See
+Note what the last row means. `task-merge` asks GitHub whether the pull
+request's review is approved. In a repository that requires a review, an
+unapproved PR is not merged: the card goes back to In Review with a comment
+saying why. In a repository that requires no review, there is nothing to wait
+for, and the chain runs from ticket to merged with no human in it, gated only on
+CI. Requiring that review is branch protection on the repository, and a
+decision about your codebase rather than a default. See
 [on human review](/why#on-human-review).
 
 ## When nothing happens
