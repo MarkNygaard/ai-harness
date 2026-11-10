@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS harness_schedules (
     updated_at   timestamptz NOT NULL DEFAULT now()
 )";
 
+/// Who last saved a schedule, added after the table shipped.
+const ADD_UPDATED_BY: &str =
+    "ALTER TABLE harness_schedules ADD COLUMN IF NOT EXISTS updated_by text";
+
 const INDEX_SCHEDULES_DUE: &str = "
 CREATE INDEX IF NOT EXISTS harness_schedules_due
     ON harness_schedules (next_run_at) WHERE enabled";
@@ -55,6 +59,9 @@ pub struct Schedule {
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Who saved it last: the creator until someone edits it. `None` for a
+    /// schedule last saved before this was recorded.
+    pub updated_by: Option<String>,
 }
 
 /// The fields a person sets.
@@ -70,7 +77,7 @@ pub struct ScheduleInput {
 }
 
 const COLUMNS: &str = "id, name, project, workflow, cron, timezone, task, enabled, next_run_at, \
-     last_run_at, last_run_id, created_by, created_at, updated_at";
+     last_run_at, last_run_id, created_by, created_at, updated_at, updated_by";
 
 /// Postgres-backed store for schedules.
 pub struct ScheduleStore {
@@ -88,6 +95,7 @@ impl ScheduleStore {
 
     pub async fn from_pool(pool: PgPool) -> Result<Self, PersistError> {
         sqlx::query(CREATE_SCHEDULES).execute(&pool).await?;
+        sqlx::query(ADD_UPDATED_BY).execute(&pool).await?;
         sqlx::query(INDEX_SCHEDULES_DUE).execute(&pool).await?;
         Ok(Self { pool })
     }
@@ -121,8 +129,9 @@ impl ScheduleStore {
     ) -> Result<Schedule, PersistError> {
         let row = sqlx::query_as::<_, Schedule>(&format!(
             "INSERT INTO harness_schedules
-                (id, name, project, workflow, cron, timezone, task, enabled, next_run_at, created_by)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                (id, name, project, workflow, cron, timezone, task, enabled, next_run_at,
+                 created_by, updated_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $10)
              RETURNING {COLUMNS}"
         ))
         .bind(id)
@@ -140,18 +149,20 @@ impl ScheduleStore {
         Ok(row)
     }
 
-    /// Replace a schedule's settings and its next occurrence. `None` when it
-    /// doesn't exist.
+    /// Replace a schedule's settings and its next occurrence. `updated_by` is
+    /// who is saving it. `None` when it doesn't exist.
     pub async fn update(
         &self,
         id: &str,
         input: &ScheduleInput,
         next_run_at: Option<DateTime<Utc>>,
+        updated_by: Option<&str>,
     ) -> Result<Option<Schedule>, PersistError> {
         let row = sqlx::query_as::<_, Schedule>(&format!(
             "UPDATE harness_schedules SET
                 name = $2, project = $3, workflow = $4, cron = $5, timezone = $6,
-                task = $7, enabled = $8, next_run_at = $9, updated_at = now()
+                task = $7, enabled = $8, next_run_at = $9, updated_at = now(),
+                updated_by = $10
              WHERE id = $1
              RETURNING {COLUMNS}"
         ))
@@ -164,6 +175,7 @@ impl ScheduleStore {
         .bind(&input.task)
         .bind(input.enabled)
         .bind(next_run_at)
+        .bind(updated_by)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
@@ -291,7 +303,13 @@ mod tests {
         // Disabled schedules are never due and can't be claimed.
         let mut off = input("INP");
         off.enabled = false;
-        store.update(&id, &off, None).await.unwrap().unwrap();
+        let edited = store
+            .update(&id, &off, None, Some("editor"))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(edited.updated_by.as_deref(), Some("editor"));
+        assert_eq!(edited.created_by, got.created_by, "the creator stays");
         assert!(!store.claim(&id, next, None).await.unwrap());
 
         assert!(store.delete(&id).await.unwrap());

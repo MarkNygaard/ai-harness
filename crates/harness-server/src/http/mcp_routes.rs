@@ -548,12 +548,14 @@ pub(crate) async fn call_tool(
                     Ok(current) => {
                         let req =
                             schedule_request(sched::ScheduleRequest::from_schedule(&current), args);
-                        sched::update(state, &s("id"), req).await.map(|s| {
-                            (
-                                format!("updated `{}`, next run {:?}", s.name, s.next_run_at),
-                                json!(s),
-                            )
-                        })
+                        sched::update(state, &s("id"), req, actor.user_id.as_deref())
+                            .await
+                            .map(|s| {
+                                (
+                                    format!("updated `{}`, next run {:?}", s.name, s.next_run_at),
+                                    json!(s),
+                                )
+                            })
                     }
                     Err(e) => Err(e),
                 },

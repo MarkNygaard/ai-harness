@@ -341,7 +341,7 @@ async fn save(
     let admin = is_admin(state, actor).await;
     match current {
         Some(_) => {
-            let t = triggers::update(state, &id, req, admin)
+            let t = triggers::update(state, &id, req, admin, actor.user_id.as_deref())
                 .await
                 .map_err(|(_, m)| m)?;
             Ok((
@@ -525,7 +525,7 @@ async fn save_schedule(
             sched::ScheduleRequest::from_schedule(&current),
             args,
         );
-        sched::update(state, &id, req).await
+        sched::update(state, &id, req, actor.user_id.as_deref()).await
     }
     .map_err(|(_, msg)| msg)?;
     let verb = if id.is_empty() { "created" } else { "updated" };

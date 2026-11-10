@@ -26,6 +26,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { LinearTriggerForm } from "@/components/triggers/LinearTriggerForm";
 import { ScheduleForm, formatWhen } from "@/components/triggers/ScheduleForm";
+import { Provenance } from "@/components/triggers/Provenance";
 import { TriggerKindIcon } from "@/components/triggers/TriggerKindIcon";
 import { WebhookTriggerForm } from "@/components/triggers/WebhookTriggerForm";
 import { isAdminOf, useAuthStatus } from "@/lib/auth";
@@ -225,6 +226,7 @@ export function RunTriggerPage() {
           />
 
           <LastFired trigger={t} />
+          <Provenance row={t} />
 
           {t.kind === "linear" && system.data === "classic" && (
             <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[12px]">
@@ -510,6 +512,7 @@ export function ScheduleTriggerPage() {
               <span className="text-destructive">{run.error.message}</span>
             )}
           </div>
+          <Provenance row={schedule} />
           {!admin && <AdminNote what="change schedules" />}
           <ScheduleForm
             key={schedule.updated_at}

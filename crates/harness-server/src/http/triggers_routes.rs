@@ -573,6 +573,7 @@ pub(crate) async fn update(
     id: &str,
     mut req: TriggerRequest,
     admin: bool,
+    updated_by: Option<&str>,
 ) -> Result<RunTrigger, Refusal> {
     let current = get(state, id).await?;
     req.kind = current.kind.clone();
@@ -585,7 +586,7 @@ pub(crate) async fn update(
         .await
         .map_err(|e| (StatusCode::SERVICE_UNAVAILABLE, e))?;
     store
-        .update(id, &input)
+        .update(id, &input, updated_by)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
         .ok_or_else(|| (StatusCode::NOT_FOUND, format!("no trigger `{id}`")))
@@ -644,9 +645,15 @@ pub async fn list_triggers(Extension(state): Extension<Arc<RunsState>>) -> Respo
     match list(&state).await {
         Ok(rows) => {
             let shadowed = shadowed(&rows);
+            let people = super::accounts::actor_labels(&state).await;
             let views: Vec<Value> = rows
                 .iter()
-                .map(|t| with_shadow(view(&state, t), &shadowed, &t.id))
+                .map(|t| {
+                    super::accounts::with_actors(
+                        with_shadow(view(&state, t), &shadowed, &t.id),
+                        &people,
+                    )
+                })
                 .collect();
             Json(json!({ "triggers": views })).into_response()
         }
@@ -675,7 +682,12 @@ pub async fn get_trigger(
     match get(&state, &id).await {
         Ok(t) => {
             let all = list(&state).await.unwrap_or_default();
-            Json(with_shadow(view(&state, &t), &shadowed(&all), &t.id)).into_response()
+            let people = super::accounts::actor_labels(&state).await;
+            Json(super::accounts::with_actors(
+                with_shadow(view(&state, &t), &shadowed(&all), &t.id),
+                &people,
+            ))
+            .into_response()
         }
         Err((s, m)) => err(s, m),
     }
@@ -690,11 +702,15 @@ pub async fn create_trigger(
     let admin = caller_is_admin(&state, &headers).await;
     let (user_id, _) = super::accounts::caller_trigger(&state, &headers).await;
     match create(&state, req, admin, user_id.as_deref()).await {
-        Ok((t, secret)) => (
-            StatusCode::CREATED,
-            Json(json!({ "trigger": view(&state, &t), "secret": secret })),
-        )
-            .into_response(),
+        Ok((t, secret)) => {
+            let people = super::accounts::actor_labels(&state).await;
+            let trigger = super::accounts::with_actors(view(&state, &t), &people);
+            (
+                StatusCode::CREATED,
+                Json(json!({ "trigger": trigger, "secret": secret })),
+            )
+                .into_response()
+        }
         Err((s, m)) => err(s, m),
     }
 }
@@ -707,8 +723,12 @@ pub async fn update_trigger(
     Json(req): Json<TriggerRequest>,
 ) -> Response {
     let admin = caller_is_admin(&state, &headers).await;
-    match update(&state, &id, req, admin).await {
-        Ok(t) => Json(view(&state, &t)).into_response(),
+    let (user_id, _) = super::accounts::caller_trigger(&state, &headers).await;
+    match update(&state, &id, req, admin, user_id.as_deref()).await {
+        Ok(t) => {
+            let people = super::accounts::actor_labels(&state).await;
+            Json(super::accounts::with_actors(view(&state, &t), &people)).into_response()
+        }
         Err((s, m)) => err(s, m),
     }
 }
@@ -1045,6 +1065,7 @@ mod tests {
             created_by: None,
             created_at: at,
             updated_at: at,
+            updated_by: None,
         }
     }
 
@@ -1167,6 +1188,7 @@ mod tests {
             created_by: None,
             created_at: now,
             updated_at: now,
+            updated_by: None,
         };
         let b = as_binding(&t).unwrap();
         assert_eq!(b.source_state_id, "s1");
