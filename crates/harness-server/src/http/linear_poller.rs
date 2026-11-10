@@ -800,6 +800,26 @@ async fn claim_and_fire(
                 let _ = store.set_entry_run(id, &issue.id, &run_id).await;
                 let _ = store.record_fired(id, &run_id).await;
             }
+            // A label starts a run without delegating the issue, and every
+            // later column's trigger (Ready for merge, Changes requested)
+            // selects delegated issues: the issue would be invisible to all of
+            // them. Delegate it now, after the claim exists, so the webhook
+            // Linear sends for the delegation finds a run in flight and starts
+            // nothing. Only for a trigger, whose entry keeps the now-delegated
+            // issue from firing again; a label binding with no In Progress move
+            // would pick it straight back up.
+            if by_label && fired_by.is_some() {
+                if let Err(e) = client.set_delegate(&issue.id, delegate_id).await {
+                    tracing::warn!(
+                        "linear poller: {}/{} — could not delegate {}, which a label started; \
+                         later triggers will not see it until someone delegates it: {}",
+                        b.project,
+                        b.workflow,
+                        issue.identifier,
+                        e.0
+                    );
+                }
+            }
             let run_url = state
                 .public_url()
                 .map(|base| format!("{base}/runs/{run_id}"));

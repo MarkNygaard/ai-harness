@@ -55,7 +55,9 @@ Everything that starts a run *by itself* is a **trigger**. **Triggers** in the
 sidebar lists every one of them in one list, whatever its kind:
 
 - **Linear** — an issue enters a status in a team and is delegated to the
-  harness, or carries a label you name.
+  harness, or carries a label you name. An issue a label started is delegated
+  to the harness when its run starts, so the triggers on later columns (Ready
+  for merge, Changes requested) see it like any other.
 - **Webhook** — another service calls the trigger's URL: GitHub, Sentry, a
   deploy pipeline, anything that can send a signed request.
 - **Schedule** — a time comes round. See [schedules](/docs/schedules).
