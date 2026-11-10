@@ -227,15 +227,16 @@ impl StdioConn {
         env: &BTreeMap<String, String>,
     ) -> Result<Self, ClientError> {
         let mut cmd = tokio::process::Command::new(command);
+        // What the server inherits is not this MCP server's business: neither
+        // the control plane's secrets nor the agents' keys. Stripped before
+        // `env` is added, so a key an admin configured for this server stays.
+        harness_agents::strip_inherited_secrets(&mut cmd);
         cmd.args(args)
             .envs(env)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .kill_on_drop(true);
-        // The server's own process never needs the harness's control-plane
-        // secrets (database URL, encryption key).
-        harness_agents::strip_control_plane_env(&mut cmd);
         let mut child = cmd
             .spawn()
             .map_err(|e| ClientError::Other(format!("could not start `{command}`: {e}")))?;

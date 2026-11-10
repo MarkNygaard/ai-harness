@@ -2650,7 +2650,7 @@ async fn execute_run_task(
     // What this run may ask the server to do on its behalf — a capability
     // scoped to this run and this project, never a credential.
     //
-    // `strip_control_plane_env` removes the database URL and the encryption key
+    // `strip_inherited_secrets` removes the database URL and the encryption key
     // at every spawn point on purpose: an agent's environment reaches its
     // context, so a secret placed here would reach a model provider and a run
     // log by accident. A grant is safe there because a leaked one buys a
@@ -2733,13 +2733,19 @@ async fn execute_run_task(
     }
 
     let agent: Arc<dyn PromptAgent> = if real {
-        // Materialize UI-entered provider credentials into the agent environment
-        // (files in $HOME for claude/codex, env vars for tokens/Kimi) before the
-        // CLIs run. Best-effort: a missing store/key just means no creds injected.
-        match state.cred_store().await {
+        // Load UI-entered provider credentials before the CLIs run: files in
+        // $HOME for claude/codex, keys returned. Best-effort: a missing
+        // store/key just means no creds injected.
+        let secrets = match state.cred_store().await {
             Ok(store) => crate::http::credentials_routes::materialize(store).await,
-            Err(e) => tracing::info!("credentials not materialized: {e}"),
-        }
+            Err(e) => {
+                tracing::info!("credentials not materialized: {e}");
+                Default::default()
+            }
+        };
+        // The GitHub token goes to every step (a bash step often opens the PR);
+        // agent keys go only to their own agent's steps, via the dispatcher.
+        run_env.extend(secrets.github_env());
         // Author this run's commits with the configured GitHub-recognized email
         // (project github credential overrides global), so platforms that
         // validate the commit author against a GitHub account — e.g. Vercel —
@@ -2749,6 +2755,8 @@ async fn execute_run_task(
         }
         // Sentry, for steps that ask for it with `mcp: [sentry]`. The agent's
         // MCP config refers to the token by name; nothing is written to disk.
+        // The run carries it, but the runner hands it only to steps whose
+        // `mcp:` names the server (`mcp_servers::env_for_step`).
         run_env.extend(state.sentry_env(Some(&project)).await);
         // And Grafana, for `mcp: [grafana]`.
         run_env.extend(state.grafana_env().await);
@@ -2768,11 +2776,14 @@ async fn execute_run_task(
         }
         // `provider: pi` → omp; `cursor` → cursor-agent; others → CodeAgent registry.
         let code = Arc::new(CodeAgentRunner::new(state.agent_registry.clone()));
-        Arc::new(DispatchAgent::new(
-            Arc::new(PiAgent::from_env()),
-            Arc::new(CursorAgent::from_env()),
-            code,
-        ))
+        Arc::new(
+            DispatchAgent::new(
+                Arc::new(PiAgent::from_env()),
+                Arc::new(CursorAgent::from_env()),
+                code,
+            )
+            .with_provider_env(secrets.agent_env()),
+        )
     } else {
         Arc::new(EchoAgent)
     };

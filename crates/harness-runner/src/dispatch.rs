@@ -8,6 +8,7 @@
 //! `provider` name so a workflow can mix all of them in one DAG.
 
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
@@ -24,6 +25,9 @@ pub struct DispatchAgent {
     pi: Arc<dyn PromptAgent>,
     cursor: Arc<dyn PromptAgent>,
     fallback: Arc<dyn PromptAgent>,
+    /// Credentials per backend (`pi`, `cursor`, or the fallback's provider
+    /// name), added to a step's environment only when it runs on that backend.
+    provider_env: HashMap<String, HashMap<String, String>>,
 }
 
 impl DispatchAgent {
@@ -36,23 +40,46 @@ impl DispatchAgent {
             pi,
             cursor,
             fallback,
+            provider_env: HashMap::new(),
         }
+    }
+
+    /// Credentials each backend's agent needs, keyed `pi`, `cursor`, `claude`,
+    /// `codex`. A step gets only its own backend's entry: the run's shared
+    /// environment carries no provider key, so an omp step cannot read the
+    /// Cursor key and a bash step reads none.
+    pub fn with_provider_env(mut self, env: HashMap<String, HashMap<String, String>>) -> Self {
+        self.provider_env = env;
+        self
     }
 
     fn routes_to(set: &[&str], provider: Option<&str>) -> bool {
         provider.is_some_and(|p| set.contains(&p))
     }
+
+    fn add_env(&self, backend: &str, req: &mut PromptRequest) {
+        if let Some(env) = self.provider_env.get(backend) {
+            req.env_vars
+                .extend(env.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+    }
 }
 
 #[async_trait]
 impl PromptAgent for DispatchAgent {
-    async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
-        let provider = req.provider.as_deref();
+    async fn run(&self, mut req: PromptRequest) -> Result<PromptResult, AgentError> {
+        let provider = req.provider.clone();
+        let provider = provider.as_deref();
         if Self::routes_to(PI_PROVIDERS, provider) {
+            self.add_env("pi", &mut req);
             self.pi.run(req).await
         } else if Self::routes_to(CURSOR_PROVIDERS, provider) {
+            self.add_env("cursor", &mut req);
             self.cursor.run(req).await
         } else {
+            if let Some(p) = provider {
+                self.add_env(p, &mut req);
+            }
             self.fallback.run(req).await
         }
     }
@@ -135,5 +162,71 @@ mod tests {
         assert_eq!(pi_seen.lock().unwrap().len(), 2);
         assert_eq!(cursor_seen.lock().unwrap().as_slice(), ["cursor"]);
         assert_eq!(fb_seen.lock().unwrap().as_slice(), ["claude", ""]);
+    }
+}
+
+#[cfg(test)]
+mod provider_env_tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    /// Records the environment each request arrived with.
+    struct EnvSpy(Arc<Mutex<Vec<HashMap<String, String>>>>);
+
+    #[async_trait]
+    impl PromptAgent for EnvSpy {
+        async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
+            self.0.lock().unwrap().push(req.env_vars.clone());
+            Ok(PromptResult::default())
+        }
+    }
+
+    fn req(provider: Option<&str>) -> PromptRequest {
+        PromptRequest {
+            provider: provider.map(str::to_string),
+            model: None,
+            effort: None,
+            prompt: "x".into(),
+            cwd: PathBuf::from("."),
+            session: None,
+            iteration: 1,
+            env_vars: HashMap::from([("SHARED".to_string(), "1".to_string())]),
+            hooks: None,
+            mcp_config: None,
+            progress: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn each_backend_gets_only_its_own_credentials() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let spy = || Arc::new(EnvSpy(seen.clone())) as Arc<dyn PromptAgent>;
+        let dispatch = DispatchAgent::new(spy(), spy(), spy()).with_provider_env(HashMap::from([
+            (
+                "pi".to_string(),
+                HashMap::from([("MOONSHOT_API_KEY".to_string(), "moon".to_string())]),
+            ),
+            (
+                "cursor".to_string(),
+                HashMap::from([("CURSOR_API_KEY".to_string(), "cur".to_string())]),
+            ),
+        ]));
+
+        for provider in [Some("kimi"), Some("cursor"), Some("claude"), None] {
+            dispatch.run(req(provider)).await.unwrap();
+        }
+        let seen = seen.lock().unwrap();
+        let keys = |i: usize| {
+            let mut k: Vec<&str> = seen[i].keys().map(String::as_str).collect();
+            k.sort();
+            k
+        };
+        // omp (via an alias) gets the Moonshot key and not the Cursor one.
+        assert_eq!(keys(0), ["MOONSHOT_API_KEY", "SHARED"]);
+        assert_eq!(keys(1), ["CURSOR_API_KEY", "SHARED"]);
+        // Claude, named or by default, gets neither.
+        assert_eq!(keys(2), ["SHARED"]);
+        assert_eq!(keys(3), ["SHARED"]);
     }
 }

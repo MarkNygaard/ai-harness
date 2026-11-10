@@ -378,9 +378,18 @@ async fn spawn(program: &Path, args: &[String], turn: &ChatTurn) -> Result<Outpu
         cmd.env(OMP_CODE_ROOT_ENV, code);
     }
     // A chat agent, and every MCP server it starts, runs what a model decides:
-    // it has no business with the control plane's database URL or secret key.
-    // The workflow spawn paths strip these; the chat path did not.
-    harness_agents::strip_control_plane_env(&mut cmd);
+    // it has no business with the control plane's database URL or secret key,
+    // nor with another agent's credentials. Its own come back from the server's
+    // environment here, and from the store through `turn.env`.
+    harness_agents::strip_inherited_secrets(&mut cmd);
+    harness_agents::restore_own_keys(
+        &mut cmd,
+        if claude {
+            harness_agents::CLAUDE_KEYS
+        } else {
+            &["MOONSHOT_API_KEY"]
+        },
+    );
     cmd.args(args)
         .current_dir(cwd)
         .envs(turn.env.iter().map(|(k, v)| (k, v)))

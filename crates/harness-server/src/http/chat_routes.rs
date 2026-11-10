@@ -688,11 +688,15 @@ async fn answer(
     context: &Value,
     extra_note: Option<&str>,
 ) -> Result<harness_runner::chat::ChatReply, String> {
-    // Fresh agent credentials, as a run gets them.
-    match state.cred_store().await {
+    // Fresh agent credentials, as a run gets them: only this conversation's
+    // agent's own key, plus the GitHub token (see `ProviderSecrets`).
+    let secrets = match state.cred_store().await {
         Ok(store) => super::credentials_routes::materialize(store).await,
-        Err(e) => tracing::info!("chat: credentials not materialized: {e}"),
-    }
+        Err(e) => {
+            tracing::info!("chat: credentials not materialized: {e}");
+            Default::default()
+        }
+    };
     let store = state.chat_store().await?;
     // Code questions, when the conversation names a project. Claude reads the
     // checkout with its own tools, confined by permission rules; Pi through
@@ -739,6 +743,23 @@ async fn answer(
         )
     });
     let grafana_note = attached("grafana").then(grafana_note);
+    // The chat agent's environment: the read-only services above, the GitHub
+    // token, and its own agent's key. Claude chat has always taken the
+    // subscription token from the environment; omp takes the Moonshot key.
+    let mut agent_env = service_env.clone();
+    agent_env.extend(secrets.github_env());
+    match conv.provider.as_str() {
+        "claude" => {
+            if let Some(token) = &secrets.claude_oauth {
+                agent_env.push(("CLAUDE_CODE_OAUTH_TOKEN".to_string(), token.clone()));
+            }
+        }
+        provider => {
+            if let Some(env) = secrets.agent_env().get(provider) {
+                agent_env.extend(env.iter().map(|(k, v)| (k.clone(), v.clone())));
+            }
+        }
+    }
     let turn = |session: Option<String>, prompt: String| ChatTurn {
         provider: conv.provider.clone(),
         model: conv.model.clone(),
@@ -753,7 +774,7 @@ async fn answer(
             tools: super::mcp_routes::tool_names(),
         },
         extra_mcp: extra_mcp.clone(),
-        env: service_env.clone(),
+        env: agent_env.clone(),
         progress: Some(progress.clone()),
     };
     let effort = load_settings(state).await.1.effort;

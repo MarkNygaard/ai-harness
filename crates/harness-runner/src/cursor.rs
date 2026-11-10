@@ -355,7 +355,8 @@ impl CursorAgent {
             .kill_on_drop(true);
         // Never let the agent (or tools it spawns) inherit the control-plane DB
         // URL / secrets.
-        harness_agents::strip_control_plane_env(&mut cmd);
+        harness_agents::strip_inherited_secrets(&mut cmd);
+        harness_agents::restore_own_keys(&mut cmd, &["CURSOR_API_KEY"]);
         cmd.envs(env_vars);
 
         let mut child = cmd.spawn().map_err(|e| {

@@ -421,7 +421,7 @@ pub fn spawn_local_broker() {
             cmd.env_remove("CLAUDECODE");
             cmd.env_remove("CLAUDE_CODE_ENTRYPOINT");
             // The broker holds subscription tokens, not the control plane's.
-            harness_agents::strip_control_plane_env(&mut cmd);
+            harness_agents::strip_inherited_secrets(&mut cmd);
             match cmd.spawn() {
                 Ok(mut child) => {
                     backoff = Duration::from_secs(2);

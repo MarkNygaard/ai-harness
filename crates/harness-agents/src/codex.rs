@@ -268,7 +268,8 @@ impl CodeAgent for CodexAgent {
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
         crate::strip_claude_env(&mut cmd);
-        crate::strip_control_plane_env(&mut cmd);
+        crate::strip_inherited_secrets(&mut cmd);
+        crate::restore_own_keys(&mut cmd, crate::CODEX_KEYS);
         cmd.envs(&req.env_vars);
 
         if self.cloud.enabled {
@@ -388,7 +389,8 @@ impl CodeAgent for CodexAgent {
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
         crate::strip_claude_env(&mut cmd);
-        crate::strip_control_plane_env(&mut cmd);
+        crate::strip_inherited_secrets(&mut cmd);
+        crate::restore_own_keys(&mut cmd, crate::CODEX_KEYS);
         cmd.envs(&req.env_vars);
 
         if self.cloud.enabled {

@@ -70,14 +70,50 @@ const CONTROL_PLANE_ENV: &[&str] = &[
     "HARNESS_REMOTE_URL",
 ];
 
-/// Strip [`CONTROL_PLANE_ENV`] from a command before spawning it, so an agent or
-/// `bash`/`script` node (and everything it spawns) can't reach the server's
-/// secrets or its production database. Call at every task-facing spawn point.
-pub fn strip_control_plane_env(cmd: &mut tokio::process::Command) {
-    for key in CONTROL_PLANE_ENV {
+/// Model-provider credentials a process can read from its environment. Each
+/// belongs to one agent: a spawn removes all of them from what it inherits,
+/// and the dispatcher adds back only the key of the agent that step runs on.
+/// Without that, an omp step could read the Claude token and a bash step every
+/// key there is. (Operator-set ones count too: a key in the container's
+/// environment reaches only its own agent.)
+pub const PROVIDER_KEY_ENV: &[&str] = &[
+    "CLAUDE_CODE_OAUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "MOONSHOT_API_KEY",
+    "CURSOR_API_KEY",
+];
+
+/// Strip [`CONTROL_PLANE_ENV`] and [`PROVIDER_KEY_ENV`] from a command before
+/// spawning it, so an agent or `bash`/`script` node (and everything it spawns)
+/// can't reach the server's secrets, its production database, or another
+/// agent's credentials. Call at every task-facing spawn point, before adding
+/// the environment the step is meant to have.
+pub fn strip_inherited_secrets(cmd: &mut tokio::process::Command) {
+    for key in CONTROL_PLANE_ENV.iter().chain(PROVIDER_KEY_ENV) {
         cmd.env_remove(key);
     }
 }
+
+/// Give a spawn back its own agent's keys from the server's environment, after
+/// [`strip_inherited_secrets`] removed them: an operator who set
+/// `ANTHROPIC_API_KEY` on the container still reaches Claude, and only Claude.
+/// Call between stripping and adding the step's own environment, which wins.
+pub fn restore_own_keys(cmd: &mut tokio::process::Command, keys: &[&str]) {
+    for key in keys {
+        if let Some(value) = std::env::var_os(key).filter(|v| !v.is_empty()) {
+            cmd.env(key, value);
+        }
+    }
+}
+
+/// The key Claude Code may take from the environment. Not
+/// `CLAUDE_CODE_OAUTH_TOKEN`: the workflow spawns strip every `CLAUDE*`
+/// variable and sign in with `~/.claude/.credentials.json`, which the server
+/// keeps fresh.
+pub const CLAUDE_KEYS: &[&str] = &["ANTHROPIC_API_KEY"];
+/// The key the Codex CLI may take from the environment.
+pub const CODEX_KEYS: &[&str] = &["OPENAI_API_KEY"];
 
 /// Place the child process into its own process group.
 ///
@@ -137,5 +173,55 @@ mod session_env_tests {
         }
         assert!(CLAUDE_SESSION_ENV.contains(&"CLAUDECODE"));
         assert!(CLAUDE_SESSION_ENV.contains(&"CLAUDE_CODE_ENTRYPOINT"));
+    }
+}
+
+#[cfg(test)]
+mod inherited_secrets_tests {
+    use super::*;
+
+    /// What a command will do with each variable: `Some(None)` = removed.
+    fn plan(cmd: &tokio::process::Command) -> Vec<(String, Option<String>)> {
+        cmd.as_std()
+            .get_envs()
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.map(|v| v.to_string_lossy().into_owned()),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn every_provider_key_and_control_plane_secret_is_removed() {
+        let mut cmd = tokio::process::Command::new("true");
+        strip_inherited_secrets(&mut cmd);
+        let plan = plan(&cmd);
+        for key in PROVIDER_KEY_ENV.iter().chain(CONTROL_PLANE_ENV) {
+            assert!(
+                plan.iter().any(|(k, v)| k == key && v.is_none()),
+                "{key} is not removed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_step_environment_added_after_stripping_wins() {
+        // The order every spawn uses: strip, then the step's own variables,
+        // which may legitimately include a key (a project's build env).
+        let mut cmd = tokio::process::Command::new("true");
+        strip_inherited_secrets(&mut cmd);
+        cmd.env("CURSOR_API_KEY", "from-the-step");
+        let plan = plan(&cmd);
+        assert!(plan
+            .iter()
+            .any(|(k, v)| k == "CURSOR_API_KEY" && v.as_deref() == Some("from-the-step")));
+    }
+
+    #[test]
+    fn claude_does_not_take_the_oauth_token_from_the_environment() {
+        assert!(!CLAUDE_KEYS.contains(&"CLAUDE_CODE_OAUTH_TOKEN"));
+        assert!(PROVIDER_KEY_ENV.contains(&"CLAUDE_CODE_OAUTH_TOKEN"));
     }
 }

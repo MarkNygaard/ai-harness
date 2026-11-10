@@ -1,6 +1,6 @@
 //! **What a run is allowed to ask the server to do on its behalf.**
 //!
-//! A run must never hold the server's credentials. `strip_control_plane_env`
+//! A run must never hold the server's credentials. `strip_inherited_secrets`
 //! removes the database URL and the encryption key at every spawn point, on
 //! purpose: an agent's environment ends up in its context, and "run `env` to see
 //! what is available" is ordinary agent behaviour, so a secret placed there

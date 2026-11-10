@@ -407,7 +407,8 @@ impl PiAgent {
             .kill_on_drop(true);
         // Never let the agent (or any tool it spawns, e.g. `cargo test`) inherit
         // the control plane's DB URL / secrets.
-        harness_agents::strip_control_plane_env(&mut cmd);
+        harness_agents::strip_inherited_secrets(&mut cmd);
+        harness_agents::restore_own_keys(&mut cmd, &["MOONSHOT_API_KEY"]);
         cmd.envs(env_vars);
 
         // Opt-in filesystem sandbox (`HARNESS_FS_SANDBOX`): confine the agent and
