@@ -358,6 +358,10 @@ impl CursorAgent {
         harness_agents::strip_inherited_secrets(&mut cmd);
         harness_agents::restore_own_keys(&mut cmd, &["CURSOR_API_KEY"]);
         cmd.envs(env_vars);
+        // Its own process group, so the guard below can stop the tools
+        // cursor-agent starts along with cursor-agent itself.
+        #[cfg(unix)]
+        harness_agents::set_process_group(&mut cmd);
 
         let mut child = cmd.spawn().map_err(|e| {
             AgentError(format!(
@@ -365,6 +369,9 @@ impl CursorAgent {
                 self.cli_path.display()
             ))
         })?;
+        // Every way out of this attempt, a cancel, the idle watchdog and the
+        // wall-clock cap included, takes cursor-agent's tools down with it.
+        let _group = harness_agents::ProcessGroupGuard::new(&child);
 
         let stderr_pipe = child.stderr.take();
         let stderr_task = tokio::spawn(async move {
