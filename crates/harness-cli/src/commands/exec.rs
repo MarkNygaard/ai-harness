@@ -370,16 +370,6 @@ pub async fn run(
         claude_agent = claude_agent.with_reasoning_budget(budget);
     }
     agent_registry.register("claude", Arc::new(claude_agent));
-    agent_registry.register(
-        "codex",
-        Arc::new(
-            harness_agents::codex::CodexAgent::from_config(
-                config.agents.codex.clone(),
-                runtime_sandbox_mode,
-            )
-            .with_stream_timeout(config.agents.stream_timeout_secs),
-        ),
-    );
     if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
         agent_registry.register(
             "anthropic-api",

@@ -590,7 +590,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/credentials/kimi/connect/poll",
             post(super::kimi_routes::connect_poll),
         )
-        // ── Connect Codex (ChatGPT OAuth device flow, server-side) ──────────
+        // ── Connect ChatGPT (OAuth PKCE flow, server-side; backs omp) ───────
         .route(
             "/api/credentials/codex/connect/start",
             post(super::codex_routes::connect_start),

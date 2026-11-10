@@ -18,7 +18,7 @@ that uses a ghcr image, CloudNativePG, an Envoy route, and a SOPS secret.
   `main`, and `1.2.3` / `1.2` / `1` on a `v*` release tag. Pin an immutable
   one (`1.2.3` or `main-<sha>`), not `latest`.
   `linux/amd64`. It bundles the web UI (embedded in the binary) plus the agent
-  CLIs (`claude`, `codex`, `omp`), `git`, and `mise`.
+  CLIs (`claude`, `cursor-agent`, `omp`), `git`, and `mise`.
 - Entrypoint runs `harness serve`. It already sets `HARNESS_HTTP_ADDR=0.0.0.0:8080`
   and listens on **8080**; health is **`GET /health`**.
 
@@ -169,7 +169,7 @@ stringData:
   # Optional: gate the API/UI behind a bearer token.
   HARNESS_API_TOKEN: <random-token>
 ```
-**No provider tokens here** — Claude/Codex/Kimi credentials are entered in the
+**No provider tokens here** — Claude/ChatGPT/Kimi credentials are entered in the
 harness **UI** (encrypted at rest in Postgres under `HARNESS_SECRET_KEY`). The
 only secrets in SOPS are the DB URL, this encryption key, and an optional API
 token — all infra, never provider tokens.
@@ -215,6 +215,6 @@ app's database uses today.)
   are present but unauthenticated.
 
 ## 6. Not yet (later ai-harness phases)
-- UI-managed provider credentials (so Claude/Codex/Kimi auth is entered in the UI).
+- UI-managed provider credentials (so Claude/ChatGPT/Kimi auth is entered in the UI).
 - Per-run Kubernetes **Job** executor + toolchain provisioning (runs are in-process today).
 - Linear/cron triggers.

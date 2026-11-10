@@ -5,8 +5,8 @@ This is the canonical guide for both humans and AI agents working in this repo.
 ## Project
 
 `ai-harness` is a Rust-native orchestration layer for AI coding agents. It
-constructs prompts and manages lifecycle — the agents (Claude Code, Codex,
-Pi/Kimi) decide how to execute. It runs as a single container (Kubernetes **or**
+constructs prompts and manages lifecycle — the agents (Claude Code, Pi/Kimi,
+Cursor) decide how to execute. It runs as a single container (Kubernetes **or**
 plain Docker) backed by Postgres; runs are triggered from the **web UI**, an
 **MCP-over-HTTP** endpoint, or a **cron-polled Linear poller**, execute
 **user-authored workflow DAGs** in an isolated git worktree, and provision
@@ -127,7 +127,7 @@ adapters). Key terms:
 |---|---|---|
 | **workflow runtime** | Orchestration layer that decides what happens next; event-sourced state machine with a command outbox. | `crates/harness-workflow/src/runtime/` |
 | **agent runtime** (`CodeAgent` / `AgentAdapter`) | Agent abstraction; receives an `AgentRequest`, returns a stream or response. | `crates/harness-core/src/agent.rs`, `crates/harness-agents/src/` |
-| **`RuntimeKind`** | Label the workflow layer attaches to an agent type (`CodexExec` / `CodexJsonrpc` / `ClaudeCode` / `AnthropicApi` / `RemoteHost`). | `crates/harness-workflow/src/runtime/model.rs` |
+| **`RuntimeKind`** | Label the workflow layer attaches to an agent type (`ClaudeCode` / `AnthropicApi` / `RemoteHost`). | `crates/harness-workflow/src/runtime/model.rs` |
 | **task** | Legacy execution unit; being migrated to flow through the workflow runtime. | `crates/harness-server/src/task_runner/` |
 | **runtime host** | Process instance that executes runtime jobs. | `crates/harness-server/src/runtime_hosts.rs` |
 

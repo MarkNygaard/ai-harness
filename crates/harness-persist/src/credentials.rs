@@ -1,6 +1,6 @@
 //! Encrypted-at-rest provider credentials.
 //!
-//! Provider tokens (Claude OAuth, Codex `auth.json`, the Kimi API key) are
+//! Provider tokens (Claude OAuth, the ChatGPT tokens, the Kimi API key) are
 //! entered in the UI and stored here — **never** in cluster Secrets/SOPS. Each
 //! provider's fields are a `field → value` map, serialized to JSON and sealed
 //! with **AES-256-GCM** under a key supplied at construction (the

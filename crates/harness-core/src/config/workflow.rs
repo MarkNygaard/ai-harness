@@ -457,8 +457,8 @@ fn default_runtime_dispatch_activity_profiles() -> BTreeMap<String, RuntimeDispa
     BTreeMap::from([(
         "poll_repo_backlog".to_string(),
         RuntimeDispatchProfileOverride {
-            runtime_kind: Some("codex_exec".to_string()),
-            runtime_profile: Some("codex-backlog-exec".to_string()),
+            runtime_kind: Some("claude_code".to_string()),
+            runtime_profile: Some("claude-backlog-exec".to_string()),
             timeout_secs: Some(3600),
             ..Default::default()
         },

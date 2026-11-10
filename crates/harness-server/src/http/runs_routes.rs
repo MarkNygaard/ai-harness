@@ -2752,7 +2752,7 @@ async fn execute_run_task(
 
     let agent: Arc<dyn PromptAgent> = if real {
         // Load UI-entered provider credentials before the CLIs run: files in
-        // $HOME for claude/codex, keys returned. Best-effort: a missing
+        // $HOME for claude, keys returned. Best-effort: a missing
         // store/key just means no creds injected.
         let secrets = match state.cred_store().await {
             Ok(store) => crate::http::credentials_routes::materialize(store).await,
@@ -3616,7 +3616,7 @@ mod tests {
     }
     #[test]
     fn public_url_trims_trailing_slashes() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(
             None,
             reg,
@@ -3629,7 +3629,7 @@ mod tests {
 
     #[test]
     fn public_url_trims_all_trailing_slashes() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(
             None,
             reg,
@@ -3642,7 +3642,7 @@ mod tests {
 
     #[test]
     fn public_url_rejects_whitespace_only() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(
             None,
             reg,
@@ -3655,7 +3655,7 @@ mod tests {
 
     #[test]
     fn public_url_rejects_empty_string() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(
             None,
             reg,
@@ -3668,7 +3668,7 @@ mod tests {
 
     #[test]
     fn public_url_none_when_input_none() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(None, reg, std::path::PathBuf::from("/tmp"), None, None);
         assert_eq!(state.public_url(), None);
     }

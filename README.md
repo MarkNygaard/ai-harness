@@ -2,7 +2,7 @@
 
 A Rust-native orchestration layer for AI coding agents. It turns a task — typed
 in a UI, sent over MCP, or pulled from a Linear column — into a run of a
-user-authored **workflow DAG**, drives coding agents (Claude Code, Codex,
+user-authored **workflow DAG**, drives coding agents (Claude Code,
 Pi/Kimi, Cursor) through it in an isolated git worktree, and opens a pull
 request at the end. The control plane is a single binary backed by Postgres, and
 runs anywhere a container does (Kubernetes or plain Docker).
@@ -28,8 +28,8 @@ runs anywhere a container does (Kubernetes or plain Docker).
   flow for Business Central / AL repos — `al compile` build gate) are published
   there. Installing makes a copy that never changes under you; when the
   original moves on, you are offered an update.
-- **Multiple agents in one pipeline.** Claude Code, Codex, Pi, and
-  Cursor (`cursor-agent`) nodes, each picking its own model.
+- **Multiple agents in one pipeline.** Claude Code, Pi, and Cursor
+  (`cursor-agent`) nodes, each picking its own model.
 - **Three ways to trigger a run:**
   - the **web UI**;
   - an **MCP-over-HTTP** endpoint — `run_trigger` / `run_list` / `run_status`

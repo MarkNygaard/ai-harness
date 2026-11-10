@@ -1,7 +1,7 @@
 //! Build a populated [`AgentRegistry`] from [`HarnessConfig`].
 //!
 //! Mirrors the registry construction in `harness-cli`'s `exec` command: register
-//! the Claude CLI, Codex CLI, and (when `ANTHROPIC_API_KEY` is set) the Anthropic
+//! the Claude CLI and (when `ANTHROPIC_API_KEY` is set) the Anthropic
 //! API agent, so a [`crate::CodeAgentRunner`] can dispatch real workflow prompts.
 //! This is config-only — no Postgres, no server — so it works for the standalone
 //! `harness-run` binary.
@@ -12,7 +12,7 @@ use harness_agents::registry::AgentRegistry;
 use harness_core::config::agents::SandboxMode;
 use harness_core::config::HarnessConfig;
 
-/// Construct an agent registry with Claude, Codex, and (if `ANTHROPIC_API_KEY`
+/// Construct an agent registry with Claude and (if `ANTHROPIC_API_KEY`
 /// is present) the Anthropic API agent, using `sandbox_mode` for the CLI agents.
 pub fn build_agent_registry(config: &HarnessConfig, sandbox_mode: SandboxMode) -> AgentRegistry {
     let mut registry = AgentRegistry::new(&config.agents.default_agent);
@@ -29,17 +29,6 @@ pub fn build_agent_registry(config: &HarnessConfig, sandbox_mode: SandboxMode) -
         claude = claude.with_reasoning_budget(budget);
     }
     registry.register("claude", Arc::new(claude));
-
-    registry.register(
-        "codex",
-        Arc::new(
-            harness_agents::codex::CodexAgent::from_config(
-                config.agents.codex.clone(),
-                sandbox_mode,
-            )
-            .with_stream_timeout(config.agents.stream_timeout_secs),
-        ),
-    );
 
     if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
         registry.register(
@@ -61,12 +50,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn builds_registry_with_claude_and_codex() {
+    fn builds_registry_with_claude() {
         let config = HarnessConfig::default();
         let registry = build_agent_registry(&config, SandboxMode::ReadOnly);
         let agents = registry.list();
         assert!(agents.contains(&"claude"), "agents: {agents:?}");
-        assert!(agents.contains(&"codex"), "agents: {agents:?}");
+        assert!(!agents.contains(&"codex"), "agents: {agents:?}");
         // anthropic-api is conditional on ANTHROPIC_API_KEY, so not asserted.
     }
 }

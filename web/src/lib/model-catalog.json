@@ -157,48 +157,6 @@
       "included": true
     },
     {
-      "provider": "codex",
-      "id": "gpt-6-astra",
-      "family": "gpt-6",
-      "included": true
-    },
-    {
-      "provider": "codex",
-      "id": "gpt-5.6-sol",
-      "family": "gpt-5.6-sol",
-      "included": true
-    },
-    {
-      "provider": "codex",
-      "id": "gpt-5.6-terra",
-      "family": "gpt-5.6-terra",
-      "included": true
-    },
-    {
-      "provider": "codex",
-      "id": "gpt-5.6-luna",
-      "family": "gpt-5.6-luna",
-      "included": true
-    },
-    {
-      "provider": "codex",
-      "id": "gpt-5.5",
-      "family": "gpt-5",
-      "included": true
-    },
-    {
-      "provider": "codex",
-      "id": "gpt-5.4",
-      "family": "gpt-5",
-      "included": true
-    },
-    {
-      "provider": "codex",
-      "id": "gpt-5.4-mini",
-      "family": "gpt-5",
-      "included": true
-    },
-    {
       "provider": "pi",
       "id": "openai-codex/gpt-6-astra",
       "family": "gpt-6",

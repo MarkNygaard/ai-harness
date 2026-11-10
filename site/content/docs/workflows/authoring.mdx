@@ -540,7 +540,6 @@ per provider at dispatch.
   via `--plugin-dir`. The serialized config is passed in the `HARNESS_HOOKS`
   environment variable. `deny` rules block via `{ block: true, reason }`;
   `post_tool_use` rules emit `sendMessage(..., { deliverAs: "steer" })`.
-- **`codex` nodes** — codex has no hook mechanism; hooks are silently ignored.
 - **`bash`/`script`/`approval`/`cancel` nodes** — parsed and stored but never
   delivered (no agent to intercept).
 
@@ -587,8 +586,8 @@ To give the step fewer, name the tools:
   delete) only when it needs them: text from a Linear issue can reach the agent.
 - **Read-only built-ins.** Agents can read Sentry issues, events and traces, and
   query Grafana. They can't change anything in either.
-- **Claude and Pi steps.** A workflow that gives MCP servers to a `codex` or
-  `cursor` step can't be saved.
+- **Claude and Pi steps.** A workflow that gives MCP servers to a `cursor`
+  step can't be saved.
 
 Ask for it only on the steps that need it. Every step that has it starts the
 server, and an agent with tools it has no use for may spend turns on them

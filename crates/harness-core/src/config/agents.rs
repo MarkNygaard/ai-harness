@@ -95,11 +95,10 @@ pub struct AgentsConfig {
     #[serde(default = "default_default_agent")]
     pub default_agent: String,
     /// Optional priority list for complex/critical task routing.
-    /// Example: `["codex", "claude"]`.
+    /// Example: `["claude", "anthropic-api"]`.
     #[serde(default)]
     pub complexity_preferred_agents: Vec<String>,
     pub claude: ClaudeAgentConfig,
-    pub codex: CodexAgentConfig,
     pub anthropic_api: AnthropicApiConfig,
     #[serde(default)]
     pub review: AgentReviewConfig,
@@ -154,7 +153,6 @@ impl Default for AgentsConfig {
             default_agent: default_default_agent(),
             complexity_preferred_agents: Vec::new(),
             claude: ClaudeAgentConfig::default(),
-            codex: CodexAgentConfig::default(),
             anthropic_api: AnthropicApiConfig::default(),
             review: AgentReviewConfig::default(),
             approval_policy: ApprovalPolicy::default(),
@@ -176,68 +174,6 @@ pub enum ReviewStrategy {
     #[default]
     LocalFirst,
     LegacyHostedBot,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodexCliReviewConfig {
-    #[serde(default = "default_true")]
-    pub enabled: bool,
-    #[serde(default = "default_codex_cli_review_path")]
-    pub cli_path: PathBuf,
-    #[serde(default = "default_codex_model")]
-    pub model: String,
-    #[serde(default = "default_codex_reasoning_effort")]
-    pub reasoning_effort: String,
-    #[serde(default = "default_codex_cli_review_base_ref")]
-    pub base_ref: String,
-    #[serde(default = "default_codex_cli_review_timeout_secs")]
-    pub timeout_secs: u64,
-    #[serde(default = "default_codex_cli_review_output_format")]
-    pub output_format: String,
-}
-
-impl Default for CodexCliReviewConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            cli_path: default_codex_cli_review_path(),
-            model: default_codex_model(),
-            reasoning_effort: default_codex_reasoning_effort(),
-            base_ref: default_codex_cli_review_base_ref(),
-            timeout_secs: default_codex_cli_review_timeout_secs(),
-            output_format: default_codex_cli_review_output_format(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodexAgentReviewProviderConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_reviewer_agent")]
-    pub reviewer_agent: String,
-    #[serde(default = "default_max_agent_review_rounds")]
-    pub max_rounds: u32,
-}
-
-impl Default for CodexAgentReviewProviderConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            reviewer_agent: default_reviewer_agent(),
-            max_rounds: default_max_agent_review_rounds(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct RawCodexAgentReviewProviderConfig {
-    #[serde(default)]
-    enabled: Option<bool>,
-    #[serde(default)]
-    reviewer_agent: Option<String>,
-    #[serde(default)]
-    max_rounds: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -304,8 +240,6 @@ pub struct AgentReviewConfig {
     pub advisory_providers: Vec<String>,
     pub external_required: bool,
     pub publish_local_review_comment: bool,
-    pub codex_cli_review: CodexCliReviewConfig,
-    pub codex_agent_review: CodexAgentReviewProviderConfig,
     pub gemini_github_bot: ExternalBotReviewProviderConfig,
     pub codex_github_bot: ExternalBotReviewProviderConfig,
     /// Agent name to use as reviewer. Empty string = auto-select.
@@ -347,10 +281,6 @@ impl<'de> Deserialize<'de> for AgentReviewConfig {
             #[serde(default)]
             publish_local_review_comment: Option<bool>,
             #[serde(default)]
-            codex_cli_review: Option<CodexCliReviewConfig>,
-            #[serde(default)]
-            codex_agent_review: Option<RawCodexAgentReviewProviderConfig>,
-            #[serde(default)]
             gemini_github_bot: Option<RawExternalBotReviewProviderConfig>,
             #[serde(default)]
             codex_github_bot: Option<RawExternalBotReviewProviderConfig>,
@@ -386,9 +316,7 @@ impl<'de> Deserialize<'de> for AgentReviewConfig {
         let fallback_chain = raw
             .fallback_chain
             .unwrap_or_else(default_review_fallback_chain);
-        let required_providers = raw
-            .required_providers
-            .unwrap_or_else(|| default_required_review_providers(enabled));
+        let required_providers = raw.required_providers.unwrap_or_default();
         let advisory_providers = raw
             .advisory_providers
             .unwrap_or_else(|| normalize_external_bot_chain(&fallback_chain));
@@ -398,11 +326,6 @@ impl<'de> Deserialize<'de> for AgentReviewConfig {
             review_bot_auto_trigger,
         );
         let default_codex_bot = ExternalBotReviewProviderConfig::codex(review_bot_auto_trigger);
-        let default_codex_agent = CodexAgentReviewProviderConfig {
-            enabled: false,
-            reviewer_agent: reviewer_agent.clone(),
-            max_rounds,
-        };
 
         Ok(Self {
             enabled,
@@ -411,11 +334,6 @@ impl<'de> Deserialize<'de> for AgentReviewConfig {
             advisory_providers,
             external_required: raw.external_required.unwrap_or(false),
             publish_local_review_comment: raw.publish_local_review_comment.unwrap_or(false),
-            codex_cli_review: raw.codex_cli_review.unwrap_or_default(),
-            codex_agent_review: merge_codex_agent_review_config(
-                raw.codex_agent_review,
-                default_codex_agent,
-            ),
             gemini_github_bot: merge_external_bot_config(raw.gemini_github_bot, default_gemini_bot),
             codex_github_bot: merge_external_bot_config(raw.codex_github_bot, default_codex_bot),
             reviewer_agent,
@@ -439,12 +357,10 @@ impl Default for AgentReviewConfig {
         Self {
             enabled: default_agent_review_enabled(),
             strategy: ReviewStrategy::default(),
-            required_providers: default_required_review_providers(true),
+            required_providers: Vec::new(),
             advisory_providers: default_advisory_review_providers(),
             external_required: false,
             publish_local_review_comment: false,
-            codex_cli_review: CodexCliReviewConfig::default(),
-            codex_agent_review: CodexAgentReviewProviderConfig::default(),
             gemini_github_bot: ExternalBotReviewProviderConfig::gemini(
                 default_review_bot_command(),
                 default_reviewer_name(),
@@ -470,7 +386,7 @@ fn default_agent_review_enabled() -> bool {
 }
 
 fn default_reviewer_agent() -> String {
-    "codex".to_string()
+    "claude".to_string()
 }
 
 fn default_true() -> bool {
@@ -491,14 +407,6 @@ fn default_review_bot_auto_trigger() -> bool {
 
 fn default_max_agent_review_rounds() -> u32 {
     3
-}
-
-fn default_required_review_providers(enabled: bool) -> Vec<String> {
-    if enabled {
-        vec!["codex_cli_review".to_string()]
-    } else {
-        Vec::new()
-    }
 }
 
 fn default_advisory_review_providers() -> Vec<String> {
@@ -523,23 +431,6 @@ fn normalize_external_bot_chain(chain: &[String]) -> Vec<String> {
         .collect()
 }
 
-fn merge_codex_agent_review_config(
-    raw: Option<RawCodexAgentReviewProviderConfig>,
-    defaults: CodexAgentReviewProviderConfig,
-) -> CodexAgentReviewProviderConfig {
-    let Some(raw) = raw else {
-        return defaults;
-    };
-    CodexAgentReviewProviderConfig {
-        enabled: raw.enabled.unwrap_or(defaults.enabled),
-        reviewer_agent: raw
-            .reviewer_agent
-            .filter(|value| !value.is_empty())
-            .unwrap_or(defaults.reviewer_agent),
-        max_rounds: raw.max_rounds.unwrap_or(defaults.max_rounds),
-    }
-}
-
 fn merge_external_bot_config(
     raw: Option<RawExternalBotReviewProviderConfig>,
     defaults: ExternalBotReviewProviderConfig,
@@ -561,22 +452,6 @@ fn merge_external_bot_config(
         wait_secs: raw.wait_secs.unwrap_or(defaults.wait_secs),
         max_rounds: raw.max_rounds.unwrap_or(defaults.max_rounds),
     }
-}
-
-fn default_codex_cli_review_path() -> PathBuf {
-    PathBuf::from("codex")
-}
-
-fn default_codex_cli_review_base_ref() -> String {
-    "origin/main".to_string()
-}
-
-fn default_codex_cli_review_timeout_secs() -> u64 {
-    1800
-}
-
-fn default_codex_cli_review_output_format() -> String {
-    "json".to_string()
 }
 
 fn default_external_bot_wait_secs() -> u64 {
@@ -607,63 +482,6 @@ impl Default for ClaudeAgentConfig {
             cli_path: PathBuf::from("claude"),
             default_model: "sonnet".to_string(),
             reasoning_budget: Some(ReasoningBudget::default()),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodexAgentConfig {
-    pub cli_path: PathBuf,
-    #[serde(default = "default_codex_model")]
-    pub default_model: String,
-    #[serde(default = "default_codex_reasoning_effort")]
-    pub reasoning_effort: String,
-    #[serde(default)]
-    pub cloud: CodexCloudConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CodexCloudConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    #[serde(default = "default_codex_cloud_cache_ttl_hours")]
-    pub cache_ttl_hours: u64,
-    #[serde(default)]
-    pub setup_commands: Vec<String>,
-    #[serde(default)]
-    pub setup_secret_env: Vec<String>,
-}
-
-impl Default for CodexCloudConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            cache_ttl_hours: default_codex_cloud_cache_ttl_hours(),
-            setup_commands: Vec::new(),
-            setup_secret_env: Vec::new(),
-        }
-    }
-}
-
-fn default_codex_cloud_cache_ttl_hours() -> u64 {
-    12
-}
-
-fn default_codex_model() -> String {
-    "gpt-5.6-sol".to_string()
-}
-
-fn default_codex_reasoning_effort() -> String {
-    "high".to_string()
-}
-
-impl Default for CodexAgentConfig {
-    fn default() -> Self {
-        Self {
-            cli_path: PathBuf::from("codex"),
-            default_model: default_codex_model(),
-            reasoning_effort: default_codex_reasoning_effort(),
-            cloud: CodexCloudConfig::default(),
         }
     }
 }

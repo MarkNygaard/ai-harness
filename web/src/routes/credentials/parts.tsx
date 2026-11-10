@@ -500,7 +500,7 @@ export function ProviderSummary({
  * queues rather than breaks.
  *
  * Shown for any provider the server says has an update, which is any CLI it can
- * actually install -- Claude Code and Codex today.
+ * actually install -- Claude Code today.
  */
 export function CliUpdateButton({
   provider,
@@ -734,7 +734,7 @@ export function KimiConnectCard({ configured }: { configured: boolean }) {
 }
 
 /**
- * Codex (ChatGPT) browser/PKCE login: Connect → sign in in the tab that opens →
+ * ChatGPT browser/PKCE login: Connect → sign in in the tab that opens →
  * the browser redirects to a localhost URL that won't load → paste that URL back
  * → we exchange it for tokens. (PKCE, not device-code — device-code needs a
  * ChatGPT workspace setting many accounts don't have.)
@@ -810,14 +810,12 @@ export function CodexConnectCard({ configured }: { configured: boolean }) {
       </Button>
       <div>
         <p className="mb-3 text-xs text-muted-foreground">
-          Uses your ChatGPT subscription for both the <strong>Codex</strong> CLI
-          and <strong>omp</strong> (the <code>openai-codex/*</code> models on
-          the Pi&nbsp;/&nbsp;omp CLI). Click Connect, sign in in the tab that
-          opens. Your browser then redirects to a <code>localhost:1455</code>{" "}
-          URL that <em>won’t load</em> — copy that URL from the address bar and
-          paste it below. The credential is stored encrypted, written to{" "}
-          <code>~/.codex/auth.json</code>, and imported into omp (and
-          self-refreshes).
+          Uses your ChatGPT subscription for the <code>openai-codex/*</code>{" "}
+          models on the Pi&nbsp;/&nbsp;omp CLI. Click Connect, sign in in the
+          tab that opens. Your browser then redirects to a{" "}
+          <code>localhost:1455</code> URL that <em>won’t load</em> — copy that
+          URL from the address bar and paste it below. The credential is stored
+          encrypted and imported into omp, which refreshes it.
         </p>
         {(phase === "await_paste" || phase === "exchanging") && start && (
           <div className="flex flex-col gap-2 text-sm">
@@ -851,7 +849,7 @@ export function CodexConnectCard({ configured }: { configured: boolean }) {
         )}
         {phase === "connected" && (
           <p className="text-sm text-status-success">
-            Connected ✓ — Codex is ready.
+            Connected ✓ — Pi’s ChatGPT models are ready.
           </p>
         )}
         {phase === "error" && <p className="text-sm text-destructive">{msg}</p>}

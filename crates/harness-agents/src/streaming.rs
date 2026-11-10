@@ -1,9 +1,5 @@
-#[cfg(test)]
-use harness_core::types::Item;
 use harness_core::{agent::StreamItem, error::HarnessError};
 use std::sync::{Arc, Mutex};
-#[cfg(test)]
-use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::mpsc::Sender;
 
@@ -18,14 +14,6 @@ const STDERR_ERROR_KEYWORDS: &[&str] = &[
 ];
 const MAX_STDERR_LINE_LEN: usize = 1000;
 const MAX_CAPTURED_STDERR_CHARS: usize = 4000;
-#[cfg(test)]
-const MAX_STREAM_FAILURE_OUTPUT_CHARS: usize = 500;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum StderrHandling {
-    ClassifyWarnings,
-    DiagnosticsOnly,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum StderrLineDisposition {
@@ -46,33 +34,9 @@ fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
 }
 
 /// Agent-internal line prefixes that should never surface as WARN.
-/// These are progress/reasoning lines emitted by Codex and similar agents,
-/// not actionable errors for the harness operator.
+/// These are progress lines an agent's tools emit, not actionable errors for
+/// the harness operator.
 const AGENT_INTERNAL_PREFIXES: &[&str] = &[
-    // ISO-8601 timestamps from Codex internal tracing
-    "2025-",
-    "2026-",
-    "2027-",
-    // Codex session header lines
-    "--------",
-    "workdir:",
-    "model:",
-    "provider:",
-    "approval:",
-    "sandbox:",
-    "reasoning effort:",
-    "reasoning summaries:",
-    "session id:",
-    "mcp startup:",
-    // Codex CLI telemetry failures are agent-internal and are not actionable
-    // server warnings.
-    "warn codex_analytics::client:",
-    "error codex_analytics::client:",
-    "codex_analytics::client:",
-    // Codex reasoning/exec progress lines
-    "codex ",
-    "exec ",
-    "tokens used",
     // Cargo/rustc build output that agents emit to stderr
     "compiling ",
     "   compiling ",
@@ -80,7 +44,7 @@ const AGENT_INTERNAL_PREFIXES: &[&str] = &[
     "    finished ",
 ];
 
-/// Detect code-content lines emitted by Codex to stderr (e.g. `   7        "error",`).
+/// Detect code-content lines an agent echoes to stderr (e.g. `   7        "error",`).
 /// These contain source code keywords but are not real errors.
 fn looks_like_code_content(line: &str) -> bool {
     let trimmed = line.trim_start();
@@ -237,12 +201,12 @@ fn append_stderr_capture(captured: &Arc<Mutex<String>>, line: &str) {
     }
 }
 
-fn stderr_line_disposition(line: &str, handling: StderrHandling) -> Option<StderrLineDisposition> {
+fn stderr_line_disposition(line: &str) -> Option<StderrLineDisposition> {
     let trimmed = truncate_to_char_boundary(line, MAX_STDERR_LINE_LEN);
     if trimmed.is_empty() {
         return None;
     }
-    if handling == StderrHandling::DiagnosticsOnly || is_agent_internal(trimmed) {
+    if is_agent_internal(trimmed) {
         return Some(StderrLineDisposition::Debug);
     }
     let lower = trimmed.to_lowercase();
@@ -274,11 +238,12 @@ pub(crate) fn enrich_stream_exit_error(error: HarnessError, stderr_tail: &str) -
     }
 }
 
-async fn drain_agent_stderr_with_capture(
+/// Read agent stderr line-by-line. Lines matching error keywords are logged
+/// at warn level; agent-internal progress lines are always debug.
+pub(crate) async fn filter_agent_stderr_with_capture(
     stderr: tokio::process::ChildStderr,
     agent_name: &str,
     captured: Option<Arc<Mutex<String>>>,
-    handling: StderrHandling,
 ) {
     let reader = BufReader::new(stderr);
     let mut lines = reader.lines();
@@ -291,67 +256,26 @@ async fn drain_agent_stderr_with_capture(
         if let Some(captured) = captured.as_ref() {
             append_stderr_capture(captured, trimmed);
         }
-        match stderr_line_disposition(trimmed, handling) {
-            Some(StderrLineDisposition::Warning) => tracing::warn!(agent = agent_name, "{trimmed}"),
-            Some(StderrLineDisposition::Debug) => tracing::debug!(agent = agent_name, "{trimmed}"),
-            None => {}
-        }
+        log_stderr_line(trimmed, agent_name);
     }
 }
 
-pub(crate) async fn filter_agent_stderr_with_capture(
-    stderr: tokio::process::ChildStderr,
-    agent_name: &str,
-    captured: Option<Arc<Mutex<String>>>,
-) {
-    drain_agent_stderr_with_capture(
-        stderr,
-        agent_name,
-        captured,
-        StderrHandling::ClassifyWarnings,
-    )
-    .await;
-}
-
-pub(crate) async fn capture_agent_stderr_diagnostics(
-    stderr: tokio::process::ChildStderr,
-    agent_name: &str,
-    captured: Option<Arc<Mutex<String>>>,
-) {
-    drain_agent_stderr_with_capture(
-        stderr,
-        agent_name,
-        captured,
-        StderrHandling::DiagnosticsOnly,
-    )
-    .await;
-}
-
-/// Read agent stderr line-by-line. Lines matching error keywords are logged
-/// at warn level; agent-internal progress lines are always debug.
-#[cfg(test)]
-pub(crate) async fn filter_agent_stderr(stderr: tokio::process::ChildStderr, agent_name: &str) {
-    filter_agent_stderr_with_capture(stderr, agent_name, None).await;
+fn log_stderr_line(line: &str, agent_name: &str) {
+    match stderr_line_disposition(line) {
+        Some(StderrLineDisposition::Warning) => tracing::warn!(agent = agent_name, "{line}"),
+        Some(StderrLineDisposition::Debug) => tracing::debug!(agent = agent_name, "{line}"),
+        None => {}
+    }
 }
 
 /// Log stderr captured from a non-streaming `output()` call.
-fn log_captured_stderr_with_mode(stderr: &str, agent_name: &str, handling: StderrHandling) {
-    for line in stderr.lines() {
-        let trimmed = truncate_to_char_boundary(line, MAX_STDERR_LINE_LEN);
-        match stderr_line_disposition(trimmed, handling) {
-            Some(StderrLineDisposition::Warning) => tracing::warn!(agent = agent_name, "{trimmed}"),
-            Some(StderrLineDisposition::Debug) => tracing::debug!(agent = agent_name, "{trimmed}"),
-            None => {}
-        }
-    }
-}
-
 pub(crate) fn log_captured_stderr(stderr: &str, agent_name: &str) {
-    log_captured_stderr_with_mode(stderr, agent_name, StderrHandling::ClassifyWarnings);
-}
-
-pub(crate) fn log_captured_stderr_diagnostics(stderr: &str, agent_name: &str) {
-    log_captured_stderr_with_mode(stderr, agent_name, StderrHandling::DiagnosticsOnly);
+    for line in stderr.lines() {
+        log_stderr_line(
+            truncate_to_char_boundary(line, MAX_STDERR_LINE_LEN),
+            agent_name,
+        );
+    }
 }
 
 pub(crate) async fn send_stream_item(
@@ -371,93 +295,6 @@ pub(crate) async fn send_stream_item(
             "{agent_name} stream send failed while sending {item_label}: {err}"
         ))
     })
-}
-
-/// Read stdout from a spawned child process line-by-line, stream deltas via `tx`,
-/// wait for exit, and return the collected output.
-///
-/// `idle_timeout` sets the maximum time to wait for the next line. When a line
-/// is not received within the timeout the subprocess is considered a zombie: an
-/// error is returned and the caller's `kill_on_drop(true)` child is dropped,
-/// terminating the process.
-#[cfg(test)]
-pub(crate) async fn stream_child_output(
-    child: &mut tokio::process::Child,
-    tx: &Sender<StreamItem>,
-    agent_name: &str,
-    idle_timeout: Option<Duration>,
-) -> harness_core::error::Result<String> {
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| HarnessError::AgentExecution(format!("{agent_name} stdout unavailable")))?;
-
-    let mut lines = BufReader::new(stdout).lines();
-    let mut output = String::new();
-
-    loop {
-        let maybe_line = if let Some(dur) = idle_timeout {
-            tokio::time::timeout(dur, lines.next_line())
-                .await
-                .map_err(|_| {
-                    // Kill entire process group to prevent orphaned grandchild
-                    // processes (e.g. cargo test binaries) from running forever.
-                    #[cfg(unix)]
-                    crate::kill_process_group(child);
-                    HarnessError::AgentExecution(format!(
-                        "{agent_name} stream idle timeout after {}s: zombie connection terminated",
-                        dur.as_secs()
-                    ))
-                })?
-                .map_err(|error| {
-                    HarnessError::AgentExecution(format!(
-                        "failed reading {agent_name} stdout: {error}"
-                    ))
-                })?
-        } else {
-            lines.next_line().await.map_err(|error| {
-                HarnessError::AgentExecution(format!("failed reading {agent_name} stdout: {error}"))
-            })?
-        };
-        let Some(line) = maybe_line else {
-            break;
-        };
-        let delta = format!("{line}\n");
-        output.push_str(&delta);
-        send_stream_item(
-            tx,
-            StreamItem::MessageDelta { text: delta },
-            agent_name,
-            "message_delta",
-        )
-        .await?;
-    }
-
-    let status = child.wait().await.map_err(|error| {
-        HarnessError::AgentExecution(format!("failed waiting for {agent_name} process: {error}"))
-    })?;
-    if !status.success() {
-        let stdout_tail = tail_chars(&output, MAX_STREAM_FAILURE_OUTPUT_CHARS);
-        return Err(HarnessError::AgentExecution(if stdout_tail.is_empty() {
-            format!("{agent_name} exited with {status}")
-        } else {
-            format!("{agent_name} exited with {status}: stdout_tail=[{stdout_tail}]")
-        }));
-    }
-
-    send_stream_item(
-        tx,
-        StreamItem::ItemCompleted {
-            item: Item::AgentReasoning {
-                content: output.clone(),
-            },
-        },
-        agent_name,
-        "item_completed",
-    )
-    .await?;
-
-    Ok(output)
 }
 
 #[cfg(test)]

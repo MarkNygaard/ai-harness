@@ -1279,7 +1279,7 @@ fn mcp_tools() -> Vec<Value> {
                 "properties": {
                     "name": { "type": "string" },
                     "description": { "type": "string" },
-                    "provider": { "type": "string", "description": "Default provider (claude/codex/pi)." },
+                    "provider": { "type": "string", "description": "Default provider (claude/pi/cursor)." },
                     "model": { "type": "string" }
                 },
                 "required": ["name"],

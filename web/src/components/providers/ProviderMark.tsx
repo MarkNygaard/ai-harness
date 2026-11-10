@@ -6,7 +6,7 @@ import { IconBrandOpenai } from "@tabler/icons-react";
  * The paths are the official ones from Simple Icons (CC0), copied in rather
  * than pulled as a dependency: six marks do not justify a package of three
  * thousand, and these do not change. OpenAI is the exception -- Simple Icons no
- * longer carries it -- so Codex keeps Tabler's, which is a stroke rosette and
+ * longer carries it -- so ChatGPT keeps Tabler's, which is a stroke rosette and
  * authentic to the mark anyway.
  *
  * Source: simple-icons 16.29.0.

@@ -30,7 +30,6 @@ export const AGENTS: {
   subscriptions: string[];
 }[] = [
   { provider: "claude", label: "Claude Code", subscriptions: ["claude"] },
-  { provider: "codex", label: "Codex", subscriptions: ["codex"] },
   { provider: "pi", label: "Pi", subscriptions: ["pi", "codex"] },
   { provider: "cursor", label: "Cursor", subscriptions: ["cursor"] },
 ];

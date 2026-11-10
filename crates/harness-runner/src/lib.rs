@@ -90,8 +90,8 @@ pub struct PromptResult {
 #[error("agent error: {0}")]
 pub struct AgentError(pub String);
 
-/// The seam between [`LocalRunner`] and a concrete agent backend (Claude/Codex/
-/// Pi). Kept minimal and session-aware so the DAG driver's session threading
+/// The seam between [`LocalRunner`] and a concrete agent backend (Claude/Pi/
+/// Cursor). Kept minimal and session-aware so the DAG driver's session threading
 /// works regardless of which backend is wired in.
 #[async_trait]
 pub trait PromptAgent: Send + Sync {

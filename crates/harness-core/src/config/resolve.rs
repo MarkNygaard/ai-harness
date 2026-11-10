@@ -140,13 +140,13 @@ mod tests {
         let server = HarnessConfig::default();
         let project = ProjectConfig {
             agent: Some(ProjectAgentConfig {
-                default: Some("codex".to_string()),
+                default: Some("anthropic-api".to_string()),
             }),
             ..Default::default()
         };
 
         let resolved = resolve_config(&server, &project);
-        assert_eq!(resolved.default_agent, "codex");
+        assert_eq!(resolved.default_agent, "anthropic-api");
     }
 
     #[test]
@@ -296,7 +296,7 @@ mod tests {
         let server = HarnessConfig::default();
         let project = ProjectConfig {
             agent: Some(ProjectAgentConfig {
-                default: Some("codex".to_string()),
+                default: Some("anthropic-api".to_string()),
             }),
             concurrency: Some(ProjectConcurrencyConfig {
                 max_concurrent_tasks: Some(2),
@@ -306,7 +306,7 @@ mod tests {
         // review and gc inherit server defaults
 
         let resolved = resolve_config(&server, &project);
-        assert_eq!(resolved.default_agent, "codex");
+        assert_eq!(resolved.default_agent, "anthropic-api");
         assert_eq!(resolved.concurrency.max_concurrent_tasks, 2);
         assert_eq!(resolved.review.enabled, server.agents.review.enabled);
         assert_eq!(resolved.gc.max_drafts_per_run, server.gc.max_drafts_per_run);

@@ -573,7 +573,7 @@ function Field({
 const DEFAULT_SENTINEL = "__default__";
 const NONE_SENTINEL = "__none__";
 
-/** Reasoning-effort levels (claude, codex, omp), low → max. */
+/** Reasoning-effort levels (claude, omp), low → max. */
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /** A labelled shadcn Select (replaces the native `<select>` for a styled popup).

@@ -8,7 +8,7 @@ well-defined role. Clients must choose the transport that matches their use case
 | Transport | Role | Typical caller |
 |-----------|------|----------------|
 | **HTTP REST** | Operator / control plane | Dashboard, CI scripts, batch jobs, webhooks |
-| **JSON-RPC 2.0** (stdio / WebSocket / HTTP `/rpc`) | Agent / data plane | Spawned agents (Claude Code, Codex), MCP integrations |
+| **JSON-RPC 2.0** (stdio / WebSocket / HTTP `/rpc`) | Agent / data plane | Spawned agents (Claude Code), MCP integrations |
 
 ### HTTP REST — operator-facing (control plane)
 

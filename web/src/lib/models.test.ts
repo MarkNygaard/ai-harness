@@ -17,7 +17,7 @@ describe("isMetered", () => {
   });
 
   it("treats subscription CLIs as included", () => {
-    expect(isMetered("codex", "gpt-6-astra")).toBe(false);
+    expect(isMetered("pi", "openai-codex/gpt-6-astra")).toBe(false);
     expect(isMetered("pi", "kimi-code/kimi-for-coding")).toBe(false);
   });
 

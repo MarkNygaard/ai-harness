@@ -15,8 +15,7 @@ A node's `provider` selects the agent. Several names route to the same one:
 | `provider` | Agent | Notes |
 | --- | --- | --- |
 | `claude` | Claude Code CLI | Run headless. The default for planning and review steps in the bundled workflows. |
-| `openai-codex` | Codex | Also reachable through Pi on a ChatGPT subscription. |
-| `pi`, `kimi`, `omp` | Pi | Three aliases for one agent. Pi's CLI binary is named `omp`, which is why that spelling is accepted. |
+| `pi`, `kimi`, `omp` | Pi | Three aliases for one agent. Pi's CLI binary is named `omp`, which is why that spelling is accepted. It runs Kimi models and, on a ChatGPT subscription, OpenAI models (`openai-codex/*`). |
 | `cursor` | `cursor-agent` | Ships in the image. The Cursor plan covers Cursor's own models. It does not cover Claude and GPT reached through Cursor. |
 
 ### A browser on every step
@@ -24,8 +23,8 @@ A node's `provider` selects the agent. Several names route to the same one:
 Every Claude and Pi step can drive a browser, with nothing to configure. The
 image carries a Chromium and the fonts it needs. Pi uses its own browser tool;
 Claude gets Playwright's MCP server pointed at the same Chromium. It is not
-listed on the MCP servers page and a step does not ask for it. (Codex and
-Cursor steps have none yet.)
+listed on the MCP servers page and a step does not ask for it. (Cursor steps
+have none yet.)
 
 Each such step is told when to use it: when its work changes or reviews
 something a user sees. It then starts the app's dev server, opens the pages the
@@ -95,8 +94,7 @@ implement with a cheap one.
 
 `effort` takes `low` | `medium` | `high` | `xhigh` | `max`. Any other value is
 rejected when the workflow is saved. It is passed to the agent CLI: as
-`--effort` to Claude Code, as `model_reasoning_effort` to Codex, and as
-`--thinking` to Pi. Cursor and the direct Anthropic API have no effort setting,
+`--effort` to Claude Code and as `--thinking` to Pi. Cursor and the direct Anthropic API have no effort setting,
 so the editor hides the field for them, and a workflow that sets it anyway
 validates with a warning and runs at the agent's default. Spend it where
 judgement matters, on planning and architecture, and not on mechanical steps.

@@ -1,7 +1,7 @@
 //! A [`PromptAgent`] backed by majiayu's real agent adapters.
 //!
 //! [`CodeAgentRunner`] resolves a node's `provider` to a registered
-//! [`CodeAgent`] (Claude CLI, Codex CLI, Anthropic API) and runs the prompt
+//! [`CodeAgent`] (Claude CLI, Anthropic API) and runs the prompt
 //! through `CodeAgent::execute`, mapping the response back to a [`PromptResult`].
 //!
 //! ## Session-threading gap (known limitation)
@@ -603,17 +603,17 @@ mod tests {
 
     #[tokio::test]
     async fn nonzero_exit_is_failure() {
-        let mut reg = AgentRegistry::new("codex");
+        let mut reg = AgentRegistry::new("anthropic-api");
         reg.register(
-            "codex",
+            "anthropic-api",
             Arc::new(StubAgent {
-                name: "codex",
+                name: "anthropic-api",
                 output: "stub",
                 exit_code: Some(2),
             }),
         );
         let runner = CodeAgentRunner::new(Arc::new(reg));
-        let out = runner.run(request(Some("codex"))).await.unwrap();
+        let out = runner.run(request(Some("anthropic-api"))).await.unwrap();
         assert!(!out.success);
     }
 }

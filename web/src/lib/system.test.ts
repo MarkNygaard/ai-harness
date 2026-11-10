@@ -26,7 +26,7 @@ function health(over: Partial<ProviderHealth> = {}): ProviderHealth {
 
 describe("offersCliUpdate", () => {
   /**
-   * The reported bug. Claude Code and Codex sat at the latest version with an
+   * The reported bug. Claude Code sat at the latest version with an
    * "Update to 2.1.268" button beside `v2.1.268`, and pressing it changed
    * nothing because there was nothing to change.
    */

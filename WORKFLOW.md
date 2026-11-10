@@ -37,8 +37,8 @@ runtime_dispatch:
     inspect_pr_feedback:
       timeout_secs: 3600
     poll_repo_backlog:
-      runtime_kind: codex_exec
-      runtime_profile: codex-backlog-exec
+      runtime_kind: claude_code
+      runtime_profile: claude-backlog-exec
       timeout_secs: 3600
 runtime_worker:
   enabled: true

@@ -62,7 +62,7 @@ export function ratesFor(model: string): Rates {
 /**
  * Notional cost of one usage bucket, priced at `model`'s rate. When no cache
  * breakdown is present (cache_read/cache_write both zero — older Claude builds
- * and Codex report all context as input), assume a 90% cache-read hit rate,
+ * report all context as input), assume a 90% cache-read hit rate,
  * matching the server's per-record heuristic.
  */
 export function usageCost(model: string | null, usage: Usage): number {
