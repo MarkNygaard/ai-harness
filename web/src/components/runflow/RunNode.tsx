@@ -3,7 +3,7 @@ import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { Cpu, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useNow } from "@/lib/useNow";
-import type { RunNodeData } from "./layout";
+import { EXIT_ROW_HEIGHT, type RunNodeData } from "./layout";
 import {
   elapsedMs,
   formatDuration,
@@ -18,7 +18,7 @@ import {
  * timer while running, and token count; hovering reveals a details panel.
  */
 export function RunNode({ data }: NodeProps) {
-  const { view } = data as RunNodeData;
+  const { view, taken } = data as RunNodeData;
   const [hover, setHover] = useState(false);
   const running = view.status === "running";
   const now = useNow(running);
@@ -102,14 +102,70 @@ export function RunNode({ data }: NodeProps) {
             </span>
           )}
         </div>
+
+        {view.routes.length > 0 && (
+          <RouteExits routes={view.routes} taken={taken} color={color} />
+        )}
       </div>
-      <Handle
-        type="source"
-        position={Position.Right}
-        className="!h-2 !w-2 !border-0 !bg-border"
-      />
+      {view.routes.length === 0 && (
+        <Handle
+          type="source"
+          position={Position.Right}
+          className="!h-2 !w-2 !border-0 !bg-border"
+        />
+      )}
 
       {hover && <NodeHoverCard view={view} elapsed={elapsed} />}
+    </div>
+  );
+}
+
+/**
+ * A route node's exits, one row each with its own source handle (id = the
+ * route's name), so every step behind the route hangs off the exit that leads
+ * to it. Once the route has decided, the exit it took is marked.
+ */
+function RouteExits({
+  routes,
+  taken,
+  color,
+}: {
+  routes: string[];
+  taken: string | null;
+  color: string;
+}) {
+  return (
+    <div className="-mx-3 -mb-2 border-t border-border">
+      {routes.map((name, i) => (
+        <div
+          key={`${i}-${name}`}
+          className="relative flex items-center justify-end px-3"
+          style={{ height: EXIT_ROW_HEIGHT }}
+          title={name === taken ? `${name} (taken)` : name}
+        >
+          <span
+            className={cn(
+              "truncate font-mono text-[10px]",
+              name === taken
+                ? "font-semibold text-card-foreground"
+                : "text-muted-foreground",
+              taken != null && name !== taken && "opacity-60",
+            )}
+          >
+            {name || "?"}
+          </span>
+          <Handle
+            type="source"
+            id={name}
+            position={Position.Right}
+            className={cn(
+              "!h-2 !w-2 !border-0",
+              name !== taken && "!bg-border",
+            )}
+            style={name === taken ? { background: color } : undefined}
+          />
+        </div>
+      ))}
     </div>
   );
 }

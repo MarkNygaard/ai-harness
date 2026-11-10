@@ -1863,6 +1863,8 @@ mod tests {
                     category: Some("implementation".into()),
                     artifact: None,
                     linear_comment: false,
+                    routes: vec![],
+                    when: None,
                 },
                 harness_dag::NodeMeta {
                     id: "review".into(),
@@ -1870,6 +1872,8 @@ mod tests {
                     category: None,
                     artifact: None,
                     linear_comment: false,
+                    routes: vec![],
+                    when: None,
                 },
             ],
             nodes: vec![

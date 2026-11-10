@@ -34,6 +34,10 @@ export interface NodeMeta {
   category?: string | null;
   /** Declared artifact path (relative to the run's artifacts dir). */
   artifact?: string | null;
+  /** A route node's exit names, in order; absent for other nodes. */
+  routes?: string[];
+  /** The node's `when:` — names the route exit(s) it is reached through. */
+  when?: string | null;
 }
 
 /** A run row for the list view (matches `RunSummary`). */
@@ -285,6 +289,10 @@ export interface JudgePairResponse {
 export interface NodeView {
   id: string;
   depends_on: string[];
+  /** A route node's exit names, in order; empty for other nodes. */
+  routes: string[];
+  /** The node's `when:` (which route exit(s) lead to it), if any. */
+  when: string | null;
   status: NodeStatus;
   provider: string | null;
   model: string | null;
