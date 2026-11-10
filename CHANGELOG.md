@@ -127,6 +127,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Runs can reach every Linear route again where sign-in is required.** Five of
+  the routes a run calls with its run token (`/api/run/linear/labels`,
+  `ready-state`, `release`, `issues`, `epic-review-state`) were missing from the
+  list that lets a run past the sign-in check. Under accounts mode or with
+  `HARNESS_API_TOKEN` set, a `linear: { add_labels | remove_labels }` step and
+  the epic steps that call `harness linear ready-state` / `release` were refused
+  with 401. The whole `/api/run/linear/` prefix is now let through (each handler
+  checks the run's token itself), and a test fails if any `/api/run/` route the
+  router serves is not.
 - **`install-deps` generates code in a monorepo.** It looked for a `prebuild`,
   `codegen`, `generate` or `db:generate` script in the root `package.json` only,
   then ran it with `pnpm -r`, which skips the root. So a script defined only in a

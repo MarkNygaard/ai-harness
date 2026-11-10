@@ -139,17 +139,12 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             // third party we cannot hand a bearer token; authenticated by the
             // `Linear-Signature` HMAC over the raw body (see `linear_agent`).
             | "/api/linear/webhook"
-            // What a workflow run asks of Linear. Exempt from *this* middleware
-            // because a run holds no session and no API token — it holds a
-            // grant scoped to its own project, which this middleware knows
-            // nothing about. Every one of these authenticates itself against
-            // that grant and refuses without one (see `run_grants`).
-            | "/api/run/linear/issue"
-            | "/api/run/linear/children"
-            | "/api/run/linear/sub-issue"
-            | "/api/run/linear/create-issue"
-            | "/api/run/linear/state"
-            | "/api/run/linear/comment"
+            // What a workflow run asks of the server; its Linear routes are the
+            // prefix below. Exempt from *this* middleware because a run holds
+            // no session and no API token — it holds a grant scoped to its own
+            // project, which this middleware knows nothing about. Every one of
+            // these authenticates itself against that grant and refuses
+            // without one (see `run_grants`).
             | "/api/run/s3/upload-url"
             | "/api/run/improvements/evidence"
             | "/api/run/facts/evidence"
@@ -183,6 +178,42 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
         // which buys only that step's tools (see `mcp_gateway`). The server
         // name is a path segment, hence a prefix.
         || path.starts_with("/api/run/mcp/")
+        // What a workflow run asks of Linear: moves, comments, labels, and the
+        // epic's pieces. A prefix, not a list: the routes were once listed one
+        // by one, five added later were missed, and every call a run made to
+        // them was refused wherever a sign-in or an API token is required.
+        // Each handler authenticates against the run's grant itself
+        // (`run_linear_routes::grant`).
+        || path.starts_with("/api/run/linear/")
+}
+
+#[cfg(test)]
+mod run_route_tests {
+    use super::is_auth_exempt_path;
+
+    /// A run carries only its grant, so every `/api/run/` route the router
+    /// serves must get past this middleware and authenticate against the
+    /// grant itself. Read from the router's source, so a route added there
+    /// without a matching exemption fails here rather than in production.
+    #[test]
+    fn every_run_route_is_reachable_with_a_grant() {
+        let router = include_str!("http_router.rs");
+        let routes: Vec<&str> = router
+            .split('"')
+            .filter(|s| s.starts_with("/api/run/"))
+            .collect();
+        assert!(routes.len() >= 15, "found only {routes:?}");
+        for route in routes {
+            // A path parameter stands in for any value.
+            let concrete = route.replace("{server}", "github");
+            assert!(
+                is_auth_exempt_path(&concrete),
+                "`{route}` is served to runs but needs a session or API token"
+            );
+        }
+        // The prefix covers what runs ask of Linear, not the rest of the API.
+        assert!(!is_auth_exempt_path("/api/linear/sources"));
+    }
 }
 
 /// Bearer token authentication middleware.
