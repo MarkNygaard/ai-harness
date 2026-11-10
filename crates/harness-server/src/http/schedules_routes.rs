@@ -230,11 +230,12 @@ pub(crate) async fn update(
     state: &Arc<RunsState>,
     id: &str,
     req: ScheduleRequest,
+    updated_by: Option<&str>,
 ) -> Result<Schedule, Refusal> {
     let (input, next) = validate(state, req).await?;
     store(state)
         .await?
-        .update(id, &input, next)
+        .update(id, &input, next, updated_by)
         .await
         .map_err(internal)?
         .ok_or_else(|| refuse(StatusCode::NOT_FOUND, "no such schedule"))
@@ -267,9 +268,19 @@ pub(crate) fn preview(cron: &str, timezone: &str) -> Result<Vec<DateTime<Utc>>, 
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 
-fn respond<T: serde::Serialize>(status: StatusCode, r: Result<T, Refusal>) -> Response {
+/// One schedule as a response, with the names of who created it and who
+/// last changed it beside their ids (`created_by_actor`, `updated_by_actor`).
+async fn respond_named(
+    state: &Arc<RunsState>,
+    status: StatusCode,
+    r: Result<Schedule, Refusal>,
+) -> Response {
     match r {
-        Ok(v) => (status, Json(v)).into_response(),
+        Ok(s) => {
+            let people = super::accounts::actor_labels(state).await;
+            let row = serde_json::to_value(&s).unwrap_or_else(|_| json!({}));
+            (status, Json(super::accounts::with_actors(row, &people))).into_response()
+        }
         Err((status, msg)) => err(status, msg),
     }
 }
@@ -277,7 +288,17 @@ fn respond<T: serde::Serialize>(status: StatusCode, r: Result<T, Refusal>) -> Re
 /// `GET /api/schedules`.
 pub async fn list_schedules(Extension(state): Extension<Arc<RunsState>>) -> Response {
     match list(&state).await {
-        Ok(rows) => Json(json!({ "schedules": rows })).into_response(),
+        Ok(rows) => {
+            let people = super::accounts::actor_labels(&state).await;
+            let rows: Vec<serde_json::Value> = rows
+                .iter()
+                .map(|s| {
+                    let row = serde_json::to_value(s).unwrap_or_else(|_| json!({}));
+                    super::accounts::with_actors(row, &people)
+                })
+                .collect();
+            Json(json!({ "schedules": rows })).into_response()
+        }
         Err((status, msg)) => err(status, msg),
     }
 }
@@ -287,7 +308,7 @@ pub async fn get_schedule(
     Extension(state): Extension<Arc<RunsState>>,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
-    respond(StatusCode::OK, get(&state, &id).await)
+    respond_named(&state, StatusCode::OK, get(&state, &id).await).await
 }
 
 /// `POST /api/schedules`.
@@ -298,20 +319,21 @@ pub async fn create_schedule(
     Json(req): Json<ScheduleRequest>,
 ) -> Response {
     let (user, _) = caller_trigger(&state, &headers).await;
-    respond(
-        StatusCode::CREATED,
-        create(&state, req, user.as_deref()).await,
-    )
+    let created = create(&state, req, user.as_deref()).await;
+    respond_named(&state, StatusCode::CREATED, created).await
 }
 
 /// `PUT /api/schedules/{id}`.
 pub async fn update_schedule(
     _: AdminOnly,
     Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
     AxumPath(id): AxumPath<String>,
     Json(req): Json<ScheduleRequest>,
 ) -> Response {
-    respond(StatusCode::OK, update(&state, &id, req).await)
+    let (user, _) = caller_trigger(&state, &headers).await;
+    let updated = update(&state, &id, req, user.as_deref()).await;
+    respond_named(&state, StatusCode::OK, updated).await
 }
 
 /// `DELETE /api/schedules/{id}`.
@@ -515,6 +537,7 @@ mod tests {
             created_by: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            updated_by: None,
         };
         // 23:30 UTC Sunday is already Monday in Copenhagen.
         let at = Utc.with_ymd_and_hms(2026, 10, 25, 23, 30, 0).unwrap();

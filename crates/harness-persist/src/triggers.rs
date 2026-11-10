@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS harness_triggers (
     updated_at    timestamptz NOT NULL DEFAULT now()
 )";
 
+/// Who last saved a trigger, added after the table shipped.
+const ADD_UPDATED_BY: &str =
+    "ALTER TABLE harness_triggers ADD COLUMN IF NOT EXISTS updated_by text";
+
 const CREATE_ENTRIES: &str = "
 CREATE TABLE IF NOT EXISTS harness_trigger_entries (
     trigger_id text NOT NULL,
@@ -71,7 +75,7 @@ CREATE TABLE IF NOT EXISTS harness_trigger_deliveries (
 const DELIVERY_RETENTION_DAYS: i32 = 7;
 
 const COLUMNS: &str = "id, name, kind, project, workflow, enabled, config, last_fired_at, \
-                       last_run_id, last_error, created_by, created_at, updated_at";
+                       last_run_id, last_error, created_by, created_at, updated_at, updated_by";
 
 /// A trigger (matches `harness_triggers`).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -93,6 +97,9 @@ pub struct RunTrigger {
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Who saved it last: the creator until someone edits it. `None` for a
+    /// trigger last saved before this was recorded, or by no person.
+    pub updated_by: Option<String>,
 }
 
 /// The fields a person sets.
@@ -121,6 +128,7 @@ impl TriggerStore {
 
     pub async fn from_pool(pool: PgPool) -> Result<Self, PersistError> {
         sqlx::query(CREATE_TRIGGERS).execute(&pool).await?;
+        sqlx::query(ADD_UPDATED_BY).execute(&pool).await?;
         sqlx::query(CREATE_ENTRIES).execute(&pool).await?;
         sqlx::query(INDEX_ENTRIES_RUN).execute(&pool).await?;
         sqlx::query(CREATE_DELIVERIES).execute(&pool).await?;
@@ -167,8 +175,9 @@ impl TriggerStore {
         created_by: Option<&str>,
     ) -> Result<RunTrigger, PersistError> {
         let row = sqlx::query_as::<_, RunTrigger>(&format!(
-            "INSERT INTO harness_triggers (id, name, kind, project, workflow, enabled, config, created_by)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            "INSERT INTO harness_triggers
+                (id, name, kind, project, workflow, enabled, config, created_by, updated_by)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
              RETURNING {COLUMNS}"
         ))
         .bind(id)
@@ -184,17 +193,18 @@ impl TriggerStore {
         Ok(row)
     }
 
-    /// Replace a trigger's settings; its kind never changes. `None` when it
-    /// doesn't exist.
+    /// Replace a trigger's settings; its kind never changes. `updated_by` is
+    /// who is saving it. `None` when it doesn't exist.
     pub async fn update(
         &self,
         id: &str,
         input: &TriggerInput,
+        updated_by: Option<&str>,
     ) -> Result<Option<RunTrigger>, PersistError> {
         let row = sqlx::query_as::<_, RunTrigger>(&format!(
             "UPDATE harness_triggers SET
                 name = $2, project = $3, workflow = $4, enabled = $5, config = $6,
-                updated_at = now()
+                updated_at = now(), updated_by = $7
              WHERE id = $1
              RETURNING {COLUMNS}"
         ))
@@ -204,6 +214,7 @@ impl TriggerStore {
         .bind(&input.workflow)
         .bind(input.enabled)
         .bind(Json(&input.config))
+        .bind(updated_by)
         .fetch_optional(&self.pool)
         .await?;
         Ok(row)
@@ -457,14 +468,26 @@ mod tests {
         };
         let store = TriggerStore::connect(&url).await.expect("connect");
         let id = unique("upd");
-        store.create(&id, &input(KIND_LINEAR), None).await.unwrap();
+        let created = store
+            .create(&id, &input(KIND_LINEAR), Some("author"))
+            .await
+            .unwrap();
+        // Until someone edits it, the last to save it is the one who made it.
+        assert_eq!(created.updated_by.as_deref(), Some("author"));
         store.record_fired(&id, "run-9").await.unwrap();
         let mut changed = input(KIND_WEBHOOK);
         changed.name = "renamed".into();
-        let row = store.update(&id, &changed).await.unwrap().unwrap();
+        let row = store
+            .update(&id, &changed, Some("editor"))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(row.kind, KIND_LINEAR, "kind is fixed at creation");
         assert_eq!(row.name, "renamed");
         assert_eq!(row.last_run_id.as_deref(), Some("run-9"));
+        assert_eq!(row.created_by.as_deref(), Some("author"));
+        assert_eq!(row.updated_by.as_deref(), Some("editor"));
+        assert!(row.updated_at >= created.updated_at);
         store.delete(&id).await.unwrap();
     }
 }

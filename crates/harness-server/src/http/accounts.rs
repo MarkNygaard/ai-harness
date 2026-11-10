@@ -409,6 +409,47 @@ pub(crate) async fn authenticated_user(
     }
 }
 
+/// Every member as [`actor_label`] writes them, by user id: for naming who
+/// created or last changed a trigger or schedule, which store only the id.
+/// Empty when the install has no accounts, so nothing gets a name.
+pub(crate) async fn actor_labels(
+    state: &Arc<RunsState>,
+) -> std::collections::HashMap<String, String> {
+    let Ok(users) = state.user_store().await else {
+        return Default::default();
+    };
+    users
+        .list()
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|u| actor_label(Some(&u.name), Some(&u.email)).map(|label| (u.id, label)))
+        .collect()
+}
+
+/// Add `created_by_actor` and `updated_by_actor` beside a serialized row's
+/// `created_by` and `updated_by` ids, for the people [`actor_labels`] knows.
+/// An id it doesn't know (a deleted account) gets no name rather than a guess.
+pub(crate) fn with_actors(
+    mut row: serde_json::Value,
+    labels: &std::collections::HashMap<String, String>,
+) -> serde_json::Value {
+    for (id_key, name_key) in [
+        ("created_by", "created_by_actor"),
+        ("updated_by", "updated_by_actor"),
+    ] {
+        let label = row
+            .get(id_key)
+            .and_then(serde_json::Value::as_str)
+            .and_then(|id| labels.get(id))
+            .cloned();
+        if let Some(label) = label {
+            row[name_key] = serde_json::Value::String(label);
+        }
+    }
+    row
+}
+
 /// How to write a person on a run, for a reader rather than for a join.
 ///
 /// Name and address together because either alone loses something: two
@@ -529,6 +570,28 @@ pub(crate) fn valid_role(role: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_gets_the_names_of_who_made_it_and_who_changed_it() {
+        let people = std::collections::HashMap::from([
+            ("u-mark".to_string(), "Mark <mark@x.dev>".to_string()),
+            ("u-henrik".to_string(), "Henrik <henrik@x.dev>".to_string()),
+        ]);
+        let row = with_actors(
+            serde_json::json!({ "created_by": "u-mark", "updated_by": "u-henrik" }),
+            &people,
+        );
+        assert_eq!(row["created_by_actor"], "Mark <mark@x.dev>");
+        assert_eq!(row["updated_by_actor"], "Henrik <henrik@x.dev>");
+
+        // Nobody recorded, or an account that no longer exists: no name, not a guess.
+        let row = with_actors(
+            serde_json::json!({ "created_by": null, "updated_by": "u-gone" }),
+            &people,
+        );
+        assert!(row.get("created_by_actor").is_none());
+        assert!(row.get("updated_by_actor").is_none());
+    }
 
     /// A run list has to read like people, not like a mail log — and a person
     /// Linear named with no address is still worth showing.

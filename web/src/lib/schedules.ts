@@ -23,6 +23,12 @@ export interface Schedule {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  /** Who saved it last; the creator until someone edits it. */
+  updated_by?: string | null;
+  /** "Name <email>" for `created_by`, when the harness knows the member. */
+  created_by_actor?: string | null;
+  /** "Name <email>" for `updated_by`, when the harness knows the member. */
+  updated_by_actor?: string | null;
 }
 
 export interface ScheduleInput {
