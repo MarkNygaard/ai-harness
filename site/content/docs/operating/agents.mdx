@@ -19,10 +19,29 @@ A node's `provider` selects the agent. Several names route to the same one:
 | `pi`, `kimi`, `omp` | Pi | Three aliases for one agent. Pi's CLI binary is named `omp`, which is why that spelling is accepted. |
 | `cursor` | `cursor-agent` | Ships in the image. The Cursor plan covers Cursor's own models. It does not cover Claude and GPT reached through Cursor. |
 
-Pi's browser tool needs no setup. The image carries a Chromium and the fonts it
-needs, so a workflow that inspects a live page can take a screenshot an agent
-can read. `geo-audit` is the worked example. Without the font package every
-glyph renders as a box, which is why the two ship together.
+### A browser on every step
+
+Every Claude and Pi step can drive a browser, with nothing to configure. The
+image carries a Chromium and the fonts it needs. Pi uses its own browser tool;
+Claude gets Playwright's MCP server pointed at the same Chromium. It is not
+listed on the MCP servers page and a step does not ask for it. (Codex and
+Cursor steps have none yet.)
+
+Each such step is told when to use it: when its work changes or reviews
+something a user sees. It then starts the app's dev server, opens the pages the
+change affects at desktop and mobile widths, reads the console, and saves
+screenshots with a short note on each. If the app cannot start in the container,
+the step says so and carries on. A planning step, or a change with nothing
+visible, skips it.
+
+The screenshots are kept after the run and shown on the run's page under
+**Screenshots**, grouped by page. They are deleted after
+`HARNESS_SCREENSHOT_TTL_DAYS` (7 by default), and the page then says how many
+there were. The dev server command comes from the project's `CLAUDE.md` or
+`AGENTS.md`, so put it there, along with any env vars the app needs to start.
+
+Without the font package every glyph renders as a box, which is why it ships
+with Chromium.
 
 Anything the dispatcher does not recognise falls through to the default agent,
 so an unknown provider name falls back instead of failing. Worth knowing when a

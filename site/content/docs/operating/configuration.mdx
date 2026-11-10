@@ -50,6 +50,7 @@ Caches live on the data volume and are garbage-collected against these caps.
 | `HARNESS_DEPS_CACHE_CAP_GB` | 20 GiB | Shared package-manager cache. |
 | `HARNESS_PROJECT_CACHE_CAP_GB` | 5 GiB per project | Whatever a workflow caches itself via `$HARNESS_CACHE_DIR`. |
 | `HARNESS_GIT_MIRROR_TTL_DAYS` | 30 | Idle time before a bare git mirror is dropped. |
+| `HARNESS_SCREENSHOT_TTL_DAYS` | 7 | How long a run's UI screenshots are kept after it finishes. |
 | `HARNESS_ATTACHMENTS_DIR` | none | Where Linear attachments are staged. |
 | `HARNESS_ATTACHMENTS_TTL_HOURS` | none | How long staged attachments live. |
 

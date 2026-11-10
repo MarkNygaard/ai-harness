@@ -97,13 +97,14 @@ Postgres holds the actual state: projects, credentials, runs, workflows.
 ### Sizing the volume
 
 Runs work in throwaway worktrees, so everything reusable lives beside them under
-the projects directory. Four caches, each separately bounded:
+the projects directory. Four caches, and the runs' screenshots, each separately bounded:
 
 | Directory | Holds | Cap | Default |
 | --- | --- | --- | --- |
 | `.cargo-target/<project>` | Rust build artifacts (`CARGO_TARGET_DIR`), per project | `HARNESS_CARGO_TARGET_CAP_GB` | 50 GiB **per project** |
 | `.deps-cache` | Package-manager downloads, shared by all projects. pnpm, npm/bun/yarn, NuGet, Go modules, uv/pip/poetry, Composer | `HARNESS_DEPS_CACHE_CAP_GB` | 20 GiB |
 | `.git-cache` | Bare mirrors that runs clone from, shared | `HARNESS_GIT_MIRROR_TTL_DAYS` | 30 days idle |
+| `.run-screenshots/<run>` | UI screenshots a run's agents took, shown on the run's page | `HARNESS_SCREENSHOT_TTL_DAYS` | 7 days, then deleted |
 | `.project-cache/<project>` | Whatever a workflow caches itself via `$HARNESS_CACHE_DIR` | `HARNESS_PROJECT_CACHE_CAP_GB` | 5 GiB **per project** |
 
 `0` disables the corresponding sweep. **The defaults add up to far more than a
