@@ -870,3 +870,20 @@ fn a_workflow_can_say_it_runs_epics_itself() {
         .unwrap()
         .contains("handles_epics"));
 }
+
+#[test]
+fn effort_must_be_a_known_level() {
+    for level in crate::model::EFFORT_LEVELS {
+        let yaml = format!("name: e\nnodes:\n  - id: a\n    prompt: x\n    effort: {level}\n");
+        assert!(parse_workflow(&yaml).is_ok(), "{level} should parse");
+    }
+    for bad in ["hgih", "High", "ultra"] {
+        let yaml = format!("name: e\nnodes:\n  - id: a\n    prompt: x\n    effort: {bad}\n");
+        match parse_workflow(&yaml) {
+            Err(DagError::InvalidEffort { node, value }) => {
+                assert_eq!((node.as_str(), value.as_str()), ("a", bad));
+            }
+            other => panic!("`{bad}` should be rejected, got {other:?}"),
+        }
+    }
+}

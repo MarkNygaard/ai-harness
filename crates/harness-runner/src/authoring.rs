@@ -85,6 +85,10 @@ pub struct ValidationResult {
     pub error: Option<String>,
     /// Node summaries when valid (empty otherwise) — drives the canvas preview.
     pub nodes: Vec<NodeSummary>,
+    /// Things that will not stop a run but will not do what they say, such as
+    /// effort on an agent that ignores it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// A request to validate or save a workflow.
@@ -122,6 +126,9 @@ pub struct ProviderInfo {
     /// the editor can say which update unlocks them; never in `models`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unavailable: Vec<UnavailableModel>,
+    /// The agent's CLI takes an effort level. The editor hides the Effort
+    /// field when it does not, rather than offering a setting that is ignored.
+    pub takes_effort: bool,
 }
 
 /// A model held back because the installed CLI predates it.
@@ -208,6 +215,7 @@ fn build_providers(creds: ConnectedCreds, installed: &InstalledClis) -> Vec<Prov
                 label,
                 models,
                 unavailable,
+                takes_effort: harness_dag::provider_takes_effort(Some(id)),
             }
         })
         .collect()
@@ -296,6 +304,7 @@ pub fn validate_workflow(yaml: &str) -> ValidationResult {
                     valid: false,
                     error: Some(e.to_string()),
                     nodes: Vec::new(),
+                    warnings: Vec::new(),
                 };
             }
             if let Err(e) = check_mcp(&wf) {
@@ -303,20 +312,49 @@ pub fn validate_workflow(yaml: &str) -> ValidationResult {
                     valid: false,
                     error: Some(e),
                     nodes: Vec::new(),
+                    warnings: Vec::new(),
                 };
             }
             ValidationResult {
                 valid: true,
                 error: None,
                 nodes: summarize(&wf),
+                warnings: ignored_effort_warnings(&wf),
             }
         }
         Err(e) => ValidationResult {
             valid: false,
             error: Some(e.to_string()),
             nodes: Vec::new(),
+            warnings: Vec::new(),
         },
     }
+}
+
+/// A warning for each step that sets `effort` on an agent that ignores it
+/// (cursor-agent, the direct Anthropic API). Not an error: the step runs, at
+/// the agent's default — which is the surprise worth saying out loud.
+fn ignored_effort_warnings(wf: &Workflow) -> Vec<String> {
+    wf.nodes
+        .iter()
+        .filter(|n| n.effort.is_some() && n.kind.is_ai())
+        .filter_map(|n| {
+            let provider = match &n.kind {
+                NodeKind::Loop(cfg) => cfg.provider.as_deref(),
+                _ => None,
+            }
+            .or(n.provider.as_deref())
+            .or(wf.provider.as_deref());
+            (!harness_dag::provider_takes_effort(provider)).then(|| {
+                format!(
+                    "step `{}` sets effort `{}`, but `{}` has no effort setting; it runs at the agent's default",
+                    n.id,
+                    n.effort.as_deref().unwrap_or_default(),
+                    provider.unwrap_or_default()
+                )
+            })
+        })
+        .collect()
 }
 
 /// List workflows available to a project: bundled defaults plus any under
@@ -1713,6 +1751,44 @@ nodes:
         assert!(cat.providers.iter().any(|p| p.id == "pi"));
         // Bundled commands surface in the catalog.
         assert!(cat.commands.iter().any(|c| c.name == "implement-tasks"));
+    }
+
+    #[test]
+    fn effort_on_an_agent_that_ignores_it_is_a_warning_not_an_error() {
+        let yaml = r#"
+name: e
+provider: claude
+nodes:
+  - id: plan
+    prompt: "plan"
+    effort: max
+  - id: build
+    depends_on: [plan]
+    provider: cursor
+    prompt: "build"
+    effort: high
+  - id: review
+    depends_on: [build]
+    provider: pi
+    prompt: "review"
+    effort: high
+  - id: plain
+    depends_on: [review]
+    provider: cursor
+    prompt: "no effort here"
+"#;
+        let v = validate_workflow(yaml);
+        assert!(v.valid, "{:?}", v.error);
+        assert_eq!(v.warnings.len(), 1, "{:?}", v.warnings);
+        assert!(v.warnings[0].contains("`build`"), "{:?}", v.warnings);
+        assert!(v.warnings[0].contains("`cursor`"), "{:?}", v.warnings);
+    }
+
+    #[test]
+    fn a_misspelt_effort_is_rejected() {
+        let v = validate_workflow("name: e\nnodes:\n  - id: a\n    prompt: x\n    effort: hgih\n");
+        assert!(!v.valid);
+        assert!(v.error.unwrap().contains("hgih"));
     }
 
     #[test]

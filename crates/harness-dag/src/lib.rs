@@ -45,10 +45,10 @@ pub use exec::{
 };
 pub use graph::topological_layers;
 pub use model::{
-    is_valid_mcp_server_name, ApprovalConfig, ContextMode, HookDecision, HookRule,
-    ImprovementsConfig, LinearAction, LoopConfig, McpUse, Node, NodeHooks, NodeKind, ReportAction,
-    ReportStatus, RouteConfig, RouteOption, ScriptRuntime, TriggerRule, Workflow, WorkflowNav,
-    WorkflowReport, WorkflowUi, IMPROVEMENTS_EVERY,
+    is_valid_mcp_server_name, provider_takes_effort, ApprovalConfig, ContextMode, HookDecision,
+    HookRule, ImprovementsConfig, LinearAction, LoopConfig, McpUse, Node, NodeHooks, NodeKind,
+    ReportAction, ReportStatus, RouteConfig, RouteOption, ScriptRuntime, TriggerRule, Workflow,
+    WorkflowNav, WorkflowReport, WorkflowUi, EFFORT_LEVELS, IMPROVEMENTS_EVERY,
 };
 pub use parse::parse_workflow;
 pub use signal::{detect_signal, validate_signal};

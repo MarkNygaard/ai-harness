@@ -392,25 +392,32 @@ export function PropertiesDrawer({
                 </p>
               )}
             </div>
-            <SelectField
-              label="Effort"
-              value={node.effort ?? DEFAULT_SENTINEL}
-              onValueChange={(v) =>
-                set({
-                  effort:
-                    v === DEFAULT_SENTINEL
-                      ? undefined
-                      : (v as EditorNode["effort"]),
-                })
-              }
-            >
-              <SelectItem value={DEFAULT_SENTINEL}>(agent default)</SelectItem>
-              {EFFORT_LEVELS.map((e) => (
-                <SelectItem key={e} value={e}>
-                  {e}
+            {/* Hidden for an agent with no effort setting (cursor-agent, the
+                direct API) — unless the step already sets one, which stays
+                visible so it can be cleared; validation warns about it. */}
+            {(effProviderInfo?.takes_effort !== false || node.effort) && (
+              <SelectField
+                label="Effort"
+                value={node.effort ?? DEFAULT_SENTINEL}
+                onValueChange={(v) =>
+                  set({
+                    effort:
+                      v === DEFAULT_SENTINEL
+                        ? undefined
+                        : (v as EditorNode["effort"]),
+                  })
+                }
+              >
+                <SelectItem value={DEFAULT_SENTINEL}>
+                  (agent default)
                 </SelectItem>
-              ))}
-            </SelectField>
+                {EFFORT_LEVELS.map((e) => (
+                  <SelectItem key={e} value={e}>
+                    {e}
+                  </SelectItem>
+                ))}
+              </SelectField>
+            )}
             {/* A route's model only picks a way out; it gets no tools. */}
             {kind !== "route" && (
               <McpPicker
@@ -566,7 +573,7 @@ function Field({
 const DEFAULT_SENTINEL = "__default__";
 const NONE_SENTINEL = "__none__";
 
-/** Reasoning-effort levels (claude/codex), low → max. */
+/** Reasoning-effort levels (claude, codex, omp), low → max. */
 const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
 /** A labelled shadcn Select (replaces the native `<select>` for a styled popup).

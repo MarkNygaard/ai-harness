@@ -169,6 +169,20 @@ impl<'de> Deserialize<'de> for McpUse {
     }
 }
 
+/// The effort levels a node may set. Each agent that takes effort knows all
+/// of them: Claude's `--effort`, Codex's `model_reasoning_effort` and omp's
+/// `--thinking`.
+pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
+
+/// The providers whose CLI takes an effort level. cursor-agent has no such
+/// setting, so effort on a cursor step is ignored; validation says so.
+pub const EFFORT_PROVIDERS: &[&str] = &["claude", "codex", "pi", "omp", "kimi"];
+
+/// Whether `provider` (absent = the default agent, Claude) takes `effort`.
+pub fn provider_takes_effort(provider: Option<&str>) -> bool {
+    provider.is_none_or(|p| EFFORT_PROVIDERS.contains(&p))
+}
+
 /// Whether `name` can name an MCP server: lowercase letters, digits, `-` and
 /// `_`, starting with a letter or digit, at most 40 long. The name becomes the
 /// prefix of the agent's tool names (`mcp__<name>__<tool>`), so it stays plain.
@@ -416,9 +430,11 @@ pub struct Node {
     /// Model override.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
-    /// Reasoning-effort override for AI bodies (`low`|`medium`|`high`|`xhigh`|
-    /// `max`), passed to the agent CLI (`--effort` for claude/codex). Higher
-    /// effort suits high-leverage steps like planning. `None` → agent default.
+    /// Reasoning-effort override for AI bodies, one of [`EFFORT_LEVELS`],
+    /// passed to the agent CLI: `--effort` for Claude, `model_reasoning_effort`
+    /// for Codex, `--thinking` for omp. cursor-agent has no such setting and
+    /// ignores it. Higher effort suits high-leverage steps like planning.
+    /// `None` → agent default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
     /// Session-handling mode for AI bodies.

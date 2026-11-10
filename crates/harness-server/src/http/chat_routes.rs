@@ -1350,6 +1350,7 @@ mod tests {
             label: id,
             models: models.to_vec(),
             unavailable: Vec::new(),
+            takes_effort: true,
         }
     }
 

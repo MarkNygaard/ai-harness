@@ -215,11 +215,22 @@ impl PiAgent {
     }
 }
 
+/// A step's effort as omp's `--thinking` level. omp's levels include every
+/// one a workflow may set (`low`…`max`, checked at parse time), so the value
+/// passes through unchanged — as the chat path already passes it.
+fn thinking_args(effort: Option<&str>) -> Vec<String> {
+    match effort.map(str::trim).filter(|e| !e.is_empty()) {
+        Some(e) => vec!["--thinking".to_string(), e.to_string()],
+        None => Vec::new(),
+    }
+}
+
 #[async_trait]
 impl PromptAgent for PiAgent {
     async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
         let model = self.resolve_model(req.model.as_deref());
         let mut args = self.build_args(&req.prompt, &model, req.session.as_deref());
+        args.extend(thinking_args(req.effort.as_deref()));
 
         // External MCP servers the step asked for: omp reads them from
         // `<cwd>/.omp/mcp.json`, kept out of git and removed after the step.
@@ -1308,6 +1319,24 @@ mod tests {
             "openai-codex/gpt-5.5"
         );
         assert_eq!(agent.resolve_model(Some("gpt-5.5")), "kimi-code/gpt-5.5");
+    }
+
+    #[test]
+    fn effort_reaches_omp_as_its_thinking_level() {
+        assert_eq!(thinking_args(Some("high")), ["--thinking", "high"]);
+        assert_eq!(thinking_args(Some("max")), ["--thinking", "max"]);
+        assert!(thinking_args(None).is_empty());
+        assert!(thinking_args(Some("")).is_empty());
+        // Every level a workflow may set is one omp knows.
+        let omp_levels = [
+            "off", "minimal", "low", "medium", "high", "xhigh", "max", "auto",
+        ];
+        for level in harness_dag::EFFORT_LEVELS {
+            assert!(
+                omp_levels.contains(level),
+                "omp has no thinking level `{level}`"
+            );
+        }
     }
 
     #[test]
