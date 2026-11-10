@@ -439,6 +439,68 @@ fn grafana(env: &HashMap<String, String>) -> Option<Value> {
     }))
 }
 
+/// The name the always-on browser server goes by in a Claude step's MCP
+/// config. Not a [`BUILTIN_SERVERS`] entry: nobody asks for it with `mcp:`,
+/// it is not listed anywhere a person picks servers, and the registry refuses
+/// the name so a configured server can never stand in for it.
+pub const BROWSER_SERVER: &str = "browser";
+
+/// Where the image's Chromium is, or `None` when there is no browser to drive
+/// (a developer machine, an image built without it). `CHROME_PATH` is what the
+/// image sets; `/usr/bin/chromium` is where Debian puts it.
+pub fn chromium_path() -> Option<std::path::PathBuf> {
+    let candidate = std::env::var("CHROME_PATH")
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| "/usr/bin/chromium".into());
+    let path = std::path::PathBuf::from(candidate);
+    path.is_file().then_some(path)
+}
+
+/// The browser every Claude step gets: Playwright's MCP server driving the
+/// image's own Chromium, headless, with a throwaway profile. Screenshots it
+/// saves without a path land in `screenshots_dir`, which the server keeps
+/// after the run.
+///
+/// omp steps are not given this: omp has its own browser tool on the same
+/// Chromium.
+pub fn browser_config(chromium: &std::path::Path, screenshots_dir: &std::path::Path) -> Value {
+    let command = std::env::var("HARNESS_BROWSER_MCP")
+        .ok()
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "playwright-mcp".into());
+    json!({
+        "type": "stdio",
+        "command": command,
+        "args": [
+            "--headless",
+            // In memory: nothing from one step's session leaks into the next.
+            "--isolated",
+            // A container has no user namespaces for Chromium's sandbox; the
+            // image's own CHROMIUM_FLAGS says the same.
+            "--no-sandbox",
+            "--executable-path",
+            chromium.to_string_lossy(),
+            "--output-dir",
+            screenshots_dir.to_string_lossy(),
+        ],
+        "env": {
+            // It must never fetch a browser of its own at run time.
+            "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD": "1",
+        }
+    })
+}
+
+/// Add the browser to a step's MCP config document, creating the document when
+/// the step asked for no other server. A step's own servers are kept.
+pub fn with_browser(config: Option<Value>, browser: Value) -> Value {
+    let mut doc = config.unwrap_or_else(|| json!({ "mcpServers": {} }));
+    if let Some(servers) = doc.get_mut("mcpServers").and_then(Value::as_object_mut) {
+        servers.insert(BROWSER_SERVER.to_string(), browser);
+    }
+    doc
+}
+
 /// One requested server's config, or `None` when the project doesn't have it.
 fn config_for(name: &str, env: &HashMap<String, String>) -> Option<Value> {
     match name {
@@ -791,6 +853,45 @@ mod tests {
         // A server removed from the registry is unknown again.
         set_catalog(HashMap::new());
         assert!(check_uses("s", None, &[McpUse::server("m365")]).is_err());
+    }
+
+    /// The browser drives the image's Chromium, headless and throwaway, and
+    /// writes screenshots where the server keeps them.
+    #[test]
+    fn the_browser_drives_the_images_chromium_and_saves_to_the_run() {
+        let cfg = browser_config(
+            std::path::Path::new("/usr/bin/chromium"),
+            std::path::Path::new("/w/.harness/artifacts/screenshots"),
+        );
+        assert_eq!(cfg["type"], "stdio");
+        let args: Vec<&str> = cfg["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a.as_str().unwrap())
+            .collect();
+        for flag in ["--headless", "--isolated", "--no-sandbox"] {
+            assert!(args.contains(&flag), "{flag} missing: {args:?}");
+        }
+        let after = |flag: &str| args[args.iter().position(|a| *a == flag).unwrap() + 1];
+        assert_eq!(after("--executable-path"), "/usr/bin/chromium");
+        assert_eq!(after("--output-dir"), "/w/.harness/artifacts/screenshots");
+        assert_eq!(cfg["env"]["PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"], "1");
+    }
+
+    /// Added beside the step's own servers, and never offered to a person.
+    #[test]
+    fn the_browser_joins_a_steps_servers_and_is_not_listed() {
+        let own = json!({ "mcpServers": { "sentry": { "type": "stdio" } } });
+        let doc = with_browser(Some(own), json!({ "type": "stdio" }));
+        assert!(doc["mcpServers"]["sentry"].is_object());
+        assert!(doc["mcpServers"][BROWSER_SERVER].is_object());
+
+        let alone = with_browser(None, json!({ "type": "stdio" }));
+        assert_eq!(alone["mcpServers"].as_object().unwrap().len(), 1);
+
+        assert!(!is_builtin(BROWSER_SERVER));
+        assert!(!known_servers().contains(&BROWSER_SERVER.to_string()));
     }
 }
 

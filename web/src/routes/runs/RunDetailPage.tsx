@@ -19,10 +19,12 @@ import { Markdown } from "@/components/Markdown";
 import { RunFlow } from "@/components/runflow/RunFlow";
 import { TaskOverview } from "@/components/runflow/TaskOverview";
 import { WorkflowReport } from "@/components/report/WorkflowReport";
+import { RunScreenshots } from "@/components/runs/RunScreenshots";
 import { useCancelRun, useRerunRun, useRunView } from "@/lib/runs";
+import { useRunScreenshots } from "@/lib/screenshots";
 import { parseInitiator, sourceLabel } from "@/lib/initiator";
 import { parseWorkflowVerdict, useWorkflowUi } from "@/lib/report";
-type Panel = "graph" | "overview" | "report";
+type Panel = "graph" | "overview" | "report" | "screenshots";
 
 export function RunDetailPage() {
   const { id = null } = useParams();
@@ -41,6 +43,12 @@ export function RunDetailPage() {
         : null,
     [run.nodes, declaredReport],
   );
+
+  // Kept as the run ends, so the tab appears once there is something to show,
+  // or something that was shown and has since expired.
+  const shots = useRunScreenshots(id, run.live).data;
+  const hasShots =
+    !!shots && (shots.screenshots.length > 0 || shots.expired != null);
 
   const done = run.nodes.filter((n) =>
     ["success", "failed", "skipped", "cancelled"].includes(n.status),
@@ -173,6 +181,13 @@ export function RunDetailPage() {
                 onClick={() => setPanel("report")}
               />
             )}
+            {hasShots && (
+              <PanelTab
+                label="Screenshots"
+                active={panel === "screenshots"}
+                onClick={() => setPanel("screenshots")}
+              />
+            )}
           </div>
         </div>
 
@@ -185,6 +200,10 @@ export function RunDetailPage() {
             <ReactFlowProvider key={id ?? "none"}>
               <RunFlow nodes={run.nodes} />
             </ReactFlowProvider>
+          ) : panel === "screenshots" && id && shots && hasShots ? (
+            <div className="h-full overflow-y-auto p-6">
+              <RunScreenshots runId={id} data={shots} />
+            </div>
           ) : panel === "report" && report && declaredReport ? (
             <div className="h-full overflow-y-auto p-6">
               <WorkflowReport

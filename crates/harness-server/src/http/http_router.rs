@@ -60,6 +60,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     schedules_routes::spawn_scheduler(runs_state.clone());
     // Bound the shared cargo build cache (size-gated) so it can't fill the disk.
     runs_routes::spawn_cache_sweeper(runs_state.clone());
+    super::run_screenshots::spawn_sweeper(runs_state.clone());
     // Launch runs that are waiting for a concurrency slot. A finishing run
     // dispatches its own successor; this is the backstop, and the thing that
     // picks the queue back up after a restart.
@@ -277,6 +278,16 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/runs/{id}/activity",
             get(runs_routes::get_run_activity),
+        )
+        // Screenshots the run's agents took of the UI it changed, kept for
+        // `HARNESS_SCREENSHOT_TTL_DAYS`.
+        .route(
+            "/api/runs/{id}/screenshots",
+            get(super::run_screenshots::list_screenshots),
+        )
+        .route(
+            "/api/runs/{id}/screenshots/{file}",
+            get(super::run_screenshots::get_screenshot),
         )
         // ── Report per-finding triage state (built / issued / ignored) ───────
         // One unified store, served at the generic `/findings` for every report

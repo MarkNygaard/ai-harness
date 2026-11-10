@@ -38,7 +38,7 @@ pub use defaults::{
     IMPROVEMENTS_WORKFLOW, INTERNAL_WORKFLOWS,
 };
 pub use dispatch::DispatchAgent;
-pub use local::{LocalRunner, Shell, PROJECT_FACTS_ENV};
+pub use local::{LocalRunner, Shell, PROJECT_FACTS_ENV, SCREENSHOTS_DIR, SCREENSHOTS_MANIFEST};
 pub use pi::{parse_omp_stream, ParsedOmp, PiAgent};
 pub use registry::build_agent_registry;
 pub use run::{execute_run, parse_sandbox, print_report, RunOptions};

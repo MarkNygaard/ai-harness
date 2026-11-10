@@ -2805,7 +2805,10 @@ async fn execute_run_task(
     } else {
         Arc::new(EchoAgent)
     };
-    let runner = LocalRunner::new(workspace, command_dirs, agent).with_env_vars(run_env);
+    // A browser for every agent step, on the image's Chromium when it has one.
+    let runner = LocalRunner::new(workspace, command_dirs, agent)
+        .with_env_vars(run_env)
+        .with_browser(harness_runner::mcp_servers::chromium_path());
 
     // The task spec feeds `$ARGUMENTS`/`$USER_MESSAGE`/`$TASK_DESCRIPTION`; the
     // title is exposed separately as `$TASK_TITLE` (option 1).
@@ -2993,6 +2996,22 @@ async fn execute_run_task(
                 continue;
             };
             node.artifact_content = read_declared_artifact(&artifacts, rel);
+        }
+    }
+    // Screenshots the agents took, out of the worktree before it goes. Kept
+    // whatever the outcome: a failed run's screenshots show what it got to.
+    {
+        let artifacts = artifacts.clone();
+        let root = super::run_screenshots::root(&state.projects_dir);
+        let id = run_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            super::run_screenshots::keep(&artifacts, &root, &id)
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(run_id = %run_id, "kept {n} screenshot(s)"),
+            Err(e) => tracing::warn!(run_id = %run_id, "keeping screenshots: {e}"),
         }
     }
     // Final authoritative snapshot (reconciles nodes + sets terminal status).

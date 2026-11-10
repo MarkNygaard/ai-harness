@@ -51,9 +51,14 @@ pub(crate) const CALLBACK_PATH: &str = "/api/mcp-servers/oauth/callback";
 /// The Settings page the callback returns to.
 const UI_PATH: &str = "/settings/mcp-servers";
 
-/// Names a registry server may not take: the built-ins, and the gateway's own
-/// `session` route, which shares the `/api/run/mcp/` prefix.
-const RESERVED_NAMES: &[&str] = &["session", "oauth"];
+/// Names a registry server may not take besides the built-ins: the gateway's
+/// own `session` and `oauth` routes, which share the `/api/run/mcp/` prefix,
+/// and the browser every Claude step is given, which is never listed.
+const RESERVED_NAMES: &[&str] = &[
+    "session",
+    "oauth",
+    harness_runner::mcp_servers::BROWSER_SERVER,
+];
 
 /// A token this close to expiry is refreshed before a step uses it.
 const REFRESH_MARGIN_MS: i64 = 60_000;

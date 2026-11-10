@@ -48,6 +48,7 @@ pub(crate) mod rate_limit;
 pub(crate) mod run_grants;
 pub(crate) mod run_linear_routes;
 pub(crate) mod run_s3_routes;
+pub(crate) mod run_screenshots;
 pub(crate) mod runs_routes;
 pub(crate) mod schedules_routes;
 pub(crate) mod settings_routes;
