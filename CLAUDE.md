@@ -177,6 +177,15 @@ tests are the source of truth.*
   `PUPPETEER_EXECUTABLE_PATH` point at it and `CHROMIUM_FLAGS` carries
   `--no-sandbox --disable-dev-shm-usage`, which is what a container needs. It is
   ~400 MB of the image — an all-backend install can drop that layer.
+  **Claude steps** get the same Chromium through Playwright's MCP server
+  (`playwright-mcp`, pinned in the Dockerfile), added to every Claude step's
+  `--mcp-config` by `LocalRunner::run_prompt` (`mcp_servers::browser_config`).
+  It is hidden on purpose: not a `BUILTIN_SERVERS` entry, never in the MCP
+  catalog, and its name is reserved in the registry. Every step with a browser
+  gets one shared instruction (`browser_preamble`) to screenshot UI changes into
+  `$ARTIFACTS_DIR/screenshots/`; the server keeps that folder after the run
+  (`http/run_screenshots.rs`) for `HARNESS_SCREENSHOT_TTL_DAYS`. Do not add
+  per-workflow screenshot prose.
 - **Step MCP servers (`mcp:`)** — Sentry/Grafana are built in
   (`harness-runner/src/mcp_servers.rs`); anything else is a registry row
   (`harness-persist` `McpServerStore`, secrets in `CredentialStore` under

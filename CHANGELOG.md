@@ -51,6 +51,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checked out by a bash step, and its dependencies are installed, before
   anything reads the code.
 
+- **Every Claude step has a browser, and runs show screenshots of the UI they
+  changed.** Claude steps now get Playwright's MCP server (`@playwright/mcp`
+  0.0.85, pinned in the image) on the image's Chromium, always and without
+  configuration; it is not listed on the MCP servers page. Pi steps keep their
+  own browser tool. Every step with a browser is told to use it when its work
+  changes or reviews something a user sees: start the dev server, check the
+  affected pages at desktop and mobile widths, read the console, and save
+  screenshots with a note. If the app cannot start, the step says so and goes
+  on. The server keeps the screenshots after the run (at most 40 images / 50 MB
+  per run) and shows them on the run's page under **Screenshots**. They are
+  deleted after `HARNESS_SCREENSHOT_TTL_DAYS` (default 7, `0` keeps them), and
+  the page then says how many there were.
 - **A missing Linear status is caught before a run starts.** A `linear:` step
   names its status (`move_state: In Review`), and a team without it used to
   fail that step only when it ran: for `In Review` or `Done`, after the pull

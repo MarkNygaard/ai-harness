@@ -2995,6 +2995,22 @@ async fn execute_run_task(
             node.artifact_content = read_declared_artifact(&artifacts, rel);
         }
     }
+    // Screenshots the agents took, out of the worktree before it goes. Kept
+    // whatever the outcome: a failed run's screenshots show what it got to.
+    {
+        let artifacts = artifacts.clone();
+        let root = super::run_screenshots::root(&state.projects_dir);
+        let id = run_id.clone();
+        match tokio::task::spawn_blocking(move || {
+            super::run_screenshots::keep(&artifacts, &root, &id)
+        })
+        .await
+        {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(run_id = %run_id, "kept {n} screenshot(s)"),
+            Err(e) => tracing::warn!(run_id = %run_id, "keeping screenshots: {e}"),
+        }
+    }
     // Final authoritative snapshot (reconciles nodes + sets terminal status).
     if let Ok(report) = &report {
         if let Ok(store) = state.store().await {

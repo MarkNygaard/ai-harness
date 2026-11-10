@@ -148,6 +148,19 @@ RUN npm install -g --prefix /opt/sentry-mcp "@sentry/mcp-server@${SENTRY_MCP_VER
     && chmod -R a+rX /opt/sentry-mcp \
     && ln -sf /opt/sentry-mcp/bin/sentry-mcp /usr/local/bin/sentry-mcp
 
+# Playwright's MCP server (`playwright-mcp`): the browser every Claude step is
+# given, driving the Chromium installed further down (omp uses its own browser
+# tool on the same Chromium). Pinned like sentry-mcp. Playwright would download
+# its own browsers on install; the harness points it at the image's Chromium
+# with --executable-path instead (harness-runner/src/mcp_servers.rs), so the
+# download is skipped and ~300 MB stays out of the image.
+ARG PLAYWRIGHT_MCP_VERSION=0.0.85
+RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
+    npm install -g --prefix /opt/playwright-mcp "@playwright/mcp@${PLAYWRIGHT_MCP_VERSION}" \
+    && npm cache clean --force \
+    && chmod -R a+rX /opt/playwright-mcp \
+    && ln -sf /opt/playwright-mcp/bin/playwright-mcp /usr/local/bin/playwright-mcp
+
 # Grafana's MCP server (`mcp-grafana`), for `mcp: [grafana]` steps and the
 # chat. A single Go binary from the GitHub release, pinned by version AND
 # checksum (the release's own checksums file) — it runs with the install's

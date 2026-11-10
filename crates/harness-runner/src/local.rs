@@ -339,7 +339,7 @@ impl LocalRunner {
         // them and the step's agent can take them, otherwise said in the
         // prompt so the agent doesn't hunt for tools that aren't there.
         let mcp_supported = crate::mcp_servers::provider_supports_mcp(req.provider);
-        let (mcp_config, mcp_missing, mcp_session) = if !mcp_supported {
+        let (mut mcp_config, mcp_missing, mcp_session) = if !mcp_supported {
             (
                 None,
                 req.mcp.iter().map(|u| u.server.clone()).collect(),
@@ -353,6 +353,33 @@ impl LocalRunner {
         };
         let prompt = match crate::mcp_servers::unavailable_note(&mcp_missing, mcp_supported) {
             Some(note) => format!("{note}\n\n{prompt}"),
+            None => prompt,
+        };
+        // A browser on every agent step that can drive one, so UI work is
+        // looked at and not only typechecked: Claude through Playwright's MCP
+        // server, omp through its own browser tool. Not something a step asks
+        // for; there is nothing to configure.
+        let screenshots = req
+            .vars
+            .get("ARTIFACTS_DIR")
+            .filter(|d| !d.is_empty())
+            .map(|d| PathBuf::from(d).join(SCREENSHOTS_DIR));
+        let has_browser = match &screenshots {
+            Some(dir) if is_claude(req.provider) => match crate::mcp_servers::browser_config(dir) {
+                Some(browser) => {
+                    mcp_config = Some(crate::mcp_servers::with_browser(mcp_config.take(), browser));
+                    true
+                }
+                None => false,
+            },
+            Some(_) if is_omp(req.provider) => crate::mcp_servers::chromium_path().is_some(),
+            _ => false,
+        };
+        let prompt = match screenshots.filter(|_| has_browser) {
+            Some(dir) => {
+                let _ = std::fs::create_dir_all(&dir);
+                format!("{}\n\n{prompt}", browser_preamble(&dir))
+            }
             None => prompt,
         };
         // Stays last: a schema directive the agent reads before the task it
@@ -511,6 +538,52 @@ pub const PROJECT_FACTS_ENV: &str = "HARNESS_PROJECT_FACTS";
 
 /// Bounds on the facts block. It is read by every step of every run, so it
 /// stays a short list, not a manual.
+/// Where, under the run's artifacts, screenshots go. The server keeps this
+/// folder after the run and shows it on the run's page.
+pub const SCREENSHOTS_DIR: &str = "screenshots";
+
+/// The manifest the agents keep beside their screenshots.
+pub const SCREENSHOTS_MANIFEST: &str = "screenshots.json";
+
+/// Claude Code, which is what a step with no provider runs.
+fn is_claude(provider: Option<&str>) -> bool {
+    provider.is_none_or(|p| p == "claude")
+}
+
+/// omp, under any of the names a step can give it.
+fn is_omp(provider: Option<&str>) -> bool {
+    matches!(provider, Some("pi" | "omp" | "kimi"))
+}
+
+/// What a step with a browser is told about it. Conditional on the work: a
+/// planning step reads, and a change with nothing visible needs no screenshot.
+fn browser_preamble(dir: &std::path::Path) -> String {
+    let dir = dir.display();
+    format!(
+        "## Browser\n\n\
+         A headless browser (Chromium) is available in this step. Use it when your \
+         work changes or reviews something a user sees: a page, a component, \
+         styling or copy.\n\n\
+         1. Start the app's dev server in the background (the command is in \
+         CLAUDE.md / AGENTS.md, or package.json) and wait until it answers.\n\
+         2. Open each page the change affects. Check it at desktop (1440x900) and \
+         mobile (390x844) widths, and read the console for errors. Fix what you \
+         find, if fixing is your job.\n\
+         3. Save a screenshot of each, giving the full path as the file name: \
+         `{dir}/<page>-<desktop|mobile>.png` (a bare name is saved in the \
+         working directory, where it is lost). Add an entry for each to \
+         `{dir}/{SCREENSHOTS_MANIFEST}`: a JSON array of objects with `file`, \
+         `page`, `viewport` and `note`, where `note` says what the screenshot \
+         shows. Add to the array if it already exists; an earlier step may have \
+         written to it, and a later screenshot of the same page and viewport \
+         replaces the earlier entry.\n\
+         4. Stop the dev server when you are done.\n\n\
+         If the app cannot start here (a missing credential, a service it needs), \
+         say so in your output and carry on: that is not a reason to fail the \
+         step. Skip all of this for work that changes nothing a user sees."
+    )
+}
+
 const FACTS_MAX: usize = 12;
 const FACT_MAX_CHARS: usize = 300;
 
@@ -657,6 +730,24 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    /// The browser instruction says when to use it, where screenshots go, and
+    /// that an app which will not start is not a failure.
+    #[test]
+    fn the_browser_instruction_is_conditional_and_names_the_folder() {
+        let text = browser_preamble(Path::new("/w/.harness/artifacts/screenshots"));
+        assert!(text.contains("when your work changes or reviews something a user sees"));
+        assert!(text.contains("`/w/.harness/artifacts/screenshots/screenshots.json`"));
+        // Playwright saves a bare file name relative to its working directory,
+        // not to --output-dir, so the instruction must ask for the full path.
+        assert!(text.contains("`/w/.harness/artifacts/screenshots/<page>-<desktop|mobile>.png`"));
+        assert!(text.contains("not a reason to fail the step"));
+        assert!(text.contains("Skip all of this for work that changes nothing a user sees"));
+
+        assert!(is_claude(None) && is_claude(Some("claude")));
+        assert!(!is_claude(Some("pi")) && !is_claude(Some("codex")));
+        assert!(is_omp(Some("pi")) && is_omp(Some("kimi")) && !is_omp(None));
+    }
 
     /// Records the last prompt it received and returns a canned result.
     #[derive(Default)]
