@@ -50,6 +50,12 @@ pub enum DagError {
     )]
     InvalidMcpServerName { node: String, name: String },
 
+    /// A node's `effort` is not one of [`crate::model::EFFORT_LEVELS`]. Checked
+    /// here because the CLIs take it as given: a typo reached
+    /// `claude --effort` as it was written.
+    #[error("node `{node}` has effort `{value}`; expected one of: low, medium, high, xhigh, max")]
+    InvalidEffort { node: String, value: String },
+
     /// A `script` node is missing its required `runtime`.
     #[error("script node `{0}` is missing `runtime` (expected `bun` or `uv`)")]
     ScriptMissingRuntime(String),

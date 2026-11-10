@@ -74,9 +74,13 @@ implement with a cheap one.
   command: implement-tasks
 ```
 
-`effort` takes `low` | `medium` | `high` | `xhigh` | `max` and is passed to the
-agent CLI. Spend it where judgement matters, on planning and architecture, and
-not on mechanical steps.
+`effort` takes `low` | `medium` | `high` | `xhigh` | `max`. Any other value is
+rejected when the workflow is saved. It is passed to the agent CLI: as
+`--effort` to Claude Code, as `model_reasoning_effort` to Codex, and as
+`--thinking` to Pi. Cursor and the direct Anthropic API have no effort setting,
+so the editor hides the field for them, and a workflow that sets it anyway
+validates with a warning and runs at the agent's default. Spend it where
+judgement matters, on planning and architecture, and not on mechanical steps.
 
 **Prefer a family alias over a dated model id.** `model: opus` keeps working
 when the vendor ships a new version. A pinned id like `claude-opus-4-1-20250805`

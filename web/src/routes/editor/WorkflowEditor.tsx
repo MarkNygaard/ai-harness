@@ -488,6 +488,7 @@ function Editor() {
         valid={validate.data?.valid}
         error={validate.data?.error ?? null}
         count={validate.data?.nodes.length}
+        warnings={validate.data?.warnings ?? []}
       />
       {source.data?.has_bundled_default && source.data.source === "project" && (
         <Button
@@ -718,16 +719,32 @@ function ValidationStatus({
   valid,
   error,
   count,
+  warnings,
 }: {
   pending: boolean;
   valid: boolean | undefined;
   error: string | null;
   count: number | undefined;
+  warnings: string[];
 }) {
   if (pending) {
     return (
       <span className="flex items-center gap-1 text-xs text-muted-foreground">
         <Loader2 className="h-3.5 w-3.5 animate-spin" /> validating…
+      </span>
+    );
+  }
+  if (valid === true && warnings.length > 0) {
+    // Runs, but something in it will not do what it says (effort on an
+    // agent that ignores it). The text says what; hover lists each one.
+    return (
+      <span
+        className="flex items-center gap-1 truncate text-xs text-status-pending"
+        title={warnings.join("\n")}
+      >
+        <TriangleAlert className="h-3.5 w-3.5 shrink-0" /> valid · {count} step
+        {count === 1 ? "" : "s"} · {warnings.length} warning
+        {warnings.length === 1 ? "" : "s"}
       </span>
     );
   }

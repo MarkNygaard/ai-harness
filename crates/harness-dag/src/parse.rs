@@ -327,6 +327,14 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
                 name: u.server.clone(),
             });
         }
+        if let Some(effort) = &parts.effort {
+            if !crate::model::EFFORT_LEVELS.contains(&effort.as_str()) {
+                return Err(DagError::InvalidEffort {
+                    node: id,
+                    value: effort.clone(),
+                });
+            }
+        }
         nodes.push(Node {
             id,
             depends_on: parts.depends_on,

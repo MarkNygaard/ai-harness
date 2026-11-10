@@ -144,6 +144,8 @@ export interface ValidationResult {
   valid: boolean;
   error: string | null;
   nodes: NodeSummary[];
+  /** Runs, but will not do what it says (e.g. effort an agent ignores). */
+  warnings?: string[];
 }
 
 export interface NodeKindInfo {
@@ -159,6 +161,8 @@ export interface ProviderInfo {
   models: string[];
   /** Models the installed CLI is too old for; never also in `models`. */
   unavailable?: UnavailableModel[];
+  /** The agent takes an effort level; the editor hides Effort when not. */
+  takes_effort?: boolean;
 }
 
 export interface UnavailableModel {
