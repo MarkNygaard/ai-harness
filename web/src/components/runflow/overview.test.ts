@@ -11,6 +11,8 @@ function node(
   return {
     id,
     depends_on: [],
+    routes: [],
+    when: null,
     status: "success",
     provider: model ? "claude" : null,
     model,

@@ -1956,6 +1956,8 @@ mod tests {
             category: None,
             artifact: None,
             linear_comment: false,
+            routes: vec![],
+            when: None,
         }
     }
 

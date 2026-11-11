@@ -302,6 +302,14 @@ pub struct NodeMeta {
     /// an edit to the workflow mid-run can't change what gets posted.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub linear_comment: bool,
+    /// A route node's exit names, in declaration order, so the run graph can
+    /// draw one exit per route as the editor does. Empty for other nodes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub routes: Vec<String>,
+    /// The node's `when:`, which says which route exit(s) it is reached
+    /// through (`$kind.output.route == 'epic'`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<String>,
 }
 
 /// The result of driving a workflow to completion.
@@ -400,6 +408,11 @@ pub async fn run_workflow_streaming<R: NodeRunner>(
             category: n.category.clone(),
             artifact: n.artifact.clone(),
             linear_comment: n.linear_comment,
+            routes: match &n.kind {
+                NodeKind::Route(cfg) => cfg.names().into_iter().map(str::to_string).collect(),
+                _ => Vec::new(),
+            },
+            when: n.when.clone(),
         })
         .collect();
     emit(
