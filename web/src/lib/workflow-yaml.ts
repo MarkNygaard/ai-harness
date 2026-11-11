@@ -13,6 +13,7 @@ import type {
   NodeKindId,
   PrebuiltStep,
   ReportAction,
+  ReportApply,
   ReportLayout,
   ReportStatus,
   WorkflowNav,
@@ -137,10 +138,26 @@ function uiToDoc(
             ui.report.layout && ui.report.layout !== "list"
               ? ui.report.layout
               : undefined,
+          apply: ui.report.apply?.workflow
+            ? clean({
+                workflow: ui.report.apply.workflow,
+                label: ui.report.apply.label || undefined,
+              })
+            : undefined,
         })
       : undefined;
   const out = clean({ nav, report });
   return Object.keys(out).length ? out : undefined;
+}
+
+function applyFromRaw(raw: unknown): ReportApply | null {
+  if (!raw || typeof raw !== "object") return null;
+  const a = raw as Record<string, unknown>;
+  if (typeof a.workflow !== "string") return null;
+  return {
+    workflow: a.workflow,
+    label: typeof a.label === "string" ? a.label : null,
+  };
 }
 
 /** Parse the `ui` block from raw YAML into the structured editor shape. */
@@ -165,6 +182,7 @@ function uiFromRaw(raw: unknown): WorkflowUi | undefined {
           : undefined,
         status: repRaw.status as ReportStatus | undefined,
         layout: repRaw.layout as ReportLayout | undefined,
+        apply: applyFromRaw(repRaw.apply),
       }
     : null;
   if (!nav && !report) return undefined;

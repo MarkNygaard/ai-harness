@@ -216,6 +216,8 @@ export function RunDetailPage() {
                 actions={declaredReport.actions ?? []}
                 status={declaredReport.status ?? "none"}
                 layout={declaredReport.layout ?? "list"}
+                apply={declaredReport.apply ?? null}
+                runTitle={run.title ?? null}
               />
             </div>
           ) : (

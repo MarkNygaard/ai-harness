@@ -147,6 +147,60 @@ impl FindingStateStore {
         Ok(row)
     }
 
+    /// Record the same state for many findings at once — "approve all shown"
+    /// on a report with hundreds of rows, or marking what an apply run took.
+    /// One statement, so it lands all or nothing. Returns how many rows it
+    /// wrote.
+    pub async fn set_many(
+        &self,
+        run_id: &str,
+        finding_keys: &[String],
+        input: &FindingStateInput,
+    ) -> Result<u64, PersistError> {
+        if finding_keys.is_empty() {
+            return Ok(0);
+        }
+        let result = sqlx::query(
+            "INSERT INTO harness_finding_state (
+                run_id, finding_key, action, ref_run_id, issue_identifier, issue_url,
+                created_at, updated_at
+            )
+            SELECT $1, k, $3, $4, $5, $6, now(), now()
+            FROM UNNEST($2::text[]) AS k
+            ON CONFLICT (run_id, finding_key) DO UPDATE SET
+                action           = excluded.action,
+                ref_run_id       = excluded.ref_run_id,
+                issue_identifier = excluded.issue_identifier,
+                issue_url        = excluded.issue_url,
+                updated_at       = now()",
+        )
+        .bind(run_id)
+        .bind(finding_keys)
+        .bind(&input.action)
+        .bind(input.ref_run_id.as_deref())
+        .bind(input.issue_identifier.as_deref())
+        .bind(input.issue_url.as_deref())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
+    /// Forget many findings' state at once. Returns how many were removed.
+    pub async fn clear_many(
+        &self,
+        run_id: &str,
+        finding_keys: &[String],
+    ) -> Result<u64, PersistError> {
+        let result = sqlx::query(
+            "DELETE FROM harness_finding_state WHERE run_id = $1 AND finding_key = ANY($2)",
+        )
+        .bind(run_id)
+        .bind(finding_keys)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     /// Forget a finding's state (the "Rebuild" / "Unignore" action — restores
     /// the buttons). Returns `true` if a row was removed.
     pub async fn clear(&self, run_id: &str, finding_key: &str) -> Result<bool, PersistError> {
@@ -215,6 +269,43 @@ mod tests {
 
         assert!(store.clear(&run_id, key).await.unwrap());
         assert!(!store.clear(&run_id, key).await.unwrap());
+        assert!(store.list_for_run(&run_id).await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn many_findings_are_decided_and_undone_together() {
+        let Some(url) = db_url() else {
+            eprintln!("skipping: HARNESS_DATABASE_URL not set");
+            return;
+        };
+        let store = FindingStateStore::connect(&url).await.expect("connect");
+        let run_id = format!(
+            "report-run-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap()
+        );
+        let keys: Vec<String> = ["id::a", "id::b", "id::c"].map(String::from).to_vec();
+        let approve = FindingStateInput {
+            action: "approved".into(),
+            ..Default::default()
+        };
+        assert_eq!(store.set_many(&run_id, &keys, &approve).await.unwrap(), 3);
+        assert_eq!(store.set_many(&run_id, &[], &approve).await.unwrap(), 0);
+
+        // An apply run takes two of them, and says which run it was.
+        let applied = FindingStateInput {
+            action: "applied".into(),
+            ref_run_id: Some("prune-1".into()),
+            ..Default::default()
+        };
+        store.set_many(&run_id, &keys[..2], &applied).await.unwrap();
+        let list = store.list_for_run(&run_id).await.unwrap();
+        let by_key = |k: &str| list.iter().find(|s| s.finding_key == k).unwrap();
+        assert_eq!(by_key("id::a").action, "applied");
+        assert_eq!(by_key("id::a").ref_run_id.as_deref(), Some("prune-1"));
+        assert_eq!(by_key("id::c").action, "approved");
+
+        assert_eq!(store.clear_many(&run_id, &keys).await.unwrap(), 3);
         assert!(store.list_for_run(&run_id).await.unwrap().is_empty());
     }
 }

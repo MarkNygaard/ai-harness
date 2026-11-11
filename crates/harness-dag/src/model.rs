@@ -580,6 +580,21 @@ pub struct WorkflowReport {
     /// one sortable row per finding.
     #[serde(default, skip_serializing_if = "ReportLayout::is_list")]
     pub layout: ReportLayout,
+    /// What acts on the approved findings: an "Apply" button that starts this
+    /// workflow with them. Pairs with the `approve` action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apply: Option<ReportApply>,
+}
+
+/// A report's apply step: the workflow its "Apply" button starts, in the same
+/// project, with the approved findings as its input (`$ARGUMENTS`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportApply {
+    /// The workflow to start.
+    pub workflow: String,
+    /// The button's label (e.g. "Open PRs"); default "Apply".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// How a report lays out its findings.
@@ -610,6 +625,9 @@ pub enum ReportAction {
     Issue,
     /// "Ignore" — dim/skip the finding.
     Ignore,
+    /// "Approve" / "Reject" — decide on what the finding proposes; the
+    /// report's `apply` workflow then acts on the approved ones.
+    Approve,
 }
 
 /// The per-item status control a report shows on each finding.
