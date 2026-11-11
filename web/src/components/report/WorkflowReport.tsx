@@ -55,6 +55,7 @@ import {
 import {
   DECISION_FILTERS,
   DECISION_FILTER_LABEL,
+  categoryOf,
   decisionState,
   type Decision,
   type DecisionFilter,
@@ -155,16 +156,23 @@ export function WorkflowReport({
   const [decision, setDecision] = useState<DecisionFilter>("all");
   const [startedRun, setStartedRun] = useState<string | null>(null);
 
+  // Only the categories the apply workflow acts on are up for a decision: a
+  // "keep" row has nothing to approve.
+  const decidable = (f: WorkflowFinding) =>
+    canApprove &&
+    (!apply?.categories?.length || apply.categories.includes(categoryOf(f)));
   const approved = findings.filter(
-    (f) => stateByKey[findingKey(f)]?.action === "approved",
+    (f) => decidable(f) && stateByKey[findingKey(f)]?.action === "approved",
   );
 
   /** Record one decision for every finding in `rows`, or clear theirs. */
   async function decideAll(rows: WorkflowFinding[], action: Decision | null) {
-    // A finding an apply run already took is not up for a decision.
+    // A finding an apply run already took is not up for a new decision, but
+    // can be undone (its run may have failed).
     const keys = rows
+      .filter(decidable)
       .map(findingKey)
-      .filter((k) => stateByKey[k]?.action !== "applied");
+      .filter((k) => action === null || stateByKey[k]?.action !== "applied");
     if (keys.length === 0) return;
     setActionError(null);
     setBusy("bulk");
@@ -467,7 +475,7 @@ export function WorkflowReport({
                     <DecisionTools
                       filter={decision}
                       onFilter={setDecision}
-                      shown={rows.length}
+                      shown={rows.filter(decidable).length}
                       busy={busy !== null}
                       onApproveAll={() => decideAll(rows, "approved")}
                       onRejectAll={() => decideAll(rows, "rejected")}
@@ -486,7 +494,7 @@ export function WorkflowReport({
                       canIssue={canIssue}
                       issueBlocked={issueBlocked}
                       canIgnore={canIgnore}
-                      canApprove={canApprove}
+                      canApprove={decidable(f)}
                       busy={busy === findingKey(f) || busy === "bulk"}
                       onBuild={() => build(f)}
                       onCreateIssue={() => createIssueOne(f)}
@@ -510,7 +518,7 @@ export function WorkflowReport({
                 canIssue={canIssue}
                 issueBlocked={issueBlocked}
                 canIgnore={canIgnore}
-                canApprove={canApprove}
+                canApprove={decidable(f)}
                 status={status}
                 state={stateByKey[findingKey(f)]}
                 busy={busy === findingKey(f) || busy === "bulk"}
@@ -623,6 +631,12 @@ function DecisionTools({
           ))}
         </SelectContent>
       </Select>
+      {/* Applied rows can only be undone (their run may have failed). */}
+      {shown > 0 && filter === "applied" && (
+        <Button variant="ghost" size="sm" disabled={busy} onClick={onClearAll}>
+          Undo {shown}
+        </Button>
+      )}
       {shown > 0 && filter !== "applied" && (
         <>
           <Button
@@ -746,18 +760,32 @@ function TableActions({
 }) {
   const action = state?.action;
   if (action === "applied") {
-    return state?.ref_run_id ? (
-      <Button
-        variant="link"
-        size="xs"
-        render={<Link to={`/runs/${state.ref_run_id}`} />}
-        nativeButton={false}
-        title="The run that is acting on it"
-      >
-        Applied
-      </Button>
-    ) : (
-      <Badge variant="success">Applied</Badge>
+    return (
+      <span className="inline-flex items-center gap-1">
+        {state?.ref_run_id ? (
+          <Button
+            variant="link"
+            size="xs"
+            render={<Link to={`/runs/${state.ref_run_id}`} />}
+            nativeButton={false}
+            title="The run that is acting on it"
+          >
+            Applied
+          </Button>
+        ) : (
+          <Badge variant="success">Applied</Badge>
+        )}
+        {/* If that run failed, this is how the finding goes back. */}
+        <Button
+          variant="ghost"
+          size="xs"
+          disabled={busy}
+          title="Undo, for instance if that run failed"
+          onClick={onReset}
+        >
+          Undo
+        </Button>
+      </span>
     );
   }
   if (action === "approved" || action === "rejected") {
@@ -953,16 +981,28 @@ function FindingRow({
           {/* A decision on what the finding proposes. */}
           {canApprove &&
             (action === "applied" ? (
-              state?.ref_run_id ? (
-                <Link
-                  to={`/runs/${state.ref_run_id}`}
-                  className="text-xs text-accent-orange hover:underline"
+              <>
+                {state?.ref_run_id ? (
+                  <Link
+                    to={`/runs/${state.ref_run_id}`}
+                    className="text-xs text-accent-orange hover:underline"
+                  >
+                    Applied →
+                  </Link>
+                ) : (
+                  <Badge variant="success">Applied</Badge>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  title="Undo, for instance if that run failed"
+                  onClick={onReset}
                 >
-                  Applied →
-                </Link>
-              ) : (
-                <Badge variant="success">Applied</Badge>
-              )
+                  Undo
+                </Button>
+              </>
             ) : action === "approved" || action === "rejected" ? (
               <>
                 <Badge

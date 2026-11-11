@@ -634,6 +634,10 @@ pub struct ReportApply {
     /// The button's label (e.g. "Open PRs"); default "Apply".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// The finding categories it acts on (`[delete, review, merge]`). Only
+    /// those rows can be approved, and only they are sent. Empty: every row.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
 }
 
 /// How a report lays out its findings.

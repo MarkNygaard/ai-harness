@@ -251,7 +251,7 @@ fn a_report_applies_what_it_approves() {
     };
     let wf = parse_workflow(&yaml(
         "approve, build",
-        "    apply:\n      workflow: ecom-test-prune\n      label: Open PRs\n",
+        "    apply:\n      workflow: ecom-test-prune\n      label: Open PRs\n      categories: [delete, merge]\n",
     ))
     .unwrap();
     let report = wf.ui.unwrap().report.unwrap();
@@ -261,6 +261,7 @@ fn a_report_applies_what_it_approves() {
         Some(ReportApply {
             workflow: "ecom-test-prune".into(),
             label: Some("Open PRs".into()),
+            categories: vec!["delete".into(), "merge".into()],
         })
     );
 
