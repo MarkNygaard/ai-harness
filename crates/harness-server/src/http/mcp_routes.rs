@@ -981,7 +981,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "run_findings",
-            "description": "Read the per-finding state a human set in a run's report: each finding's `finding_key` (category::title) + `action` — built | issued | ignored | checked | passed | failed — plus any `ref_run_id` / Linear `issue_identifier`+`issue_url`. Use to see which report items a person marked, e.g. which manual test scenarios passed vs failed. Findings with no recorded state are absent from the list.",
+            "description": "Read the per-finding state a human set in a run's report: each finding's `finding_key` (category::title) + `action` — built | issued | ignored | checked | passed | failed | approved | rejected | applied — plus any `ref_run_id` / Linear `issue_identifier`+`issue_url`. Use to see which report items a person marked, e.g. which manual test scenarios passed vs failed. Findings with no recorded state are absent from the list.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1304,7 +1304,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_set_ui",
-            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (the default workflow, task), issue (Linear), ignore. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings. `layout: table` shows totals, filters and one sortable row per finding instead of cards; use it for many findings, and give each finding `id` (unique), `score` (0-1) and `duration_ms` where they apply.",
+            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (the default workflow, task), issue (Linear), ignore, approve (Approve / Reject what the finding proposes). `apply: { workflow, label? }` (needs approve) adds a button that starts that workflow in the same project with the approved findings as its input, and marks them applied. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings. `layout: table` shows totals, filters and one sortable row per finding instead of cards; use it for many findings, and give each finding `id` (unique), `score` (0-1) and `duration_ms` where they apply.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1329,10 +1329,18 @@ fn mcp_tools() -> Vec<Value> {
                                     "scored": { "type": "boolean" },
                                     "actions": {
                                         "type": "array",
-                                        "items": { "enum": ["build", "issue", "ignore"] }
+                                        "items": { "enum": ["build", "issue", "ignore", "approve"] }
                                     },
                                     "status": { "enum": ["none", "check", "pass_fail"] },
-                                    "layout": { "enum": ["list", "table"] }
+                                    "layout": { "enum": ["list", "table"] },
+                                    "apply": {
+                                        "type": "object",
+                                        "properties": {
+                                            "workflow": { "type": "string" },
+                                            "label": { "type": "string" }
+                                        },
+                                        "required": ["workflow"]
+                                    }
                                 },
                                 "required": ["label"]
                             }

@@ -242,6 +242,36 @@ fn a_report_is_a_list_unless_it_asks_for_a_table() {
 }
 
 #[test]
+fn a_report_applies_what_it_approves() {
+    use crate::model::{ReportAction, ReportApply};
+    let yaml = |actions: &str, apply: &str| {
+        format!(
+            "name: audit\nui:\n  report:\n    label: Tests\n    actions: [{actions}]\n{apply}nodes:\n  - id: a\n    bash: \"x\"\n"
+        )
+    };
+    let wf = parse_workflow(&yaml(
+        "approve, build",
+        "    apply:\n      workflow: ecom-test-prune\n      label: Open PRs\n",
+    ))
+    .unwrap();
+    let report = wf.ui.unwrap().report.unwrap();
+    assert!(report.actions.contains(&ReportAction::Approve));
+    assert_eq!(
+        report.apply,
+        Some(ReportApply {
+            workflow: "ecom-test-prune".into(),
+            label: Some("Open PRs".into()),
+        })
+    );
+
+    // Nothing to apply without the buttons that approve.
+    let err = parse_workflow(&yaml("build", "    apply:\n      workflow: x\n")).unwrap_err();
+    assert!(matches!(err, DagError::ReportApply(_)), "{err}");
+    let err = parse_workflow(&yaml("approve", "    apply:\n      workflow: \" \"\n")).unwrap_err();
+    assert!(matches!(err, DagError::ReportApply(_)), "{err}");
+}
+
+#[test]
 fn workflow_without_ui_parses_with_none() {
     let wf = parse_workflow("name: plain\nnodes:\n  - id: a\n    bash: \"x\"\n").unwrap();
     assert!(wf.ui.is_none());

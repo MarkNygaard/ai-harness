@@ -298,6 +298,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
                 .put(finding_routes::set_finding)
                 .delete(finding_routes::clear_finding),
         )
+        .route(
+            "/api/runs/{id}/findings/batch",
+            post(finding_routes::batch_findings),
+        )
         // ── Cluster-hosted MCP endpoint (JSON-RPC over HTTP; no local binary) ─
         // Authoring + run control for editors via `{ "type": "http", "url":
         // ".../mcp" }`. Behind the global bearer-token middleware.

@@ -282,6 +282,28 @@ describe("ui block round-trip", () => {
     expect(back.ui?.report?.actions).toEqual(["build", "ignore"]);
   });
 
+  it("keeps a report's apply workflow through a save", () => {
+    const yaml = toYaml({
+      name: "audit",
+      nodes: [{ id: "report", prompt: "p" }],
+      ui: {
+        nav: null,
+        report: {
+          label: "Tests",
+          verdict_node: "report",
+          scored: false,
+          actions: ["approve", "build"],
+          apply: { workflow: "ecom-test-prune", label: "Open PRs" },
+        },
+      },
+    });
+    expect(yaml).toContain("workflow: ecom-test-prune");
+    expect(fromYaml(yaml).ui?.report?.apply).toEqual({
+      workflow: "ecom-test-prune",
+      label: "Open PRs",
+    });
+  });
+
   it("omits the ui block entirely when absent, and drops default status", () => {
     // No ui → no `ui:` key at all.
     expect(

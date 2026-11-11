@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 
 /** Sentinel for a nullable select — Base UI Select needs a concrete item value. */
 const AUTO_SENTINEL = "__auto__";
-const REPORT_ACTIONS: ReportAction[] = ["build", "issue", "ignore"];
+const REPORT_ACTIONS: ReportAction[] = ["build", "issue", "ignore", "approve"];
 const REPORT_STATUSES: ReportStatus[] = ["none", "check", "pass_fail"];
 
 /**
@@ -60,7 +60,13 @@ export function WorkflowSettingsDrawer({
     const actions = on
       ? [...current, action]
       : current.filter((a) => a !== action);
-    setReport({ ...report, actions: actions.length ? actions : undefined });
+    setReport({
+      ...report,
+      actions: actions.length ? actions : undefined,
+      // Apply acts on approved findings, and the server refuses it without
+      // the Approve buttons, so it goes with them.
+      apply: actions.includes("approve") ? report.apply : null,
+    });
   };
 
   return (
@@ -196,6 +202,41 @@ export function WorkflowSettingsDrawer({
                 />
               ))}
             </div>
+            {(report.actions ?? []).includes("approve") && (
+              <>
+                <Field label="Apply workflow (acts on approved findings)">
+                  <Input
+                    value={report.apply?.workflow ?? ""}
+                    placeholder="none"
+                    onChange={(e) =>
+                      setReport({
+                        ...report,
+                        apply: e.target.value
+                          ? { ...report.apply, workflow: e.target.value }
+                          : null,
+                      })
+                    }
+                  />
+                </Field>
+                {report.apply?.workflow && (
+                  <Field label="Apply button label">
+                    <Input
+                      value={report.apply.label ?? ""}
+                      placeholder="Apply"
+                      onChange={(e) =>
+                        setReport({
+                          ...report,
+                          apply: {
+                            workflow: report.apply!.workflow,
+                            label: e.target.value || null,
+                          },
+                        })
+                      }
+                    />
+                  </Field>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>

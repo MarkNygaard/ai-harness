@@ -28,6 +28,8 @@ import {
   findingTaskDescription,
   issueActionBlocked,
   ratingColor,
+  applyDescription,
+  useBatchFindingState,
   useClearFindingState,
   useFindingStates,
   useReportHistory,
@@ -39,9 +41,24 @@ import {
 } from "@/lib/report";
 import type {
   ReportAction,
+  ReportApply,
   ReportLayout,
   ReportStatus,
 } from "@/types/authoring";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  DECISION_FILTERS,
+  DECISION_FILTER_LABEL,
+  decisionState,
+  type Decision,
+  type DecisionFilter,
+} from "@/lib/report-table";
 import { FindingsTable } from "./FindingsTable";
 
 /** The workflow findings are filed/built against. */
@@ -65,6 +82,8 @@ export function WorkflowReport({
   actions,
   status,
   layout = "list",
+  apply = null,
+  runTitle = null,
 }: {
   verdict: WorkflowVerdict;
   scored: boolean;
@@ -78,10 +97,15 @@ export function WorkflowReport({
   status: ReportStatus;
   /** Cards, or a table with totals and filters for many findings. */
   layout?: ReportLayout;
+  /** The workflow that acts on approved findings, if the report has one. */
+  apply?: ReportApply | null;
+  /** The run's title, to name the apply run after. */
+  runTitle?: string | null;
 }) {
   const canBuild = actions.includes("build");
   const canIssue = actions.includes("issue");
   const canIgnore = actions.includes("ignore");
+  const canApprove = actions.includes("approve");
   const projects = useProjects();
   const externalUrl =
     projects.data?.find((p) => p.name === project)?.external_url ?? "";
@@ -125,8 +149,81 @@ export function WorkflowReport({
   const createIssue = useCreateLinearIssue(project);
   const setState = useSetFindingState(runId);
   const clearState = useClearFindingState(runId);
+  const batchState = useBatchFindingState(runId);
   const [busy, setBusy] = useState<string | "bulk" | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [decision, setDecision] = useState<DecisionFilter>("all");
+  const [startedRun, setStartedRun] = useState<string | null>(null);
+
+  const approved = findings.filter(
+    (f) => stateByKey[findingKey(f)]?.action === "approved",
+  );
+
+  /** Record one decision for every finding in `rows`, or clear theirs. */
+  async function decideAll(rows: WorkflowFinding[], action: Decision | null) {
+    // A finding an apply run already took is not up for a decision.
+    const keys = rows
+      .map(findingKey)
+      .filter((k) => stateByKey[k]?.action !== "applied");
+    if (keys.length === 0) return;
+    setActionError(null);
+    setBusy("bulk");
+    try {
+      await batchState.mutateAsync({ finding_keys: keys, action });
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  /**
+   * Start the apply workflow with the approved findings, then mark them
+   * applied, so they show which run took them and can't be sent twice.
+   */
+  async function applyApproved() {
+    if (!apply || !runId || approved.length === 0) return;
+    setActionError(null);
+    setBusy("bulk");
+    try {
+      const res = await createRun.mutateAsync({
+        workflow: apply.workflow,
+        project: project ?? undefined,
+        real: true,
+        title: `${apply.label || "Apply"}: ${approved.length} from ${runTitle || runId}`,
+        description: applyDescription(runId, approved),
+      });
+      await batchState.mutateAsync({
+        finding_keys: approved.map(findingKey),
+        action: "applied",
+        ref_run_id: res.run_id,
+      });
+      setStartedRun(res.run_id);
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function decideOne(f: WorkflowFinding, action: Decision) {
+    setActionError(null);
+    try {
+      if (stateByKey[findingKey(f)]?.action === action) {
+        await clearState.mutateAsync(findingKey(f));
+      } else {
+        await setState.mutateAsync({ finding_key: findingKey(f), action });
+      }
+    } catch (e) {
+      setActionError((e as Error).message);
+    }
+  }
+
+  const decisionOf = (f: WorkflowFinding) =>
+    decisionState(stateByKey[findingKey(f)]?.action);
+  const decided = canApprove
+    ? findings.filter((f) => decision === "all" || decisionOf(f) === decision)
+    : findings;
 
   async function issueOne(f: WorkflowFinding) {
     const key = findingKey(f);
@@ -346,12 +443,41 @@ export function WorkflowReport({
         {actionError && (
           <p className="text-[11px] text-destructive">{actionError}</p>
         )}
+        {apply && canApprove && (
+          <ApplyBar
+            label={apply.label || "Apply"}
+            workflow={apply.workflow}
+            approved={approved.length}
+            canStart={!!project && !!runId}
+            busy={busy === "bulk"}
+            startedRun={startedRun}
+            onApply={applyApproved}
+          />
+        )}
         {layout === "table" ? (
           <FindingsTable
-            findings={findings}
-            dimmed={(f) => stateByKey[findingKey(f)]?.action === "ignored"}
+            findings={decided}
+            dimmed={(f) => {
+              const a = stateByKey[findingKey(f)]?.action;
+              return a === "ignored" || a === "rejected";
+            }}
+            toolbar={
+              canApprove
+                ? (rows) => (
+                    <DecisionTools
+                      filter={decision}
+                      onFilter={setDecision}
+                      shown={rows.length}
+                      busy={busy !== null}
+                      onApproveAll={() => decideAll(rows, "approved")}
+                      onRejectAll={() => decideAll(rows, "rejected")}
+                      onClearAll={() => decideAll(rows, null)}
+                    />
+                  )
+                : undefined
+            }
             actionsFor={
-              (canBuild && project) || canIssue || canIgnore
+              (canBuild && project) || canIssue || canIgnore || canApprove
                 ? (f) => (
                     <TableActions
                       finding={f}
@@ -360,10 +486,12 @@ export function WorkflowReport({
                       canIssue={canIssue}
                       issueBlocked={issueBlocked}
                       canIgnore={canIgnore}
+                      canApprove={canApprove}
                       busy={busy === findingKey(f) || busy === "bulk"}
                       onBuild={() => build(f)}
                       onCreateIssue={() => createIssueOne(f)}
                       onIgnore={() => ignore(f)}
+                      onDecide={(d) => decideOne(f, d)}
                       onReset={() => reset(f)}
                     />
                   )
@@ -382,12 +510,14 @@ export function WorkflowReport({
                 canIssue={canIssue}
                 issueBlocked={issueBlocked}
                 canIgnore={canIgnore}
+                canApprove={canApprove}
                 status={status}
                 state={stateByKey[findingKey(f)]}
                 busy={busy === findingKey(f) || busy === "bulk"}
                 onBuild={() => build(f)}
                 onCreateIssue={() => createIssueOne(f)}
                 onIgnore={() => ignore(f)}
+                onDecide={(d) => decideOne(f, d)}
                 onReset={() => reset(f)}
                 onMark={(v) => mark(f, v)}
               />
@@ -454,8 +584,136 @@ function ReportHistory({
 }
 
 /**
- * A table row's build / issue / ignore buttons: the same actions as a card's,
- * compact, with a link once a finding has been built or filed.
+ * The decision tools above a table: which decisions to show, and one decision
+ * for every row in view (after the category tab, the search and this filter).
+ */
+function DecisionTools({
+  filter,
+  onFilter,
+  shown,
+  busy,
+  onApproveAll,
+  onRejectAll,
+  onClearAll,
+}: {
+  filter: DecisionFilter;
+  onFilter: (f: DecisionFilter) => void;
+  shown: number;
+  busy: boolean;
+  onApproveAll: () => void;
+  onRejectAll: () => void;
+  onClearAll: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <Select
+        value={filter}
+        onValueChange={(v) => v && onFilter(v as DecisionFilter)}
+      >
+        <SelectTrigger size="sm" aria-label="Show decisions">
+          <SelectValue>
+            {(v: string) => DECISION_FILTER_LABEL[v as DecisionFilter]}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {DECISION_FILTERS.map((d) => (
+            <SelectItem key={d} value={d}>
+              {DECISION_FILTER_LABEL[d]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {shown > 0 && filter !== "applied" && (
+        <>
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy}
+            onClick={onApproveAll}
+          >
+            Approve {shown} shown
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            disabled={busy}
+            onClick={onRejectAll}
+          >
+            Reject {shown}
+          </Button>
+          {filter !== "undecided" && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={busy}
+              onClick={onClearAll}
+            >
+              Undo {shown}
+            </Button>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * How many findings are approved, and the button that starts the report's
+ * apply workflow with them. Once started, a link to that run.
+ */
+function ApplyBar({
+  label,
+  workflow,
+  approved,
+  canStart,
+  busy,
+  startedRun,
+  onApply,
+}: {
+  label: string;
+  workflow: string;
+  approved: number;
+  canStart: boolean;
+  busy: boolean;
+  startedRun: string | null;
+  onApply: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-md border border-border bg-card p-3 text-sm">
+      <span className="tabular-nums">
+        <span className="font-semibold">{approved}</span> approved
+      </span>
+      <span className="text-xs text-muted-foreground">
+        {label} starts <span className="font-mono">{workflow}</span> with the
+        approved findings.
+      </span>
+      {startedRun && (
+        <Button
+          variant="link"
+          size="sm"
+          render={<Link to={`/runs/${startedRun}`} />}
+          nativeButton={false}
+        >
+          Started: view the run
+        </Button>
+      )}
+      <Button
+        className="ml-auto"
+        size="sm"
+        disabled={approved === 0 || !canStart || busy}
+        title={canStart ? undefined : "This run has no project to start it in"}
+        onClick={onApply}
+      >
+        {busy ? "Starting…" : `${label} (${approved})`}
+      </Button>
+    </div>
+  );
+}
+
+/**
+ * A table row's buttons: Approve / Reject where the report decides, then
+ * build / issue / ignore, as on a card. Once decided or acted on, what was
+ * done, with a link to the run where there is one.
  */
 function TableActions({
   finding,
@@ -464,10 +722,12 @@ function TableActions({
   canIssue,
   issueBlocked,
   canIgnore,
+  canApprove,
   busy,
   onBuild,
   onCreateIssue,
   onIgnore,
+  onDecide,
   onReset,
 }: {
   finding: WorkflowFinding;
@@ -476,13 +736,42 @@ function TableActions({
   canIssue: boolean;
   issueBlocked: string | null;
   canIgnore: boolean;
+  canApprove: boolean;
   busy: boolean;
   onBuild: () => void;
   onCreateIssue: () => void;
   onIgnore: () => void;
+  onDecide: (d: Decision) => void;
   onReset: () => void;
 }) {
   const action = state?.action;
+  if (action === "applied") {
+    return state?.ref_run_id ? (
+      <Button
+        variant="link"
+        size="xs"
+        render={<Link to={`/runs/${state.ref_run_id}`} />}
+        nativeButton={false}
+        title="The run that is acting on it"
+      >
+        Applied
+      </Button>
+    ) : (
+      <Badge variant="success">Applied</Badge>
+    );
+  }
+  if (action === "approved" || action === "rejected") {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <Badge variant={action === "approved" ? "success" : "secondary"}>
+          {action === "approved" ? "Approved" : "Rejected"}
+        </Badge>
+        <Button variant="ghost" size="xs" disabled={busy} onClick={onReset}>
+          Undo
+        </Button>
+      </span>
+    );
+  }
   if (action === "built" || action === "issued") {
     const href =
       action === "built" && state?.ref_run_id
@@ -528,6 +817,28 @@ function TableActions({
   }
   return (
     <span className="inline-flex items-center gap-1">
+      {canApprove && (
+        <>
+          <Button
+            variant="outline"
+            size="xs"
+            disabled={busy}
+            title="Approve what this finding proposes"
+            onClick={() => onDecide("approved")}
+          >
+            Approve
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            disabled={busy}
+            title="Reject it: leave things as they are"
+            onClick={() => onDecide("rejected")}
+          >
+            Reject
+          </Button>
+        </>
+      )}
       {canBuild && (
         <Button
           variant="outline"
@@ -565,12 +876,14 @@ function FindingRow({
   canIssue,
   issueBlocked,
   canIgnore,
+  canApprove,
   status,
   state,
   busy,
   onBuild,
   onCreateIssue,
   onIgnore,
+  onDecide,
   onReset,
   onMark,
 }: {
@@ -580,23 +893,27 @@ function FindingRow({
   /** Why "Create issue" cannot be used, or null when it can. */
   issueBlocked: string | null;
   canIgnore: boolean;
+  canApprove: boolean;
   status: ReportStatus;
   state: FindingState | undefined;
   busy: boolean;
   onBuild: () => void;
   onCreateIssue: () => void;
   onIgnore: () => void;
+  onDecide: (d: Decision) => void;
   onReset: () => void;
   onMark: (value: FindingAction) => void;
 }) {
   const action = state?.action;
-  const ignored = action === "ignored";
+  const ignored = action === "ignored" || action === "rejected";
   const failed = action === "failed";
   const positive =
     action === "built" ||
     action === "issued" ||
     action === "checked" ||
-    action === "passed";
+    action === "passed" ||
+    action === "approved" ||
+    action === "applied";
   // An off-site finding ("earn a Wikipedia entity") has no code change behind it,
   // so `task` would have nothing to implement. It stays filable as an issue
   // for a human, which is what such an item actually needs.
@@ -633,6 +950,58 @@ function FindingRow({
           {title}
         </span>
         <div className="ml-auto flex shrink-0 items-center gap-2">
+          {/* A decision on what the finding proposes. */}
+          {canApprove &&
+            (action === "applied" ? (
+              state?.ref_run_id ? (
+                <Link
+                  to={`/runs/${state.ref_run_id}`}
+                  className="text-xs text-accent-orange hover:underline"
+                >
+                  Applied →
+                </Link>
+              ) : (
+                <Badge variant="success">Applied</Badge>
+              )
+            ) : action === "approved" || action === "rejected" ? (
+              <>
+                <Badge
+                  variant={action === "approved" ? "success" : "secondary"}
+                >
+                  {action === "approved" ? "Approved" : "Rejected"}
+                </Badge>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={onReset}
+                >
+                  Undo
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  onClick={() => onDecide("approved")}
+                >
+                  Approve
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => onDecide("rejected")}
+                >
+                  Reject
+                </Button>
+              </>
+            ))}
           {/* Per-item status control (checkbox / pass-fail). */}
           {status === "check" && (
             <label className="flex items-center gap-1.5 text-xs text-muted-foreground">

@@ -3,6 +3,7 @@ import { findingKey, type WorkflowFinding } from "./report";
 import {
   categoryTotals,
   columnsOf,
+  decisionState,
   defaultSort,
   formatMs,
   visibleRows,
@@ -115,6 +116,13 @@ describe("table columns", () => {
     expect(findingKey(f({ title: "works", category: "keep" }))).toBe(
       "keep::works",
     );
+  });
+
+  it("counts anything but a decision as undecided", () => {
+    expect(decisionState("approved")).toBe("approved");
+    expect(decisionState("applied")).toBe("applied");
+    expect(decisionState("built")).toBe("undecided");
+    expect(decisionState(undefined)).toBe("undecided");
   });
 
   it("formats durations at a readable scale", () => {

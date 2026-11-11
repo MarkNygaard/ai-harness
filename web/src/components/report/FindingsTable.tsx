@@ -52,8 +52,11 @@ export function FindingsTable({
   findings,
   actionsFor,
   dimmed,
+  toolbar,
 }: {
   findings: WorkflowFinding[];
+  /** Controls beside the search, given the rows now in view (bulk actions). */
+  toolbar?: (rows: WorkflowFinding[]) => ReactNode;
   /** The buttons for one row; absent → no actions column. */
   actionsFor?: (f: WorkflowFinding) => ReactNode;
   /** Rows to show faded (an ignored finding). */
@@ -132,6 +135,7 @@ export function FindingsTable({
             </TabsTrigger>
           </TabsList>
         </Tabs>
+        {toolbar?.(rows)}
         <InputGroup className="ml-auto w-full sm:w-64">
           <InputGroupAddon>
             <Search />

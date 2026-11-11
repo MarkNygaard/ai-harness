@@ -136,6 +136,8 @@ for a plain workflow.
 | `report.scored` | `true` → show a score + rating + per-dimension bars + score-history sparkline (GEO-style); `false` (default) → findings list only. |
 | `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (fire the default workflow, `task`), `issue` (file into Linear), `ignore`. A bug/finding report uses `[build, issue, ignore]`. |
 | `report.status` | Per-item status control: `none` (default), `check` (a "tested" checkbox), or `pass_fail` (Passed / Failed) — for manual test checklists. |
+| `report.actions: [approve]` | Approve / Reject per finding: a decision on what the finding proposes (delete this test, apply this fix). Tables add "Approve N shown" for the rows in view and a filter by decision. Decisions are kept per run, so a long report can be worked through over several visits. |
+| `report.apply` | `{ workflow, label? }`, with `approve`: a button (default label "Apply") that starts `workflow` in the run's project with the approved findings as its input, then marks them `applied`, linked to that run, so they can't be sent twice. The input is a sentence, then a JSON block `{ source_run, findings: [{ id, title, category, location, score, duration_ms, detail }] }` for a step to parse. |
 | `report.layout` | `list` (default): one card per finding. `table`: totals per category, category tabs, a search box, and one sortable row per finding — for reports with hundreds of findings, such as a test audit. |
 
 The report renders a node's JSON output shaped as

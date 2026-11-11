@@ -125,3 +125,39 @@ export function formatMs(ms: number): string {
   const m = Math.floor(s / 60);
   return `${m} min ${Math.round(s - m * 60)} s`;
 }
+
+/** A decision on what a finding proposes. */
+export type Decision = "approved" | "rejected";
+
+/** Which findings a report shows by their decision. */
+export type DecisionFilter =
+  "all" | "undecided" | "approved" | "rejected" | "applied";
+
+export const DECISION_FILTERS: DecisionFilter[] = [
+  "all",
+  "undecided",
+  "approved",
+  "rejected",
+  "applied",
+];
+
+export const DECISION_FILTER_LABEL: Record<DecisionFilter, string> = {
+  all: "All decisions",
+  undecided: "Undecided",
+  approved: "Approved",
+  rejected: "Rejected",
+  applied: "Applied",
+};
+
+/**
+ * Where a finding stands on the decision, from its one state slot. Anything
+ * other than a decision (built, ignored, …) counts as undecided: it is still
+ * open for one.
+ */
+export function decisionState(
+  action: string | undefined,
+): Exclude<DecisionFilter, "all"> {
+  return action === "approved" || action === "rejected" || action === "applied"
+    ? action
+    : "undecided";
+}

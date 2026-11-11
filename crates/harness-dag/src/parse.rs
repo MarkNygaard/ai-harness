@@ -418,6 +418,26 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
         }
     }
 
+    // An apply step acts on approved findings, so it needs a workflow to start
+    // and the Approve buttons that make something approved.
+    if let Some(report) = raw.ui.as_ref().and_then(|ui| ui.report.as_ref()) {
+        if let Some(apply) = &report.apply {
+            if apply.workflow.trim().is_empty() {
+                return Err(DagError::ReportApply("`workflow` is empty".into()));
+            }
+            if !report
+                .actions
+                .contains(&crate::model::ReportAction::Approve)
+            {
+                return Err(DagError::ReportApply(
+                    "add `approve` to `actions`: apply acts on approved findings, and only \
+                     that action approves them"
+                        .into(),
+                ));
+            }
+        }
+    }
+
     if let Some(cfg) = &raw.improvements {
         if !crate::model::IMPROVEMENTS_EVERY.contains(&cfg.every) {
             return Err(DagError::ImprovementsEvery(cfg.every));

@@ -78,6 +78,10 @@ pub enum DagError {
     #[error("workflow `ui.report.verdict_node` references unknown node `{0}`")]
     ReportVerdictNodeUnknown(String),
 
+    /// A workflow's `ui.report.apply` can never be used as written.
+    #[error("workflow `ui.report.apply`: {0}")]
+    ReportApply(String),
+
     /// A route node that can't always choose a route, or names its routes
     /// badly.
     #[error("route node `{node}`: {reason}")]

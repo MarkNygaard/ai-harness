@@ -14,7 +14,14 @@ export interface WorkflowNav {
 }
 
 /** An opt-in per-finding action a report offers. */
-export type ReportAction = "build" | "issue" | "ignore";
+export type ReportAction = "build" | "issue" | "ignore" | "approve";
+
+/** The workflow a report's Apply button starts with the approved findings. */
+export interface ReportApply {
+  workflow: string;
+  /** The button's label; default "Apply". */
+  label?: string | null;
+}
 
 /** The per-item status control shown on each finding. */
 export type ReportStatus = "none" | "check" | "pass_fail";
@@ -32,6 +39,8 @@ export interface WorkflowReport {
   status?: ReportStatus;
   /** Cards (default) or a table with totals and filters, for many findings. */
   layout?: ReportLayout;
+  /** What acts on the approved findings; pairs with the `approve` action. */
+  apply?: ReportApply | null;
 }
 
 /** How a report lays out its findings. */
