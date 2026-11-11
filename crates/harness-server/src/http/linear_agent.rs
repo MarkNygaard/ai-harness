@@ -1530,11 +1530,12 @@ fn choose_target(bindings: &[LinearSource], context: &IssueContext) -> Target {
     }
 }
 
-/// Whether a binding is already running as many claims as it allows.
+/// Whether a trigger or binding is already running as many runs as it allows
+/// (**Max simultaneous tasks**). A stored 0 or below still allows one.
 ///
-/// The poller checks the same thing before claiming; delegation did not, so
-/// handing three issues to the harness at once started three runs regardless of
-/// **Max simultaneous tasks**.
+/// Checked where a run starts and where the queue dispatches
+/// (`runs_routes::workflow_has_room`), for every way a run starts: delegation,
+/// the poller, a person. Over it the run is parked as queued, not refused.
 pub(crate) fn at_capacity(active: i64, max_concurrent_runs: i32) -> bool {
     active >= max_concurrent_runs.max(1) as i64
 }

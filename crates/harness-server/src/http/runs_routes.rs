@@ -898,40 +898,81 @@ impl RunsState {
         }
         DEFAULT_MAX_CONCURRENT_RUNS
     }
+}
 
-    /// Whether a queued run's own `(project, workflow)` has room, on top of the
-    /// instance-wide limit.
-    ///
-    /// This is a Linear binding's **Max simultaneous tasks**, enforced here at
-    /// dispatch rather than at submission. Enforcing it at submission is what
-    /// made three issues delegated together produce one queued run and two that
-    /// looked dropped: the binding refused the first two outright, before the
-    /// queue ever saw them.
-    ///
-    /// No binding — a UI or MCP run, or a workflow Linear does not drive — means
-    /// no per-workflow cap, and the global limit is the only gate.
-    pub(crate) async fn binding_has_room_for(&self, run: &harness_persist::QueuedRun) -> bool {
-        let Some(project) = run.project.as_deref() else {
-            return true;
-        };
-        let Ok(sources) = self.linear_source_store().await else {
-            return true;
-        };
-        let limit = match sources.get(project, &run.workflow_name).await {
-            Ok(Some(binding)) => binding.max_concurrent_runs.max(1) as i64,
-            // No binding, or the lookup failed: do not hold work back over a
-            // missing row or a database hiccup. The global limit still applies.
-            _ => return true,
-        };
-        let Ok(store) = self.store().await else {
-            return true;
-        };
-        match store.count_running_for(project, &run.workflow_name).await {
-            Ok(running) => running < limit,
-            Err(_) => true,
-        }
+/// Whether one more run of `workflow` in `project` may execute now, on top of
+/// the instance-wide limit.
+///
+/// This is the **Max simultaneous tasks** of the Linear trigger (or, on the
+/// classic system, the binding) that starts the workflow. It is checked where a
+/// run starts *and* where the queue dispatches, and a run over it is parked as
+/// queued rather than refused. Refusing at submission is what made issues
+/// waiting for a slot look dropped: three issues delegated together produced
+/// one run and nothing else, and an issue moved into a busy status never showed
+/// up anywhere until the slot freed.
+///
+/// No trigger or binding — a UI or MCP run, or a workflow Linear does not
+/// drive — means no per-workflow cap, and the global limit is the only gate.
+pub(crate) async fn workflow_has_room(
+    state: &Arc<RunsState>,
+    project: Option<&str>,
+    workflow: &str,
+) -> bool {
+    let Some(project) = project else {
+        return true;
+    };
+    let Some(limit) = workflow_run_limit(state, project, workflow).await else {
+        return true;
+    };
+    let Ok(store) = state.store().await else {
+        return true;
+    };
+    match store.count_running_for(project, workflow).await {
+        Ok(running) => !super::linear_agent::at_capacity(running, limit),
+        Err(_) => true,
     }
+}
 
+/// The most runs of `workflow` in `project` the starting trigger or binding
+/// allows at once, or `None` when nothing limits it. Under the trigger system
+/// that is the largest limit among the enabled Linear triggers that start it;
+/// on the classic system, the binding's.
+///
+/// A missing row or a database hiccup is `None`: work is not held back over
+/// it, and the global limit still applies.
+async fn workflow_run_limit(state: &Arc<RunsState>, project: &str, workflow: &str) -> Option<i32> {
+    if super::triggers_routes::uses_triggers(state).await {
+        let triggers: Vec<harness_persist::LinearSource> =
+            super::triggers_routes::linear_bindings(state)
+                .await
+                .into_iter()
+                .map(|(_, b)| b)
+                .collect();
+        return trigger_limit(&triggers, project, workflow);
+    }
+    let sources = state.linear_source_store().await.ok()?;
+    match sources.get(project, workflow).await {
+        Ok(Some(binding)) => Some(binding.max_concurrent_runs),
+        _ => None,
+    }
+}
+
+/// The limit the enabled Linear triggers starting `workflow` in `project` put
+/// on it: the largest, when several do, since each allows that many. `None`
+/// when no enabled trigger starts it.
+fn trigger_limit(
+    triggers: &[harness_persist::LinearSource],
+    project: &str,
+    workflow: &str,
+) -> Option<i32> {
+    triggers
+        .iter()
+        .filter(|t| t.enabled && t.project == project && t.workflow == workflow)
+        .map(|t| t.max_concurrent_runs)
+        .max()
+}
+
+impl RunsState {
     /// Whether `wanted` more runs fit alongside what is executing right now.
     ///
     /// Approximate by construction: the count is read a moment before a caller
@@ -2275,7 +2316,13 @@ async fn dispatch_next_queued_inner(state: Arc<RunsState>) {
     };
     let mut claimed = None;
     for candidate in &waiting {
-        if !state.binding_has_room_for(candidate).await {
+        if !workflow_has_room(
+            state,
+            candidate.project.as_deref(),
+            &candidate.workflow_name,
+        )
+        .await
+        {
             continue;
         }
         // `None` means someone else took it between the list and the claim.
@@ -2472,14 +2519,18 @@ async fn start_run_inner(
         )
     });
 
-    // At capacity: park the run rather than refuse it. It gets a row, an id and
-    // a place in the list immediately, so "why hasn't this started?" has an
-    // answer on the page — and the dispatcher launches it when a slot frees.
+    // At capacity — the instance's, or the starting trigger's own limit: park
+    // the run rather than refuse it. It gets a row, an id and a place in the
+    // list immediately, so "why hasn't this started?" has an answer on the page
+    // — and the dispatcher launches it when a slot frees.
     //
     // The row goes in with no graph: the node list arrives with the executor's
     // `RunStarted`, which has not happened yet. `start_run`'s upsert fills it in
     // on dispatch.
-    if dispatched_id.is_none() && !state.has_capacity_for(1).await {
+    if dispatched_id.is_none()
+        && (!state.has_capacity_for(1).await
+            || !workflow_has_room(state, Some(&project), &workflow.name).await)
+    {
         let description = if req.description.is_empty() {
             req.args.as_str()
         } else {
@@ -3401,6 +3452,61 @@ pub async fn delete_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Under the trigger system a trigger's **Max simultaneous tasks** is what
+    /// holds a run back: ECOM-854 waited in Changes requested behind a running
+    /// revision, and nothing showed it. The limit comes from the enabled
+    /// triggers that start that workflow in that project, and nothing else.
+    #[test]
+    fn a_workflows_limit_is_its_enabled_triggers() {
+        let trigger = |project: &str, workflow: &str, max: i32, enabled: bool| {
+            harness_persist::LinearSource {
+                project: project.into(),
+                workflow: workflow.into(),
+                team_id: "t".into(),
+                team_name: "Team".into(),
+                source_state_id: "s".into(),
+                failed_label: None,
+                in_progress_state_id: None,
+                review_state_id: None,
+                ready_state_id: None,
+                piece_ready_state_id: None,
+                epic_review_state_id: None,
+                base_branch: None,
+                poll_interval_secs: 60,
+                max_concurrent_runs: max,
+                max_attempts: 1,
+                enabled,
+                live: true,
+                linear_project_id: None,
+                linear_project_name: None,
+                trigger_label: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }
+        };
+        let triggers = [
+            trigger("ecom", "revise-task", 1, true),
+            trigger("ecom", "ecom-task", 1, true),
+            trigger("erp", "revise-task", 3, true),
+            trigger("ecom", "revise-task", 5, false),
+        ];
+        assert_eq!(trigger_limit(&triggers, "ecom", "revise-task"), Some(1));
+        assert_eq!(trigger_limit(&triggers, "erp", "revise-task"), Some(3));
+        assert_eq!(trigger_limit(&triggers, "ecom", "review-pr"), None);
+
+        // Two enabled triggers on one workflow: each allows its own, so the
+        // larger one decides.
+        let two = [
+            trigger("ecom", "revise-task", 1, true),
+            trigger("ecom", "revise-task", 2, true),
+        ];
+        assert_eq!(trigger_limit(&two, "ecom", "revise-task"), Some(2));
+
+        // At the limit, the next one waits; a stored 0 still allows one.
+        assert!(super::super::linear_agent::at_capacity(1, 1));
+        assert!(!super::super::linear_agent::at_capacity(0, 0));
+    }
 
     #[test]
     fn the_run_limit_counts_what_is_about_to_start_too() {
