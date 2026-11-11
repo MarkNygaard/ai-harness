@@ -165,6 +165,13 @@ export function describeAction(action: ChatAction): string {
       const project = arg("project");
       return `Start an A/B pair of ${wf}${project ? ` in ${project}` : ""}.`;
     }
+    case "linear_request_changes": {
+      const issue = arg("issue") || "the issue";
+      const to = arg("state");
+      return `Post the agreed changes on ${issue} as your request${
+        to ? ` and move it to ${to}` : ""
+      }, so its trigger revises the pull request.`;
+    }
     case "workflow_delete":
       return `Delete the workflow ${arg("name")}. It stays in the bin for 14 days.`;
     case "library_uninstall":

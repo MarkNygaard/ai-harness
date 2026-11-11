@@ -994,15 +994,28 @@ fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     if !human.is_empty() {
         task.push_str("\n\n## Reviewer comments (Linear)\n\n");
         for (idx, c) in human.iter().enumerate() {
-            // The harness's own comments (plans, closing summaries) stay in,
-            // because a revision dates new feedback from the latest of them,
-            // but they are marked: the app's display name differs per
-            // install, so a workflow cannot recognise them by author.
-            let mark = if c.by_harness { " [harness]" } else { "" };
-            task.push_str(&format!(
-                "**{}** ({}){mark}:\n{}\n",
-                c.author, c.created_at, c.body
-            ));
+            // Changes a person agreed with the agent, which the harness posted
+            // for them (`request_changes`): theirs, not one of its own notes.
+            let asked = c
+                .by_harness
+                .then(|| super::request_changes::requested_by(&c.body))
+                .flatten();
+            if let Some((who, body)) = asked {
+                task.push_str(&format!(
+                    "**{who}** ({}), through the AI Harness agent:\n{body}\n",
+                    c.created_at
+                ));
+            } else {
+                // The harness's own comments (plans, closing summaries) stay
+                // in, because a revision dates new feedback from the latest of
+                // them, but they are marked: the app's display name differs per
+                // install, so a workflow cannot recognise them by author.
+                let mark = if c.by_harness { " [harness]" } else { "" };
+                task.push_str(&format!(
+                    "**{}** ({}){mark}:\n{}\n",
+                    c.author, c.created_at, c.body
+                ));
+            }
             if idx + 1 < human.len() {
                 task.push_str("\n---\n\n");
             }
@@ -2475,6 +2488,42 @@ mod tests {
         let task = task_for_issue(&sample_issue(), &comments);
         assert!(task.contains("**Whatever The App Is Called** (2026-06-01T10:00:00Z) [harness]:"));
         assert!(task.contains("**Alice** (2026-06-01T10:00:00Z):"));
+    }
+    /// Changes a person agreed with the agent reach the revision as theirs:
+    /// not marked `[harness]`, so `revise-task` counts them as feedback.
+    #[test]
+    fn task_for_issue_hands_agreed_changes_back_as_the_persons() {
+        let comments = vec![
+            Comment {
+                by_harness: true,
+                ..sample_comment("Proposed change (not applied yet): …", "AI Harness")
+            },
+            Comment {
+                by_harness: true,
+                created_at: "2026-06-01T11:00:00Z".into(),
+                ..sample_comment(
+                    &super::super::request_changes::comment_body(
+                        "Ada Lindqvist",
+                        "Rewrite the Campaign orders bullet.",
+                    ),
+                    "AI Harness",
+                )
+            },
+        ];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(
+            task.contains(
+                "**Ada Lindqvist** (2026-06-01T11:00:00Z), through the AI Harness agent:"
+            ),
+            "{task}"
+        );
+        assert!(task.contains("Rewrite the Campaign orders bullet."));
+        assert!(
+            !task.contains("harness:requested-by"),
+            "the marker stays out"
+        );
+        // The agent's own proposal is still the harness's.
+        assert!(task.contains("**AI Harness** (2026-06-01T10:00:00Z) [harness]:"));
     }
     #[test]
     fn task_for_issue_without_comments_omits_section() {
