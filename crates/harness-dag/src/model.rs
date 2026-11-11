@@ -575,6 +575,29 @@ pub struct WorkflowReport {
     /// report uses `check` (a "tested" checkbox) or `pass_fail` (Passed/Failed).
     #[serde(default, skip_serializing_if = "ReportStatus::is_none")]
     pub status: ReportStatus,
+    /// How the findings are laid out. Default `list` (one card each); `table`
+    /// is for reports with many findings (a test audit): totals, filters and
+    /// one sortable row per finding.
+    #[serde(default, skip_serializing_if = "ReportLayout::is_list")]
+    pub layout: ReportLayout,
+}
+
+/// How a report lays out its findings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportLayout {
+    /// One card per finding (default) — right for a handful.
+    #[default]
+    List,
+    /// Totals per category, filters, and a sortable table — right for hundreds.
+    Table,
+}
+
+impl ReportLayout {
+    /// `true` for the default `List` — used to skip serialization.
+    pub fn is_list(&self) -> bool {
+        matches!(self, ReportLayout::List)
+    }
 }
 
 /// An opt-in per-finding action a report offers.

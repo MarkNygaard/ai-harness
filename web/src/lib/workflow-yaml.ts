@@ -13,6 +13,7 @@ import type {
   NodeKindId,
   PrebuiltStep,
   ReportAction,
+  ReportLayout,
   ReportStatus,
   WorkflowNav,
   WorkflowReport,
@@ -131,6 +132,11 @@ function uiToDoc(
               ? ui.report.status
               : undefined,
           actions: ui.report.actions,
+          // Likewise `list`.
+          layout:
+            ui.report.layout && ui.report.layout !== "list"
+              ? ui.report.layout
+              : undefined,
         })
       : undefined;
   const out = clean({ nav, report });
@@ -158,6 +164,7 @@ function uiFromRaw(raw: unknown): WorkflowUi | undefined {
           ? (repRaw.actions as ReportAction[])
           : undefined,
         status: repRaw.status as ReportStatus | undefined,
+        layout: repRaw.layout as ReportLayout | undefined,
       }
     : null;
   if (!nav && !report) return undefined;

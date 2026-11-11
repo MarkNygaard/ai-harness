@@ -30,7 +30,12 @@ export interface WorkflowReport {
   actions?: ReportAction[];
   /** Per-item status control; absent → `none`. */
   status?: ReportStatus;
+  /** Cards (default) or a table with totals and filters, for many findings. */
+  layout?: ReportLayout;
 }
+
+/** How a report lays out its findings. */
+export type ReportLayout = "list" | "table";
 
 /** Optional UI surfaces a workflow opts into (mirrors `harness_dag::WorkflowUi`). */
 export interface WorkflowUi {
