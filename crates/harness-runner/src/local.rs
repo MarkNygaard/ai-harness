@@ -576,20 +576,39 @@ fn browser_preamble(dir: &std::path::Path) -> String {
          A headless browser (Chromium) is available in this step. Use it when your \
          work changes or reviews something a user sees: a page, a component, \
          styling or copy.\n\n\
-         1. Start the app's dev server in the background (the command is in \
-         CLAUDE.md / AGENTS.md, or package.json) and wait until it answers.\n\
-         2. Open each page the change affects. Check it at desktop (1440x900) and \
-         mobile (390x844) widths, and read the console for errors. Fix what you \
-         find, if fixing is your job.\n\
-         3. Save a screenshot of each, giving the full path as the file name: \
-         `{dir}/<page>-<desktop|mobile>.png` (a bare name is saved in the \
-         working directory, where it is lost). Add an entry for each to \
-         `{dir}/{SCREENSHOTS_MANIFEST}`: a JSON array of objects with `file`, \
-         `page`, `viewport` and `note`, where `note` says what the screenshot \
-         shows. Add to the array if it already exists; an earlier step may have \
-         written to it, and a later screenshot of the same page and viewport \
-         replaces the earlier entry.\n\
-         4. Stop the dev server when you are done.\n\n\
+         1. Look at what earlier steps in this run saw: read \
+         `{dir}/{SCREENSHOTS_MANIFEST}` and open the images it lists before you \
+         start the app. They show each view as the last step that changed it \
+         left it, so use them: look for what is wrong in them. Start the app \
+         only for what they can't tell you: a view nobody has taken, an \
+         interaction, a console error, or a view your own step has changed \
+         since.\n\
+         2. Then, if you need it, start the app's dev server in the background \
+         (the command is in CLAUDE.md / AGENTS.md, or package.json) and wait \
+         until it answers. Open each page the change affects. Check it at \
+         desktop (1440x900) and mobile (390x844) widths, and read the console \
+         for errors. Fix what you find, if fixing is your job.\n\
+         3. Screenshots are for the person reviewing the pull request: one per \
+         view, showing the change.\n\
+         \x20  - A *view* is a page in one state at one width: the URL path, \
+         what is open or selected that matters to the change (`filter-open`), \
+         and desktop or mobile. Its file is `{dir}/<path>[-<state>]-<desktop|mobile>.png`, \
+         the path as a slug (`/category/women` is `category-women`): the same \
+         view always has the same name. Give the full path; a bare name is \
+         saved in the working directory, where it is lost.\n\
+         \x20  - If your step changed what a view shows, take it after your \
+         change, overwriting the earlier file of that view.\n\
+         \x20  - If your step only checks or reviews, take one only of a view \
+         nobody has taken yet, or to show a problem you found (put the problem \
+         in its `note`). Don't retake a view to show it is unchanged.\n\
+         \x20  - Show the change: open the drawer, menu or state it is in. Wait \
+         until the page has settled (no animation running, images loaded) \
+         before you take it.\n\
+         \x20  - For each screenshot, add or replace its entry in the manifest, \
+         a JSON array of objects with `file`, `page` (the URL path only), \
+         `view` (the state, or empty), `viewport` (`1440x900` or `390x844`) \
+         and `note` (what it shows). One entry per file.\n\
+         4. Stop the dev server, if you started one, when you are done.\n\n\
          If the app cannot start here (a missing credential, a service it needs), \
          say so in your output and carry on: that is not a reason to fail the \
          step. Skip all of this for work that changes nothing a user sees."
@@ -752,7 +771,16 @@ mod tests {
         assert!(text.contains("`/w/.harness/artifacts/screenshots/screenshots.json`"));
         // Playwright saves a bare file name relative to its working directory,
         // not to --output-dir, so the instruction must ask for the full path.
-        assert!(text.contains("`/w/.harness/artifacts/screenshots/<page>-<desktop|mobile>.png`"));
+        assert!(text
+            .contains("`/w/.harness/artifacts/screenshots/<path>[-<state>]-<desktop|mobile>.png`"));
+        // One screenshot per view: the same view always gets the same name, and
+        // a step that only reviews doesn't retake what is already there.
+        assert!(text.contains("the same view always has the same name"));
+        assert!(text.contains("Don't retake a view to show it is unchanged"));
+        assert!(text.contains("Wait until the page has settled"));
+        // A later step looks at what earlier ones saw before starting the app.
+        assert!(text.contains("open the images it lists before you"));
+        assert!(text.contains("Start the app only for what they can't tell you"));
         assert!(text.contains("not a reason to fail the step"));
         assert!(text.contains("Skip all of this for work that changes nothing a user sees"));
 
