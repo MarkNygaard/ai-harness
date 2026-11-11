@@ -472,23 +472,11 @@ async fn claim_and_fire(
         },
         None => None,
     };
-    // Concurrency gate: skip if this binding is already at its in-flight cap.
-    // `max_concurrent_runs` defaults to 1 (the original one-at-a-time behaviour);
-    // a binding can raise it to run several issues in parallel. The poller still
-    // claims at most one issue per tick, so it ramps up to the cap over ticks.
-    match claim_store.count_active(&b.project, &b.workflow).await {
-        Ok(active) if super::linear_agent::at_capacity(active, b.max_concurrent_runs) => return,
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!(
-                "linear poller: count_active failed for {}/{}: {e}",
-                b.project,
-                b.workflow
-            );
-            return;
-        }
-    }
-
+    // No concurrency gate here. `max_concurrent_runs` is enforced where the run
+    // starts (`runs_routes::workflow_has_room`): over it, the run is parked as
+    // queued. Refusing here instead left an issue waiting for a slot invisible —
+    // eligible, but in no list — until the slot freed. The poller still claims
+    // at most one issue per tick, and never one that already has a claim.
     let found = match candidates(client, b, delegate_id).await {
         Ok(i) => i,
         Err(e) => {
