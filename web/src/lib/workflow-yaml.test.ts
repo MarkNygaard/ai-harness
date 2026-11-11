@@ -260,6 +260,7 @@ describe("ui block round-trip", () => {
           scored: false,
           status: "pass_fail",
           actions: ["build", "ignore"],
+          layout: "table",
         },
       },
     };
@@ -267,6 +268,8 @@ describe("ui block round-trip", () => {
     expect(yaml).toContain("label: Test Scenarios");
     expect(yaml).toContain("verdict_node: refine");
     expect(yaml).toContain("status: pass_fail");
+    expect(yaml).toContain("layout: table");
+    expect(fromYaml(yaml).ui?.report?.layout).toBe("table");
 
     const back = fromYaml(yaml);
     expect(back.ui?.nav).toEqual({
@@ -295,10 +298,12 @@ describe("ui block round-trip", () => {
           verdict_node: null,
           scored: false,
           status: "none",
+          layout: "list",
         },
       },
     });
     expect(yaml).not.toContain("status:");
+    expect(yaml).not.toContain("layout:");
     expect(yaml).not.toContain("verdict_node:"); // null dropped
     expect(fromYaml(yaml).ui?.report?.label).toBe("R");
   });

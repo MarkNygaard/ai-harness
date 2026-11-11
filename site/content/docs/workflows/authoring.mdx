@@ -136,10 +136,15 @@ for a plain workflow.
 | `report.scored` | `true` → show a score + rating + per-dimension bars + score-history sparkline (GEO-style); `false` (default) → findings list only. |
 | `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (fire the default workflow, `task`), `issue` (file into Linear), `ignore`. A bug/finding report uses `[build, issue, ignore]`. |
 | `report.status` | Per-item status control: `none` (default), `check` (a "tested" checkbox), or `pass_fail` (Passed / Failed) — for manual test checklists. |
+| `report.layout` | `list` (default): one card per finding. `table`: totals per category, category tabs, a search box, and one sortable row per finding — for reports with hundreds of findings, such as a test audit. |
 
 The report renders a node's JSON output shaped as
-`{ summary?, score?, rating?, categories?[], findings: [{ title?, severity?, category?, detail?, fix?, location?, effort? }] }`
-— produce it with `output_format` on the verdict node. This is how any
+`{ summary?, score?, rating?, categories?[], findings: [{ title?, severity?, category?, detail?, fix?, location?, effort?, id?, score?, duration_ms? }] }`
+— produce it with `output_format` on the verdict node, or print it from a
+`script` node. In a `table` report, give each finding an `id` that is unique in
+the run (two findings with the same category and title are otherwise one), and
+`score` (0–1) and `duration_ms` where they mean something: each becomes a
+sortable column. This is how any
 workflow (including MCP-authored ones) gets a report tab + nav entry without
 front-end changes.
 

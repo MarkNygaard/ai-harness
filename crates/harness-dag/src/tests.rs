@@ -220,6 +220,28 @@ nodes:
 }
 
 #[test]
+fn a_report_is_a_list_unless_it_asks_for_a_table() {
+    use crate::model::ReportLayout;
+    let report = |extra: &str| {
+        let yaml = format!(
+            "name: audit\nui:\n  report:\n    label: Tests\n{extra}nodes:\n  - id: a\n    bash: \"x\"\n"
+        );
+        parse_workflow(&yaml).unwrap().ui.unwrap().report.unwrap()
+    };
+    assert_eq!(report("").layout, ReportLayout::List);
+    let table = report("    layout: table\n");
+    assert_eq!(table.layout, ReportLayout::Table);
+    // Round-trips, and the default stays out of the saved YAML.
+    assert!(serde_json::to_string(&report(""))
+        .unwrap()
+        .find("layout")
+        .is_none());
+    assert!(serde_json::to_string(&table)
+        .unwrap()
+        .contains("\"layout\":\"table\""));
+}
+
+#[test]
 fn workflow_without_ui_parses_with_none() {
     let wf = parse_workflow("name: plain\nnodes:\n  - id: a\n    bash: \"x\"\n").unwrap();
     assert!(wf.ui.is_none());

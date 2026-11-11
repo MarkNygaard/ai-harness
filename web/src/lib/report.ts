@@ -18,6 +18,16 @@ import type { WorkflowUi } from "@/types/authoring";
 import type { NodeView, RunDetail } from "@/types/run";
 
 export interface WorkflowFinding {
+  /**
+   * Unique within the run. A report with many findings sets it, since two can
+   * share a category and title (a test name repeated in two files); it is
+   * then the finding's key.
+   */
+  id?: string;
+  /** 0–1, where the finding has a score of its own (a table column). */
+  score?: number;
+  /** How long the thing found takes, e.g. a test's runtime (a table column). */
+  duration_ms?: number;
   title?: string;
   summary?: string;
   severity?: string;
@@ -147,6 +157,8 @@ export function useWorkflowUi(
 
 /** Stable key for a finding within a run's report (`category::title`). */
 export function findingKey(f: WorkflowFinding): string {
+  // A report with many findings names them: two tests can share a title.
+  if (f.id) return `id::${f.id}`;
   const title = f.title ?? f.summary ?? "";
   return `${f.category ?? ""}::${title}`;
 }

@@ -1217,7 +1217,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_save",
-            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project). The YAML may include a top-level `ui:` block ({ nav: { label, icon }, report: { label, verdict_node?, scored } }) to give the workflow a left-nav entry + a findings/report tab; or set it incrementally with workflow_set_ui. A top-level `improvements: { every: N }` (3-100) switches on improvement suggestions: after every N finished runs per project the harness reviews them and suggests changes, read with improvements_list.",
+            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project). The YAML may include a top-level `ui:` block ({ nav: { label, icon }, report: { label, verdict_node?, scored?, actions?, status?, layout? } }) to give the workflow a left-nav entry + a findings/report tab; or set it incrementally with workflow_set_ui. A top-level `improvements: { every: N }` (3-100) switches on improvement suggestions: after every N finished runs per project the harness reviews them and suggests changes, read with improvements_list.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1304,7 +1304,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_set_ui",
-            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (the default workflow, task), issue (Linear), ignore. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings.",
+            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (the default workflow, task), issue (Linear), ignore. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings. `layout: table` shows totals, filters and one sortable row per finding instead of cards; use it for many findings, and give each finding `id` (unique), `score` (0-1) and `duration_ms` where they apply.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1331,7 +1331,8 @@ fn mcp_tools() -> Vec<Value> {
                                         "type": "array",
                                         "items": { "enum": ["build", "issue", "ignore"] }
                                     },
-                                    "status": { "enum": ["none", "check", "pass_fail"] }
+                                    "status": { "enum": ["none", "check", "pass_fail"] },
+                                    "layout": { "enum": ["list", "table"] }
                                 },
                                 "required": ["label"]
                             }

@@ -2,6 +2,7 @@ import { X } from "lucide-react";
 import { NAV_ICON_KEYS } from "@/components/AppSidebar";
 import type {
   ReportAction,
+  ReportLayout,
   ReportStatus,
   WorkflowNav,
   WorkflowReport,
@@ -164,6 +165,18 @@ export function WorkflowSettingsDrawer({
                   {s}
                 </SelectItem>
               ))}
+            </SelectField>
+            <SelectField
+              label="Layout"
+              value={report.layout ?? "list"}
+              onValueChange={(v) =>
+                setReport({ ...report, layout: v as ReportLayout })
+              }
+            >
+              <SelectItem value="list">list (a card per finding)</SelectItem>
+              <SelectItem value="table">
+                table (totals, filters, a row per finding)
+              </SelectItem>
             </SelectField>
             <Toggle
               label="Scored (score gauge + history)"

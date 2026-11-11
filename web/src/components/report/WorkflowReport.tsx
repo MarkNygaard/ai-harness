@@ -37,7 +37,12 @@ import {
   type WorkflowFinding,
   type WorkflowVerdict,
 } from "@/lib/report";
-import type { ReportAction, ReportStatus } from "@/types/authoring";
+import type {
+  ReportAction,
+  ReportLayout,
+  ReportStatus,
+} from "@/types/authoring";
+import { FindingsTable } from "./FindingsTable";
 
 /** The workflow findings are filed/built against. */
 const BUILD_WORKFLOW = "task";
@@ -59,6 +64,7 @@ export function WorkflowReport({
   verdictNode,
   actions,
   status,
+  layout = "list",
 }: {
   verdict: WorkflowVerdict;
   scored: boolean;
@@ -70,6 +76,8 @@ export function WorkflowReport({
   actions: ReportAction[];
   /** Per-item status control (checkbox / pass-fail); `none` → hidden. */
   status: ReportStatus;
+  /** Cards, or a table with totals and filters for many findings. */
+  layout?: ReportLayout;
 }) {
   const canBuild = actions.includes("build");
   const canIssue = actions.includes("issue");
@@ -228,7 +236,13 @@ export function WorkflowReport({
   const showScore = scored && verdict.score != null;
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-6">
+    <div
+      className={cn(
+        "mx-auto flex flex-col gap-6",
+        // A table needs the width for its columns.
+        layout === "table" ? "max-w-6xl" : "max-w-4xl",
+      )}
+    >
       {showScore ? (
         <div className="flex items-center gap-4 border border-border p-4">
           <div className="flex flex-col items-center">
@@ -332,7 +346,31 @@ export function WorkflowReport({
         {actionError && (
           <p className="text-[11px] text-destructive">{actionError}</p>
         )}
-        {findings.length === 0 ? (
+        {layout === "table" ? (
+          <FindingsTable
+            findings={findings}
+            dimmed={(f) => stateByKey[findingKey(f)]?.action === "ignored"}
+            actionsFor={
+              (canBuild && project) || canIssue || canIgnore
+                ? (f) => (
+                    <TableActions
+                      finding={f}
+                      state={stateByKey[findingKey(f)]}
+                      canBuild={canBuild && !!project && !f.offsite}
+                      canIssue={canIssue}
+                      issueBlocked={issueBlocked}
+                      canIgnore={canIgnore}
+                      busy={busy === findingKey(f) || busy === "bulk"}
+                      onBuild={() => build(f)}
+                      onCreateIssue={() => createIssueOne(f)}
+                      onIgnore={() => ignore(f)}
+                      onReset={() => reset(f)}
+                    />
+                  )
+                : undefined
+            }
+          />
+        ) : findings.length === 0 ? (
           <p className="text-sm text-muted-foreground">No findings.</p>
         ) : (
           <div className="flex flex-col gap-2">
@@ -412,6 +450,112 @@ function ReportHistory({
         previous
       </span>
     </div>
+  );
+}
+
+/**
+ * A table row's build / issue / ignore buttons: the same actions as a card's,
+ * compact, with a link once a finding has been built or filed.
+ */
+function TableActions({
+  finding,
+  state,
+  canBuild,
+  canIssue,
+  issueBlocked,
+  canIgnore,
+  busy,
+  onBuild,
+  onCreateIssue,
+  onIgnore,
+  onReset,
+}: {
+  finding: WorkflowFinding;
+  state: FindingState | undefined;
+  canBuild: boolean;
+  canIssue: boolean;
+  issueBlocked: string | null;
+  canIgnore: boolean;
+  busy: boolean;
+  onBuild: () => void;
+  onCreateIssue: () => void;
+  onIgnore: () => void;
+  onReset: () => void;
+}) {
+  const action = state?.action;
+  if (action === "built" || action === "issued") {
+    const href =
+      action === "built" && state?.ref_run_id
+        ? `/runs/${state.ref_run_id}`
+        : null;
+    return (
+      <span className="inline-flex items-center gap-1">
+        {href ? (
+          <Button
+            variant="link"
+            size="xs"
+            render={<Link to={href} />}
+            nativeButton={false}
+          >
+            Building
+          </Button>
+        ) : state?.issue_url ? (
+          <Button
+            variant="link"
+            size="xs"
+            render={
+              <a href={state.issue_url} target="_blank" rel="noreferrer" />
+            }
+            nativeButton={false}
+          >
+            {state.issue_identifier ?? "Issue"}
+          </Button>
+        ) : (
+          <Check className="size-4 text-status-success" aria-label="done" />
+        )}
+        <Button variant="ghost" size="xs" onClick={onReset}>
+          Undo
+        </Button>
+      </span>
+    );
+  }
+  if (action === "ignored") {
+    return (
+      <Button variant="ghost" size="xs" onClick={onReset}>
+        Unignore
+      </Button>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1">
+      {canBuild && (
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={busy}
+          title={`Build a fix with the task workflow: ${finding.title ?? ""}`}
+          onClick={onBuild}
+        >
+          Build
+        </Button>
+      )}
+      {canIssue && (
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={busy || !!issueBlocked}
+          title={issueBlocked ?? "File a Linear issue for this finding"}
+          onClick={onCreateIssue}
+        >
+          Issue
+        </Button>
+      )}
+      {canIgnore && (
+        <Button variant="ghost" size="xs" onClick={onIgnore}>
+          Ignore
+        </Button>
+      )}
+    </span>
   );
 }
 
