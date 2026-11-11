@@ -2354,28 +2354,69 @@ async fn dispatch_next_queued_inner(state: Arc<RunsState>) {
         claimed
             .request
             .clone()
-            .and_then(|v| match serde_json::from_value(v) {
+            .and_then(|v| match parked_request(v) {
                 Ok(r) => Some(r),
                 Err(e) => {
                     failed(&format!("its parked request no longer parses: {e}"));
                     None
                 }
             });
-    let Some(req) = req else {
-        if claimed.request.is_none() {
-            failed("no request was parked with it");
+    let launched = match req {
+        Some(req) => match start_run_inner(state, req, Some(claimed.run_id.clone())).await {
+            Ok(_) => true,
+            Err((_, msg)) => {
+                failed(&msg);
+                false
+            }
+        },
+        None => {
+            if claimed.request.is_none() {
+                failed("no request was parked with it");
+            }
+            false
         }
-        let _ = store
-            .finish_run(&claimed.run_id, harness_dag::RunStatus::Failed)
-            .await;
-        return;
     };
-    if let Err((_, msg)) = start_run_inner(state, req, Some(claimed.run_id.clone())).await {
-        failed(&msg);
-        let _ = store
-            .finish_run(&claimed.run_id, harness_dag::RunStatus::Failed)
-            .await;
+    if launched {
+        return;
     }
+    let _ = store
+        .finish_run(&claimed.run_id, harness_dag::RunStatus::Failed)
+        .await;
+    // Ended like any other run, so what waits on it hears: a facts or
+    // improvements review closes now, with the run's status, instead of
+    // blocking the next review until it goes stale.
+    tokio::spawn(super::improvements_routes::on_run_finished(
+        state.clone(),
+        claimed.run_id.clone(),
+    ));
+    // The slot it claimed is free again.
+    dispatch_next_queued(state.clone()).await;
+}
+
+/// Starts at once even with every slot taken: the harness's own runs.
+fn skips_queue(workflow: &harness_dag::Workflow) -> bool {
+    workflow.internal
+}
+
+/// A queued run's request, read back from the row it was parked on.
+///
+/// The trigger fields are `skip_deserializing` so that an API caller cannot
+/// set them, which also drops them here. This JSON was written by the server
+/// itself, so they are restored from it. Without them a queued run lost who
+/// started it and how, and a queued `learn-facts` or `improvements-analysis`
+/// run was refused as an internal workflow started by hand.
+fn parked_request(v: serde_json::Value) -> Result<CreateRunRequest, serde_json::Error> {
+    let field = |name: &str| v.get(name).and_then(|x| x.as_str()).map(str::to_string);
+    let (triggered_by, trigger_source, trigger_actor) = (
+        field("triggered_by"),
+        field("trigger_source"),
+        field("trigger_actor"),
+    );
+    let mut req: CreateRunRequest = serde_json::from_value(v)?;
+    req.triggered_by = triggered_by;
+    req.trigger_source = trigger_source;
+    req.trigger_actor = trigger_actor;
+    Ok(req)
 }
 
 pub(crate) async fn start_run(
@@ -2527,7 +2568,13 @@ async fn start_run_inner(
     // The row goes in with no graph: the node list arrives with the executor's
     // `RunStarted`, which has not happened yet. `start_run`'s upsert fills it in
     // on dispatch.
+    //
+    // The harness's own runs (a facts or improvements review) never wait. They
+    // are two short steps, at most one at a time per project and workflow, and
+    // queued behind an hour-long task they only arrive late. They still count
+    // against capacity while they run.
     if dispatched_id.is_none()
+        && !skips_queue(&workflow)
         && (!state.has_capacity_for(1).await
             || !workflow_has_room(state, Some(&project), &workflow.name).await)
     {
@@ -3452,6 +3499,69 @@ pub async fn delete_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A facts or improvements review is the harness's own two-step run. It
+    /// starts at once rather than queueing behind an hour-long task; anything
+    /// a person starts still waits its turn.
+    #[test]
+    fn only_the_harness_own_runs_skip_the_queue() {
+        for name in harness_runner::INTERNAL_WORKFLOWS {
+            let wf = parse_workflow(harness_runner::default_workflow(name).unwrap()).unwrap();
+            assert!(skips_queue(&wf), "{name} should skip the queue");
+        }
+        let task = parse_workflow(
+            harness_runner::default_workflow(harness_runner::DEFAULT_WORKFLOW).unwrap(),
+        )
+        .unwrap();
+        assert!(!skips_queue(&task));
+    }
+
+    fn request(source: Option<&str>) -> CreateRunRequest {
+        CreateRunRequest {
+            triggered_by: source.map(|_| "user-1".to_string()),
+            trigger_source: source.map(str::to_string),
+            trigger_actor: source.map(|_| "Learned facts".to_string()),
+            workflow: "learn-facts".into(),
+            title: Some("Learn facts".into()),
+            description: "review".into(),
+            args: String::new(),
+            issue_id: None,
+            real: true,
+            base_branch: None,
+            project: Some("p".into()),
+            swap_from: None,
+            swap_to: None,
+            ab_pair_id: None,
+            ab_arm: None,
+            ab_label: None,
+        }
+    }
+
+    /// The facts review stalled on exactly this: parked, then read back with
+    /// no `trigger_source`, then refused as an internal workflow started by
+    /// hand. What the server parked comes back whole.
+    #[test]
+    fn a_queued_request_keeps_who_started_it_and_how() {
+        let parked = serde_json::to_value(request(Some("facts"))).unwrap();
+        let back = parked_request(parked).unwrap();
+        assert_eq!(back.trigger_source.as_deref(), Some("facts"));
+        assert_eq!(back.trigger_actor.as_deref(), Some("Learned facts"));
+        assert_eq!(back.triggered_by.as_deref(), Some("user-1"));
+        assert_eq!(back.workflow, "learn-facts");
+        assert_eq!(back.project.as_deref(), Some("p"));
+    }
+
+    /// The restore is for the parked row only: a request body from a caller
+    /// still cannot say it came from the facts machinery.
+    #[test]
+    fn a_request_body_still_cannot_set_its_trigger() {
+        let body = serde_json::to_value(request(Some("facts"))).unwrap();
+        let from_caller: CreateRunRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(from_caller.trigger_source, None);
+        assert_eq!(from_caller.triggered_by, None);
+        let unset = parked_request(serde_json::to_value(request(None)).unwrap()).unwrap();
+        assert_eq!(unset.trigger_source, None);
+    }
 
     /// Under the trigger system a trigger's **Max simultaneous tasks** is what
     /// holds a run back: ECOM-854 waited in Changes requested behind a running
