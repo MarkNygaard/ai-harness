@@ -257,6 +257,29 @@ pub(crate) async fn call_tool(
                 Err(e) => tool_error(e),
             }
         }
+        "linear_request_changes" => {
+            let (project, issue, target) = (s("project"), s("issue"), s("state"));
+            if project.is_empty() || issue.is_empty() || target.is_empty() {
+                return tool_error("`project`, `issue` and `state` are required");
+            }
+            if !is_issue_identifier(&issue) {
+                return tool_error(format!("`{issue}` is not an issue identifier like ECOM-44"));
+            }
+            let requester = actor.actor.as_deref().unwrap_or_default();
+            match super::request_changes::request_changes(
+                state,
+                requester,
+                &project,
+                &issue,
+                &target,
+                &s("changes"),
+            )
+            .await
+            {
+                Ok(summary) => to_result(summary.clone(), &json!({ "summary": summary })),
+                Err(e) => tool_error(e),
+            }
+        }
         "linear_check" => {
             let project = s("project");
             if project.is_empty() {
@@ -934,6 +957,21 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "linear_request_changes",
+            "description": "Hand agreed changes to a Linear issue's EXISTING pull request over to the team's revise path, instead of starting a run. Posts `changes` on the issue as a comment credited to the person you are talking to, makes sure the issue is delegated to the harness, and moves it to `state`: a column an enabled trigger in this project watches for that team (find it with trigger_list, e.g. the one that runs revise-task). That trigger then revises the PR with its normal Linear updates. Refused when no trigger watches that column. Needs the person's confirmation. Write `changes` as the full instruction a developer could act on alone: what to change, where, and why, including what you agreed in the conversation.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "project": { "type": "string" },
+                    "issue": { "type": "string", "description": "The issue identifier, e.g. ECOM-854" },
+                    "state": { "type": "string", "description": "The status to move it to, by name, e.g. Changes requested" },
+                    "changes": { "type": "string", "description": "Markdown: the agreed changes, complete" }
+                },
+                "required": ["project", "issue", "state", "changes"],
+            }
+        }),
+        json!({
             "name": "linear_check",
             "description": "Diagnose a project's Linear wiring: does the relay of columns actually join up? Read-only. A binding moves an issue to a column expecting a *different* binding to claim it from there — and nothing enforces that. A ready status no binding polls means the run succeeds, the move succeeds, and the work is parked forever with no error anywhere; for an epic, the feature stops advancing overnight and the only symptom is absence. Returns findings at `error` (work will be dropped or never start), `warn` (works, but probably not as intended) and `ok` (the chain, stated so the report reads whole). Run this when an issue or an epic stopped for no visible reason, and after changing any binding.",
             "inputSchema": {
@@ -1468,6 +1506,8 @@ fn node_output(
 pub(crate) const NEEDS_CONFIRMATION: &[&str] = &[
     "run_trigger",
     "run_trigger_pair",
+    // Comments on an issue and moves it, which starts a run through its trigger.
+    "linear_request_changes",
     "workflow_delete",
     "library_uninstall",
     // A schedule starts runs by itself from then on, so setting one up or
@@ -1932,8 +1972,14 @@ const RUN_TOOLS: &[&str] = &[
 /// name. A typical harness PR is well under it; a sweeping one is read a
 /// folder at a time.
 const PR_DIFF_BUDGET: usize = 60_000;
-/// Reading and diagnosing what triggers a run, as opposed to starting one.
-const LINEAR_TOOLS: &[&str] = &["linear_states", "linear_bindings", "linear_check"];
+/// Reading and diagnosing what triggers a run, and handing an issue to its
+/// triggers instead of starting a run.
+const LINEAR_TOOLS: &[&str] = &[
+    "linear_states",
+    "linear_bindings",
+    "linear_check",
+    "linear_request_changes",
+];
 /// Workflows run on a cron schedule (the Schedules page).
 const SCHEDULE_TOOLS: &[&str] = &[
     "schedule_list",

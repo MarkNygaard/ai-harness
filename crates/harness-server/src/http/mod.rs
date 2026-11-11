@@ -45,6 +45,7 @@ pub(crate) mod oidc;
 pub(crate) mod pr_tracking;
 pub(crate) mod projects_routes;
 pub(crate) mod rate_limit;
+pub(crate) mod request_changes;
 pub(crate) mod run_grants;
 pub(crate) mod run_linear_routes;
 pub(crate) mod run_s3_routes;
