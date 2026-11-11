@@ -55,9 +55,7 @@ pub fn detect_signal(output: &str, signal: &str) -> bool {
 
 /// The sentence `text` ends in: what follows its last sentence break.
 fn last_sentence(text: &str) -> &str {
-    let start = text
-        .rfind(['.', '!', '?', '\n'])
-        .map_or(0, |i| i + 1);
+    let start = text.rfind(['.', '!', '?', '\n']).map_or(0, |i| i + 1);
     &text[start..]
 }
 
