@@ -272,6 +272,46 @@ fn a_report_applies_what_it_approves() {
 }
 
 #[test]
+fn a_scorer_node_is_named_and_passes_at_a_score_in_0_to_1() {
+    let yaml = |scorer: &str| {
+        format!(
+            "name: task\nnodes:\n  - id: score-tests\n    prompt: \"grade\"\n    scorer:\n{scorer}"
+        )
+    };
+    let wf = parse_workflow(&yaml(
+        "      name: redundant-tests\n      pass_at: 0.7\n      description: Surplus tests\n",
+    ))
+    .unwrap();
+    let scorer = wf.nodes[0].scorer.clone().unwrap();
+    assert_eq!(scorer.name, "redundant-tests");
+    assert_eq!(scorer.pass_at, 0.7);
+    assert_eq!(scorer.description.as_deref(), Some("Surplus tests"));
+
+    // pass_at defaults to 0.5, and a plain node has no scorer.
+    let default = parse_workflow(&yaml("      name: x\n")).unwrap();
+    assert_eq!(default.nodes[0].scorer.as_ref().unwrap().pass_at, 0.5);
+    assert!(
+        parse_workflow("name: p\nnodes:\n  - id: a\n    bash: \"x\"\n")
+            .unwrap()
+            .nodes[0]
+            .scorer
+            .is_none()
+    );
+
+    for bad in [
+        "      name: Redundant Tests\n",
+        "      name: x\n      pass_at: 1.5\n",
+        "      name: x\n      pass_at: -0.1\n",
+    ] {
+        let err = parse_workflow(&yaml(bad)).unwrap_err();
+        assert!(
+            matches!(err, DagError::InvalidScorer { .. }),
+            "{bad}: {err}"
+        );
+    }
+}
+
+#[test]
 fn workflow_without_ui_parses_with_none() {
     let wf = parse_workflow("name: plain\nnodes:\n  - id: a\n    bash: \"x\"\n").unwrap();
     assert!(wf.ui.is_none());
@@ -843,6 +883,7 @@ fn linear_text_is_substitutable_so_a_comment_can_carry_vars() {
         hooks: None,
         mcp: vec![],
         linear_comment: false,
+        scorer: None,
         kind: NodeKind::Linear(LinearAction::Comment("see $plan.output".into())),
     };
     assert_eq!(node.substitutable_text(), vec!["see $plan.output"]);

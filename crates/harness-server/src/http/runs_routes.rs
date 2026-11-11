@@ -105,6 +105,7 @@ pub struct RunsState {
     linear_source_store: OnceCell<harness_persist::LinearSourceStore>,
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     finding_store: OnceCell<harness_persist::FindingStateStore>,
+    scorer_store: OnceCell<harness_persist::ScorerResultStore>,
     chat_store: OnceCell<harness_persist::ChatStore>,
     schedule_store: OnceCell<harness_persist::ScheduleStore>,
     trigger_store: OnceCell<harness_persist::TriggerStore>,
@@ -222,6 +223,7 @@ impl RunsState {
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             finding_store: OnceCell::new(),
+            scorer_store: OnceCell::new(),
             chat_store: OnceCell::new(),
             schedule_store: OnceCell::new(),
             trigger_store: OnceCell::new(),
@@ -633,6 +635,21 @@ impl RunsState {
         self.finding_store
             .get_or_try_init(|| async {
                 harness_persist::FindingStateStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
+    /// Grades recorded by scorer nodes.
+    pub(crate) async fn scorer_store(&self) -> Result<&harness_persist::ScorerResultStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.scorer_store
+            .get_or_try_init(|| async {
+                harness_persist::ScorerResultStore::connect(url)
                     .await
                     .map_err(|e| e.to_string())
             })
@@ -2846,9 +2863,38 @@ async fn execute_run_task(
         .filter_map(|n| n.artifact.as_ref().map(|a| (n.id.clone(), a.clone())))
         .collect();
     let forwarder_artifacts = artifacts.clone();
+    // Scorer nodes, whose grades are recorded as they finish.
+    let node_scorers: HashMap<String, harness_dag::ScorerConfig> = workflow
+        .nodes
+        .iter()
+        .filter_map(|n| n.scorer.clone().map(|s| (n.id.clone(), s)))
+        .collect();
+    let scorer_workflow = workflow.name.clone();
     let forwarder = tokio::spawn(async move {
         let mut ordinals: HashMap<String, i32> = HashMap::new();
+        let mut node_started: HashMap<String, std::time::Instant> = HashMap::new();
         while let Some(mut ev) = rx.next().await {
+            match &ev {
+                RunEvent::NodeStarted { node_id, .. } if node_scorers.contains_key(node_id) => {
+                    node_started.insert(node_id.clone(), std::time::Instant::now());
+                }
+                RunEvent::NodeFinished { node } => {
+                    if let Some(scorer) = node_scorers.get(&node.id) {
+                        let ms = node_started
+                            .remove(&node.id)
+                            .map(|t| t.elapsed().as_millis() as i64);
+                        let run = super::scorer_routes::GradedRun {
+                            run_id: &persist_run_id,
+                            workflow: &scorer_workflow,
+                            project: persist_project.as_deref(),
+                            title: persist_title.as_deref(),
+                        };
+                        super::scorer_routes::record_grade(&persist_state, &run, scorer, node, ms)
+                            .await;
+                    }
+                }
+                _ => {}
+            }
             // Read a node's declared artifact as soon as it finishes (the
             // worktree is still live) so both the persisted row and the SSE
             // broadcast carry its content while the run is still in progress.

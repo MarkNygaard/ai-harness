@@ -302,6 +302,9 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/runs/{id}/findings/batch",
             post(finding_routes::batch_findings),
         )
+        // ── Scorers: grades recorded by scorer nodes, across runs ───────────
+        .route("/api/scorers", get(super::scorer_routes::list_scorers))
+        .route("/api/scorers/{name}", get(super::scorer_routes::get_scorer))
         // ── Cluster-hosted MCP endpoint (JSON-RPC over HTTP; no local binary) ─
         // Authoring + run control for editors via `{ "type": "http", "url":
         // ".../mcp" }`. Behind the global bearer-token middleware.

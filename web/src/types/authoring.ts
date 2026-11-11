@@ -43,6 +43,14 @@ export interface WorkflowReport {
   apply?: ReportApply | null;
 }
 
+/** A node that grades its run (mirrors `harness_dag::ScorerConfig`). */
+export interface ScorerConfig {
+  name: string;
+  /** The lowest passing score, 0–1; default 0.5. */
+  pass_at?: number;
+  description?: string;
+}
+
 /** How a report lays out its findings. */
 export type ReportLayout = "list" | "table";
 
@@ -327,6 +335,8 @@ export interface EditorNode {
   mcp?: McpEntry[];
   /** Post this step's output to the Linear issue when the run completes. */
   linear_comment?: boolean;
+  /** This step grades the run; its grade is recorded under the scorer. */
+  scorer?: ScorerConfig;
   // Mutually exclusive bodies:
   prompt?: string;
   bash?: string;
