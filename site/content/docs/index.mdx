@@ -21,7 +21,7 @@ the work.
 There is no diff-application engine here, no tool-call interpreter, no attempt
 to script the edit. A node hands an agent a prompt and a working directory, and
 what the agent does with them is the agent's business. That is why one pipeline
-can put Claude Code, Codex, Kimi and Cursor nodes side by side without an
+can put Claude Code, Kimi, GPT and Cursor nodes side by side without an
 adapter for each, and why a new version of an agent CLI is not a change to the
 harness.
 
@@ -62,7 +62,7 @@ someone who cannot read a diff. See
 
 The harness coordinates. It brings no intelligence of its own.
 
-- **Accounts for the agents.** Claude Code, Codex, Pi and Cursor run as
+- **Accounts for the agents.** Claude Code, Pi and Cursor run as
   subprocesses, and each needs one. See
   [subscriptions](/docs/setup/subscriptions).
 - **A workflow**, or one of the [nine that ship with it](/docs/workflows/bundled).

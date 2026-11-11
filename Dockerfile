@@ -7,11 +7,11 @@
 # so the builder needs both cargo AND bun, and the runtime is a single static-ish
 # binary that already serves the UI.
 #
-# The runtime also carries the agent CLIs (claude / codex / cursor / omp) + git + mise
+# The runtime also carries the agent CLIs (claude / cursor / omp) + git + mise
 # + a headless Chromium for the agents' browser tool,
-# so `provider: claude|codex|cursor|pi` nodes and toolchain bootstrap work in-pod.
+# so `provider: claude|cursor|pi` nodes and toolchain bootstrap work in-pod.
 # Provider credentials are NOT baked in — they're entered in the UI, stored encrypted
-# in Postgres, and materialized into $HOME (~/.claude, ~/.codex) or env (CURSOR_API_KEY)
+# in Postgres, and materialized into $HOME (~/.claude, ~/.omp) or env (CURSOR_API_KEY)
 # at run time.
 
 # ── Builder: cargo + bun → the `harness` binary with the UI embedded ──────────
@@ -87,18 +87,16 @@ RUN mkdir -p -m 755 /etc/apt/keyrings \
     && apt-get install -y --no-install-recommends gh \
     && rm -rf /var/lib/apt/lists/*
 
-# Node (Claude Code + Codex CLIs are npm packages).
+# Node (the Claude Code CLI is an npm package).
 #
-# This layer is cached on its text like any other, so the versions baked in
-# here age the same way omp's did below. It is left unpinned because these two
-# are the CLIs the system routes CAN update in place at runtime
+# This layer is cached on its text like any other, so the version baked in
+# here ages the same way omp's did below. It is left unpinned because Claude
+# Code is a CLI the system routes CAN update in place at runtime
 # (`npm install --prefix`, see `system_routes.rs`), so a stale image is
-# recoverable from the UI rather than only by a rebuild. Note `gpt-6-astra` on
-# the `codex` provider needs Codex CLI >= 0.153.1 — if a node fails on that,
-# updating the CLI from Settings is the fix.
+# recoverable from the UI rather than only by a rebuild.
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code @openai/codex \
+    && npm install -g @anthropic-ai/claude-code \
     && npm cache clean --force \
     && rm -rf /var/lib/apt/lists/*
 

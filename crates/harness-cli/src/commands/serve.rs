@@ -215,28 +215,6 @@ pub async fn run(
             harness_agents::registry::AdapterExecutionStrategy::ControlOnly,
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    agent_registry.register(
-        "codex",
-        Arc::new(
-            harness_agents::codex::CodexAgent::from_config(
-                serve_config.agents.codex.clone(),
-                serve_config.agents.sandbox_mode,
-            )
-            .with_stream_timeout(serve_config.agents.stream_timeout_secs),
-        ),
-    );
-    let codex_cli_path = serve_config.agents.codex.cli_path.clone();
-    agent_registry
-        .register_adapter_factory_with_strategy(
-            "codex",
-            move || {
-                Arc::new(harness_agents::codex_adapter::CodexAdapter::new(
-                    codex_cli_path.clone(),
-                ))
-            },
-            harness_agents::registry::AdapterExecutionStrategy::ExecuteTurns,
-        )
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
     if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
         agent_registry.register(
             "anthropic-api",

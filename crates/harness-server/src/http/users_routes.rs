@@ -373,7 +373,7 @@ mod tests {
 
         let state = Arc::new(RunsState::new(
             Some(url),
-            Arc::new(AgentRegistry::new("codex")),
+            Arc::new(AgentRegistry::new("claude")),
             std::path::PathBuf::from("/tmp"),
             None,
             None,
@@ -458,7 +458,7 @@ mod tests {
 
         let state = Arc::new(RunsState::new(
             Some(url),
-            Arc::new(AgentRegistry::new("codex")),
+            Arc::new(AgentRegistry::new("claude")),
             std::path::PathBuf::from("/tmp"),
             None,
             None,
@@ -545,7 +545,7 @@ mod tests {
 
         let state = Arc::new(RunsState::new(
             Some(url),
-            Arc::new(AgentRegistry::new("codex")),
+            Arc::new(AgentRegistry::new("claude")),
             std::path::PathBuf::from("/tmp"),
             None,
             None,

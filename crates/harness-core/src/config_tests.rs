@@ -14,8 +14,6 @@ fn harness_config_toml(data_dir: &str, workspace_section: &str) -> String {
         [agents.claude]
         cli_path = "claude"
         default_model = "sonnet"
-        [agents.codex]
-        cli_path = "codex"
         [agents.anthropic_api]
         base_url = "https://api.anthropic.com"
         default_model = "claude-sonnet-5"
@@ -59,7 +57,7 @@ where
 fn agent_review_config_defaults() {
     let config = AgentReviewConfig::default();
     assert!(config.enabled);
-    assert_eq!(config.reviewer_agent, "codex");
+    assert_eq!(config.reviewer_agent, "claude");
     assert_eq!(config.max_rounds, 3);
     assert_eq!(config.review_bot_command, "/gemini review");
     assert!(!config.review_bot_auto_trigger);
@@ -72,12 +70,12 @@ fn agent_review_config_defaults() {
 fn agent_review_config_deserializes_from_toml() {
     let toml_str = r#"
         enabled = true
-        reviewer_agent = "codex"
+        reviewer_agent = "anthropic-api"
         max_rounds = 5
     "#;
     let config: AgentReviewConfig = toml::from_str(toml_str).unwrap();
     assert!(config.enabled);
-    assert_eq!(config.reviewer_agent, "codex");
+    assert_eq!(config.reviewer_agent, "anthropic-api");
     assert_eq!(config.max_rounds, 5);
     assert_eq!(config.review_bot_command, "/gemini review");
     assert!(!config.review_bot_auto_trigger);
@@ -93,7 +91,7 @@ fn agent_review_config_deserializes_with_defaults() {
     "#;
     let config: AgentReviewConfig = toml::from_str(toml_str).unwrap();
     assert!(config.enabled);
-    assert_eq!(config.reviewer_agent, "codex");
+    assert_eq!(config.reviewer_agent, "claude");
     assert_eq!(config.max_rounds, 3);
     assert_eq!(config.review_bot_command, "/gemini review");
     assert!(!config.review_bot_auto_trigger);
@@ -149,19 +147,17 @@ fn agents_config_includes_review() {
         [claude]
         cli_path = "claude"
         default_model = "sonnet"
-        [codex]
-        cli_path = "codex"
         [anthropic_api]
         base_url = "https://api.anthropic.com"
         default_model = "claude-sonnet-5"
         [review]
         enabled = true
-        reviewer_agent = "codex"
+        reviewer_agent = "anthropic-api"
         max_rounds = 2
     "#;
     let config: AgentsConfig = toml::from_str(toml_str).unwrap();
     assert!(config.review.enabled);
-    assert_eq!(config.review.reviewer_agent, "codex");
+    assert_eq!(config.review.reviewer_agent, "anthropic-api");
     assert_eq!(config.review.max_rounds, 2);
     assert_eq!(config.sandbox_mode, SandboxMode::DangerFullAccess);
 }
@@ -197,8 +193,6 @@ fn approval_policy_deserializes_from_toml() {
         [claude]
         cli_path = "claude"
         default_model = "sonnet"
-        [codex]
-        cli_path = "codex"
         [anthropic_api]
         base_url = "https://api.anthropic.com"
         default_model = "claude-sonnet-5"
@@ -215,8 +209,6 @@ fn sandbox_mode_deserializes_from_toml() {
         [claude]
         cli_path = "claude"
         default_model = "sonnet"
-        [codex]
-        cli_path = "codex"
         [anthropic_api]
         base_url = "https://api.anthropic.com"
         default_model = "claude-sonnet-5"
@@ -235,35 +227,6 @@ fn anthropic_api_config_defaults_max_tokens_when_missing() {
     // Must leave room for adaptive thinking as well as the answer — the request
     // omits `thinking`, which on Sonnet 5 / Opus 5 means thinking is on.
     assert_eq!(config.max_tokens, 16_000);
-}
-
-#[test]
-fn codex_cloud_config_defaults() {
-    let config = CodexCloudConfig::default();
-    assert!(!config.enabled);
-    assert_eq!(config.cache_ttl_hours, 12);
-    assert!(config.setup_commands.is_empty());
-    assert!(config.setup_secret_env.is_empty());
-}
-
-#[test]
-fn codex_agent_config_deserializes_cloud_block() {
-    let toml_str = r#"
-        cli_path = "codex"
-        [cloud]
-        enabled = true
-        cache_ttl_hours = 6
-        setup_commands = ["npm ci", "cargo fetch"]
-        setup_secret_env = ["NPM_TOKEN"]
-    "#;
-    let config: CodexAgentConfig = toml::from_str(toml_str).unwrap();
-    assert!(config.cloud.enabled);
-    assert_eq!(config.cloud.cache_ttl_hours, 6);
-    assert_eq!(
-        config.cloud.setup_commands,
-        vec!["npm ci".to_string(), "cargo fetch".to_string()]
-    );
-    assert_eq!(config.cloud.setup_secret_env, vec!["NPM_TOKEN".to_string()]);
 }
 
 #[test]
@@ -306,8 +269,6 @@ fn harness_config_deserializes_otel_section() {
         [agents.claude]
         cli_path = "claude"
         default_model = "sonnet"
-        [agents.codex]
-        cli_path = "codex"
         [agents.anthropic_api]
         base_url = "https://api.anthropic.com"
         default_model = "claude-sonnet-5"
@@ -450,7 +411,7 @@ fn harness_config_default_roundtrip() {
     assert!(config.agents.complexity_preferred_agents.is_empty());
     assert_eq!(config.server.transport, Transport::Http);
     assert!(config.agents.review.enabled);
-    assert_eq!(config.agents.review.reviewer_agent, "codex");
+    assert_eq!(config.agents.review.reviewer_agent, "claude");
     assert_eq!(config.otel.exporter, OtelExporter::Disabled);
     assert_eq!(config.gc.max_drafts_per_run, 5);
     assert!(!config.review.enabled);

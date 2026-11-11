@@ -47,14 +47,14 @@ fn load_workflow_config_defaults_when_missing() -> anyhow::Result<()> {
             .activity_profiles
             .get("poll_repo_backlog")
             .and_then(|profile| profile.runtime_kind.as_deref()),
-        Some("codex_exec")
+        Some("claude_code")
     );
     assert_eq!(
         cfg.runtime_dispatch
             .activity_profiles
             .get("poll_repo_backlog")
             .and_then(|profile| profile.runtime_profile.as_deref()),
-        Some("codex-backlog-exec")
+        Some("claude-backlog-exec")
     );
     assert_eq!(
         cfg.runtime_dispatch
@@ -150,8 +150,8 @@ runtime_dispatch:
   enabled: true
   interval_secs: 5
   batch_limit: 7
-  runtime_kind: codex_jsonrpc
-  runtime_profile: codex-gpt-5.5-xhigh
+  runtime_kind: claude_code
+  runtime_profile: claude-gpt-5.5-xhigh
   model: gpt-5.5
   reasoning_effort: xhigh
   sandbox: workspace-write
@@ -160,23 +160,23 @@ runtime_dispatch:
   timeout_secs: 600
   workflow_profiles:
     github_issue_pr:
-      runtime_kind: codex_jsonrpc
-      runtime_profile: codex-high
+      runtime_kind: claude_code
+      runtime_profile: claude-high
       model: gpt-5.4
       reasoning_effort: high
       max_turns: 8
     repo_backlog:
-      runtime_profile: codex-backlog
+      runtime_profile: claude-backlog
       timeout_secs: 120
   activity_profiles:
     replan_issue:
-      runtime_profile: codex-replan
+      runtime_profile: claude-replan
       model: gpt-5.4-mini
       timeout_secs: 180
   workflow_activity_profiles:
     github_issue_pr:
       replan_issue:
-        runtime_profile: codex-issue-replan
+        runtime_profile: claude-issue-replan
         model: gpt-5.4
         timeout_secs: 90
 runtime_worker:
@@ -249,11 +249,11 @@ Body
     assert_eq!(cfg.runtime_dispatch.batch_limit, 7);
     assert_eq!(
         cfg.runtime_dispatch.runtime_kind.as_deref(),
-        Some("codex_jsonrpc")
+        Some("claude_code")
     );
     assert_eq!(
         cfg.runtime_dispatch.runtime_profile.as_deref(),
-        Some("codex-gpt-5.5-xhigh")
+        Some("claude-gpt-5.5-xhigh")
     );
     assert_eq!(cfg.runtime_dispatch.model.as_deref(), Some("gpt-5.5"));
     assert_eq!(
@@ -275,8 +275,11 @@ Body
         .workflow_profiles
         .get("github_issue_pr")
         .expect("issue workflow override should parse");
-    assert_eq!(issue_profile.runtime_kind.as_deref(), Some("codex_jsonrpc"));
-    assert_eq!(issue_profile.runtime_profile.as_deref(), Some("codex-high"));
+    assert_eq!(issue_profile.runtime_kind.as_deref(), Some("claude_code"));
+    assert_eq!(
+        issue_profile.runtime_profile.as_deref(),
+        Some("claude-high")
+    );
     assert_eq!(issue_profile.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(issue_profile.reasoning_effort.as_deref(), Some("high"));
     assert_eq!(issue_profile.max_turns, Some(8));
@@ -288,7 +291,7 @@ Body
     assert_eq!(backlog_profile.runtime_kind, None);
     assert_eq!(
         backlog_profile.runtime_profile.as_deref(),
-        Some("codex-backlog")
+        Some("claude-backlog")
     );
     assert_eq!(backlog_profile.timeout_secs, Some(120));
     let replan_profile = cfg
@@ -298,7 +301,7 @@ Body
         .expect("activity profile override should parse");
     assert_eq!(
         replan_profile.runtime_profile.as_deref(),
-        Some("codex-replan")
+        Some("claude-replan")
     );
     assert_eq!(replan_profile.model.as_deref(), Some("gpt-5.4-mini"));
     assert_eq!(replan_profile.timeout_secs, Some(180));
@@ -307,14 +310,14 @@ Body
             .activity_profiles
             .get("poll_repo_backlog")
             .and_then(|profile| profile.runtime_kind.as_deref()),
-        Some("codex_exec")
+        Some("claude_code")
     );
     assert_eq!(
         cfg.runtime_dispatch
             .activity_profiles
             .get("poll_repo_backlog")
             .and_then(|profile| profile.runtime_profile.as_deref()),
-        Some("codex-backlog-exec")
+        Some("claude-backlog-exec")
     );
     assert_eq!(
         cfg.runtime_dispatch
@@ -331,7 +334,7 @@ Body
         .expect("workflow activity profile override should parse");
     assert_eq!(
         issue_replan_profile.runtime_profile.as_deref(),
-        Some("codex-issue-replan")
+        Some("claude-issue-replan")
     );
     assert_eq!(issue_replan_profile.model.as_deref(), Some("gpt-5.4"));
     assert_eq!(issue_replan_profile.timeout_secs, Some(90));
@@ -420,11 +423,11 @@ Body
         .get("poll_repo_backlog");
     assert_eq!(
         poll_profile.and_then(|profile| profile.runtime_kind.as_deref()),
-        Some("codex_exec")
+        Some("claude_code")
     );
     assert_eq!(
         poll_profile.and_then(|profile| profile.runtime_profile.as_deref()),
-        Some("codex-backlog-exec")
+        Some("claude-backlog-exec")
     );
     assert_eq!(
         poll_profile.and_then(|profile| profile.timeout_secs),

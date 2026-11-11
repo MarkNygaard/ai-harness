@@ -458,8 +458,9 @@ impl WorkflowDecisionRecord {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RuntimeKind {
-    CodexExec,
-    CodexJsonrpc,
+    /// `codex_exec` / `codex_jsonrpc` were the removed Codex CLI runtimes; a
+    /// row persisted with either still reads, as this one.
+    #[serde(alias = "codex_exec", alias = "codex_jsonrpc")]
     ClaudeCode,
     AnthropicApi,
     RemoteHost,

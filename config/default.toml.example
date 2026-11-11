@@ -31,19 +31,14 @@ project_root = "."
 # stall_timeout_secs = 3600
 
 [agents]
-default_agent = "codex"
+default_agent = "claude"
 # Optional: preferred routing order for complex/critical tasks.
-complexity_preferred_agents = ["codex"]
+complexity_preferred_agents = ["claude"]
 sandbox_mode = "danger-full-access"
 
 [agents.claude]
 cli_path = "claude"
 default_model = "sonnet"
-
-[agents.codex]
-cli_path = "codex"
-default_model = "gpt-5.5"
-reasoning_effort = "xhigh"
 
 [agents.anthropic_api]
 base_url = "https://api.anthropic.com"
@@ -53,7 +48,7 @@ max_tokens = 4096
 
 [agents.review]
 enabled = true
-reviewer_agent = "codex"
+reviewer_agent = "claude"
 max_rounds = 3
 # Hosted GitHub review bots are advisory. Leave this disabled unless you
 # explicitly want Harness to post /gemini review and wait for hosted bot output.
@@ -95,7 +90,7 @@ enabled = false
 # Override interval in seconds (takes precedence over interval_hours).
 # interval_secs = 300
 # interval_hours = 24
-# agent = "codex"
+# agent = "claude"
 # strategy = "single" # or "cross" for dual-review + synthesis
 # timeout_secs = 10800
 # max_concurrent_tasks = 2
@@ -103,7 +98,7 @@ enabled = false
 # [intake.github]
 # enabled = true
 # poll_interval_secs = 300
-# planner_agent = "codex"
+# planner_agent = "claude"
 # sprint_timeout_secs = 10800
 # retry_backoff_base_secs = 15
 # retry_backoff_max_secs = 120

@@ -38,7 +38,7 @@ pub use pr::{
 pub use review::{
     agent_review_fix_prompt, agent_review_intervention_prompt, agent_review_prompt, is_approved,
     periodic_review_prompt, periodic_review_prompt_with_guard_scan, review_prompt,
-    review_synthesis_prompt, review_synthesis_prompt_with_agents,
+    review_synthesis_prompt_with_agents,
 };
 
 /// A prompt decomposed into its static, semi-static, and dynamic layers.

@@ -2,7 +2,7 @@
 name = "harness-agents"
 version.workspace = true
 edition.workspace = true
-description = "Agent adapters (Claude Code, Codex) for the Harness orchestration layer"
+description = "Agent adapters (Claude Code) for the Harness orchestration layer"
 license.workspace = true
 repository.workspace = true
 
@@ -18,7 +18,6 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }
 reqwest = { workspace = true }
-sha2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

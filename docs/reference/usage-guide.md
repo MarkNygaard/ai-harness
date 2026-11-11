@@ -4,7 +4,7 @@
 
 - Rust 1.88+
 - Bun 1.1+ for `cargo build --release` when `web/dist` has not already been built
-- At least one configured agent runtime, such as Codex CLI, Claude CLI, or the direct Anthropic adapter
+- At least one configured agent runtime, such as Claude CLI or the direct Anthropic adapter
 
 ## Installation
 
@@ -41,19 +41,16 @@ data_dir = "~/.local/share/harness"
 
 [agents]
 default_agent = "auto"
-# complexity_preferred_agents = ["codex", "claude"]
+# complexity_preferred_agents = ["claude", "anthropic-api"]
 sandbox_mode = "danger-full-access"
 
 [agents.claude]
 cli_path = "claude"
 default_model = "sonnet"
 
-[agents.codex]
-cli_path = "codex"
-
 [agents.review]
 enabled = true
-reviewer_agent = "codex"
+reviewer_agent = "claude"
 max_rounds = 3
 review_bot_auto_trigger = false
 
@@ -287,7 +284,7 @@ curl -X POST http://127.0.0.1:9800/projects \
     "id": "new-project",
     "root": "/path/to/new-project",
     "max_concurrent": 2,
-    "default_agent": "codex",
+    "default_agent": "claude",
     "active": true
   }'
 ```
@@ -316,7 +313,7 @@ curl -X DELETE http://127.0.0.1:9800/projects/new-project
 | Field | Default | Description |
 |-------|---------|-------------|
 | `default_agent` | `"auto"` | Default execution agent; `"auto"` picks the first registered agent |
-| `complexity_preferred_agents` | `[]` | Optional ordered list for complex/critical routing (for example `["codex","claude"]`) |
+| `complexity_preferred_agents` | `[]` | Optional ordered list for complex/critical routing (for example `["claude","anthropic-api"]`) |
 | `sandbox_mode` | `"danger-full-access"` | Sandbox policy: `read-only`, `read-only-with-network`, `workspace-write`, `danger-full-access` |
 | `approval_policy` | `"auto-edit"` | Approval policy for agent actions |
 
@@ -328,27 +325,12 @@ curl -X DELETE http://127.0.0.1:9800/projects/new-project
 | `default_model` | `"sonnet"` | Default model for Claude agent |
 | `reasoning_budget` | — | Optional reasoning budget for per-phase model selection |
 
-### `[agents.codex]`
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `cli_path` | `"codex"` | Path to Codex CLI binary |
-
-### `[agents.codex.cloud]`
-
-| Field | Default | Description |
-|-------|---------|-------------|
-| `enabled` | `false` | Enable cloud execution mode |
-| `cache_ttl_hours` | `12` | Setup phase cache TTL |
-| `setup_commands` | `[]` | Commands run during cloud setup phase |
-| `setup_secret_env` | `[]` | Env vars available during setup but removed for agent execution |
-
 ### `[agents.review]`
 
 | Field | Default | Description |
 |-------|---------|-------------|
 | `enabled` | `true` | Enable independent agent review after PR creation. |
-| `reviewer_agent` | `"codex"` | Agent used for review. It may match the implementor when configured explicitly; Harness runs it as a separate review turn. |
+| `reviewer_agent` | `"claude"` | Agent used for review. It may match the implementor when configured explicitly; Harness runs it as a separate review turn. |
 | `max_rounds` | `3` | Maximum review-fix cycles |
 | `review_bot_auto_trigger` | `false` | Post and wait for a hosted review bot command. When omitted with `enabled = false`, Harness keeps the hosted-bot path; when disabled, local completion requires local review approval, validation, PR-head advancement after local review fixes that changed the workspace or reported a pushed commit, unchanged reviewed PR head after CI polling, green GitHub PR checks, an open PR or already merged PR, and a configured GitHub token. |
 
@@ -431,12 +413,12 @@ If no new commits have landed since the last review, the cycle is skipped.
 1. POST /tasks                    → validate request, resolve project
 2. TaskQueue.acquire()            → acquire per-project + global semaphore
 3. WorkspaceManager.create()      → create isolated git worktree
-4. Agent.execute_stream()         → agent runs in worktree (Claude/Codex/API)
+4. Agent.execute_stream()         → agent runs in worktree (Claude/API)
 5. PostValidator.run()            → cargo fmt, cargo check (language-detected)
    └─ on failure: retry up to max_retries, agent fixes issues
 6. Agent creates PR               → git push + gh pr create
-7. Codex review                   → independent review, up to max_rounds
-   └─ on issues: agent fixes → Codex re-reviews → repeat
+7. Agent review                   → independent review, up to max_rounds
+   └─ on issues: agent fixes → reviewer re-reviews → repeat
 8. QualityGrader.score()          → compute quality grade (A/B/C/D/F)
 9. WorkspaceManager.cleanup()     → remove worktree
 10. Task status → done/failed
@@ -654,10 +636,6 @@ macOS Seatbelt sandbox blocks Claude Code syscalls. Set `sandbox_mode = "danger-
 ### Tasks fail with SIGTRAP
 
 Started server from within Claude Code. Restart from a standalone terminal.
-
-### Codex review shows "unexpected argument"
-
-Codex CLI updated. Check `codex exec --help` for current flags and update `crates/harness-agents/src/codex.rs`.
 
 ### All tasks show `no_pr` status
 

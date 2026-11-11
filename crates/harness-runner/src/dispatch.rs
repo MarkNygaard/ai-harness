@@ -1,7 +1,7 @@
 //! Provider dispatch across heterogeneous [`PromptAgent`] backends.
 //!
 //! The DAG driver talks to a single [`PromptAgent`], but different providers are
-//! backed by different machinery: `claude`/`codex`/`anthropic-api` go through
+//! backed by different machinery: `claude`/`anthropic-api` go through
 //! majiayu's session-less `CodeAgent` registry (via [`CodeAgentRunner`]), `pi` is
 //! a session-aware [`PiAgent`] that drives the `omp` CLI, and `cursor` is a
 //! [`CursorAgent`] driving the `cursor-agent` CLI. [`DispatchAgent`] routes by
@@ -20,7 +20,7 @@ const CURSOR_PROVIDERS: &[&str] = &["cursor"];
 
 /// Routes a [`PromptRequest`] by `provider`: the Pi agent (`pi|omp|kimi`), the
 /// Cursor agent (`cursor`), or a fallback (everything else, typically the
-/// [`CodeAgentRunner`] for `claude`/`codex`).
+/// [`CodeAgentRunner`] for `claude`/`anthropic-api`).
 pub struct DispatchAgent {
     pi: Arc<dyn PromptAgent>,
     cursor: Arc<dyn PromptAgent>,
@@ -44,8 +44,8 @@ impl DispatchAgent {
         }
     }
 
-    /// Credentials each backend's agent needs, keyed `pi`, `cursor`, `claude`,
-    /// `codex`. A step gets only its own backend's entry: the run's shared
+    /// Credentials each backend's agent needs, keyed `pi`, `cursor`,
+    /// `claude`. A step gets only its own backend's entry: the run's shared
     /// environment carries no provider key, so an omp step cannot read the
     /// Cursor key and a bash step reads none.
     pub fn with_provider_env(mut self, env: HashMap<String, HashMap<String, String>>) -> Self {

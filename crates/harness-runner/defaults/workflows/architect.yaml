@@ -143,7 +143,7 @@ nodes:
     provider: claude
     model: opus
     # The plan decides which cleanups happen — the highest-leverage step. Run it
-    # at max reasoning effort (claude/codex only; ignored by other providers).
+    # at max reasoning effort (claude/pi only; ignored by other providers).
     effort: max
     context: fresh
     depends_on: [analyze]

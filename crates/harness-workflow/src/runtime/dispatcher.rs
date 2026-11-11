@@ -9,7 +9,7 @@ use uuid::Uuid;
 
 const COMMAND_STATUS_SKIPPED: &str = "skipped";
 const COMMAND_STATUS_CANCELLED: &str = "cancelled";
-const DEFAULT_REPO_BACKLOG_POLL_RUNTIME_PROFILE: &str = "codex-backlog-exec";
+const DEFAULT_REPO_BACKLOG_POLL_RUNTIME_PROFILE: &str = "claude-backlog-exec";
 const DEFAULT_REPO_BACKLOG_POLL_TIMEOUT_SECS: u64 = 3600;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -113,12 +113,9 @@ impl RuntimeProfileSelector {
 fn default_repo_backlog_poll_runtime_profile(default_profile: &RuntimeProfile) -> RuntimeProfile {
     let mut profile = RuntimeProfile::new(
         DEFAULT_REPO_BACKLOG_POLL_RUNTIME_PROFILE,
-        RuntimeKind::CodexExec,
+        RuntimeKind::ClaudeCode,
     );
-    if matches!(
-        default_profile.kind,
-        RuntimeKind::CodexExec | RuntimeKind::CodexJsonrpc
-    ) {
+    if default_profile.kind == RuntimeKind::ClaudeCode {
         profile.model = default_profile.model.clone();
         profile.reasoning_effort = default_profile.reasoning_effort.clone();
         profile.approval_policy = default_profile.approval_policy.clone();
@@ -327,15 +324,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn profile_selector_defaults_repo_backlog_poll_to_codex_exec() {
-        let mut default_profile = RuntimeProfile::new("codex-default", RuntimeKind::CodexJsonrpc);
+    fn profile_selector_defaults_repo_backlog_poll_to_claude_code() {
+        let mut default_profile = RuntimeProfile::new("claude-default", RuntimeKind::ClaudeCode);
         default_profile.model = Some("gpt-5.5".to_string());
         default_profile.reasoning_effort = Some("high".to_string());
 
         let selector = RuntimeProfileSelector::new(default_profile);
         let profile = selector.select(Some("repo_backlog"), Some(REPO_BACKLOG_POLL_ACTIVITY));
 
-        assert_eq!(profile.kind, RuntimeKind::CodexExec);
+        assert_eq!(profile.kind, RuntimeKind::ClaudeCode);
         assert_eq!(profile.name, DEFAULT_REPO_BACKLOG_POLL_RUNTIME_PROFILE);
         assert_eq!(profile.model.as_deref(), Some("gpt-5.5"));
         assert_eq!(profile.reasoning_effort.as_deref(), Some("high"));
@@ -347,7 +344,7 @@ mod tests {
 
     #[test]
     fn profile_selector_allows_explicit_repo_backlog_poll_override() {
-        let default_profile = RuntimeProfile::new("codex-default", RuntimeKind::CodexJsonrpc);
+        let default_profile = RuntimeProfile::new("claude-default", RuntimeKind::ClaudeCode);
         let mut override_profile = RuntimeProfile::new("custom-backlog", RuntimeKind::ClaudeCode);
         override_profile.timeout_secs = Some(7200);
 

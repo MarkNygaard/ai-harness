@@ -1,13 +1,13 @@
 //! One table of the models the harness knows, and what they cost.
 //!
 //! Adding a model used to mean editing three places in two languages: the
-//! editor's catalog (twice for a Codex model — once bare, once `openai-codex/`
+//! editor's catalog (twice for a GPT model — once bare, once `openai-codex/`
 //! prefixed), a price arm in Rust, and the same price arm again in TypeScript.
 //! Nothing made them fail together when they drifted.
 //!
 //! **A row per `(provider, id)`, naming a family.** Not one model with a
 //! transform per agent: the ids are not related by one. Claude Code's `sonnet`
-//! is Cursor's `claude-sonnet-5`, and Codex's `gpt-5.6-sol` is omp's
+//! is Cursor's `claude-sonnet-5`, and Cursor's `gpt-5.6-sol` is omp's
 //! `openai-codex/gpt-5.6-sol` — a prefix in that one case and nothing like it
 //! in the other. Anything derived here would be true of one pair and wrong
 //! about the rest, so nothing is derived.
@@ -150,7 +150,7 @@ pub const FAMILIES: &[Family] = &[
 /// One model as one agent names it.
 #[derive(Debug, Clone, Copy, serde::Serialize)]
 pub struct Model {
-    /// Provider id: `claude`, `codex`, `pi`, `cursor`, `anthropic-api`.
+    /// Provider id: `claude`, `pi`, `cursor`, `anthropic-api`.
     pub provider: &'static str,
     /// The exact string handed to that agent's CLI.
     pub id: &'static str,
@@ -204,58 +204,6 @@ pub const MODELS: &[Model] = &[
         provider: "claude",
         id: "fable",
         family: "fable",
-        included: true,
-        min_cli: None,
-    },
-    // ── Codex CLI on a ChatGPT account ──────────────────────────────────────
-    // The general models, not the `-codex` variants, which need API-key auth.
-    // Versioned because Codex publishes no alias for these tiers.
-    Model {
-        provider: "codex",
-        id: "gpt-6-astra",
-        family: "gpt-6",
-        included: true,
-        min_cli: None,
-    },
-    Model {
-        provider: "codex",
-        id: "gpt-5.6-sol",
-        family: "gpt-5.6-sol",
-        included: true,
-        min_cli: None,
-    },
-    Model {
-        provider: "codex",
-        id: "gpt-5.6-terra",
-        family: "gpt-5.6-terra",
-        included: true,
-        min_cli: None,
-    },
-    Model {
-        provider: "codex",
-        id: "gpt-5.6-luna",
-        family: "gpt-5.6-luna",
-        included: true,
-        min_cli: None,
-    },
-    Model {
-        provider: "codex",
-        id: "gpt-5.5",
-        family: "gpt-5",
-        included: true,
-        min_cli: None,
-    },
-    Model {
-        provider: "codex",
-        id: "gpt-5.4",
-        family: "gpt-5",
-        included: true,
-        min_cli: None,
-    },
-    Model {
-        provider: "codex",
-        id: "gpt-5.4-mini",
-        family: "gpt-5",
         included: true,
         min_cli: None,
     },
@@ -578,7 +526,7 @@ pub const CATALOG_ENV: &str = "HARNESS_MODEL_CATALOG";
 const RECHECK: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The provider ids an overlay row may name: the agents the harness can run.
-pub const PROVIDERS: &[&str] = &["claude", "codex", "pi", "cursor", "anthropic-api"];
+pub const PROVIDERS: &[&str] = &["claude", "pi", "cursor", "anthropic-api"];
 
 /// The table in force: the bundled one, with the overlay merged over it.
 #[derive(Debug, Clone)]
@@ -896,7 +844,7 @@ mod tests {
     /// between them measures the table rather than the models.
     #[test]
     fn the_same_model_prices_the_same_whichever_agent_reaches_it() {
-        // Codex's bare id and omp's prefixed one are one model.
+        // A bare GPT id and omp's prefixed one are one model.
         assert_eq!(
             family_for("gpt-6-astra").id,
             family_for("openai-codex/gpt-6-astra").id
@@ -935,13 +883,13 @@ mod tests {
     }
 
     /// The editor lists what each agent can actually be handed. omp needs the
-    /// backend prefix; Codex must not have one.
+    /// backend prefix; Cursor must not have one.
     #[test]
     fn each_provider_lists_ids_in_its_own_shape() {
-        assert!(models_for("codex").contains(&"gpt-6-astra"));
+        assert!(models_for("cursor").contains(&"gpt-5.6-sol"));
         assert!(models_for("pi").contains(&"openai-codex/gpt-6-astra"));
         assert!(!models_for("pi").iter().any(|id| !id.contains('/')));
-        assert!(!models_for("codex").iter().any(|id| id.contains('/')));
+        assert!(!models_for("cursor").iter().any(|id| id.contains('/')));
         assert!(models_for("nobody").is_empty());
     }
 

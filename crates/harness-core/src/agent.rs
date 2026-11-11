@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-/// Core trait for all code agents (Claude Code, Codex, Anthropic API, etc.)
+/// Core trait for all code agents (Claude Code, Anthropic API, etc.)
 #[async_trait]
 pub trait CodeAgent: Send + Sync {
     fn name(&self) -> &str;

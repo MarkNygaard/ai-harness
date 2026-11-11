@@ -19,12 +19,7 @@ describe("the agent table", () => {
   it("offers exactly the providers a workflow node can name", () => {
     // Matches AGENT_CLIS in crates/harness-server/src/http/system_routes.rs and
     // DispatchAgent in crates/harness-runner/src/dispatch.rs.
-    expect(AGENTS.map((a) => a.provider)).toEqual([
-      "claude",
-      "codex",
-      "pi",
-      "cursor",
-    ]);
+    expect(AGENTS.map((a) => a.provider)).toEqual(["claude", "pi", "cursor"]);
   });
 
   it("shows Pi backed by both of the accounts that can run it", () => {
@@ -36,6 +31,7 @@ describe("the agent table", () => {
   });
 
   it("backs every agent with at least one account that exists", () => {
+    // `codex` is the ChatGPT credential, which backs Pi's openai-codex/*.
     const known = new Set(["claude", "codex", "pi", "cursor"]);
     for (const agent of AGENTS) {
       expect(agent.subscriptions.length).toBeGreaterThan(0);
@@ -126,11 +122,11 @@ describe("the dismissal record", () => {
       },
     ]);
     markAgentVersionsSeen([
-      { provider: "codex", label: "Codex", latest: "0.9.0", installed: null },
+      { provider: "cursor", label: "Cursor", latest: "0.9.0", installed: null },
     ]);
     expect(readSeenAgentVersions()).toEqual({
       claude: "2.1.4",
-      codex: "0.9.0",
+      cursor: "0.9.0",
     });
   });
 
@@ -172,19 +168,19 @@ describe("describeAgentUpdates", () => {
         installed: "2.0.9",
       },
       {
-        provider: "codex",
-        label: "Codex",
+        provider: "cursor",
+        label: "Cursor",
         latest: "0.9.0",
         installed: "0.8.1",
       },
     ]);
     expect(title).toBe("2 agent updates are available");
-    expect(detail).toBe("Claude Code 2.1.4, Codex 0.9.0");
+    expect(detail).toBe("Claude Code 2.1.4, Cursor 0.9.0");
   });
 
   it("says so rather than lying when the CLI would not report a version", () => {
     const { detail } = describeAgentUpdates([
-      { provider: "codex", label: "Codex", latest: "0.9.0", installed: null },
+      { provider: "cursor", label: "Cursor", latest: "0.9.0", installed: null },
     ]);
     expect(detail).toBe("The installed version did not report itself.");
   });

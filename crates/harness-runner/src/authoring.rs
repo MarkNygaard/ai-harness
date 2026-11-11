@@ -149,10 +149,10 @@ pub type InstalledClis = std::collections::HashMap<String, String>;
 /// Which agent CLIs have a credential connected right now. Drives the catalog's
 /// credential-gated model lists: a CLI's models are only offered once its
 /// credential is present, and the omp (`pi`) list reflects which omp backends
-/// (Codex / Kimi) are authenticated.
+/// (ChatGPT / Kimi) are authenticated.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct ConnectedCreds {
-    /// "Codex (ChatGPT)" — the Codex CLI auth and/or omp's `openai-codex`.
+    /// ChatGPT — omp's `openai-codex` backend.
     pub codex: bool,
     /// "Kimi-for-Coding" — omp's `kimi-code`.
     pub kimi: bool,
@@ -176,8 +176,7 @@ fn build_providers(creds: ConnectedCreds, installed: &InstalledClis) -> Vec<Prov
     // always-available direct-key fallback.
     let offered: &[(&str, &str, bool)] = &[
         ("claude", "Claude Code", creds.claude),
-        ("codex", "Codex", creds.codex),
-        // omp reaches Codex and Kimi, so it is shown when either is
+        // omp reaches ChatGPT and Kimi, so it is shown when either is
         // authenticated — and lists only the backends that are.
         ("pi", "Pi", creds.codex || creds.kimi),
         ("cursor", "Cursor", creds.cursor),
@@ -1828,7 +1827,7 @@ nodes:
         assert!(new.unavailable.is_empty());
         assert!(pi(&InstalledClis::new()).models.contains(&astra));
         // Another provider's version does not apply to omp.
-        let other = pi(&InstalledClis::from([("codex".into(), "0.1.0".into())]));
+        let other = pi(&InstalledClis::from([("cursor".into(), "0.1.0".into())]));
         assert!(other.models.contains(&astra));
     }
 
@@ -1849,11 +1848,11 @@ nodes:
         // Anthropic API fallback remains.
         let none = catalog(tmp.path(), ConnectedCreds::default());
         assert!(!has(&none, "claude"));
-        assert!(!has(&none, "codex"));
         assert!(!has(&none, "pi"));
         assert!(has(&none, "anthropic-api"));
 
-        // Codex only: Codex-CLI models + omp's openai-codex/* ones; no kimi.
+        // ChatGPT only: omp's openai-codex/* models; no kimi, and no
+        // separate Codex CLI provider.
         let codex = catalog(
             tmp.path(),
             ConnectedCreds {
@@ -1861,18 +1860,14 @@ nodes:
                 ..Default::default()
             },
         );
-        assert!(models(&codex, "codex").contains(&"gpt-5.5"));
-        assert!(models(&codex, "codex").contains(&"gpt-6-astra"));
-        // The CLI default and the id the bundled workflows pin are both
-        // offerable, and so are the other two 5.6 tiers.
-        assert!(models(&codex, "codex").contains(&"gpt-5.6-sol"));
-        assert!(models(&codex, "pi").contains(&"openai-codex/gpt-5.6-sol"));
+        assert!(!has(&codex, "codex"));
+        // The id the bundled workflows pin is offerable, and so are the
+        // three 5.6 tiers.
+        assert!(models(&codex, "pi").contains(&"openai-codex/gpt-5.5"));
         for tier in ["sol", "terra", "luna"] {
-            let bare = format!("gpt-5.6-{tier}");
-            assert!(models(&codex, "codex").iter().any(|m| *m == bare));
             assert!(models(&codex, "pi")
                 .iter()
-                .any(|m| *m == format!("openai-codex/{bare}")));
+                .any(|m| *m == format!("openai-codex/gpt-5.6-{tier}")));
         }
         assert!(models(&codex, "pi").contains(&"openai-codex/gpt-5.1-codex"));
         // On `pi` an OpenAI id must be namespace-qualified — Astra included.

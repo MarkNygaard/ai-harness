@@ -28,7 +28,7 @@ pub struct RunOptions {
     pub workspace: PathBuf,
     pub base_branch: String,
     pub arguments: String,
-    /// Use the real agent registry (Claude/Codex) instead of the echo agent.
+    /// Use the real agent registry (Claude) instead of the echo agent.
     pub real: bool,
     pub sandbox: SandboxMode,
     /// Optional harness config TOML for the real registry.
@@ -121,7 +121,7 @@ pub async fn execute_run(opts: RunOptions) -> Result<RunReport, String> {
         };
         let registry = Arc::new(build_agent_registry(&config, opts.sandbox));
         // Route `provider: pi` → omp, `cursor` → cursor-agent; everything else
-        // goes through the CodeAgent registry (claude/codex/anthropic-api).
+        // goes through the CodeAgent registry (claude/anthropic-api).
         let code = Arc::new(CodeAgentRunner::new(registry));
         Arc::new(DispatchAgent::new(
             Arc::new(PiAgent::from_env()),

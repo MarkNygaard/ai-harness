@@ -379,7 +379,7 @@ mod tests {
                 root: canonical_root.clone(),
                 name: Some("root-keyed".to_string()),
                 max_concurrent: Some(2),
-                default_agent: Some("codex".to_string()),
+                default_agent: Some("claude".to_string()),
                 active: true,
                 created_at: "2026-01-01T00:00:00Z".to_string(),
             })
@@ -391,7 +391,7 @@ mod tests {
             .expect("project should resolve by canonical root");
         assert_eq!(loaded.id, "root-keyed");
         assert_eq!(loaded.root, canonical_root);
-        assert_eq!(loaded.default_agent.as_deref(), Some("codex"));
+        assert_eq!(loaded.default_agent.as_deref(), Some("claude"));
         Ok(())
     }
 }

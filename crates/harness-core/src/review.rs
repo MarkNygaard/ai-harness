@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn parses_fenced_review_report_json() {
         let report = parse_review_report(
-            "codex_cli_review",
+            "local_cli_review",
             ReviewProviderKind::LocalCli,
             r#"```harness-review-report
 {"decision":"changes_requested","summary":"One issue.","findings":[{"severity":"high","category":"correctness","path":"src/lib.rs","line":7,"message":"Wrong result","evidence":"The branch is not handled.","recommendation":"Handle the branch.","blocking":true,"confidence":0.9}]}
@@ -392,7 +392,7 @@ mod tests {
     #[test]
     fn parses_raw_review_report_json() {
         let report = parse_review_report(
-            "codex_cli_review",
+            "local_cli_review",
             ReviewProviderKind::LocalCli,
             r#"{"decision":"approved","summary":"No blocking issues.","findings":[]}"#,
             started(),
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn parses_legacy_approved_line() {
         let report = parse_review_report(
-            "codex_agent_review",
+            "local_agent_review",
             ReviewProviderKind::LocalAgent,
             "Looks good.\nAPPROVED",
             started(),
@@ -419,7 +419,7 @@ mod tests {
     #[test]
     fn parses_legacy_issue_lines_as_blocking_findings() {
         let report = parse_review_report(
-            "codex_agent_review",
+            "local_agent_review",
             ReviewProviderKind::LocalAgent,
             "ISSUE: Missing retry coverage\nIssue: Wrong timeout",
             started(),
@@ -434,7 +434,7 @@ mod tests {
     #[test]
     fn malformed_output_returns_failed_report() {
         let report = parse_review_report(
-            "codex_cli_review",
+            "local_cli_review",
             ReviewProviderKind::LocalCli,
             "review text without a decision",
             started(),
@@ -448,7 +448,7 @@ mod tests {
     fn gate_approves_when_required_providers_approve() {
         let result = evaluate_review_gate(
             &[approved_report(
-                "codex_cli_review",
+                "local_cli_review",
                 ReviewProviderRole::Required,
             )],
             false,
@@ -459,7 +459,7 @@ mod tests {
 
     #[test]
     fn gate_blocks_on_required_failure() {
-        let mut failed = approved_report("codex_cli_review", ReviewProviderRole::Required);
+        let mut failed = approved_report("local_cli_review", ReviewProviderRole::Required);
         failed.report.decision = ReviewDecision::Failed;
 
         let result = evaluate_review_gate(&[failed], false);
@@ -467,7 +467,7 @@ mod tests {
         assert_eq!(result.decision, ReviewGateDecision::Blocked);
         assert_eq!(
             result.blocking_provider_id.as_deref(),
-            Some("codex_cli_review")
+            Some("local_cli_review")
         );
     }
 
@@ -492,7 +492,7 @@ mod tests {
 
         let result = evaluate_review_gate(
             &[
-                approved_report("codex_cli_review", ReviewProviderRole::Required),
+                approved_report("local_cli_review", ReviewProviderRole::Required),
                 failed,
             ],
             false,
@@ -505,7 +505,7 @@ mod tests {
     fn gate_blocks_when_external_required_without_advisory_report() {
         let result = evaluate_review_gate(
             &[approved_report(
-                "codex_cli_review",
+                "local_cli_review",
                 ReviewProviderRole::Required,
             )],
             true,
@@ -522,7 +522,7 @@ mod tests {
 
         let result = evaluate_review_gate(
             &[
-                approved_report("codex_cli_review", ReviewProviderRole::Required),
+                approved_report("local_cli_review", ReviewProviderRole::Required),
                 failed,
             ],
             true,

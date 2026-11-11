@@ -1,6 +1,6 @@
 //! Provider-credential API + run-time materialization.
 //!
-//! Credentials (Claude OAuth, Codex `auth.json`, the Kimi API key) are entered
+//! Credentials (Claude OAuth, the ChatGPT tokens, the Kimi API key) are entered
 //! in the UI, stored **encrypted** in Postgres (`harness_persist::CredentialStore`),
 //! and never placed in cluster Secrets/SOPS. [`materialize`] injects them into the
 //! agent environment just before a real run: token-style values become env vars,
@@ -113,8 +113,14 @@ async fn provider_native_present(provider: &str) -> bool {
             )
             .await
         }
-        // Codex: ChatGPT OAuth tokens / api key live in auth.json.
-        "codex" => file_non_empty(home.join(".codex").join("auth.json")),
+        // ChatGPT: the tokens back omp's `openai-codex` provider.
+        "codex" => {
+            crate::http::kimi_routes::agent_db_has_provider(
+                home.join(".omp").join("agent").join("agent.db"),
+                &["openai-codex"],
+            )
+            .await
+        }
         // Claude: the CLI reads ~/.claude/.credentials.json.
         "claude" => file_non_empty(home.join(".claude").join(".credentials.json")),
         _ => false,
@@ -134,11 +140,9 @@ fn file_non_empty(path: PathBuf) -> bool {
 pub async fn connected_clis() -> harness_runner::authoring::ConnectedCreds {
     let home = home_dir();
     let agent_db = home.join(".omp").join("agent").join("agent.db");
-    // "Codex (ChatGPT)" powers both the Codex CLI (auth.json) and omp's
-    // `openai-codex`; treat either as connected.
-    let codex = file_non_empty(home.join(".codex").join("auth.json"))
-        || crate::http::kimi_routes::agent_db_has_provider(agent_db.clone(), &["openai-codex"])
-            .await;
+    // ChatGPT backs omp's `openai-codex` provider.
+    let codex =
+        crate::http::kimi_routes::agent_db_has_provider(agent_db.clone(), &["openai-codex"]).await;
     let kimi = crate::http::kimi_routes::agent_db_has_provider(agent_db, &["kimi-code"]).await;
     let claude = file_non_empty(home.join(".claude").join(".credentials.json"));
     // Cursor CLI is usable when an API key was loaded from the store (by the
@@ -193,23 +197,10 @@ pub async fn set_credential(
             // seeds-if-missing (it won't clobber the CLI's self-refreshing file).
             // This is the one authoritative point where the DB copy overwrites
             // disk; thereafter the CLI owns and rotates the token in place.
-            let home = home_dir();
-            match provider.as_str() {
-                "claude" => {
-                    if let Some(json) = req.fields.get("credentials_json").filter(|v| !v.is_empty())
-                    {
-                        write_secret_file(home.join(".claude").join(".credentials.json"), json);
-                    }
+            if provider == "claude" {
+                if let Some(json) = req.fields.get("credentials_json").filter(|v| !v.is_empty()) {
+                    write_secret_file(home_dir().join(".claude").join(".credentials.json"), json);
                 }
-                "codex" => {
-                    if let Some(json) = req.fields.get("auth_json").filter(|v| !v.is_empty()) {
-                        write_secret_file(
-                            home.join(".codex").join("auth.json"),
-                            &strip_codex_auth_mode(json),
-                        );
-                    }
-                }
-                _ => {}
             }
             // A usage-card visibility toggle takes effect on the next dashboard
             // poll rather than after the ~3-min usage cache expires.
@@ -238,15 +229,8 @@ pub async fn delete_credential(
             // `materialize` only seeds them when missing, so leaving the file
             // makes Clear a no-op for auth (the stale credential keeps being
             // used). Best-effort; absence is fine.
-            let home = home_dir();
-            match provider.as_str() {
-                "claude" => {
-                    let _ = std::fs::remove_file(home.join(".claude").join(".credentials.json"));
-                }
-                "codex" => {
-                    let _ = std::fs::remove_file(home.join(".codex").join("auth.json"));
-                }
-                _ => {}
+            if provider == "claude" {
+                let _ = std::fs::remove_file(home_dir().join(".claude").join(".credentials.json"));
             }
             super::usage_routes::invalidate_cache().await;
             Json(serde_json::json!({ "deleted": true, "provider": provider })).into_response()
@@ -458,20 +442,6 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/home/harness"))
 }
 
-/// Remove a stale top-level `auth_mode` field from a codex `auth.json` blob.
-/// The codex CLI parses `auth_mode` as an enum and rejects the old `"ChatGPT"`
-/// value; the canonical file omits it (mode is inferred from `tokens`). Returns
-/// the input unchanged if it isn't a JSON object.
-fn strip_codex_auth_mode(json: &str) -> String {
-    match serde_json::from_str::<serde_json::Value>(json) {
-        Ok(serde_json::Value::Object(mut map)) if map.contains_key("auth_mode") => {
-            map.remove("auth_mode");
-            serde_json::Value::Object(map).to_string()
-        }
-        _ => json.to_string(),
-    }
-}
-
 fn write_secret_file(path: PathBuf, contents: &str) {
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -542,7 +512,6 @@ static LAST_MATERIALIZED: std::sync::Mutex<Option<ProviderSecrets>> = std::sync:
 /// Prepare stored credentials for a real run or chat turn:
 /// - **claude**: `credentials_json` → `$HOME/.claude/.credentials.json` (seeded
 ///   if missing); `oauth_token` returned.
-/// - **codex**: `auth_json` → `$HOME/.codex/auth.json` (seeded if missing).
 /// - **pi**: `kimi_oauth` (from the "Connect Kimi" device login) → re-seeds omp's
 ///   `~/.omp/agent/agent.db` if missing (for `kimi-code/*` models);
 ///   `moonshot_api_key` returned (per-token Moonshot API, `moonshotai/*`).
@@ -572,19 +541,6 @@ pub async fn materialize(store: &CredentialStore) -> ProviderSecrets {
             let path = home.join(".claude").join(".credentials.json");
             if !file_non_empty(path.clone()) {
                 write_secret_file(path, json);
-            }
-        }
-    }
-    if let Ok(Some(codex)) = store.get("codex").await {
-        if let Some(json) = codex.get("auth_json").filter(|v| !v.is_empty()) {
-            // Seed-if-missing, same as claude above: the codex CLI also rotates
-            // its refresh token in `auth.json`, so clobbering it each run breaks
-            // auth. Defensive `strip_codex_auth_mode`: older Connect Codex wrote
-            // an `auth_mode` field the codex CLI rejects ("unknown variant
-            // ChatGPT") — strip it so pre-fix credentials still work.
-            let path = home.join(".codex").join("auth.json");
-            if !file_non_empty(path.clone()) {
-                write_secret_file(path, &strip_codex_auth_mode(json));
             }
         }
     }

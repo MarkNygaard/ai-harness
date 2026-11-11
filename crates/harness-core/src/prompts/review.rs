@@ -374,10 +374,6 @@ pub fn review_synthesis_prompt_with_agents(
     )
 }
 
-pub fn review_synthesis_prompt(claude_review: &str, codex_review: &str) -> String {
-    review_synthesis_prompt_with_agents("Claude", claude_review, "Codex", codex_review)
-}
-
 /// Check if agent output indicates approval (last non-empty line is "APPROVED").
 pub fn is_approved(output: &str) -> bool {
     last_non_empty_line(output) == Some("APPROVED")
@@ -389,9 +385,9 @@ mod tests {
 
     #[test]
     fn test_review_synthesis_prompt_with_custom_agents() {
-        let p = review_synthesis_prompt_with_agents("Codex", "left", "Claude", "right");
-        assert!(p.contains("Codex and Claude"));
-        assert!(p.contains("## Codex's Review"));
+        let p = review_synthesis_prompt_with_agents("Pi", "left", "Claude", "right");
+        assert!(p.contains("Pi and Claude"));
+        assert!(p.contains("## Pi's Review"));
         assert!(p.contains("## Claude's Review"));
     }
 
