@@ -203,6 +203,7 @@ Every node has an `id` and exactly **one body** (`prompt` / `bash` / `command` /
 | `output_format` | JSON schema the AI body's output should match (see [output_format](#output_format)). |
 | `mcp` | External tools for this step's agent: servers by name (`[sentry]`), or narrowed to some tools (`[{server: m365, tools: [outlook_email_search]}]`). See [External tools](#external-tools-mcp). |
 | `linear_comment` | `true` on one node: when a Linear issue started the run, this node's output is posted to the issue when the run completes (see [Reporting back to Linear](#reporting-back-to-linear)). |
+| `scorer` | `{ name, pass_at?, description? }`: this node grades the run (see [Scorers](#scorers)). |
 
 ### Node bodies
 
@@ -600,6 +601,46 @@ To give the step fewer, name the tools:
 Ask for it only on the steps that need it. Every step that has it starts the
 server, and an agent with tools it has no use for may spend turns on them
 anyway.
+
+## Scorers
+
+A scorer is a step that grades the run it is in, so the grade can be followed
+across runs: for example, whether an implementation run's pull request adds
+tests that nothing needs. Mark the step with `scorer:` and have it output JSON
+with a `score` between 0 and 1:
+
+```yaml
+- id: score-tests
+  depends_on: [finalize-pr]
+  model: sonnet
+  context: fresh
+  scorer:
+    name: redundant-tests       # shared by every workflow that runs it
+    pass_at: 0.5                # a score at or above this passes (default 0.5)
+    description: Whether the PR's tests include redundant or trivial ones.
+  output_format:
+    type: object
+    properties:
+      score: { type: number }
+      classification: { type: string }
+      summary: { type: string }
+    required: [score]
+  prompt: |
+    Read the test files in this PR's diff …
+```
+
+When the step succeeds, the harness records its score, whether it passed,
+`classification` (a short label such as "No surplus tests") and `summary`,
+with the step's run time and cost. **Scorers** in the sidebar lists every
+scorer that has graded something. Each one has a page with its all-time cost,
+its pass rate or daily cost over the last 30 days, and the runs it graded.
+
+- **The name is the scorer.** Two workflows with a step named
+  `redundant-tests` add up on one page. Lowercase letters, digits and hyphens.
+- **A grade has to be readable.** Output without a `score` between 0 and 1 is
+  not recorded, rather than counted as a zero. Neither is a step that failed.
+- **A scorer only grades.** It doesn't stop the run or change anything. Gate
+  a later step on `$score-tests.output.score` if it should.
 
 ## Reporting back to Linear
 

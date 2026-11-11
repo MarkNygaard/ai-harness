@@ -141,6 +141,9 @@ nodes:
     mcp: [sentry]
     linear_comment: true
     retries: 2
+    scorer:
+      name: redundant-tests
+      pass_at: 0.7
     hooks:
       pre_tool_use:
         - matcher: Bash
@@ -155,6 +158,11 @@ nodes:
     expect(back.nodes[0].linear_comment).toBe(true);
     expect(back.nodes[1].linear_comment).toBeUndefined();
     expect(back.nodes[0].retries).toBe(2);
+    expect(back.nodes[0].scorer).toEqual({
+      name: "redundant-tests",
+      pass_at: 0.7,
+    });
+    expect(back.nodes[1].scorer).toBeUndefined();
     expect(back.nodes[0].hooks).toEqual({
       pre_tool_use: [{ matcher: "Bash", decision: "deny" }],
     });

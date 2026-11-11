@@ -2,6 +2,7 @@ import { Link, useLocation } from "react-router-dom";
 import {
   IconBolt,
   IconClipboardCheck,
+  IconGauge,
   IconGitCompare,
   IconLayoutDashboard,
   IconMessageCircle,
@@ -16,6 +17,7 @@ import { Factory } from "lucide-react";
 import { useHiddenNav } from "@/lib/nav-prefs";
 import { useRuns } from "@/lib/runs";
 import { useWorkflowList } from "@/lib/authoring";
+import { useScorers } from "@/lib/scorers";
 import { AccountMenu } from "@/components/AccountMenu";
 import {
   Sidebar,
@@ -85,6 +87,7 @@ export function useOperationsNav(): NavItem[] {
   // conditionally (the run list is cached/shared across pages).
   const runs = useRuns({});
   const workflows = useWorkflowList();
+  const scorers = useScorers();
   const hasRun = (name: string) =>
     !!runs.data?.some((r) => r.workflow_name === name);
 
@@ -139,6 +142,18 @@ export function useOperationsNav(): NavItem[] {
       match: "/ab",
       group: "harness",
     },
+    // Grades from scorer steps, once any step has graded a run.
+    ...(scorers.data && scorers.data.length > 0
+      ? [
+          {
+            href: "/scorers",
+            label: "Scorers",
+            icon: IconGauge,
+            match: "/scorers",
+            group: "harness" as const,
+          },
+        ]
+      : []),
     ...declaredNav,
   ];
 }

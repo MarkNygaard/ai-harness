@@ -412,6 +412,42 @@ impl RouteConfig {
     }
 }
 
+/// Marks a node as a *scorer*: a step that grades the run it is in. Its
+/// output is JSON `{ score, classification?, summary? }` (give it an
+/// `output_format`), and the server records the grade with the run, so a
+/// scorer's grades can be followed across runs on its own page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScorerConfig {
+    /// The scorer's name, shared by every workflow that runs it, so its
+    /// grades add up on one page (e.g. `redundant-tests`). Lowercase letters,
+    /// digits and hyphens.
+    pub name: String,
+    /// The lowest score that passes, 0–1. Default 0.5.
+    #[serde(default = "default_pass_at")]
+    pub pass_at: f64,
+    /// What it judges, in a sentence, for its page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+// `pass_at` is checked to be a number in 0..=1 when the workflow is parsed, so
+// it is never NaN and equality is total.
+impl Eq for ScorerConfig {}
+
+fn default_pass_at() -> f64 {
+    0.5
+}
+
+/// Whether `name` can name a scorer: lowercase letters, digits and hyphens,
+/// starting with a letter.
+pub fn is_valid_scorer_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some('a'..='z'))
+        && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+        && name.len() <= 64
+}
+
 /// A single node in the workflow DAG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Node {
@@ -480,6 +516,10 @@ pub struct Node {
     /// note. At most one node per workflow.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub linear_comment: bool,
+    /// This node grades the run: its JSON output is recorded as a scorer's
+    /// grade (see [`ScorerConfig`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scorer: Option<ScorerConfig>,
     /// The executable body.
     pub kind: NodeKind,
 }

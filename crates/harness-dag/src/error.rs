@@ -56,6 +56,10 @@ pub enum DagError {
     #[error("node `{node}` has effort `{value}`; expected one of: low, medium, high, xhigh, max")]
     InvalidEffort { node: String, value: String },
 
+    /// A node's `scorer:` can't be recorded as written.
+    #[error("node `{node}`: scorer {reason}")]
+    InvalidScorer { node: String, reason: String },
+
     /// A `script` node is missing its required `runtime`.
     #[error("script node `{0}` is missing `runtime` (expected `bun` or `uv`)")]
     ScriptMissingRuntime(String),

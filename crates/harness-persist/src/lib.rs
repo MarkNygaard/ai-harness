@@ -76,6 +76,11 @@ pub use mcp_servers::{credential_key as mcp_credential_key, McpServer, McpServer
 mod finding_state;
 pub use finding_state::{FindingState, FindingStateInput, FindingStateStore};
 
+mod scorer_results;
+pub use scorer_results::{
+    ScorerDay, ScorerResult, ScorerResultInput, ScorerResultStore, ScorerSummary,
+};
+
 mod installed_workflows;
 pub use installed_workflows::{InstallRecord, InstalledWorkflow, InstalledWorkflowStore};
 

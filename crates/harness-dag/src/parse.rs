@@ -69,6 +69,8 @@ struct RawNode {
     mcp: Vec<crate::model::McpUse>,
     #[serde(default)]
     linear_comment: bool,
+    #[serde(default)]
+    scorer: Option<crate::model::ScorerConfig>,
 
     // Mutually exclusive body discriminators.
     #[serde(default)]
@@ -183,6 +185,7 @@ impl RawNode {
             hooks,
             mcp,
             linear_comment,
+            scorer,
         } = self;
 
         let mut found: Vec<&'static str> = Vec::new();
@@ -275,6 +278,7 @@ impl RawNode {
                 hooks,
                 mcp,
                 linear_comment,
+                scorer,
             },
         ))
     }
@@ -299,6 +303,7 @@ struct NodeKindParts {
     hooks: Option<NodeHooks>,
     mcp: Vec<crate::model::McpUse>,
     linear_comment: bool,
+    scorer: Option<crate::model::ScorerConfig>,
 }
 
 /// Parse a workflow from YAML, validating node uniqueness, body exclusivity,
@@ -327,6 +332,24 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
                 name: u.server.clone(),
             });
         }
+        if let Some(scorer) = &parts.scorer {
+            if !crate::model::is_valid_scorer_name(&scorer.name) {
+                return Err(DagError::InvalidScorer {
+                    node: id,
+                    reason: format!(
+                        "name `{}` must be lowercase letters, digits and hyphens, starting \
+                         with a letter",
+                        scorer.name
+                    ),
+                });
+            }
+            if !(0.0..=1.0).contains(&scorer.pass_at) {
+                return Err(DagError::InvalidScorer {
+                    node: id,
+                    reason: format!("pass_at {} must be between 0 and 1", scorer.pass_at),
+                });
+            }
+        }
         if let Some(effort) = &parts.effort {
             if !crate::model::EFFORT_LEVELS.contains(&effort.as_str()) {
                 return Err(DagError::InvalidEffort {
@@ -352,6 +375,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             hooks: parts.hooks,
             mcp: parts.mcp,
             linear_comment: parts.linear_comment,
+            scorer: parts.scorer,
             kind: parts.kind,
         });
     }
