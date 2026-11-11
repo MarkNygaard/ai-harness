@@ -143,6 +143,7 @@ function uiToDoc(
             ? clean({
                 workflow: ui.report.apply.workflow,
                 label: ui.report.apply.label || undefined,
+                categories: ui.report.apply.categories,
               })
             : undefined,
         })
@@ -158,6 +159,9 @@ function applyFromRaw(raw: unknown): ReportApply | null {
   return {
     workflow: a.workflow,
     label: typeof a.label === "string" ? a.label : null,
+    categories: Array.isArray(a.categories)
+      ? a.categories.filter((c): c is string => typeof c === "string")
+      : undefined,
   };
 }
 

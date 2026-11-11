@@ -21,6 +21,8 @@ export interface ReportApply {
   workflow: string;
   /** The button's label; default "Apply". */
   label?: string | null;
+  /** The finding categories it acts on; only those can be approved. */
+  categories?: string[];
 }
 
 /** The per-item status control shown on each finding. */

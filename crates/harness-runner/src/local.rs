@@ -235,18 +235,47 @@ impl LocalRunner {
     }
 
     /// Run a `bash` body through the platform shell in the workspace.
+    ///
+    /// The script is the value of `-c`, unless it is too big to be one: Linux
+    /// refuses a single argument over 128 KiB ("Argument list too long"), and
+    /// a step that writes `$ARGUMENTS` into its script grows with its input
+    /// (a report's 274 findings did). A big script runs from a temp file
+    /// instead, kept outside the workspace so a step that commits with
+    /// `git add -A` can't pick it up.
     async fn run_bash(
         &self,
         script: &str,
         timeout: Option<u64>,
     ) -> Result<NodeOutput, RunnerError> {
-        self.run_process(
-            self.shell.program.as_str(),
-            &[self.shell.command_flag.as_str(), script],
-            "bash node",
-            timeout,
-        )
-        .await
+        if !bash_script_needs_file(script, &self.shell) {
+            return self
+                .run_process(
+                    self.shell.program.as_str(),
+                    &[self.shell.command_flag.as_str(), script],
+                    "bash node",
+                    timeout,
+                )
+                .await;
+        }
+        use std::io::Write as _;
+        let mut file = tempfile::Builder::new()
+            .prefix("harness-bash-")
+            .suffix(".sh")
+            .tempfile()
+            .map_err(|e| RunnerError(format!("failed to create temp bash script: {e}")))?;
+        file.write_all(script.as_bytes())
+            .map_err(|e| RunnerError(format!("failed to write temp bash script: {e}")))?;
+        let path = file.path().to_string_lossy().to_string();
+        let result = self
+            .run_process(
+                self.shell.program.as_str(),
+                &[path.as_str()],
+                "bash node",
+                timeout,
+            )
+            .await;
+        drop(file);
+        result
     }
 
     /// Run a `script` body via its runtime (`bun` for TS/JS, `uv` for Python).
@@ -569,6 +598,16 @@ fn is_omp(provider: Option<&str>) -> bool {
 
 /// What a step with a browser is told about it. Conditional on the work: a
 /// planning step reads, and a change with nothing visible needs no screenshot.
+/// Scripts at or above this size run from a file rather than as `-c`'s
+/// value: under Linux's 128 KiB limit for one argument, with room to spare.
+const BASH_INLINE_MAX: usize = 100 * 1024;
+
+/// Whether a bash body is too big to pass as one argument. Only a POSIX
+/// shell (`-c`) can run a script file this way; `cmd /C` keeps the old path.
+fn bash_script_needs_file(script: &str, shell: &Shell) -> bool {
+    shell.command_flag == "-c" && script.len() >= BASH_INLINE_MAX
+}
+
 fn browser_preamble(dir: &std::path::Path) -> String {
     let dir = dir.display();
     format!(
@@ -871,6 +910,59 @@ mod tests {
             .unwrap();
         assert!(out.success);
         assert!(out.text.contains("hello"), "got: {:?}", out.text);
+    }
+
+    /// A script bigger than one argument may be (a step that writes a large
+    /// `$ARGUMENTS` into its body) still runs, in the workspace, and leaves no
+    /// file there.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_bash_script_too_big_for_one_argument_still_runs() {
+        let dir = TempDir::new().unwrap();
+        let (runner, _agent) = runner_at(dir.path(), vec![]);
+        let vars = VarContext::new();
+        let payload = "x".repeat(300 * 1024);
+        let script = format!("cat > input.txt <<'EOF'\n{payload}\nEOF\nwc -c < input.txt; pwd");
+        assert!(bash_script_needs_file(&script, &Shell::platform_default()));
+        let out = runner
+            .execute(request(NodeBody::Bash(script), &vars))
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.text);
+        assert!(
+            out.text.contains(&(300 * 1024 + 1).to_string()),
+            "{}",
+            out.text
+        );
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"input.txt".to_string()),
+            "ran in the workspace: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.starts_with("harness-bash-")),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_big_script_on_a_posix_shell_goes_to_a_file() {
+        let bash = Shell {
+            program: "bash".into(),
+            command_flag: "-c".into(),
+        };
+        let cmd = Shell {
+            program: "cmd".into(),
+            command_flag: "/C".into(),
+        };
+        assert!(!bash_script_needs_file("echo hi", &bash));
+        let big = "x".repeat(BASH_INLINE_MAX);
+        assert!(bash_script_needs_file(&big, &bash));
+        assert!(!bash_script_needs_file(&big, &cmd));
     }
 
     #[tokio::test]

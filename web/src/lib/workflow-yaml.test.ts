@@ -301,7 +301,11 @@ describe("ui block round-trip", () => {
           verdict_node: "report",
           scored: false,
           actions: ["approve", "build"],
-          apply: { workflow: "ecom-test-prune", label: "Open PRs" },
+          apply: {
+            workflow: "ecom-test-prune",
+            label: "Open PRs",
+            categories: ["delete", "merge"],
+          },
         },
       },
     });
@@ -309,6 +313,7 @@ describe("ui block round-trip", () => {
     expect(fromYaml(yaml).ui?.report?.apply).toEqual({
       workflow: "ecom-test-prune",
       label: "Open PRs",
+      categories: ["delete", "merge"],
     });
   });
 

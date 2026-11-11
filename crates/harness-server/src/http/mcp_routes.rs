@@ -1342,7 +1342,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_set_ui",
-            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (the default workflow, task), issue (Linear), ignore, approve (Approve / Reject what the finding proposes). `apply: { workflow, label? }` (needs approve) adds a button that starts that workflow in the same project with the approved findings as its input, and marks them applied. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings. `layout: table` shows totals, filters and one sortable row per finding instead of cards; use it for many findings, and give each finding `id` (unique), `score` (0-1) and `duration_ms` where they apply.",
+            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (the default workflow, task), issue (Linear), ignore, approve (Approve / Reject what the finding proposes). `apply: { workflow, label?, categories? }` (needs approve) adds a button that starts that workflow in the same project with the approved findings as its input, and marks them applied. `categories` limits Approve, and what is sent, to the finding categories the workflow acts on. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings. `layout: table` shows totals, filters and one sortable row per finding instead of cards; use it for many findings, and give each finding `id` (unique), `score` (0-1) and `duration_ms` where they apply.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1375,7 +1375,8 @@ fn mcp_tools() -> Vec<Value> {
                                         "type": "object",
                                         "properties": {
                                             "workflow": { "type": "string" },
-                                            "label": { "type": "string" }
+                                            "label": { "type": "string" },
+                                            "categories": { "type": "array", "items": { "type": "string" } }
                                         },
                                         "required": ["workflow"]
                                     }
