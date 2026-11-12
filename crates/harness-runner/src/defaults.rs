@@ -1207,6 +1207,31 @@ mod tests {
         assert_eq!(moves(&runner), ["In Progress", "In Review"]);
     }
 
+    /// Opening the epic's pull request sets off Linear's own "pull request
+    /// opened" automation a few seconds later, which moved NIL-72 from In
+    /// Review straight back to In Progress. The move has to be checked and
+    /// repeated, not fired once.
+    #[test]
+    fn the_finished_epic_is_moved_to_review_and_checked_that_it_stayed() {
+        let wf = harness_dag::parse_workflow(default_workflow("task").unwrap()).unwrap();
+        let advance = wf
+            .node("advance")
+            .and_then(|n| match &n.kind {
+                harness_dag::NodeKind::Bash(b) => Some(b.as_str()),
+                _ => None,
+            })
+            .expect("advance is a bash node");
+        let pr = advance.find("gh pr create").expect("opens the epic PR");
+        let moved = advance
+            .rfind("move-state --issue \"$parent\"")
+            .expect("moves the epic");
+        assert!(pr < moved, "the epic moves after its pull request exists");
+        assert!(
+            advance.contains(".state_name"),
+            "reads the epic's state back after moving it"
+        );
+    }
+
     #[tokio::test]
     async fn a_piece_github_will_not_merge_stops_for_a_person_and_says_why() {
         // NIL-73: graded and passed, but its PR was into a branch that
