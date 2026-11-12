@@ -15,8 +15,7 @@ A node's `provider` selects the agent. Several names route to the same one:
 | `provider` | Agent | Notes |
 | --- | --- | --- |
 | `claude` | Claude Code CLI | Run headless. The default for planning and review steps in the bundled workflows. |
-| `openai-codex` | Codex | Also reachable through Pi on a ChatGPT subscription. |
-| `pi`, `kimi`, `omp` | Pi | Three aliases for one agent. Pi's CLI binary is named `omp`, which is why that spelling is accepted. |
+| `pi`, `kimi`, `omp` | Pi | Three aliases for one agent. Pi's CLI binary is named `omp`, which is why that spelling is accepted. It runs Kimi models and, on a ChatGPT subscription, OpenAI models (`openai-codex/*`). |
 | `cursor` | `cursor-agent` | Ships in the image. The Cursor plan covers Cursor's own models. It does not cover Claude and GPT reached through Cursor. |
 
 ### A browser on every step
@@ -24,15 +23,24 @@ A node's `provider` selects the agent. Several names route to the same one:
 Every Claude and Pi step can drive a browser, with nothing to configure. The
 image carries a Chromium and the fonts it needs. Pi uses its own browser tool;
 Claude gets Playwright's MCP server pointed at the same Chromium. It is not
-listed on the MCP servers page and a step does not ask for it. (Codex and
-Cursor steps have none yet.)
+listed on the MCP servers page and a step does not ask for it. (Cursor steps
+have none yet.)
 
 Each such step is told when to use it: when its work changes or reviews
-something a user sees. It then starts the app's dev server, opens the pages the
-change affects at desktop and mobile widths, reads the console, and saves
-screenshots with a short note on each. If the app cannot start in the container,
-the step says so and carries on. A planning step, or a change with nothing
-visible, skips it.
+something a user sees. It first looks at the screenshots earlier steps in the
+run took, and starts the app's dev server only for what they can't show: a view
+nobody has taken, an interaction, the console, or a view it has changed since.
+Then it opens the pages the change affects at desktop and mobile widths, reads
+the console, and saves screenshots with a short note on each. If the app cannot
+start in the container, the step says so and carries on. A planning step, or a
+change with nothing visible, skips it.
+
+There is one screenshot per view: a page in one state (a drawer open, say) at
+one width. A step that changes a view retakes it; a step that only reviews adds
+one only for a view nobody has taken, or to show a problem it found. When the
+run ends, an earlier screenshot of the same page, state and width is dropped in
+favour of the latest, so a run with several reviewers doesn't keep several
+copies of the same drawer.
 
 The screenshots are kept after the run and shown on the run's page under
 **Screenshots**, grouped by page. They are deleted after
@@ -95,8 +103,7 @@ implement with a cheap one.
 
 `effort` takes `low` | `medium` | `high` | `xhigh` | `max`. Any other value is
 rejected when the workflow is saved. It is passed to the agent CLI: as
-`--effort` to Claude Code, as `model_reasoning_effort` to Codex, and as
-`--thinking` to Pi. Cursor and the direct Anthropic API have no effort setting,
+`--effort` to Claude Code and as `--thinking` to Pi. Cursor and the direct Anthropic API have no effort setting,
 so the editor hides the field for them, and a workflow that sets it anyway
 validates with a warning and runs at the agent's default. Spend it where
 judgement matters, on planning and architecture, and not on mechanical steps.

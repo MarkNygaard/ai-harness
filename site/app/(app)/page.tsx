@@ -20,7 +20,7 @@ const features = [
   },
   {
     title: "Many agents, one pipeline",
-    body: "Claude Code, Codex, Pi and Cursor nodes in the same run, each on its own model. The harness writes the prompts and runs the pipeline. The agents decide how to do the work.",
+    body: "Claude Code, Pi and Cursor nodes in the same run, each on its own model. The harness writes the prompts and runs the pipeline. The agents decide how to do the work.",
     href: "/docs/workflows/authoring",
   },
   {

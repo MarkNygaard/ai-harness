@@ -472,23 +472,11 @@ async fn claim_and_fire(
         },
         None => None,
     };
-    // Concurrency gate: skip if this binding is already at its in-flight cap.
-    // `max_concurrent_runs` defaults to 1 (the original one-at-a-time behaviour);
-    // a binding can raise it to run several issues in parallel. The poller still
-    // claims at most one issue per tick, so it ramps up to the cap over ticks.
-    match claim_store.count_active(&b.project, &b.workflow).await {
-        Ok(active) if super::linear_agent::at_capacity(active, b.max_concurrent_runs) => return,
-        Ok(_) => {}
-        Err(e) => {
-            tracing::warn!(
-                "linear poller: count_active failed for {}/{}: {e}",
-                b.project,
-                b.workflow
-            );
-            return;
-        }
-    }
-
+    // No concurrency gate here. `max_concurrent_runs` is enforced where the run
+    // starts (`runs_routes::workflow_has_room`): over it, the run is parked as
+    // queued. Refusing here instead left an issue waiting for a slot invisible —
+    // eligible, but in no list — until the slot freed. The poller still claims
+    // at most one issue per tick, and never one that already has a claim.
     let found = match candidates(client, b, delegate_id).await {
         Ok(i) => i,
         Err(e) => {
@@ -994,15 +982,28 @@ fn task_for_issue(issue: &Issue, comments: &[Comment]) -> String {
     if !human.is_empty() {
         task.push_str("\n\n## Reviewer comments (Linear)\n\n");
         for (idx, c) in human.iter().enumerate() {
-            // The harness's own comments (plans, closing summaries) stay in,
-            // because a revision dates new feedback from the latest of them,
-            // but they are marked: the app's display name differs per
-            // install, so a workflow cannot recognise them by author.
-            let mark = if c.by_harness { " [harness]" } else { "" };
-            task.push_str(&format!(
-                "**{}** ({}){mark}:\n{}\n",
-                c.author, c.created_at, c.body
-            ));
+            // Changes a person agreed with the agent, which the harness posted
+            // for them (`request_changes`): theirs, not one of its own notes.
+            let asked = c
+                .by_harness
+                .then(|| super::request_changes::requested_by(&c.body))
+                .flatten();
+            if let Some((who, body)) = asked {
+                task.push_str(&format!(
+                    "**{who}** ({}), through the AI Harness agent:\n{body}\n",
+                    c.created_at
+                ));
+            } else {
+                // The harness's own comments (plans, closing summaries) stay
+                // in, because a revision dates new feedback from the latest of
+                // them, but they are marked: the app's display name differs per
+                // install, so a workflow cannot recognise them by author.
+                let mark = if c.by_harness { " [harness]" } else { "" };
+                task.push_str(&format!(
+                    "**{}** ({}){mark}:\n{}\n",
+                    c.author, c.created_at, c.body
+                ));
+            }
             if idx + 1 < human.len() {
                 task.push_str("\n---\n\n");
             }
@@ -1956,6 +1957,8 @@ mod tests {
             category: None,
             artifact: None,
             linear_comment: false,
+            routes: vec![],
+            when: None,
         }
     }
 
@@ -2456,7 +2459,7 @@ mod tests {
             body: body.into(),
             author: author.into(),
             created_at: "2026-06-01T10:00:00Z".into(),
-            by_harness: false,
+            ..Default::default()
         }
     }
     /// `revise-task` dates new feedback from the harness's latest comment, and
@@ -2473,6 +2476,42 @@ mod tests {
         let task = task_for_issue(&sample_issue(), &comments);
         assert!(task.contains("**Whatever The App Is Called** (2026-06-01T10:00:00Z) [harness]:"));
         assert!(task.contains("**Alice** (2026-06-01T10:00:00Z):"));
+    }
+    /// Changes a person agreed with the agent reach the revision as theirs:
+    /// not marked `[harness]`, so `revise-task` counts them as feedback.
+    #[test]
+    fn task_for_issue_hands_agreed_changes_back_as_the_persons() {
+        let comments = vec![
+            Comment {
+                by_harness: true,
+                ..sample_comment("Proposed change (not applied yet): …", "AI Harness")
+            },
+            Comment {
+                by_harness: true,
+                created_at: "2026-06-01T11:00:00Z".into(),
+                ..sample_comment(
+                    &super::super::request_changes::comment_body(
+                        "Ada Lindqvist",
+                        "Rewrite the Campaign orders bullet.",
+                    ),
+                    "AI Harness",
+                )
+            },
+        ];
+        let task = task_for_issue(&sample_issue(), &comments);
+        assert!(
+            task.contains(
+                "**Ada Lindqvist** (2026-06-01T11:00:00Z), through the AI Harness agent:"
+            ),
+            "{task}"
+        );
+        assert!(task.contains("Rewrite the Campaign orders bullet."));
+        assert!(
+            !task.contains("harness:requested-by"),
+            "the marker stays out"
+        );
+        // The agent's own proposal is still the harness's.
+        assert!(task.contains("**AI Harness** (2026-06-01T10:00:00Z) [harness]:"));
     }
     #[test]
     fn task_for_issue_without_comments_omits_section() {

@@ -20,6 +20,8 @@ function node(
   return {
     id,
     depends_on: [],
+    routes: [],
+    when: null,
     status,
     provider: null,
     model: null,

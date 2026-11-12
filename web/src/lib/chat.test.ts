@@ -65,6 +65,16 @@ describe("describeAction", () => {
     expect(describeAction(action("workflow_delete", { name: "old" }))).toBe(
       "Delete the workflow old. It stays in the bin for 14 days.",
     );
+    expect(
+      describeAction(
+        action("linear_request_changes", {
+          issue: "ECOM-854",
+          state: "Changes requested",
+        }),
+      ),
+    ).toBe(
+      "Post the agreed changes on ECOM-854 as your request and move it to Changes requested, so its trigger revises the pull request.",
+    );
     expect(describeAction(action("something_new", {}))).toBe(
       "Run something_new.",
     );

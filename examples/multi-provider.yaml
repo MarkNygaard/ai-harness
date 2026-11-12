@@ -1,7 +1,8 @@
 name: multi-provider-demo
 description: >
-  Demonstrates one DAG fanning across three agent backends — Claude, Pi/Kimi
-  (via the `omp` CLI), and Codex — each on its declared provider/model. Run with
+  Demonstrates one DAG fanning across agent backends — Claude, and Pi (the
+  `omp` CLI) running both a Kimi and a GPT model — each on its declared
+  provider/model. Run with
   real agents: `harness run examples/multi-provider.yaml --real`. With the echo
   agent (no `--real`) it exercises the graph without invoking any model.
 provider: claude
@@ -19,14 +20,15 @@ nodes:
     model: kimi-code/kimi-k2.5
     prompt: "Implement the change described in $USER_MESSAGE under $ARTIFACTS_DIR."
 
-  # Codex node, running in parallel with the Claude review below.
-  - id: codex_pass
+  # GPT node via omp on a ChatGPT subscription, running in parallel with the
+  # Claude review below. omp needs the `openai-codex/` prefix on the model id.
+  - id: gpt_pass
     depends_on: [implement]
-    provider: codex
-    model: gpt-5-codex
+    provider: pi
+    model: openai-codex/gpt-5.6-sol
     prompt: "Review the implementation for correctness and tighten it."
 
-  # Claude review node (parallel layer with codex_pass).
+  # Claude review node (parallel layer with gpt_pass).
   - id: claude_review
     depends_on: [implement]
     provider: claude
@@ -35,5 +37,5 @@ nodes:
 
   # Joins both reviews; runs on the workflow default provider/model (Claude).
   - id: signoff
-    depends_on: [codex_pass, claude_review]
-    prompt: "Synthesize the Codex and Claude reviews into a final sign-off."
+    depends_on: [gpt_pass, claude_review]
+    prompt: "Synthesize the GPT and Claude reviews into a final sign-off."

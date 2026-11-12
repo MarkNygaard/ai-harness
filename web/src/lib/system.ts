@@ -7,7 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiJson } from "./api";
 
 export interface ProviderHealth {
-  /** Credential-store key: "claude", "codex", "pi", "cursor". */
+  /** Credential-store key: "claude", "pi", "cursor". */
   provider: string;
   /** The executable the harness spawns for it. */
   binary: string;
@@ -116,9 +116,9 @@ export function useCliUpdateStatus(enabled = true) {
  * whatever is running, so it will not do that while an agent is live. Check
  * `result.queued` to know which happened.
  *
- * Claude Code and Codex are both npm packages installed the same way, so one
- * mutation covers both; `omp` and `cursor-agent` come from elsewhere and report
- * `update_available: false`, so no button is ever offered for them.
+ * Claude Code is an npm package, which is what this mutation installs; `omp`
+ * and `cursor-agent` come from elsewhere and report `update_available: false`,
+ * so no button is ever offered for them.
  */
 export function useUpdateAgentCli() {
   const qc = useQueryClient();

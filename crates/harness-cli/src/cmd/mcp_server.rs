@@ -1,7 +1,6 @@
 use anyhow::Context;
 use harness_agents::{
-    claude::ClaudeCodeAgent, claude_adapter::ClaudeAdapter, codex::CodexAgent,
-    codex_adapter::CodexAdapter, registry::AgentRegistry,
+    claude::ClaudeCodeAgent, claude_adapter::ClaudeAdapter, registry::AgentRegistry,
 };
 use harness_core::{agent::AgentRequest, config::HarnessConfig, prompts, types::ThreadId};
 use serde::Deserialize;
@@ -783,7 +782,7 @@ fn mcp_tools_base() -> Vec<Value> {
                     },
                     "agent": {
                         "type": "string",
-                        "description": "Agent name (for example: claude, codex). Defaults to configured default agent.",
+                        "description": "Agent name (for example: claude, anthropic-api). Defaults to configured default agent.",
                     }
                 },
                 "required": ["prompt"],
@@ -878,7 +877,7 @@ fn mcp_tools_base() -> Vec<Value> {
                 "properties": {
                     "name": { "type": "string", "description": "Workflow name (file stem)." },
                     "description": { "type": "string" },
-                    "provider": { "type": "string", "description": "Default provider (claude/codex/pi) — see workflow_catalog." },
+                    "provider": { "type": "string", "description": "Default provider (claude/pi/cursor) — see workflow_catalog." },
                     "model": { "type": "string", "description": "Default model." },
                     "project_root": { "type": "string", "description": "Project directory. Defaults to server cwd." }
                 },
@@ -1065,19 +1064,6 @@ pub async fn run(config: HarnessConfig) -> anyhow::Result<()> {
             )),
         )
         .context("failed to attach claude adapter")?;
-    agent_registry.register(
-        "codex",
-        Arc::new(
-            CodexAgent::from_config(config.agents.codex.clone(), config.agents.sandbox_mode)
-                .with_stream_timeout(config.agents.stream_timeout_secs),
-        ),
-    );
-    agent_registry
-        .register_adapter(
-            "codex",
-            Arc::new(CodexAdapter::new(config.agents.codex.cli_path.clone())),
-        )
-        .context("failed to attach codex adapter")?;
 
     let default_agent_name = agent_registry
         .resolved_default_agent_name()

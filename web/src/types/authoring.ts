@@ -14,7 +14,16 @@ export interface WorkflowNav {
 }
 
 /** An opt-in per-finding action a report offers. */
-export type ReportAction = "build" | "issue" | "ignore";
+export type ReportAction = "build" | "issue" | "ignore" | "approve";
+
+/** The workflow a report's Apply button starts with the approved findings. */
+export interface ReportApply {
+  workflow: string;
+  /** The button's label; default "Apply". */
+  label?: string | null;
+  /** The finding categories it acts on; only those can be approved. */
+  categories?: string[];
+}
 
 /** The per-item status control shown on each finding. */
 export type ReportStatus = "none" | "check" | "pass_fail";
@@ -30,7 +39,22 @@ export interface WorkflowReport {
   actions?: ReportAction[];
   /** Per-item status control; absent → `none`. */
   status?: ReportStatus;
+  /** Cards (default) or a table with totals and filters, for many findings. */
+  layout?: ReportLayout;
+  /** What acts on the approved findings; pairs with the `approve` action. */
+  apply?: ReportApply | null;
 }
+
+/** A node that grades its run (mirrors `harness_dag::ScorerConfig`). */
+export interface ScorerConfig {
+  name: string;
+  /** The lowest passing score, 0–1; default 0.5. */
+  pass_at?: number;
+  description?: string;
+}
+
+/** How a report lays out its findings. */
+export type ReportLayout = "list" | "table";
 
 /** Optional UI surfaces a workflow opts into (mirrors `harness_dag::WorkflowUi`). */
 export interface WorkflowUi {
@@ -224,7 +248,7 @@ export type TriggerRule =
   | "one_failed";
 export type ScriptRuntime = "bun" | "uv";
 /** Reasoning-effort override for AI bodies, forwarded as `--effort` to
- * claude/codex CLIs. Higher effort suits high-leverage steps like planning. */
+ * Claude and `--thinking` to omp. Higher effort suits high-leverage steps like planning. */
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
 /** Loop body config (mirrors `LoopConfig`, editor-relevant fields). */
@@ -289,7 +313,7 @@ export interface EditorNode {
   depends_on?: string[];
   provider?: string;
   model?: string;
-  /** Reasoning-effort override (claude/codex only); undefined → agent default. */
+  /** Reasoning-effort override (claude/pi only); undefined → agent default. */
   effort?: EffortLevel;
   context?: ContextMode;
   trigger_rule?: TriggerRule;
@@ -313,6 +337,8 @@ export interface EditorNode {
   mcp?: McpEntry[];
   /** Post this step's output to the Linear issue when the run completes. */
   linear_comment?: boolean;
+  /** This step grades the run; its grade is recorded under the scorer. */
+  scorer?: ScorerConfig;
   // Mutually exclusive bodies:
   prompt?: string;
   bash?: string;

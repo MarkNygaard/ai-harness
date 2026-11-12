@@ -235,18 +235,47 @@ impl LocalRunner {
     }
 
     /// Run a `bash` body through the platform shell in the workspace.
+    ///
+    /// The script is the value of `-c`, unless it is too big to be one: Linux
+    /// refuses a single argument over 128 KiB ("Argument list too long"), and
+    /// a step that writes `$ARGUMENTS` into its script grows with its input
+    /// (a report's 274 findings did). A big script runs from a temp file
+    /// instead, kept outside the workspace so a step that commits with
+    /// `git add -A` can't pick it up.
     async fn run_bash(
         &self,
         script: &str,
         timeout: Option<u64>,
     ) -> Result<NodeOutput, RunnerError> {
-        self.run_process(
-            self.shell.program.as_str(),
-            &[self.shell.command_flag.as_str(), script],
-            "bash node",
-            timeout,
-        )
-        .await
+        if !bash_script_needs_file(script, &self.shell) {
+            return self
+                .run_process(
+                    self.shell.program.as_str(),
+                    &[self.shell.command_flag.as_str(), script],
+                    "bash node",
+                    timeout,
+                )
+                .await;
+        }
+        use std::io::Write as _;
+        let mut file = tempfile::Builder::new()
+            .prefix("harness-bash-")
+            .suffix(".sh")
+            .tempfile()
+            .map_err(|e| RunnerError(format!("failed to create temp bash script: {e}")))?;
+        file.write_all(script.as_bytes())
+            .map_err(|e| RunnerError(format!("failed to write temp bash script: {e}")))?;
+        let path = file.path().to_string_lossy().to_string();
+        let result = self
+            .run_process(
+                self.shell.program.as_str(),
+                &[path.as_str()],
+                "bash node",
+                timeout,
+            )
+            .await;
+        drop(file);
+        result
     }
 
     /// Run a `script` body via its runtime (`bun` for TS/JS, `uv` for Python).
@@ -569,6 +598,16 @@ fn is_omp(provider: Option<&str>) -> bool {
 
 /// What a step with a browser is told about it. Conditional on the work: a
 /// planning step reads, and a change with nothing visible needs no screenshot.
+/// Scripts at or above this size run from a file rather than as `-c`'s
+/// value: under Linux's 128 KiB limit for one argument, with room to spare.
+const BASH_INLINE_MAX: usize = 100 * 1024;
+
+/// Whether a bash body is too big to pass as one argument. Only a POSIX
+/// shell (`-c`) can run a script file this way; `cmd /C` keeps the old path.
+fn bash_script_needs_file(script: &str, shell: &Shell) -> bool {
+    shell.command_flag == "-c" && script.len() >= BASH_INLINE_MAX
+}
+
 fn browser_preamble(dir: &std::path::Path) -> String {
     let dir = dir.display();
     format!(
@@ -576,20 +615,39 @@ fn browser_preamble(dir: &std::path::Path) -> String {
          A headless browser (Chromium) is available in this step. Use it when your \
          work changes or reviews something a user sees: a page, a component, \
          styling or copy.\n\n\
-         1. Start the app's dev server in the background (the command is in \
-         CLAUDE.md / AGENTS.md, or package.json) and wait until it answers.\n\
-         2. Open each page the change affects. Check it at desktop (1440x900) and \
-         mobile (390x844) widths, and read the console for errors. Fix what you \
-         find, if fixing is your job.\n\
-         3. Save a screenshot of each, giving the full path as the file name: \
-         `{dir}/<page>-<desktop|mobile>.png` (a bare name is saved in the \
-         working directory, where it is lost). Add an entry for each to \
-         `{dir}/{SCREENSHOTS_MANIFEST}`: a JSON array of objects with `file`, \
-         `page`, `viewport` and `note`, where `note` says what the screenshot \
-         shows. Add to the array if it already exists; an earlier step may have \
-         written to it, and a later screenshot of the same page and viewport \
-         replaces the earlier entry.\n\
-         4. Stop the dev server when you are done.\n\n\
+         1. Look at what earlier steps in this run saw: read \
+         `{dir}/{SCREENSHOTS_MANIFEST}` and open the images it lists before you \
+         start the app. They show each view as the last step that changed it \
+         left it, so use them: look for what is wrong in them. Start the app \
+         only for what they can't tell you: a view nobody has taken, an \
+         interaction, a console error, or a view your own step has changed \
+         since.\n\
+         2. Then, if you need it, start the app's dev server in the background \
+         (the command is in CLAUDE.md / AGENTS.md, or package.json) and wait \
+         until it answers. Open each page the change affects. Check it at \
+         desktop (1440x900) and mobile (390x844) widths, and read the console \
+         for errors. Fix what you find, if fixing is your job.\n\
+         3. Screenshots are for the person reviewing the pull request: one per \
+         view, showing the change.\n\
+         \x20  - A *view* is a page in one state at one width: the URL path, \
+         what is open or selected that matters to the change (`filter-open`), \
+         and desktop or mobile. Its file is `{dir}/<path>[-<state>]-<desktop|mobile>.png`, \
+         the path as a slug (`/category/women` is `category-women`): the same \
+         view always has the same name. Give the full path; a bare name is \
+         saved in the working directory, where it is lost.\n\
+         \x20  - If your step changed what a view shows, take it after your \
+         change, overwriting the earlier file of that view.\n\
+         \x20  - If your step only checks or reviews, take one only of a view \
+         nobody has taken yet, or to show a problem you found (put the problem \
+         in its `note`). Don't retake a view to show it is unchanged.\n\
+         \x20  - Show the change: open the drawer, menu or state it is in. Wait \
+         until the page has settled (no animation running, images loaded) \
+         before you take it.\n\
+         \x20  - For each screenshot, add or replace its entry in the manifest, \
+         a JSON array of objects with `file`, `page` (the URL path only), \
+         `view` (the state, or empty), `viewport` (`1440x900` or `390x844`) \
+         and `note` (what it shows). One entry per file.\n\
+         4. Stop the dev server, if you started one, when you are done.\n\n\
          If the app cannot start here (a missing credential, a service it needs), \
          say so in your output and carry on: that is not a reason to fail the \
          step. Skip all of this for work that changes nothing a user sees."
@@ -752,7 +810,16 @@ mod tests {
         assert!(text.contains("`/w/.harness/artifacts/screenshots/screenshots.json`"));
         // Playwright saves a bare file name relative to its working directory,
         // not to --output-dir, so the instruction must ask for the full path.
-        assert!(text.contains("`/w/.harness/artifacts/screenshots/<page>-<desktop|mobile>.png`"));
+        assert!(text
+            .contains("`/w/.harness/artifacts/screenshots/<path>[-<state>]-<desktop|mobile>.png`"));
+        // One screenshot per view: the same view always gets the same name, and
+        // a step that only reviews doesn't retake what is already there.
+        assert!(text.contains("the same view always has the same name"));
+        assert!(text.contains("Don't retake a view to show it is unchanged"));
+        assert!(text.contains("Wait until the page has settled"));
+        // A later step looks at what earlier ones saw before starting the app.
+        assert!(text.contains("open the images it lists before you"));
+        assert!(text.contains("Start the app only for what they can't tell you"));
         assert!(text.contains("not a reason to fail the step"));
         assert!(text.contains("Skip all of this for work that changes nothing a user sees"));
 
@@ -843,6 +910,59 @@ mod tests {
             .unwrap();
         assert!(out.success);
         assert!(out.text.contains("hello"), "got: {:?}", out.text);
+    }
+
+    /// A script bigger than one argument may be (a step that writes a large
+    /// `$ARGUMENTS` into its body) still runs, in the workspace, and leaves no
+    /// file there.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_bash_script_too_big_for_one_argument_still_runs() {
+        let dir = TempDir::new().unwrap();
+        let (runner, _agent) = runner_at(dir.path(), vec![]);
+        let vars = VarContext::new();
+        let payload = "x".repeat(300 * 1024);
+        let script = format!("cat > input.txt <<'EOF'\n{payload}\nEOF\nwc -c < input.txt; pwd");
+        assert!(bash_script_needs_file(&script, &Shell::platform_default()));
+        let out = runner
+            .execute(request(NodeBody::Bash(script), &vars))
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.text);
+        assert!(
+            out.text.contains(&(300 * 1024 + 1).to_string()),
+            "{}",
+            out.text
+        );
+        let names: Vec<String> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .collect();
+        assert!(
+            names.contains(&"input.txt".to_string()),
+            "ran in the workspace: {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.starts_with("harness-bash-")),
+            "{names:?}"
+        );
+    }
+
+    #[test]
+    fn only_a_big_script_on_a_posix_shell_goes_to_a_file() {
+        let bash = Shell {
+            program: "bash".into(),
+            command_flag: "-c".into(),
+        };
+        let cmd = Shell {
+            program: "cmd".into(),
+            command_flag: "/C".into(),
+        };
+        assert!(!bash_script_needs_file("echo hi", &bash));
+        let big = "x".repeat(BASH_INLINE_MAX);
+        assert!(bash_script_needs_file(&big, &bash));
+        assert!(!bash_script_needs_file(&big, &cmd));
     }
 
     #[tokio::test]

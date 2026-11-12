@@ -1154,6 +1154,16 @@ issue_prs, pr_status. Recommend one, say why in a sentence, and give its preview
 - Workflows that run on a schedule: schedule_list. To set one up or change it, check the \
 cron expression with schedule_preview first, then schedule_create or schedule_update.
 - Why a Linear issue did not start: linear_check, linear_bindings, linear_states.
+- Having code changed for a Linear issue: first check issue_prs. **If the issue already has an \
+open pull request, never start a run.** The change is a revision of that PR, and the team \
+revises through its board: use linear_request_changes. Find the column with trigger_list: the \
+enabled Linear trigger for the issue's team whose workflow revises a pull request (such as \
+revise-task). Write `changes` as the complete instruction, everything that was agreed, so a \
+developer could act on it without this conversation.
+- Building something new for an issue that has no pull request yet: use the workflow the team's \
+own trigger for starting work runs (trigger_list), and name it in run_trigger's `workflow`. \
+Never leave `workflow` empty: that falls back to the project's default, which may not be the \
+one the team uses.
 - Creating or changing a workflow: workflow_catalog and workflow_get first, workflow_validate \
 before workflow_save. Saving keeps the previous version, so edits can be undone.
 

@@ -298,6 +298,13 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
                 .put(finding_routes::set_finding)
                 .delete(finding_routes::clear_finding),
         )
+        .route(
+            "/api/runs/{id}/findings/batch",
+            post(finding_routes::batch_findings),
+        )
+        // ── Scorers: grades recorded by scorer nodes, across runs ───────────
+        .route("/api/scorers", get(super::scorer_routes::list_scorers))
+        .route("/api/scorers/{name}", get(super::scorer_routes::get_scorer))
         // ── Cluster-hosted MCP endpoint (JSON-RPC over HTTP; no local binary) ─
         // Authoring + run control for editors via `{ "type": "http", "url":
         // ".../mcp" }`. Behind the global bearer-token middleware.
@@ -528,6 +535,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/run/s3/upload-url", post(run_s3_routes::upload_url))
         .route("/api/run/linear/issue", post(run_linear_routes::issue))
         .route(
+            "/api/run/linear/comments",
+            post(run_linear_routes::comments),
+        )
+        .route(
             "/api/run/linear/children",
             post(run_linear_routes::children),
         )
@@ -590,7 +601,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             "/api/credentials/kimi/connect/poll",
             post(super::kimi_routes::connect_poll),
         )
-        // ── Connect Codex (ChatGPT OAuth device flow, server-side) ──────────
+        // ── Connect ChatGPT (OAuth PKCE flow, server-side; backs omp) ───────
         .route(
             "/api/credentials/codex/connect/start",
             post(super::codex_routes::connect_start),

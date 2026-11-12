@@ -159,6 +159,13 @@ pub enum LinearAction {
         #[arg(long)]
         remove: Vec<String>,
     },
+    /// Print every comment on an issue as JSON, oldest first: `id`, `author`,
+    /// `is_harness`, `created_at`, `parent_id`, `body`. Read-only
+    Comments {
+        /// The issue's id or identifier, e.g. ECOM-12
+        #[arg(long)]
+        issue: String,
+    },
     /// Print an epic's sub-issues as JSON, in board order
     Children {
         #[arg(long)]
@@ -212,7 +219,7 @@ pub enum Command {
         #[command(subcommand)]
         action: AdminAction,
     },
-    /// Write to Linear as the harness app (used by workflow steps)
+    /// Read and write Linear as the harness app (used by workflow steps)
     Linear {
         #[command(subcommand)]
         action: LinearAction,
@@ -283,7 +290,7 @@ pub enum Command {
         /// Free-form text exposed as `$ARGUMENTS` / `$USER_MESSAGE`
         #[arg(long, default_value = "")]
         args: String,
-        /// Use real agents (Claude/Codex) instead of the built-in echo agent
+        /// Use real agents (Claude) instead of the built-in echo agent
         #[arg(long)]
         real: bool,
         /// Sandbox mode for real CLI agents
@@ -1318,7 +1325,7 @@ mod tests {
             "--project",
             "/tmp/repo",
             "--agent",
-            "codex",
+            "anthropic-api",
             "--model",
             "gpt-4",
             "--sandbox-mode",
@@ -1351,7 +1358,7 @@ mod tests {
                 ..
             } => {
                 assert_eq!(prompt, "review PR");
-                assert_eq!(agent, "codex");
+                assert_eq!(agent, "anthropic-api");
                 assert_eq!(model.as_deref(), Some("gpt-4"));
                 assert_eq!(sandbox_mode, "read-only");
                 assert!(!drop_sudo);
@@ -1402,6 +1409,20 @@ mod tests {
             }
             _ => panic!("expected Pr Loop command"),
         }
+    }
+
+    /// `harness linear comments --issue ECOM-12`, the read #505 asked for.
+    #[test]
+    fn cli_parses_linear_comments() {
+        let cli = Cli::try_parse_from(["harness", "linear", "comments", "--issue", "ECOM-12"])
+            .expect("linear comments should parse");
+        match cli.command {
+            Command::Linear {
+                action: LinearAction::Comments { issue },
+            } => assert_eq!(issue, "ECOM-12"),
+            _ => panic!("expected linear comments"),
+        }
+        assert!(Cli::try_parse_from(["harness", "linear", "comments"]).is_err());
     }
 
     #[test]
@@ -1708,6 +1729,7 @@ async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
             harness_server::linear_cli::comment(&issue, &md).await
         }
         LinearAction::Issue { issue } => harness_server::linear_cli::issue(&issue).await,
+        LinearAction::Comments { issue } => harness_server::linear_cli::comments(&issue).await,
         LinearAction::Children { issue } => harness_server::linear_cli::children(&issue).await,
         LinearAction::Issues {
             team,

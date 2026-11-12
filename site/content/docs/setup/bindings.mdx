@@ -68,9 +68,9 @@ back to the project's default.
 ## Concurrency and attempts
 
 **Max simultaneous tasks** caps how many of this binding's issues run at once.
-Default 1. It applies to delegation as well as the poller: delegate three issues
-to a binding set to 1 and one starts, while the others get a reply saying what
-is running and stay where they are.
+Default 1. It applies however a run starts. An issue over the cap is queued: its
+run shows in the runs list at once and starts by itself when a slot frees.
+Delegate three issues to a binding set to 1 and one runs while two wait.
 
 Staying put is the point. A refused issue is still in the source column and
 still delegated, so a `live` binding starts it by itself once a slot frees. With

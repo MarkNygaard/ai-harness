@@ -533,8 +533,8 @@ mod tests {
         let job = store
             .enqueue_runtime_job(
                 "command-1",
-                RuntimeKind::CodexJsonrpc,
-                "codex-default",
+                RuntimeKind::ClaudeCode,
+                "claude-default",
                 json!({ "activity": "check" }),
             )
             .await?;
@@ -583,8 +583,8 @@ mod tests {
         let local_job = store
             .enqueue_runtime_job(
                 "command-local",
-                RuntimeKind::CodexJsonrpc,
-                "codex-default",
+                RuntimeKind::ClaudeCode,
+                "claude-default",
                 json!({ "activity": "local_check" }),
             )
             .await?;

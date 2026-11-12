@@ -1,7 +1,9 @@
-//! "Connect Codex" — the OpenAI/ChatGPT OAuth **authorization-code + PKCE** flow,
-//! run server-side so the operator authenticates from the harness UI.
+//! "Connect ChatGPT" — the OpenAI/ChatGPT OAuth **authorization-code + PKCE**
+//! flow, run server-side so the operator authenticates from the harness UI. The
+//! tokens back omp's `openai-codex` provider, which runs `openai-codex/*`
+//! models for `provider: pi` steps.
 //!
-//! We deliberately use the browser/PKCE flow (what `codex login` and omp's
+//! We deliberately use the browser/PKCE flow (what OpenAI's own login and omp's
 //! `loginOpenAICodex` use), NOT the device-code flow: OpenAI gates device-code
 //! auth behind a ChatGPT *workspace* security setting ("device code
 //! authorization"), so on workspaces where it's disabled the device flow errors
@@ -12,10 +14,9 @@
 //! their own browser, gets redirected to `http://localhost:1455/auth/callback?
 //! code=…&state=…` (which won't load — there's no server there — but the URL is
 //! in the address bar), and pastes that URL back to `complete`, which exchanges
-//! the code for tokens and writes codex's `~/.codex/auth.json`. Stateless: the
+//! the code for tokens and hands them to omp. Stateless: the
 //! client carries `verifier`/`state` between the two calls (mirrors Connect Kimi).
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::extract::Extension;
@@ -39,12 +40,6 @@ const JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(serde_json::json!({ "error": msg.into() }))).into_response()
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/home/harness"))
 }
 
 const B64: base64::engine::general_purpose::GeneralPurpose =
@@ -209,8 +204,8 @@ pub async fn connect_complete(
     let omp_id_token = id_token.clone();
     let omp_account_id = account_id.clone();
 
-    // Exactly the shape `codex login` writes: no `auth_mode` (the CLI parses it
-    // as an enum and infers ChatGPT mode from the presence of `tokens`).
+    // Kept in the credential store (the shape OpenAI's `auth.json` uses), so
+    // Settings shows the connection and a reconnect has the account on record.
     let auth_json = serde_json::json!({
         "OPENAI_API_KEY": serde_json::Value::Null,
         "tokens": {
@@ -231,29 +226,22 @@ pub async fn connect_complete(
             format!("store credential: {e}"),
         );
     }
-    if let Err(e) = write_codex_auth_json(&auth_json) {
-        return err(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("write auth.json: {e}"),
-        );
-    }
-    // One "Connect Codex" also provisions omp's `openai-codex` from the same
-    // ChatGPT tokens, so the `pi` provider can run `openai-codex/*` models
-    // without a separate login. Fail loud if it doesn't take.
+    // Provision omp's `openai-codex` from the ChatGPT tokens, so the `pi`
+    // provider can run `openai-codex/*` models without a separate login. Fail
+    // loud if it doesn't take.
     if let Err(e) =
         provision_omp_codex(&omp_access, &omp_refresh, &omp_id_token, &omp_account_id).await
     {
         return err(
             StatusCode::INTERNAL_SERVER_ERROR,
-            format!("connected the Codex CLI, but provisioning omp's openai-codex failed: {e}"),
+            format!("stored the ChatGPT tokens, but provisioning omp's openai-codex failed: {e}"),
         );
     }
     Json(serde_json::json!({ "status": "connected" })).into_response()
 }
 
-/// Provision omp's `openai-codex` credential from the ChatGPT OAuth tokens, so a
-/// single "Connect Codex" powers both the Codex CLI (`~/.codex/auth.json`) and
-/// omp (the `pi` provider running `openai-codex/*` models). We hand the tokens to
+/// Provision omp's `openai-codex` credential from the ChatGPT OAuth tokens, so
+/// the `pi` provider can run `openai-codex/*` models. We hand the tokens to
 /// omp via `omp auth-broker import` rather than writing its SQLite vault
 /// directly: omp owns that schema, and `import` transparently targets the local
 /// store or a configured auth-broker (`OMP_AUTH_BROKER_URL`).
@@ -379,7 +367,7 @@ fn percent_decode(s: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// Extract `chatgpt_account_id` from a Codex access-token JWT. Best-effort.
+/// Extract `chatgpt_account_id` from a ChatGPT access-token JWT. Best-effort.
 fn account_id_from_jwt(access_token: &str) -> Option<String> {
     let payload_b64 = access_token.split('.').nth(1)?;
     let decoded = B64.decode(payload_b64).ok()?;
@@ -390,19 +378,4 @@ fn account_id_from_jwt(access_token: &str) -> Option<String> {
         .as_str()
         .filter(|s| !s.is_empty())
         .map(str::to_string)
-}
-
-/// Write codex's `~/.codex/auth.json` (mode 0600 on unix).
-fn write_codex_auth_json(json: &str) -> Result<(), String> {
-    let path = home_dir().join(".codex").join("auth.json");
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("create dir: {e}"))?;
-    }
-    std::fs::write(&path, json).map_err(|e| format!("write: {e}"))?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
-    }
-    Ok(())
 }

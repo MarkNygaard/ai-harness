@@ -382,6 +382,8 @@ function seedNode(meta: NodeMeta): NodeView {
   return {
     id: meta.id,
     depends_on: meta.depends_on,
+    routes: meta.routes ?? [],
+    when: meta.when ?? null,
     status: "pending",
     provider: null,
     model: null,
@@ -589,43 +591,51 @@ export function nodesFromDetail(detail: RunDetail): NodeView[] {
     ? detail.graph.map((g) => ({
         id: g.id,
         depends_on: g.depends_on,
+        routes: g.routes ?? [],
+        when: g.when ?? null,
         category: g.category ?? null,
         artifact: g.artifact ?? null,
       }))
     : detail.nodes.map((n) => ({
         id: n.node_id,
         depends_on: [] as string[],
+        routes: [] as string[],
+        when: null,
         category: null,
         artifact: null,
       }));
-  return skeleton.map(({ id, depends_on, category, artifact }) => {
-    const n = byId.get(id);
-    return {
-      id,
-      depends_on,
-      status: n?.status ?? "pending",
-      provider: n?.provider ?? null,
-      model: n?.model ?? null,
-      iterations: n?.iterations ?? 0,
-      usage: {
-        input: n?.input_tokens ?? null,
-        output: n?.output_tokens ?? null,
-        cache_read: n?.cache_read ?? null,
-        cache_write: n?.cache_write ?? null,
-      },
-      note: n?.note ?? null,
-      output: n?.output ?? "",
-      started_at: n?.started_at ?? null,
-      ended_at: n?.ended_at ?? null,
-      category,
-      artifact: artifact ?? null,
-      artifact_content: n?.artifact_content ?? null,
-      // Live-only; persisted detail never carries activity.
-      activity: null,
-      activityLog: [],
-      liveProgress: null,
-    };
-  });
+  return skeleton.map(
+    ({ id, depends_on, routes, when, category, artifact }) => {
+      const n = byId.get(id);
+      return {
+        id,
+        depends_on,
+        routes,
+        when,
+        status: n?.status ?? "pending",
+        provider: n?.provider ?? null,
+        model: n?.model ?? null,
+        iterations: n?.iterations ?? 0,
+        usage: {
+          input: n?.input_tokens ?? null,
+          output: n?.output_tokens ?? null,
+          cache_read: n?.cache_read ?? null,
+          cache_write: n?.cache_write ?? null,
+        },
+        note: n?.note ?? null,
+        output: n?.output ?? "",
+        started_at: n?.started_at ?? null,
+        ended_at: n?.ended_at ?? null,
+        category,
+        artifact: artifact ?? null,
+        artifact_content: n?.artifact_content ?? null,
+        // Live-only; persisted detail never carries activity.
+        activity: null,
+        activityLog: [],
+        liveProgress: null,
+      };
+    },
+  );
 }
 
 export interface RunView {
@@ -764,6 +774,8 @@ function useRunViewMemo(
             : p
           : (p ?? l ?? seedNode({ id: nid, depends_on: [] }));
       const depends_on = p?.depends_on ?? chosen.depends_on;
+      const routes = p?.routes ?? chosen.routes;
+      const when = p ? p.when : chosen.when;
       // `activity`/`activityLog`/`liveProgress` are live-only (the persisted row
       // never carries them). Always take the live node's so a running node shows
       // its progress even when the persisted row — also "running" — wins the
@@ -774,11 +786,21 @@ function useRunViewMemo(
         : chosen.activityLog;
       const liveProgress = l?.liveProgress ?? chosen.liveProgress ?? null;
       return depends_on === chosen.depends_on &&
+        routes === chosen.routes &&
+        when === chosen.when &&
         activity === chosen.activity &&
         activityLog === chosen.activityLog &&
         liveProgress === chosen.liveProgress
         ? chosen
-        : { ...chosen, depends_on, activity, activityLog, liveProgress };
+        : {
+            ...chosen,
+            depends_on,
+            routes,
+            when,
+            activity,
+            activityLog,
+            liveProgress,
+          };
     });
 
     const status = liveTerminal ? state.status : (d?.status ?? state.status);

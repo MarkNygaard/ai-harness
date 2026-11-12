@@ -220,6 +220,99 @@ nodes:
 }
 
 #[test]
+fn a_report_is_a_list_unless_it_asks_for_a_table() {
+    use crate::model::ReportLayout;
+    let report = |extra: &str| {
+        let yaml = format!(
+            "name: audit\nui:\n  report:\n    label: Tests\n{extra}nodes:\n  - id: a\n    bash: \"x\"\n"
+        );
+        parse_workflow(&yaml).unwrap().ui.unwrap().report.unwrap()
+    };
+    assert_eq!(report("").layout, ReportLayout::List);
+    let table = report("    layout: table\n");
+    assert_eq!(table.layout, ReportLayout::Table);
+    // Round-trips, and the default stays out of the saved YAML.
+    assert!(serde_json::to_string(&report(""))
+        .unwrap()
+        .find("layout")
+        .is_none());
+    assert!(serde_json::to_string(&table)
+        .unwrap()
+        .contains("\"layout\":\"table\""));
+}
+
+#[test]
+fn a_report_applies_what_it_approves() {
+    use crate::model::{ReportAction, ReportApply};
+    let yaml = |actions: &str, apply: &str| {
+        format!(
+            "name: audit\nui:\n  report:\n    label: Tests\n    actions: [{actions}]\n{apply}nodes:\n  - id: a\n    bash: \"x\"\n"
+        )
+    };
+    let wf = parse_workflow(&yaml(
+        "approve, build",
+        "    apply:\n      workflow: ecom-test-prune\n      label: Open PRs\n      categories: [delete, merge]\n",
+    ))
+    .unwrap();
+    let report = wf.ui.unwrap().report.unwrap();
+    assert!(report.actions.contains(&ReportAction::Approve));
+    assert_eq!(
+        report.apply,
+        Some(ReportApply {
+            workflow: "ecom-test-prune".into(),
+            label: Some("Open PRs".into()),
+            categories: vec!["delete".into(), "merge".into()],
+        })
+    );
+
+    // Nothing to apply without the buttons that approve.
+    let err = parse_workflow(&yaml("build", "    apply:\n      workflow: x\n")).unwrap_err();
+    assert!(matches!(err, DagError::ReportApply(_)), "{err}");
+    let err = parse_workflow(&yaml("approve", "    apply:\n      workflow: \" \"\n")).unwrap_err();
+    assert!(matches!(err, DagError::ReportApply(_)), "{err}");
+}
+
+#[test]
+fn a_scorer_node_is_named_and_passes_at_a_score_in_0_to_1() {
+    let yaml = |scorer: &str| {
+        format!(
+            "name: task\nnodes:\n  - id: score-tests\n    prompt: \"grade\"\n    scorer:\n{scorer}"
+        )
+    };
+    let wf = parse_workflow(&yaml(
+        "      name: redundant-tests\n      pass_at: 0.7\n      description: Surplus tests\n",
+    ))
+    .unwrap();
+    let scorer = wf.nodes[0].scorer.clone().unwrap();
+    assert_eq!(scorer.name, "redundant-tests");
+    assert_eq!(scorer.pass_at, 0.7);
+    assert_eq!(scorer.description.as_deref(), Some("Surplus tests"));
+
+    // pass_at defaults to 0.5, and a plain node has no scorer.
+    let default = parse_workflow(&yaml("      name: x\n")).unwrap();
+    assert_eq!(default.nodes[0].scorer.as_ref().unwrap().pass_at, 0.5);
+    assert!(
+        parse_workflow("name: p\nnodes:\n  - id: a\n    bash: \"x\"\n")
+            .unwrap()
+            .nodes[0]
+            .scorer
+            .is_none()
+    );
+
+    for bad in [
+        "      name: Redundant Tests\n",
+        "      name: x\n      pass_at: 1.5\n",
+        "      name: x\n      pass_at: -0.1\n",
+    ] {
+        let err = parse_workflow(&yaml(bad)).unwrap_err();
+        assert!(
+            matches!(err, DagError::InvalidScorer { .. }),
+            "{bad}: {err}"
+        );
+    }
+}
+
+#[test]
 fn workflow_without_ui_parses_with_none() {
     let wf = parse_workflow("name: plain\nnodes:\n  - id: a\n    bash: \"x\"\n").unwrap();
     assert!(wf.ui.is_none());
@@ -791,6 +884,7 @@ fn linear_text_is_substitutable_so_a_comment_can_carry_vars() {
         hooks: None,
         mcp: vec![],
         linear_comment: false,
+        scorer: None,
         kind: NodeKind::Linear(LinearAction::Comment("see $plan.output".into())),
     };
     assert_eq!(node.substitutable_text(), vec!["see $plan.output"]);

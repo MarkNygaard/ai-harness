@@ -138,16 +138,16 @@ Linear project keep it, and their form still shows it so you can clear it.
 
 ### Max simultaneous tasks
 
-The binding's **Max simultaneous tasks** caps how many of its issues run at once,
-and it applies to delegation as well as the poller. Delegate three issues to a
-binding set to 1 and one starts; the other two get a session reply saying what's
-running, and stay put.
+The binding's (or Linear trigger's) **Max simultaneous tasks** caps how many of
+its issues run at once, however the run starts: delegation, the poller, a label,
+or a person starting the workflow by hand. An issue over the cap is not refused.
+Its run is **queued**: it shows in the runs list straight away and starts by
+itself when a slot frees, oldest first. Delegate three issues to a binding set
+to 1 and one runs while two wait in the list.
 
-"Stay put" is the point: a refused delegation is *not* moved out of the source
-status, so it is still delegated and still where the poller looks. A `live` binding
-therefore starts it by itself once a slot frees — nothing to re-delegate. A binding
-with `live` off has no poller coming back, so its reply asks you to delegate again
-later, and says so.
+The harness also has an overall limit on runs at once
+(`HARNESS_MAX_CONCURRENT_RUNS`, or Settings, 2 by default). A run waits for
+both: a free slot on its binding, and a free slot overall.
 
 ### Start by label
 
@@ -233,7 +233,7 @@ Inside the agent session, as Linear agent activities rather than plain comments:
 | Only after ~20 minutes with nothing else posted | `thought` — "Still working — the `implement-tasks` step (4 of 16) has been running for 22 minutes". Purely a keep-alive, not a progress channel — see below |
 | Delegated, but not in the source status | `error` — names the status it's in and what to do |
 | Delegated, but no binding covers the team | `error` — asks for a binding |
-| Delegated while the binding is at **Max simultaneous tasks** | `response` — says what's running and that the issue is waiting (not an `error`: nothing failed) |
+| Delegated while the binding is at **Max simultaneous tasks** | The run is queued and starts when a slot frees; the session follows it from then |
 | Run started | `action` — the workflow name, with a link to the run |
 | PR opened | `action` — moved to In Review |
 | Run completed | `response` — which also marks the session complete |
@@ -310,6 +310,15 @@ your **Chat** list in the dashboard.
 - **Asking never starts work.** Delegating the issue does that, as above. Ask
   it to start something ("start task for this") and it says what it would
   do, then waits. Reply **yes** to go ahead; anything else cancels it.
+- **Changes to an existing pull request go through your board.** Agree a
+  change with the harness and ask it to go ahead, and it doesn't start a new
+  build. It posts the agreed changes as a comment credited to you, and moves
+  the issue to the column whose trigger revises a pull request (such as
+  "Changes requested" for `revise-task`), after your **yes**. The revision then
+  runs with its usual updates on the issue, and treats that comment as your
+  feedback. It refuses a column no trigger watches. For an issue with no pull
+  request yet, it starts the workflow your trigger for new work runs, not the
+  project's default.
 - **Only people with an ai-harness account.** The commenter is matched to an
   account by their [linked Linear account](#link-your-linear-account), else by
   email, and the conversation runs as that person, with their permissions.
@@ -515,6 +524,6 @@ in one step is possible if that ever becomes the preference.)
 | Session shows "stopped responding" mid-run | Linear marks a session stale after **30 minutes** without an activity. Progress activities and a ~10-minute heartbeat now keep it alive; if it still goes stale, check the poller is running (it is what posts them) and the logs for `failed to report into session`. Sending any later activity recovers the session. |
 | "No enabled Linear trigger covers this issue’s team" | No **enabled** binding matches the issue’s team. Add one on the Projects page, or enable the existing one — a disabled binding is inert for delegation too. |
 | "This issue is in X, and `wf` only starts from…" | Working as intended: the binding's source status is the gate. Move the issue there. |
-| "Another task is already running for `wf`…" | The binding is at **Max simultaneous tasks**. Raise it on the binding if you want more in parallel; otherwise wait — a `live` binding starts the issue itself when a slot frees. |
+| An issue's run shows as **queued** and doesn't start | Its binding or trigger is at **Max simultaneous tasks**, or the harness is at its overall run limit. It starts by itself when a slot frees. Raise the cap on the binding or trigger to run more in parallel. |
 | Delegated an issue in the right column and nothing happened | The poller logs `app user id is unknown` if the install predates that being recorded — reconnect the workspace. Otherwise check the webhook (see above). |
 | Preview returns "app user id is unknown" | Same cause: reconnect. The preview mirrors the poller's gate, so it can't show delegated issues without knowing who the harness is. |

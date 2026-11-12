@@ -3,7 +3,7 @@
 These are design specs and notes **inherited from
 [majiayu000/harness](https://github.com/majiayu000/harness)** (MIT), retained
 because they document subsystems `ai-harness` reuses — the workflow runtime,
-storage layer, agent/codex adapters, multi-project model, backlog polling, and
+storage layer, agent adapters, multi-project model, backlog polling, and
 project cache.
 
 They describe majiayu's design as of the seed copy and are **not** authoritative

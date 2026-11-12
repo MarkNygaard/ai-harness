@@ -13,10 +13,9 @@ import {
 /**
  * The accounts that pay for model access.
  *
- * Separate from Agents because the two cross: one ChatGPT account backs both
- * the `codex` CLI and `omp`, and `omp` is also backed by Kimi. Keyed on the
- * account, so connecting one is done once rather than once per agent that
- * happens to use it.
+ * Separate from Agents because the two cross: `omp` is backed by both a
+ * ChatGPT account and a Kimi one. Keyed on the account, so connecting one is
+ * done once rather than once per agent that happens to use it.
  *
  * Status here is the credential alone — whether the CLI is installed is the
  * Agents page's question, and answering it twice in different words is how a
@@ -71,7 +70,7 @@ export function SubscriptionsPage() {
           <ProviderSummary
             provider="codex"
             label="ChatGPT"
-            help="Your ChatGPT/Codex subscription. Backs both the `codex` CLI and `openai-codex/*` models on omp."
+            help="Your ChatGPT subscription. Backs `openai-codex/*` models on omp."
             configured={is("codex")}
             credentialOnly
             usageCardProvider="codex"

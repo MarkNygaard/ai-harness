@@ -13,7 +13,10 @@ import type {
   NodeKindId,
   PrebuiltStep,
   ReportAction,
+  ReportApply,
+  ReportLayout,
   ReportStatus,
+  ScorerConfig,
   WorkflowNav,
   WorkflowReport,
   WorkflowUi,
@@ -131,10 +134,35 @@ function uiToDoc(
               ? ui.report.status
               : undefined,
           actions: ui.report.actions,
+          // Likewise `list`.
+          layout:
+            ui.report.layout && ui.report.layout !== "list"
+              ? ui.report.layout
+              : undefined,
+          apply: ui.report.apply?.workflow
+            ? clean({
+                workflow: ui.report.apply.workflow,
+                label: ui.report.apply.label || undefined,
+                categories: ui.report.apply.categories,
+              })
+            : undefined,
         })
       : undefined;
   const out = clean({ nav, report });
   return Object.keys(out).length ? out : undefined;
+}
+
+function applyFromRaw(raw: unknown): ReportApply | null {
+  if (!raw || typeof raw !== "object") return null;
+  const a = raw as Record<string, unknown>;
+  if (typeof a.workflow !== "string") return null;
+  return {
+    workflow: a.workflow,
+    label: typeof a.label === "string" ? a.label : null,
+    categories: Array.isArray(a.categories)
+      ? a.categories.filter((c): c is string => typeof c === "string")
+      : undefined,
+  };
 }
 
 /** Parse the `ui` block from raw YAML into the structured editor shape. */
@@ -158,6 +186,8 @@ function uiFromRaw(raw: unknown): WorkflowUi | undefined {
           ? (repRaw.actions as ReportAction[])
           : undefined,
         status: repRaw.status as ReportStatus | undefined,
+        layout: repRaw.layout as ReportLayout | undefined,
+        apply: applyFromRaw(repRaw.apply),
       }
     : null;
   if (!nav && !report) return undefined;
@@ -201,6 +231,7 @@ export function nodeToDoc(n: EditorNode): Record<string, unknown> {
     mcp: n.mcp,
     // `false` is the default, so only `true` is written.
     linear_comment: n.linear_comment || undefined,
+    scorer: n.scorer,
     prompt: n.prompt,
     bash: n.bash,
     command: n.command,
@@ -270,6 +301,10 @@ export function fromYaml(text: string): EditorWorkflow {
     hooks: n.hooks ?? undefined,
     mcp: mcpFromDoc(n.mcp),
     linear_comment: n.linear_comment === true ? true : undefined,
+    scorer:
+      n.scorer && typeof n.scorer === "object"
+        ? (n.scorer as ScorerConfig)
+        : undefined,
     prompt: n.prompt as string | undefined,
     bash: n.bash as string | undefined,
     command: n.command as string | undefined,

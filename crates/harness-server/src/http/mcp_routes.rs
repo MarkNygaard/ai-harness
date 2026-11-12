@@ -257,6 +257,29 @@ pub(crate) async fn call_tool(
                 Err(e) => tool_error(e),
             }
         }
+        "linear_request_changes" => {
+            let (project, issue, target) = (s("project"), s("issue"), s("state"));
+            if project.is_empty() || issue.is_empty() || target.is_empty() {
+                return tool_error("`project`, `issue` and `state` are required");
+            }
+            if !is_issue_identifier(&issue) {
+                return tool_error(format!("`{issue}` is not an issue identifier like ECOM-44"));
+            }
+            let requester = actor.actor.as_deref().unwrap_or_default();
+            match super::request_changes::request_changes(
+                state,
+                requester,
+                &project,
+                &issue,
+                &target,
+                &s("changes"),
+            )
+            .await
+            {
+                Ok(summary) => to_result(summary.clone(), &json!({ "summary": summary })),
+                Err(e) => tool_error(e),
+            }
+        }
         "linear_check" => {
             let project = s("project");
             if project.is_empty() {
@@ -934,6 +957,21 @@ fn mcp_tools() -> Vec<Value> {
             }
         }),
         json!({
+            "name": "linear_request_changes",
+            "description": "Hand agreed changes to a Linear issue's EXISTING pull request over to the team's revise path, instead of starting a run. Posts `changes` on the issue as a comment credited to the person you are talking to, makes sure the issue is delegated to the harness, and moves it to `state`: a column an enabled trigger in this project watches for that team (find it with trigger_list, e.g. the one that runs revise-task). That trigger then revises the PR with its normal Linear updates. Refused when no trigger watches that column. Needs the person's confirmation. Write `changes` as the full instruction a developer could act on alone: what to change, where, and why, including what you agreed in the conversation.",
+            "inputSchema": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "project": { "type": "string" },
+                    "issue": { "type": "string", "description": "The issue identifier, e.g. ECOM-854" },
+                    "state": { "type": "string", "description": "The status to move it to, by name, e.g. Changes requested" },
+                    "changes": { "type": "string", "description": "Markdown: the agreed changes, complete" }
+                },
+                "required": ["project", "issue", "state", "changes"],
+            }
+        }),
+        json!({
             "name": "linear_check",
             "description": "Diagnose a project's Linear wiring: does the relay of columns actually join up? Read-only. A binding moves an issue to a column expecting a *different* binding to claim it from there — and nothing enforces that. A ready status no binding polls means the run succeeds, the move succeeds, and the work is parked forever with no error anywhere; for an epic, the feature stops advancing overnight and the only symptom is absence. Returns findings at `error` (work will be dropped or never start), `warn` (works, but probably not as intended) and `ok` (the chain, stated so the report reads whole). Run this when an issue or an epic stopped for no visible reason, and after changing any binding.",
             "inputSchema": {
@@ -981,7 +1019,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "run_findings",
-            "description": "Read the per-finding state a human set in a run's report: each finding's `finding_key` (category::title) + `action` — built | issued | ignored | checked | passed | failed — plus any `ref_run_id` / Linear `issue_identifier`+`issue_url`. Use to see which report items a person marked, e.g. which manual test scenarios passed vs failed. Findings with no recorded state are absent from the list.",
+            "description": "Read the per-finding state a human set in a run's report: each finding's `finding_key` (category::title) + `action` — built | issued | ignored | checked | passed | failed | approved | rejected | applied — plus any `ref_run_id` / Linear `issue_identifier`+`issue_url`. Use to see which report items a person marked, e.g. which manual test scenarios passed vs failed. Findings with no recorded state are absent from the list.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1217,7 +1255,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_save",
-            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project). The YAML may include a top-level `ui:` block ({ nav: { label, icon }, report: { label, verdict_node?, scored } }) to give the workflow a left-nav entry + a findings/report tab; or set it incrementally with workflow_set_ui. A top-level `improvements: { every: N }` (3-100) switches on improvement suggestions: after every N finished runs per project the harness reviews them and suggests changes, read with improvements_list.",
+            "description": "Validate then save a global workflow to .harness/workflows/<name>.yaml (runnable by every project). The YAML may include a top-level `ui:` block ({ nav: { label, icon }, report: { label, verdict_node?, scored?, actions?, status?, layout? } }) to give the workflow a left-nav entry + a findings/report tab; or set it incrementally with workflow_set_ui. A top-level `improvements: { every: N }` (3-100) switches on improvement suggestions: after every N finished runs per project the harness reviews them and suggests changes, read with improvements_list.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1279,7 +1317,7 @@ fn mcp_tools() -> Vec<Value> {
                 "properties": {
                     "name": { "type": "string" },
                     "description": { "type": "string" },
-                    "provider": { "type": "string", "description": "Default provider (claude/codex/pi)." },
+                    "provider": { "type": "string", "description": "Default provider (claude/pi/cursor)." },
                     "model": { "type": "string" }
                 },
                 "required": ["name"],
@@ -1304,7 +1342,7 @@ fn mcp_tools() -> Vec<Value> {
         }),
         json!({
             "name": "workflow_set_ui",
-            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (the default workflow, task), issue (Linear), ignore. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings.",
+            "description": "Set (or clear) the workflow's `ui:` block — a left-nav entry and/or a findings/report tab on its runs. Pass `ui` as { nav?: { label, icon? }, report?: { label, verdict_node?, scored?, actions?, status? } }, or null to clear. `icon` is a key from: shield, world-search, zoom-code, search, report, checklist. `report.verdict_node` names the node whose JSON output ({ summary?, score?, findings: [{ title, severity?, category?, detail?, fix?, location? }] }) is the verdict; `scored:true` shows a score + dimension bars + history. `actions` opts into per-finding buttons (default none = a clean read-only list): any of build (the default workflow, task), issue (Linear), ignore, approve (Approve / Reject what the finding proposes). `apply: { workflow, label?, categories? }` (needs approve) adds a button that starts that workflow in the same project with the approved findings as its input, and marks them applied. `categories` limits Approve, and what is sent, to the finding categories the workflow acts on. `status` adds a per-item control: none (default), check (a tested checkbox), or pass_fail (Passed/Failed) — the marks are readable back via run_findings. `layout: table` shows totals, filters and one sortable row per finding instead of cards; use it for many findings, and give each finding `id` (unique), `score` (0-1) and `duration_ms` where they apply.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -1329,9 +1367,19 @@ fn mcp_tools() -> Vec<Value> {
                                     "scored": { "type": "boolean" },
                                     "actions": {
                                         "type": "array",
-                                        "items": { "enum": ["build", "issue", "ignore"] }
+                                        "items": { "enum": ["build", "issue", "ignore", "approve"] }
                                     },
-                                    "status": { "enum": ["none", "check", "pass_fail"] }
+                                    "status": { "enum": ["none", "check", "pass_fail"] },
+                                    "layout": { "enum": ["list", "table"] },
+                                    "apply": {
+                                        "type": "object",
+                                        "properties": {
+                                            "workflow": { "type": "string" },
+                                            "label": { "type": "string" },
+                                            "categories": { "type": "array", "items": { "type": "string" } }
+                                        },
+                                        "required": ["workflow"]
+                                    }
                                 },
                                 "required": ["label"]
                             }
@@ -1459,6 +1507,8 @@ fn node_output(
 pub(crate) const NEEDS_CONFIRMATION: &[&str] = &[
     "run_trigger",
     "run_trigger_pair",
+    // Comments on an issue and moves it, which starts a run through its trigger.
+    "linear_request_changes",
     "workflow_delete",
     "library_uninstall",
     // A schedule starts runs by itself from then on, so setting one up or
@@ -1923,8 +1973,14 @@ const RUN_TOOLS: &[&str] = &[
 /// name. A typical harness PR is well under it; a sweeping one is read a
 /// folder at a time.
 const PR_DIFF_BUDGET: usize = 60_000;
-/// Reading and diagnosing what triggers a run, as opposed to starting one.
-const LINEAR_TOOLS: &[&str] = &["linear_states", "linear_bindings", "linear_check"];
+/// Reading and diagnosing what triggers a run, and handing an issue to its
+/// triggers instead of starting a run.
+const LINEAR_TOOLS: &[&str] = &[
+    "linear_states",
+    "linear_bindings",
+    "linear_check",
+    "linear_request_changes",
+];
 /// Workflows run on a cron schedule (the Schedules page).
 const SCHEDULE_TOOLS: &[&str] = &[
     "schedule_list",

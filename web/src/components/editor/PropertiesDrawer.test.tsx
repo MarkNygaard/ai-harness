@@ -17,11 +17,11 @@ describe("optionLabels", () => {
       <SelectItem key="claude" value="claude">
         Claude Code
       </SelectItem>,
-      <SelectItem key="codex" value="codex">
-        Codex
+      <SelectItem key="cursor" value="cursor">
+        Cursor
       </SelectItem>,
     ]);
-    expect(labels).toEqual({ claude: "Claude Code", codex: "Codex" });
+    expect(labels).toEqual({ claude: "Claude Code", cursor: "Cursor" });
   });
 
   /** Options built by `.map()` arrive as a nested array, not as siblings. */

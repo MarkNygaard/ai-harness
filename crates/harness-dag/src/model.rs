@@ -170,13 +170,12 @@ impl<'de> Deserialize<'de> for McpUse {
 }
 
 /// The effort levels a node may set. Each agent that takes effort knows all
-/// of them: Claude's `--effort`, Codex's `model_reasoning_effort` and omp's
-/// `--thinking`.
+/// of them: Claude's `--effort` and omp's `--thinking`.
 pub const EFFORT_LEVELS: &[&str] = &["low", "medium", "high", "xhigh", "max"];
 
 /// The providers whose CLI takes an effort level. cursor-agent has no such
 /// setting, so effort on a cursor step is ignored; validation says so.
-pub const EFFORT_PROVIDERS: &[&str] = &["claude", "codex", "pi", "omp", "kimi"];
+pub const EFFORT_PROVIDERS: &[&str] = &["claude", "pi", "omp", "kimi"];
 
 /// Whether `provider` (absent = the default agent, Claude) takes `effort`.
 pub fn provider_takes_effort(provider: Option<&str>) -> bool {
@@ -412,6 +411,42 @@ impl RouteConfig {
     }
 }
 
+/// Marks a node as a *scorer*: a step that grades the run it is in. Its
+/// output is JSON `{ score, classification?, summary? }` (give it an
+/// `output_format`), and the server records the grade with the run, so a
+/// scorer's grades can be followed across runs on its own page.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScorerConfig {
+    /// The scorer's name, shared by every workflow that runs it, so its
+    /// grades add up on one page (e.g. `redundant-tests`). Lowercase letters,
+    /// digits and hyphens.
+    pub name: String,
+    /// The lowest score that passes, 0–1. Default 0.5.
+    #[serde(default = "default_pass_at")]
+    pub pass_at: f64,
+    /// What it judges, in a sentence, for its page.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+// `pass_at` is checked to be a number in 0..=1 when the workflow is parsed, so
+// it is never NaN and equality is total.
+impl Eq for ScorerConfig {}
+
+fn default_pass_at() -> f64 {
+    0.5
+}
+
+/// Whether `name` can name a scorer: lowercase letters, digits and hyphens,
+/// starting with a letter.
+pub fn is_valid_scorer_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some('a'..='z'))
+        && chars.all(|c| matches!(c, 'a'..='z' | '0'..='9' | '-'))
+        && name.len() <= 64
+}
+
 /// A single node in the workflow DAG.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Node {
@@ -431,8 +466,8 @@ pub struct Node {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Reasoning-effort override for AI bodies, one of [`EFFORT_LEVELS`],
-    /// passed to the agent CLI: `--effort` for Claude, `model_reasoning_effort`
-    /// for Codex, `--thinking` for omp. cursor-agent has no such setting and
+    /// passed to the agent CLI: `--effort` for Claude, `--thinking` for omp.
+    /// cursor-agent has no such setting and
     /// ignores it. Higher effort suits high-leverage steps like planning.
     /// `None` → agent default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -480,6 +515,10 @@ pub struct Node {
     /// note. At most one node per workflow.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub linear_comment: bool,
+    /// This node grades the run: its JSON output is recorded as a scorer's
+    /// grade (see [`ScorerConfig`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scorer: Option<ScorerConfig>,
     /// The executable body.
     pub kind: NodeKind,
 }
@@ -575,6 +614,48 @@ pub struct WorkflowReport {
     /// report uses `check` (a "tested" checkbox) or `pass_fail` (Passed/Failed).
     #[serde(default, skip_serializing_if = "ReportStatus::is_none")]
     pub status: ReportStatus,
+    /// How the findings are laid out. Default `list` (one card each); `table`
+    /// is for reports with many findings (a test audit): totals, filters and
+    /// one sortable row per finding.
+    #[serde(default, skip_serializing_if = "ReportLayout::is_list")]
+    pub layout: ReportLayout,
+    /// What acts on the approved findings: an "Apply" button that starts this
+    /// workflow with them. Pairs with the `approve` action.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apply: Option<ReportApply>,
+}
+
+/// A report's apply step: the workflow its "Apply" button starts, in the same
+/// project, with the approved findings as its input (`$ARGUMENTS`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReportApply {
+    /// The workflow to start.
+    pub workflow: String,
+    /// The button's label (e.g. "Open PRs"); default "Apply".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The finding categories it acts on (`[delete, review, merge]`). Only
+    /// those rows can be approved, and only they are sent. Empty: every row.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub categories: Vec<String>,
+}
+
+/// How a report lays out its findings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportLayout {
+    /// One card per finding (default) — right for a handful.
+    #[default]
+    List,
+    /// Totals per category, filters, and a sortable table — right for hundreds.
+    Table,
+}
+
+impl ReportLayout {
+    /// `true` for the default `List` — used to skip serialization.
+    pub fn is_list(&self) -> bool {
+        matches!(self, ReportLayout::List)
+    }
 }
 
 /// An opt-in per-finding action a report offers.
@@ -587,6 +668,9 @@ pub enum ReportAction {
     Issue,
     /// "Ignore" — dim/skip the finding.
     Ignore,
+    /// "Approve" / "Reject" — decide on what the finding proposes; the
+    /// report's `apply` workflow then acts on the approved ones.
+    Approve,
 }
 
 /// The per-item status control a report shows on each finding.

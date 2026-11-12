@@ -105,6 +105,7 @@ pub struct RunsState {
     linear_source_store: OnceCell<harness_persist::LinearSourceStore>,
     linear_claim_store: OnceCell<harness_persist::LinearClaimStore>,
     finding_store: OnceCell<harness_persist::FindingStateStore>,
+    scorer_store: OnceCell<harness_persist::ScorerResultStore>,
     chat_store: OnceCell<harness_persist::ChatStore>,
     schedule_store: OnceCell<harness_persist::ScheduleStore>,
     trigger_store: OnceCell<harness_persist::TriggerStore>,
@@ -222,6 +223,7 @@ impl RunsState {
             linear_source_store: OnceCell::new(),
             linear_claim_store: OnceCell::new(),
             finding_store: OnceCell::new(),
+            scorer_store: OnceCell::new(),
             chat_store: OnceCell::new(),
             schedule_store: OnceCell::new(),
             trigger_store: OnceCell::new(),
@@ -639,6 +641,21 @@ impl RunsState {
             .await
     }
 
+    /// Grades recorded by scorer nodes.
+    pub(crate) async fn scorer_store(&self) -> Result<&harness_persist::ScorerResultStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.scorer_store
+            .get_or_try_init(|| async {
+                harness_persist::ScorerResultStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
     /// The global GitHub token from the credential store, if configured — used
     /// to clone/fetch private project repos. Best-effort: any error → `None`.
     pub(crate) async fn github_token(&self) -> Option<String> {
@@ -881,40 +898,81 @@ impl RunsState {
         }
         DEFAULT_MAX_CONCURRENT_RUNS
     }
+}
 
-    /// Whether a queued run's own `(project, workflow)` has room, on top of the
-    /// instance-wide limit.
-    ///
-    /// This is a Linear binding's **Max simultaneous tasks**, enforced here at
-    /// dispatch rather than at submission. Enforcing it at submission is what
-    /// made three issues delegated together produce one queued run and two that
-    /// looked dropped: the binding refused the first two outright, before the
-    /// queue ever saw them.
-    ///
-    /// No binding — a UI or MCP run, or a workflow Linear does not drive — means
-    /// no per-workflow cap, and the global limit is the only gate.
-    pub(crate) async fn binding_has_room_for(&self, run: &harness_persist::QueuedRun) -> bool {
-        let Some(project) = run.project.as_deref() else {
-            return true;
-        };
-        let Ok(sources) = self.linear_source_store().await else {
-            return true;
-        };
-        let limit = match sources.get(project, &run.workflow_name).await {
-            Ok(Some(binding)) => binding.max_concurrent_runs.max(1) as i64,
-            // No binding, or the lookup failed: do not hold work back over a
-            // missing row or a database hiccup. The global limit still applies.
-            _ => return true,
-        };
-        let Ok(store) = self.store().await else {
-            return true;
-        };
-        match store.count_running_for(project, &run.workflow_name).await {
-            Ok(running) => running < limit,
-            Err(_) => true,
-        }
+/// Whether one more run of `workflow` in `project` may execute now, on top of
+/// the instance-wide limit.
+///
+/// This is the **Max simultaneous tasks** of the Linear trigger (or, on the
+/// classic system, the binding) that starts the workflow. It is checked where a
+/// run starts *and* where the queue dispatches, and a run over it is parked as
+/// queued rather than refused. Refusing at submission is what made issues
+/// waiting for a slot look dropped: three issues delegated together produced
+/// one run and nothing else, and an issue moved into a busy status never showed
+/// up anywhere until the slot freed.
+///
+/// No trigger or binding — a UI or MCP run, or a workflow Linear does not
+/// drive — means no per-workflow cap, and the global limit is the only gate.
+pub(crate) async fn workflow_has_room(
+    state: &Arc<RunsState>,
+    project: Option<&str>,
+    workflow: &str,
+) -> bool {
+    let Some(project) = project else {
+        return true;
+    };
+    let Some(limit) = workflow_run_limit(state, project, workflow).await else {
+        return true;
+    };
+    let Ok(store) = state.store().await else {
+        return true;
+    };
+    match store.count_running_for(project, workflow).await {
+        Ok(running) => !super::linear_agent::at_capacity(running, limit),
+        Err(_) => true,
     }
+}
 
+/// The most runs of `workflow` in `project` the starting trigger or binding
+/// allows at once, or `None` when nothing limits it. Under the trigger system
+/// that is the largest limit among the enabled Linear triggers that start it;
+/// on the classic system, the binding's.
+///
+/// A missing row or a database hiccup is `None`: work is not held back over
+/// it, and the global limit still applies.
+async fn workflow_run_limit(state: &Arc<RunsState>, project: &str, workflow: &str) -> Option<i32> {
+    if super::triggers_routes::uses_triggers(state).await {
+        let triggers: Vec<harness_persist::LinearSource> =
+            super::triggers_routes::linear_bindings(state)
+                .await
+                .into_iter()
+                .map(|(_, b)| b)
+                .collect();
+        return trigger_limit(&triggers, project, workflow);
+    }
+    let sources = state.linear_source_store().await.ok()?;
+    match sources.get(project, workflow).await {
+        Ok(Some(binding)) => Some(binding.max_concurrent_runs),
+        _ => None,
+    }
+}
+
+/// The limit the enabled Linear triggers starting `workflow` in `project` put
+/// on it: the largest, when several do, since each allows that many. `None`
+/// when no enabled trigger starts it.
+fn trigger_limit(
+    triggers: &[harness_persist::LinearSource],
+    project: &str,
+    workflow: &str,
+) -> Option<i32> {
+    triggers
+        .iter()
+        .filter(|t| t.enabled && t.project == project && t.workflow == workflow)
+        .map(|t| t.max_concurrent_runs)
+        .max()
+}
+
+impl RunsState {
     /// Whether `wanted` more runs fit alongside what is executing right now.
     ///
     /// Approximate by construction: the count is read a moment before a caller
@@ -2258,7 +2316,13 @@ async fn dispatch_next_queued_inner(state: Arc<RunsState>) {
     };
     let mut claimed = None;
     for candidate in &waiting {
-        if !state.binding_has_room_for(candidate).await {
+        if !workflow_has_room(
+            state,
+            candidate.project.as_deref(),
+            &candidate.workflow_name,
+        )
+        .await
+        {
             continue;
         }
         // `None` means someone else took it between the list and the claim.
@@ -2290,28 +2354,69 @@ async fn dispatch_next_queued_inner(state: Arc<RunsState>) {
         claimed
             .request
             .clone()
-            .and_then(|v| match serde_json::from_value(v) {
+            .and_then(|v| match parked_request(v) {
                 Ok(r) => Some(r),
                 Err(e) => {
                     failed(&format!("its parked request no longer parses: {e}"));
                     None
                 }
             });
-    let Some(req) = req else {
-        if claimed.request.is_none() {
-            failed("no request was parked with it");
+    let launched = match req {
+        Some(req) => match start_run_inner(state, req, Some(claimed.run_id.clone())).await {
+            Ok(_) => true,
+            Err((_, msg)) => {
+                failed(&msg);
+                false
+            }
+        },
+        None => {
+            if claimed.request.is_none() {
+                failed("no request was parked with it");
+            }
+            false
         }
-        let _ = store
-            .finish_run(&claimed.run_id, harness_dag::RunStatus::Failed)
-            .await;
-        return;
     };
-    if let Err((_, msg)) = start_run_inner(state, req, Some(claimed.run_id.clone())).await {
-        failed(&msg);
-        let _ = store
-            .finish_run(&claimed.run_id, harness_dag::RunStatus::Failed)
-            .await;
+    if launched {
+        return;
     }
+    let _ = store
+        .finish_run(&claimed.run_id, harness_dag::RunStatus::Failed)
+        .await;
+    // Ended like any other run, so what waits on it hears: a facts or
+    // improvements review closes now, with the run's status, instead of
+    // blocking the next review until it goes stale.
+    tokio::spawn(super::improvements_routes::on_run_finished(
+        state.clone(),
+        claimed.run_id.clone(),
+    ));
+    // The slot it claimed is free again.
+    dispatch_next_queued(state.clone()).await;
+}
+
+/// Starts at once even with every slot taken: the harness's own runs.
+fn skips_queue(workflow: &harness_dag::Workflow) -> bool {
+    workflow.internal
+}
+
+/// A queued run's request, read back from the row it was parked on.
+///
+/// The trigger fields are `skip_deserializing` so that an API caller cannot
+/// set them, which also drops them here. This JSON was written by the server
+/// itself, so they are restored from it. Without them a queued run lost who
+/// started it and how, and a queued `learn-facts` or `improvements-analysis`
+/// run was refused as an internal workflow started by hand.
+fn parked_request(v: serde_json::Value) -> Result<CreateRunRequest, serde_json::Error> {
+    let field = |name: &str| v.get(name).and_then(|x| x.as_str()).map(str::to_string);
+    let (triggered_by, trigger_source, trigger_actor) = (
+        field("triggered_by"),
+        field("trigger_source"),
+        field("trigger_actor"),
+    );
+    let mut req: CreateRunRequest = serde_json::from_value(v)?;
+    req.triggered_by = triggered_by;
+    req.trigger_source = trigger_source;
+    req.trigger_actor = trigger_actor;
+    Ok(req)
 }
 
 pub(crate) async fn start_run(
@@ -2455,14 +2560,24 @@ async fn start_run_inner(
         )
     });
 
-    // At capacity: park the run rather than refuse it. It gets a row, an id and
-    // a place in the list immediately, so "why hasn't this started?" has an
-    // answer on the page — and the dispatcher launches it when a slot frees.
+    // At capacity — the instance's, or the starting trigger's own limit: park
+    // the run rather than refuse it. It gets a row, an id and a place in the
+    // list immediately, so "why hasn't this started?" has an answer on the page
+    // — and the dispatcher launches it when a slot frees.
     //
     // The row goes in with no graph: the node list arrives with the executor's
     // `RunStarted`, which has not happened yet. `start_run`'s upsert fills it in
     // on dispatch.
-    if dispatched_id.is_none() && !state.has_capacity_for(1).await {
+    //
+    // The harness's own runs (a facts or improvements review) never wait. They
+    // are two short steps, at most one at a time per project and workflow, and
+    // queued behind an hour-long task they only arrive late. They still count
+    // against capacity while they run.
+    if dispatched_id.is_none()
+        && !skips_queue(&workflow)
+        && (!state.has_capacity_for(1).await
+            || !workflow_has_room(state, Some(&project), &workflow.name).await)
+    {
         let description = if req.description.is_empty() {
             req.args.as_str()
         } else {
@@ -2752,7 +2867,7 @@ async fn execute_run_task(
 
     let agent: Arc<dyn PromptAgent> = if real {
         // Load UI-entered provider credentials before the CLIs run: files in
-        // $HOME for claude/codex, keys returned. Best-effort: a missing
+        // $HOME for claude, keys returned. Best-effort: a missing
         // store/key just means no creds injected.
         let secrets = match state.cred_store().await {
             Ok(store) => crate::http::credentials_routes::materialize(store).await,
@@ -2846,9 +2961,38 @@ async fn execute_run_task(
         .filter_map(|n| n.artifact.as_ref().map(|a| (n.id.clone(), a.clone())))
         .collect();
     let forwarder_artifacts = artifacts.clone();
+    // Scorer nodes, whose grades are recorded as they finish.
+    let node_scorers: HashMap<String, harness_dag::ScorerConfig> = workflow
+        .nodes
+        .iter()
+        .filter_map(|n| n.scorer.clone().map(|s| (n.id.clone(), s)))
+        .collect();
+    let scorer_workflow = workflow.name.clone();
     let forwarder = tokio::spawn(async move {
         let mut ordinals: HashMap<String, i32> = HashMap::new();
+        let mut node_started: HashMap<String, std::time::Instant> = HashMap::new();
         while let Some(mut ev) = rx.next().await {
+            match &ev {
+                RunEvent::NodeStarted { node_id, .. } if node_scorers.contains_key(node_id) => {
+                    node_started.insert(node_id.clone(), std::time::Instant::now());
+                }
+                RunEvent::NodeFinished { node } => {
+                    if let Some(scorer) = node_scorers.get(&node.id) {
+                        let ms = node_started
+                            .remove(&node.id)
+                            .map(|t| t.elapsed().as_millis() as i64);
+                        let run = super::scorer_routes::GradedRun {
+                            run_id: &persist_run_id,
+                            workflow: &scorer_workflow,
+                            project: persist_project.as_deref(),
+                            title: persist_title.as_deref(),
+                        };
+                        super::scorer_routes::record_grade(&persist_state, &run, scorer, node, ms)
+                            .await;
+                    }
+                }
+                _ => {}
+            }
             // Read a node's declared artifact as soon as it finishes (the
             // worktree is still live) so both the persisted row and the SSE
             // broadcast carry its content while the run is still in progress.
@@ -3356,6 +3500,124 @@ pub async fn delete_run(
 mod tests {
     use super::*;
 
+    /// A facts or improvements review is the harness's own two-step run. It
+    /// starts at once rather than queueing behind an hour-long task; anything
+    /// a person starts still waits its turn.
+    #[test]
+    fn only_the_harness_own_runs_skip_the_queue() {
+        for name in harness_runner::INTERNAL_WORKFLOWS {
+            let wf = parse_workflow(harness_runner::default_workflow(name).unwrap()).unwrap();
+            assert!(skips_queue(&wf), "{name} should skip the queue");
+        }
+        let task = parse_workflow(
+            harness_runner::default_workflow(harness_runner::DEFAULT_WORKFLOW).unwrap(),
+        )
+        .unwrap();
+        assert!(!skips_queue(&task));
+    }
+
+    fn request(source: Option<&str>) -> CreateRunRequest {
+        CreateRunRequest {
+            triggered_by: source.map(|_| "user-1".to_string()),
+            trigger_source: source.map(str::to_string),
+            trigger_actor: source.map(|_| "Learned facts".to_string()),
+            workflow: "learn-facts".into(),
+            title: Some("Learn facts".into()),
+            description: "review".into(),
+            args: String::new(),
+            issue_id: None,
+            real: true,
+            base_branch: None,
+            project: Some("p".into()),
+            swap_from: None,
+            swap_to: None,
+            ab_pair_id: None,
+            ab_arm: None,
+            ab_label: None,
+        }
+    }
+
+    /// The facts review stalled on exactly this: parked, then read back with
+    /// no `trigger_source`, then refused as an internal workflow started by
+    /// hand. What the server parked comes back whole.
+    #[test]
+    fn a_queued_request_keeps_who_started_it_and_how() {
+        let parked = serde_json::to_value(request(Some("facts"))).unwrap();
+        let back = parked_request(parked).unwrap();
+        assert_eq!(back.trigger_source.as_deref(), Some("facts"));
+        assert_eq!(back.trigger_actor.as_deref(), Some("Learned facts"));
+        assert_eq!(back.triggered_by.as_deref(), Some("user-1"));
+        assert_eq!(back.workflow, "learn-facts");
+        assert_eq!(back.project.as_deref(), Some("p"));
+    }
+
+    /// The restore is for the parked row only: a request body from a caller
+    /// still cannot say it came from the facts machinery.
+    #[test]
+    fn a_request_body_still_cannot_set_its_trigger() {
+        let body = serde_json::to_value(request(Some("facts"))).unwrap();
+        let from_caller: CreateRunRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(from_caller.trigger_source, None);
+        assert_eq!(from_caller.triggered_by, None);
+        let unset = parked_request(serde_json::to_value(request(None)).unwrap()).unwrap();
+        assert_eq!(unset.trigger_source, None);
+    }
+
+    /// Under the trigger system a trigger's **Max simultaneous tasks** is what
+    /// holds a run back: ECOM-854 waited in Changes requested behind a running
+    /// revision, and nothing showed it. The limit comes from the enabled
+    /// triggers that start that workflow in that project, and nothing else.
+    #[test]
+    fn a_workflows_limit_is_its_enabled_triggers() {
+        let trigger = |project: &str, workflow: &str, max: i32, enabled: bool| {
+            harness_persist::LinearSource {
+                project: project.into(),
+                workflow: workflow.into(),
+                team_id: "t".into(),
+                team_name: "Team".into(),
+                source_state_id: "s".into(),
+                failed_label: None,
+                in_progress_state_id: None,
+                review_state_id: None,
+                ready_state_id: None,
+                piece_ready_state_id: None,
+                epic_review_state_id: None,
+                base_branch: None,
+                poll_interval_secs: 60,
+                max_concurrent_runs: max,
+                max_attempts: 1,
+                enabled,
+                live: true,
+                linear_project_id: None,
+                linear_project_name: None,
+                trigger_label: None,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }
+        };
+        let triggers = [
+            trigger("ecom", "revise-task", 1, true),
+            trigger("ecom", "ecom-task", 1, true),
+            trigger("erp", "revise-task", 3, true),
+            trigger("ecom", "revise-task", 5, false),
+        ];
+        assert_eq!(trigger_limit(&triggers, "ecom", "revise-task"), Some(1));
+        assert_eq!(trigger_limit(&triggers, "erp", "revise-task"), Some(3));
+        assert_eq!(trigger_limit(&triggers, "ecom", "review-pr"), None);
+
+        // Two enabled triggers on one workflow: each allows its own, so the
+        // larger one decides.
+        let two = [
+            trigger("ecom", "revise-task", 1, true),
+            trigger("ecom", "revise-task", 2, true),
+        ];
+        assert_eq!(trigger_limit(&two, "ecom", "revise-task"), Some(2));
+
+        // At the limit, the next one waits; a stored 0 still allows one.
+        assert!(super::super::linear_agent::at_capacity(1, 1));
+        assert!(!super::super::linear_agent::at_capacity(0, 0));
+    }
+
     #[test]
     fn the_run_limit_counts_what_is_about_to_start_too() {
         // One slot left, one run wanted: fits exactly.
@@ -3616,7 +3878,7 @@ mod tests {
     }
     #[test]
     fn public_url_trims_trailing_slashes() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(
             None,
             reg,
@@ -3629,7 +3891,7 @@ mod tests {
 
     #[test]
     fn public_url_trims_all_trailing_slashes() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(
             None,
             reg,
@@ -3642,7 +3904,7 @@ mod tests {
 
     #[test]
     fn public_url_rejects_whitespace_only() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(
             None,
             reg,
@@ -3655,7 +3917,7 @@ mod tests {
 
     #[test]
     fn public_url_rejects_empty_string() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(
             None,
             reg,
@@ -3668,7 +3930,7 @@ mod tests {
 
     #[test]
     fn public_url_none_when_input_none() {
-        let reg = Arc::new(AgentRegistry::new("codex"));
+        let reg = Arc::new(AgentRegistry::new("claude"));
         let state = RunsState::new(None, reg, std::path::PathBuf::from("/tmp"), None, None);
         assert_eq!(state.public_url(), None);
     }

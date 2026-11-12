@@ -2,7 +2,7 @@
  * Data layer for subscription usage (`GET /api/usage`).
  *
  * One card per connected CLI: Claude (first-party Claude Code limits), and
- * ChatGPT/Codex + Kimi (via the omp auth-broker). The server caches upstream
+ * ChatGPT + Kimi (via the omp auth-broker). The server caches upstream
  * for ~3min, so a modest client refetch interval is safe.
  */
 import { useQuery } from "@tanstack/react-query";

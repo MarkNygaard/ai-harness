@@ -141,6 +141,9 @@ nodes:
     mcp: [sentry]
     linear_comment: true
     retries: 2
+    scorer:
+      name: redundant-tests
+      pass_at: 0.7
     hooks:
       pre_tool_use:
         - matcher: Bash
@@ -155,6 +158,11 @@ nodes:
     expect(back.nodes[0].linear_comment).toBe(true);
     expect(back.nodes[1].linear_comment).toBeUndefined();
     expect(back.nodes[0].retries).toBe(2);
+    expect(back.nodes[0].scorer).toEqual({
+      name: "redundant-tests",
+      pass_at: 0.7,
+    });
+    expect(back.nodes[1].scorer).toBeUndefined();
     expect(back.nodes[0].hooks).toEqual({
       pre_tool_use: [{ matcher: "Bash", decision: "deny" }],
     });
@@ -260,6 +268,7 @@ describe("ui block round-trip", () => {
           scored: false,
           status: "pass_fail",
           actions: ["build", "ignore"],
+          layout: "table",
         },
       },
     };
@@ -267,6 +276,8 @@ describe("ui block round-trip", () => {
     expect(yaml).toContain("label: Test Scenarios");
     expect(yaml).toContain("verdict_node: refine");
     expect(yaml).toContain("status: pass_fail");
+    expect(yaml).toContain("layout: table");
+    expect(fromYaml(yaml).ui?.report?.layout).toBe("table");
 
     const back = fromYaml(yaml);
     expect(back.ui?.nav).toEqual({
@@ -277,6 +288,33 @@ describe("ui block round-trip", () => {
     expect(back.ui?.report?.scored).toBe(false);
     expect(back.ui?.report?.status).toBe("pass_fail");
     expect(back.ui?.report?.actions).toEqual(["build", "ignore"]);
+  });
+
+  it("keeps a report's apply workflow through a save", () => {
+    const yaml = toYaml({
+      name: "audit",
+      nodes: [{ id: "report", prompt: "p" }],
+      ui: {
+        nav: null,
+        report: {
+          label: "Tests",
+          verdict_node: "report",
+          scored: false,
+          actions: ["approve", "build"],
+          apply: {
+            workflow: "ecom-test-prune",
+            label: "Open PRs",
+            categories: ["delete", "merge"],
+          },
+        },
+      },
+    });
+    expect(yaml).toContain("workflow: ecom-test-prune");
+    expect(fromYaml(yaml).ui?.report?.apply).toEqual({
+      workflow: "ecom-test-prune",
+      label: "Open PRs",
+      categories: ["delete", "merge"],
+    });
   });
 
   it("omits the ui block entirely when absent, and drops default status", () => {
@@ -295,10 +333,12 @@ describe("ui block round-trip", () => {
           verdict_node: null,
           scored: false,
           status: "none",
+          layout: "list",
         },
       },
     });
     expect(yaml).not.toContain("status:");
+    expect(yaml).not.toContain("layout:");
     expect(yaml).not.toContain("verdict_node:"); // null dropped
     expect(fromYaml(yaml).ui?.report?.label).toBe("R");
   });

@@ -1485,7 +1485,7 @@ fn runtime_completion_reducer_retries_failed_activity_when_policy_allows() {
     let result = ActivityResult::failed(
         "implement_issue",
         "Implementation failed.",
-        "codex stdin not available",
+        "claude stdin not available",
     )
     .with_error_kind(ActivityErrorKind::ExternalDependency);
     let event = WorkflowEvent::new(
@@ -1689,7 +1689,7 @@ fn runtime_completion_reducer_fails_after_retry_policy_exhausted() {
     let result = ActivityResult::failed(
         "implement_issue",
         "Implementation failed again.",
-        "codex stdin not available",
+        "claude stdin not available",
     );
     let event = WorkflowEvent::new(
         &instance.id,
@@ -1746,7 +1746,7 @@ fn runtime_completion_reducer_uses_activity_retry_override() {
     let result = ActivityResult::failed(
         "implement_issue",
         "Implementation failed again.",
-        "codex stdin not available",
+        "claude stdin not available",
     );
     let event = WorkflowEvent::new(
         &instance.id,
@@ -1806,7 +1806,7 @@ fn runtime_completion_reducer_adds_retry_cooldown_metadata() {
     let result = ActivityResult::failed(
         "implement_issue",
         "Implementation failed again.",
-        "codex stdin not available",
+        "claude stdin not available",
     );
     let event = WorkflowEvent::new(
         &instance.id,
@@ -4023,8 +4023,8 @@ fn runtime_job_and_activity_result_round_trip_through_json() {
 
     let job = RuntimeJob::pending(
         "command-1",
-        RuntimeKind::CodexJsonrpc,
-        "codex-high",
+        RuntimeKind::ClaudeCode,
+        "claude-high",
         json!({ "prompt_packet": { "workflow": "github_issue_pr" } }),
     );
     let job_json = serde_json::to_string(&job).expect("serialize runtime job");
@@ -4062,8 +4062,8 @@ fn in_memory_bus_passes_workflow_commands_to_runtime_jobs() {
     let command_id = bus.enqueue_command(decision.commands[0].clone());
     let job = bus.enqueue_runtime_job(
         command_id.clone(),
-        RuntimeKind::CodexJsonrpc,
-        "codex-feedback",
+        RuntimeKind::ClaudeCode,
+        "claude-feedback",
         json!({ "workflow_id": instance.id, "subject": "pr:77" }),
     );
 
@@ -4081,7 +4081,7 @@ fn in_memory_bus_passes_workflow_commands_to_runtime_jobs() {
     let first_event = bus.record_runtime_event(
         claimed.id.clone(),
         "TurnStarted",
-        json!({ "runtime": "codex_jsonrpc" }),
+        json!({ "runtime": "claude_code" }),
     );
     let second_event = bus.record_runtime_event(
         claimed.id.clone(),
@@ -4111,8 +4111,8 @@ async fn runtime_worker_claims_one_job_once_and_records_events() -> anyhow::Resu
     let job = store
         .enqueue_runtime_job(
             "command-1",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "check" }),
         )
         .await?;
@@ -4226,8 +4226,8 @@ async fn runtime_worker_skips_runtime_jobs_before_not_before() -> anyhow::Result
     let job = store
         .enqueue_runtime_job_with_not_before(
             "command-1",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "check" }),
             Some(not_before),
         )
@@ -4267,8 +4267,8 @@ async fn runtime_store_reclaims_expired_running_job() -> anyhow::Result<()> {
     let job = store
         .enqueue_runtime_job(
             "command-1",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "check" }),
         )
         .await?;
@@ -4360,8 +4360,8 @@ async fn runtime_store_prioritizes_ready_work_over_older_backlog_jobs() -> anyho
     let backlog = store
         .enqueue_runtime_job(
             "command-backlog",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": REPO_BACKLOG_POLL_ACTIVITY }),
         )
         .await?;
@@ -4369,8 +4369,8 @@ async fn runtime_store_prioritizes_ready_work_over_older_backlog_jobs() -> anyho
     let sprint_plan = store
         .enqueue_runtime_job(
             "command-sprint-plan",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": REPO_BACKLOG_SPRINT_PLAN_ACTIVITY }),
         )
         .await?;
@@ -4378,8 +4378,8 @@ async fn runtime_store_prioritizes_ready_work_over_older_backlog_jobs() -> anyho
     let implementation = store
         .enqueue_runtime_job(
             "command-implement",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "implement_issue" }),
         )
         .await?;
@@ -4419,8 +4419,8 @@ async fn runtime_store_does_not_reclaim_unexpired_running_job() -> anyhow::Resul
     let job = store
         .enqueue_runtime_job(
             "command-1",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "check" }),
         )
         .await?;
@@ -4450,8 +4450,8 @@ async fn runtime_worker_renews_running_job_lease_until_completion() -> anyhow::R
     let job = store
         .enqueue_runtime_job(
             "command-1",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "check" }),
         )
         .await?;
@@ -4511,8 +4511,8 @@ async fn runtime_worker_records_completion_event_and_command_status() -> anyhow:
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "replan_issue" }),
         )
         .await?;
@@ -4580,8 +4580,8 @@ async fn runtime_worker_persists_bind_pr_payload_for_pr_open_transition() -> any
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "implement_issue" }),
         )
         .await?;
@@ -4648,8 +4648,8 @@ async fn runtime_worker_blocks_invalid_inline_bind_pr_before_persisting_command(
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "implement_issue" }),
         )
         .await?;
@@ -4725,8 +4725,8 @@ async fn runtime_worker_blocks_implementation_success_without_pr_evidence() -> a
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "implement_issue" }),
         )
         .await?;
@@ -4789,8 +4789,8 @@ async fn runtime_worker_finishes_closed_issue_success_without_pr() -> anyhow::Re
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "implement_issue" }),
         )
         .await?;
@@ -4875,8 +4875,8 @@ async fn runtime_worker_keeps_repo_backlog_dispatching_until_child_starts_finish
         store
             .enqueue_runtime_job_for_pending_command(
                 command_id,
-                RuntimeKind::CodexJsonrpc,
-                "codex-default",
+                RuntimeKind::ClaudeCode,
+                "claude-default",
                 json!({ "activity": "start_child_workflow" }),
                 None,
             )
@@ -4952,8 +4952,8 @@ async fn runtime_completion_counts_dispatching_sibling_as_active() -> anyhow::Re
     store
         .enqueue_runtime_job_for_pending_command(
             &first_command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "start_child_workflow" }),
             None,
         )
@@ -5024,8 +5024,8 @@ async fn runtime_worker_propagates_pr_feedback_child_completion_to_parent() -> a
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": PR_FEEDBACK_INSPECT_ACTIVITY }),
         )
         .await?;
@@ -5123,8 +5123,8 @@ async fn runtime_worker_does_not_propagate_still_inspecting_pr_feedback_child() 
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": PR_FEEDBACK_INSPECT_ACTIVITY }),
         )
         .await?;
@@ -5203,8 +5203,8 @@ async fn runtime_worker_does_not_propagate_retrying_pr_feedback_child() -> anyho
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": PR_FEEDBACK_INSPECT_ACTIVITY }),
         )
         .await?;
@@ -5282,8 +5282,8 @@ async fn runtime_worker_does_not_propagate_terminal_pr_feedback_child_failure() 
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": PR_FEEDBACK_INSPECT_ACTIVITY }),
         )
         .await?;
@@ -5333,7 +5333,7 @@ async fn runtime_worker_blocks_when_profile_max_turns_is_exhausted() -> anyhow::
     let store = WorkflowRuntimeStore::open(&dir.path().join("workflow_runtime.db")).await?;
     let workflow = issue_instance("replanning");
     store.upsert_instance(&workflow).await?;
-    let mut profile = RuntimeProfile::new("codex-budgeted", RuntimeKind::CodexJsonrpc);
+    let mut profile = RuntimeProfile::new("claude-budgeted", RuntimeKind::ClaudeCode);
     profile.max_turns = Some(1);
 
     let first_command = WorkflowCommand::enqueue_activity("replan_issue", "replan-1");
@@ -5358,7 +5358,7 @@ async fn runtime_worker_blocks_when_profile_max_turns_is_exhausted() -> anyhow::
     let second_command_id = store
         .enqueue_command(&workflow.id, None, &second_command)
         .await?;
-    let mut second_profile = RuntimeProfile::new("codex-budgeted", RuntimeKind::CodexJsonrpc);
+    let mut second_profile = RuntimeProfile::new("claude-budgeted", RuntimeKind::ClaudeCode);
     second_profile.max_turns = Some(1);
     store
         .enqueue_runtime_job(
@@ -5431,8 +5431,8 @@ async fn runtime_worker_records_failed_activity_result() -> anyhow::Result<()> {
     store
         .enqueue_runtime_job(
             "command-2",
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({ "activity": "implement" }),
         )
         .await?;
@@ -5440,8 +5440,8 @@ async fn runtime_worker_records_failed_activity_result() -> anyhow::Result<()> {
     let executor = StaticRuntimeExecutor {
         result: ActivityResult::failed(
             "implement",
-            "Codex execution failed.",
-            "codex stdin not available",
+            "Claude execution failed.",
+            "claude stdin not available",
         ),
     };
 
@@ -5452,12 +5452,12 @@ async fn runtime_worker_records_failed_activity_result() -> anyhow::Result<()> {
     assert_eq!(completed.status, RuntimeJobStatus::Failed);
     assert_eq!(
         completed.error.as_deref(),
-        Some("codex stdin not available")
+        Some("claude stdin not available")
     );
     let output: ActivityResult =
         serde_json::from_value(completed.output.expect("activity result output"))?;
     assert_eq!(output.status, ActivityStatus::Failed);
-    assert_eq!(output.error.as_deref(), Some("codex stdin not available"));
+    assert_eq!(output.error.as_deref(), Some("claude stdin not available"));
     Ok(())
 }
 
@@ -5563,8 +5563,8 @@ async fn durable_store_persists_workflow_runtime_bus_contract() -> anyhow::Resul
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-high",
+            RuntimeKind::ClaudeCode,
+            "claude-high",
             json!({ "prompt_packet": { "workflow_id": instance.id } }),
         )
         .await?;
@@ -5583,7 +5583,7 @@ async fn durable_store_persists_workflow_runtime_bus_contract() -> anyhow::Resul
     assert_eq!(claimed.status, RuntimeJobStatus::Running);
 
     let runtime_first = store
-        .record_runtime_event(&claimed.id, "TurnStarted", json!({ "runtime": "codex" }))
+        .record_runtime_event(&claimed.id, "TurnStarted", json!({ "runtime": "claude" }))
         .await?;
     let runtime_second = store
         .record_runtime_event(
@@ -5808,8 +5808,8 @@ async fn durable_store_lists_workflow_runtime_tree_inputs() -> anyhow::Result<()
     let job = store
         .enqueue_runtime_job(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-high",
+            RuntimeKind::ClaudeCode,
+            "claude-high",
             json!({ "workflow_id": child.id }),
         )
         .await?;
@@ -5914,7 +5914,7 @@ async fn runtime_command_dispatcher_enqueues_runtime_job_for_activity_command() 
         .await?;
     let dispatcher = RuntimeCommandDispatcher::new(
         &store,
-        RuntimeProfile::new("codex-high", RuntimeKind::CodexJsonrpc),
+        RuntimeProfile::new("claude-high", RuntimeKind::ClaudeCode),
     );
 
     let outcome = dispatcher
@@ -5932,8 +5932,8 @@ async fn runtime_command_dispatcher_enqueues_runtime_job_for_activity_command() 
         other => panic!("unexpected dispatch outcome: {other:?}"),
     };
     assert_eq!(runtime_job.command_id, command_id);
-    assert_eq!(runtime_job.runtime_kind, RuntimeKind::CodexJsonrpc);
-    assert_eq!(runtime_job.runtime_profile, "codex-high");
+    assert_eq!(runtime_job.runtime_kind, RuntimeKind::ClaudeCode);
+    assert_eq!(runtime_job.runtime_profile, "claude-high");
     assert_eq!(runtime_job.status, RuntimeJobStatus::Pending);
     assert_eq!(
         runtime_job
@@ -6029,8 +6029,8 @@ async fn runtime_store_dedupe_status_update_does_not_regress_dispatched_command(
     let outcome = store
         .enqueue_runtime_job_for_pending_command(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({"activity": "replan_issue"}),
             None,
         )
@@ -6065,15 +6065,15 @@ async fn runtime_store_pending_command_enqueue_is_idempotent_across_concurrent_c
 
     let first = store.enqueue_runtime_job_for_pending_command(
         &command_id,
-        RuntimeKind::CodexJsonrpc,
-        "codex-default",
+        RuntimeKind::ClaudeCode,
+        "claude-default",
         json!({"activity": "replan_issue"}),
         None,
     );
     let second = store.enqueue_runtime_job_for_pending_command(
         &command_id,
-        RuntimeKind::CodexJsonrpc,
-        "codex-default",
+        RuntimeKind::ClaudeCode,
+        "claude-default",
         json!({"activity": "replan_issue"}),
         None,
     );
@@ -6102,8 +6102,8 @@ async fn runtime_store_pending_command_enqueue_is_idempotent_across_concurrent_c
     let third = store
         .enqueue_runtime_job_for_pending_command(
             &command_id,
-            RuntimeKind::CodexJsonrpc,
-            "codex-default",
+            RuntimeKind::ClaudeCode,
+            "claude-default",
             json!({"activity": "replan_issue"}),
             None,
         )
@@ -6208,16 +6208,16 @@ async fn runtime_command_dispatcher_prefers_workflow_activity_profile() -> anyho
         .enqueue_command(&backlog.id, None, &backlog_scan_command)
         .await?;
 
-    let mut default_profile = RuntimeProfile::new("codex-default", RuntimeKind::CodexJsonrpc);
+    let mut default_profile = RuntimeProfile::new("claude-default", RuntimeKind::ClaudeCode);
     default_profile.model = Some("gpt-default".to_string());
-    let mut issue_profile = RuntimeProfile::new("codex-issue-high", RuntimeKind::CodexExec);
+    let mut issue_profile = RuntimeProfile::new("claude-issue-high", RuntimeKind::ClaudeCode);
     issue_profile.model = Some("gpt-issue".to_string());
     issue_profile.timeout_secs = Some(1200);
-    let mut replan_profile = RuntimeProfile::new("codex-replan", RuntimeKind::CodexJsonrpc);
+    let mut replan_profile = RuntimeProfile::new("claude-replan", RuntimeKind::ClaudeCode);
     replan_profile.model = Some("gpt-replan".to_string());
     replan_profile.timeout_secs = Some(300);
     let mut issue_replan_profile =
-        RuntimeProfile::new("codex-issue-replan", RuntimeKind::CodexExec);
+        RuntimeProfile::new("claude-issue-replan", RuntimeKind::ClaudeCode);
     issue_replan_profile.model = Some("gpt-issue-replan".to_string());
     issue_replan_profile.timeout_secs = Some(90);
     let profile_selector = RuntimeProfileSelector::new(default_profile)
@@ -6233,11 +6233,11 @@ async fn runtime_command_dispatcher_prefers_workflow_activity_profile() -> anyho
         .runtime_jobs_for_command(&issue_replan_command_id)
         .await?;
     assert_eq!(replan_jobs.len(), 1);
-    assert_eq!(replan_jobs[0].runtime_kind, RuntimeKind::CodexExec);
-    assert_eq!(replan_jobs[0].runtime_profile, "codex-issue-replan");
+    assert_eq!(replan_jobs[0].runtime_kind, RuntimeKind::ClaudeCode);
+    assert_eq!(replan_jobs[0].runtime_profile, "claude-issue-replan");
     assert_eq!(
         replan_jobs[0].input["runtime_profile"]["name"],
-        "codex-issue-replan"
+        "claude-issue-replan"
     );
     assert_eq!(
         replan_jobs[0].input["runtime_profile"]["model"],
@@ -6249,11 +6249,11 @@ async fn runtime_command_dispatcher_prefers_workflow_activity_profile() -> anyho
         .runtime_jobs_for_command(&issue_implement_command_id)
         .await?;
     assert_eq!(implement_jobs.len(), 1);
-    assert_eq!(implement_jobs[0].runtime_kind, RuntimeKind::CodexExec);
-    assert_eq!(implement_jobs[0].runtime_profile, "codex-issue-high");
+    assert_eq!(implement_jobs[0].runtime_kind, RuntimeKind::ClaudeCode);
+    assert_eq!(implement_jobs[0].runtime_profile, "claude-issue-high");
     assert_eq!(
         implement_jobs[0].input["runtime_profile"]["name"],
-        "codex-issue-high"
+        "claude-issue-high"
     );
     assert_eq!(
         implement_jobs[0].input["runtime_profile"]["model"],
@@ -6268,11 +6268,8 @@ async fn runtime_command_dispatcher_prefers_workflow_activity_profile() -> anyho
         .runtime_jobs_for_command(&backlog_replan_command_id)
         .await?;
     assert_eq!(backlog_replan_jobs.len(), 1);
-    assert_eq!(
-        backlog_replan_jobs[0].runtime_kind,
-        RuntimeKind::CodexJsonrpc
-    );
-    assert_eq!(backlog_replan_jobs[0].runtime_profile, "codex-replan");
+    assert_eq!(backlog_replan_jobs[0].runtime_kind, RuntimeKind::ClaudeCode);
+    assert_eq!(backlog_replan_jobs[0].runtime_profile, "claude-replan");
     assert_eq!(
         backlog_replan_jobs[0].input["runtime_profile"]["model"],
         "gpt-replan"
@@ -6286,8 +6283,8 @@ async fn runtime_command_dispatcher_prefers_workflow_activity_profile() -> anyho
         .runtime_jobs_for_command(&backlog_scan_command_id)
         .await?;
     assert_eq!(backlog_scan_jobs.len(), 1);
-    assert_eq!(backlog_scan_jobs[0].runtime_kind, RuntimeKind::CodexJsonrpc);
-    assert_eq!(backlog_scan_jobs[0].runtime_profile, "codex-default");
+    assert_eq!(backlog_scan_jobs[0].runtime_kind, RuntimeKind::ClaudeCode);
+    assert_eq!(backlog_scan_jobs[0].runtime_profile, "claude-default");
     assert_eq!(
         backlog_scan_jobs[0].input["runtime_profile"]["model"],
         "gpt-default"
@@ -6318,7 +6315,7 @@ async fn runtime_command_dispatcher_preserves_retry_not_before() -> anyhow::Resu
     let command_id = store.enqueue_command(&instance.id, None, &command).await?;
     let dispatcher = RuntimeCommandDispatcher::new(
         &store,
-        RuntimeProfile::new("codex-default", RuntimeKind::CodexJsonrpc),
+        RuntimeProfile::new("claude-default", RuntimeKind::ClaudeCode),
     );
 
     let outcome = dispatcher
@@ -6364,8 +6361,8 @@ async fn runtime_command_dispatcher_uses_command_type_activity_key_for_child_wor
         .enqueue_command(&backlog.id, None, &child_command)
         .await?;
 
-    let default_profile = RuntimeProfile::new("codex-default", RuntimeKind::CodexJsonrpc);
-    let mut child_profile = RuntimeProfile::new("codex-child", RuntimeKind::CodexExec);
+    let default_profile = RuntimeProfile::new("claude-default", RuntimeKind::ClaudeCode);
+    let mut child_profile = RuntimeProfile::new("claude-child", RuntimeKind::ClaudeCode);
     child_profile.model = Some("gpt-child".to_string());
     let profile_selector = RuntimeProfileSelector::new(default_profile)
         .with_activity_profile("start_child_workflow", child_profile);
@@ -6386,8 +6383,8 @@ async fn runtime_command_dispatcher_uses_command_type_activity_key_for_child_wor
         other => panic!("unexpected dispatch outcome: {other:?}"),
     };
 
-    assert_eq!(runtime_job.runtime_kind, RuntimeKind::CodexExec);
-    assert_eq!(runtime_job.runtime_profile, "codex-child");
+    assert_eq!(runtime_job.runtime_kind, RuntimeKind::ClaudeCode);
+    assert_eq!(runtime_job.runtime_profile, "claude-child");
     assert_eq!(runtime_job.input["activity"], "start_child_workflow");
     assert_eq!(runtime_job.input["runtime_profile"]["model"], "gpt-child");
     Ok(())
@@ -6411,7 +6408,7 @@ async fn runtime_command_dispatcher_skips_non_runtime_commands() -> anyhow::Resu
     let command_id = store.enqueue_command(&instance.id, None, &command).await?;
     let dispatcher = RuntimeCommandDispatcher::new(
         &store,
-        RuntimeProfile::new("codex-high", RuntimeKind::CodexJsonrpc),
+        RuntimeProfile::new("claude-high", RuntimeKind::ClaudeCode),
     );
 
     let outcome = dispatcher
@@ -6451,7 +6448,7 @@ async fn runtime_command_dispatcher_skips_terminal_workflow_before_enqueue() -> 
     let command_id = store.enqueue_command(&instance.id, None, &command).await?;
     let dispatcher = RuntimeCommandDispatcher::new(
         &store,
-        RuntimeProfile::new("codex-default", RuntimeKind::CodexJsonrpc),
+        RuntimeProfile::new("claude-default", RuntimeKind::ClaudeCode),
     );
 
     let outcome = dispatcher

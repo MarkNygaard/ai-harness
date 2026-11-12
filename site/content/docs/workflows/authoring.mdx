@@ -136,10 +136,17 @@ for a plain workflow.
 | `report.scored` | `true` → show a score + rating + per-dimension bars + score-history sparkline (GEO-style); `false` (default) → findings list only. |
 | `report.actions` | Opt-in per-finding buttons; **default `[]` → a clean, read-only list**. Any of `build` (fire the default workflow, `task`), `issue` (file into Linear), `ignore`. A bug/finding report uses `[build, issue, ignore]`. |
 | `report.status` | Per-item status control: `none` (default), `check` (a "tested" checkbox), or `pass_fail` (Passed / Failed) — for manual test checklists. |
+| `report.actions: [approve]` | Approve / Reject per finding: a decision on what the finding proposes (delete this test, apply this fix). Tables add "Approve N shown" for the rows in view and a filter by decision. Decisions are kept per run, so a long report can be worked through over several visits. |
+| `report.apply` | `{ workflow, label? }`, with `approve`: a button (default label "Apply") that starts `workflow` in the run's project with the approved findings as its input, then marks them `applied`, linked to that run, so they can't be sent twice. The input is a sentence, then a JSON block `{ source_run, findings: [{ id, title, category, location, score, duration_ms, detail }] }` for a step to parse. |
+| `report.layout` | `list` (default): one card per finding. `table`: totals per category, category tabs, a search box, and one sortable row per finding — for reports with hundreds of findings, such as a test audit. |
 
 The report renders a node's JSON output shaped as
-`{ summary?, score?, rating?, categories?[], findings: [{ title?, severity?, category?, detail?, fix?, location?, effort? }] }`
-— produce it with `output_format` on the verdict node. This is how any
+`{ summary?, score?, rating?, categories?[], findings: [{ title?, severity?, category?, detail?, fix?, location?, effort?, id?, score?, duration_ms? }] }`
+— produce it with `output_format` on the verdict node, or print it from a
+`script` node. In a `table` report, give each finding an `id` that is unique in
+the run (two findings with the same category and title are otherwise one), and
+`score` (0–1) and `duration_ms` where they mean something: each becomes a
+sortable column. This is how any
 workflow (including MCP-authored ones) gets a report tab + nav entry without
 front-end changes.
 
@@ -196,6 +203,7 @@ Every node has an `id` and exactly **one body** (`prompt` / `bash` / `command` /
 | `output_format` | JSON schema the AI body's output should match (see [output_format](#output_format)). |
 | `mcp` | External tools for this step's agent: servers by name (`[sentry]`), or narrowed to some tools (`[{server: m365, tools: [outlook_email_search]}]`). See [External tools](#external-tools-mcp). |
 | `linear_comment` | `true` on one node: when a Linear issue started the run, this node's output is posted to the issue when the run completes (see [Reporting back to Linear](#reporting-back-to-linear)). |
+| `scorer` | `{ name, pass_at?, description? }`: this node grades the run (see [Scorers](#scorers)). |
 
 ### Node bodies
 
@@ -540,7 +548,6 @@ per provider at dispatch.
   via `--plugin-dir`. The serialized config is passed in the `HARNESS_HOOKS`
   environment variable. `deny` rules block via `{ block: true, reason }`;
   `post_tool_use` rules emit `sendMessage(..., { deliverAs: "steer" })`.
-- **`codex` nodes** — codex has no hook mechanism; hooks are silently ignored.
 - **`bash`/`script`/`approval`/`cancel` nodes** — parsed and stored but never
   delivered (no agent to intercept).
 
@@ -587,12 +594,52 @@ To give the step fewer, name the tools:
   delete) only when it needs them: text from a Linear issue can reach the agent.
 - **Read-only built-ins.** Agents can read Sentry issues, events and traces, and
   query Grafana. They can't change anything in either.
-- **Claude and Pi steps.** A workflow that gives MCP servers to a `codex` or
-  `cursor` step can't be saved.
+- **Claude and Pi steps.** A workflow that gives MCP servers to a `cursor`
+  step can't be saved.
 
 Ask for it only on the steps that need it. Every step that has it starts the
 server, and an agent with tools it has no use for may spend turns on them
 anyway.
+
+## Scorers
+
+A scorer is a step that grades the run it is in, so the grade can be followed
+across runs: for example, whether an implementation run's pull request adds
+tests that nothing needs. Mark the step with `scorer:` and have it output JSON
+with a `score` between 0 and 1:
+
+```yaml
+- id: score-tests
+  depends_on: [finalize-pr]
+  model: sonnet
+  context: fresh
+  scorer:
+    name: redundant-tests       # shared by every workflow that runs it
+    pass_at: 0.5                # a score at or above this passes (default 0.5)
+    description: Whether the PR's tests include redundant or trivial ones.
+  output_format:
+    type: object
+    properties:
+      score: { type: number }
+      classification: { type: string }
+      summary: { type: string }
+    required: [score]
+  prompt: |
+    Read the test files in this PR's diff …
+```
+
+When the step succeeds, the harness records its score, whether it passed,
+`classification` (a short label such as "No surplus tests") and `summary`,
+with the step's run time and cost. **Scorers** in the sidebar lists every
+scorer that has graded something. Each one has a page with its all-time cost,
+its pass rate or daily cost over the last 30 days, and the runs it graded.
+
+- **The name is the scorer.** Two workflows with a step named
+  `redundant-tests` add up on one page. Lowercase letters, digits and hyphens.
+- **A grade has to be readable.** Output without a `score` between 0 and 1 is
+  not recorded, rather than counted as a zero. Neither is a step that failed.
+- **A scorer only grades.** It doesn't stop the run or change anything. Gate
+  a later step on `$score-tests.output.score` if it should.
 
 ## Reporting back to Linear
 
@@ -710,6 +757,15 @@ each one and write back with `harness linear comment` and `harness linear label`
   `--without-label` drops issues that have any of them. Both are repeatable.
   A trailing `*` matches a prefix, and a label group's name matches every
   label in the group. `--limit` defaults to 25, with a maximum of 100.
+- **Reading the comments.** `issues` doesn't include them. When a person
+  answers the triage's questions in a comment, read the thread with
+  `harness linear comments --issue <identifier>`. It prints every comment as a
+  JSON array, oldest first: `id`, `author`, `is_harness`, `created_at`,
+  `parent_id` (null for a top-level comment) and `body`. `is_harness` is true
+  for the harness's own comments, so a step can find what came after its last
+  question without matching an author's name. It reads all pages, and fails
+  rather than return part of a thread. A run started from a Linear trigger
+  already has the comments in `$ARGUMENTS`.
 - **`label` only uses labels that exist.** It looks for the name in the issue's
   team, then in the workspace. An unknown name fails the step before anything
   changes. Adding a label the issue already has, or removing one it doesn't,

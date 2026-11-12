@@ -45,8 +45,69 @@ pub(crate) struct Shot {
     pub page: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewport: Option<String>,
+    /// What is open or selected on the page (`filter-open`); empty for the
+    /// page as it loads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+}
+
+/// The URL path a `page` names, without the prose an agent may add after it
+/// ("/category/women (filter drawer open)" is `/category/women`).
+fn page_path(page: &str) -> String {
+    let path = page
+        .split(|c: char| c.is_whitespace() || c == '(' || c == '?' || c == '#')
+        .next()
+        .unwrap_or_default()
+        .trim_end_matches('/');
+    if path.is_empty() {
+        "/".into()
+    } else {
+        path.to_ascii_lowercase()
+    }
+}
+
+/// The images a later screenshot of the same view replaced: the same page,
+/// state and viewport, taken again by a later step under another file name.
+/// Every step that can drive a browser may screenshot, so without this a run
+/// with five reviewers keeps five copies of the same drawer. Only entries that
+/// name all three are compared; a file a later entry still uses stays.
+fn superseded(described: &[Shot]) -> std::collections::HashSet<String> {
+    use std::collections::{HashMap, HashSet};
+    let mut latest: HashMap<(String, String, String), String> = HashMap::new();
+    let mut replaced: HashSet<String> = HashSet::new();
+    for shot in described {
+        let (Some(page), Some(viewport)) = (&shot.page, &shot.viewport) else {
+            continue;
+        };
+        let file = base_name(&shot.file);
+        let key = (
+            page_path(page),
+            shot.view
+                .as_deref()
+                .unwrap_or_default()
+                .trim()
+                .to_ascii_lowercase(),
+            viewport.trim().to_ascii_lowercase(),
+        );
+        if let Some(earlier) = latest.insert(key, file.clone()) {
+            if earlier != file {
+                replaced.insert(earlier);
+            }
+        }
+    }
+    replaced.retain(|f| !latest.values().any(|v| v == f));
+    replaced
+}
+
+/// The file name an entry names, even when the agent wrote out a full path.
+fn base_name(file: &str) -> String {
+    Path::new(file)
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// `HARNESS_SCREENSHOT_TTL_DAYS`, or the default.
@@ -92,13 +153,19 @@ pub(crate) fn keep(artifacts: &Path, root: &Path, run_id: &str) -> usize {
     let Ok(entries) = std::fs::read_dir(&src) else {
         return 0;
     };
+    let described: Vec<Shot> = std::fs::read(src.join(harness_runner::SCREENSHOTS_MANIFEST))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    let replaced = superseded(&described);
     let mut images: Vec<(String, u64)> = entries
         .flatten()
         .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
         .filter_map(|e| {
             let name = e.file_name().to_str()?.to_string();
             let size = e.metadata().ok()?.len();
-            (is_image(&name) && plain_name(&name)).then_some((name, size))
+            (is_image(&name) && plain_name(&name) && !replaced.contains(&name))
+                .then_some((name, size))
         })
         .collect();
     if images.is_empty() {
@@ -124,10 +191,6 @@ pub(crate) fn keep(artifacts: &Path, root: &Path, run_id: &str) -> usize {
         }
     }
 
-    let described: Vec<Shot> = std::fs::read(src.join(harness_runner::SCREENSHOTS_MANIFEST))
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
     let manifest = manifest_for(&kept, described);
     let _ = std::fs::write(
         dest.join(harness_runner::SCREENSHOTS_MANIFEST),
@@ -141,11 +204,7 @@ fn manifest_for(kept: &[String], described: Vec<Shot>) -> Vec<Shot> {
     let mut out: Vec<Shot> = Vec::new();
     for shot in described {
         // A path the agent wrote out in full still names the file it saved.
-        let file = Path::new(&shot.file)
-            .file_name()
-            .and_then(|f| f.to_str())
-            .unwrap_or_default()
-            .to_string();
+        let file = base_name(&shot.file);
         if !kept.contains(&file) {
             continue;
         }
@@ -158,6 +217,7 @@ fn manifest_for(kept: &[String], described: Vec<Shot>) -> Vec<Shot> {
                 file: file.clone(),
                 page: None,
                 viewport: None,
+                view: None,
                 note: None,
             });
         }
@@ -332,6 +392,76 @@ mod tests {
             "undescribed images still show"
         );
         assert!(!root.join("task-1").join("notes.txt").exists());
+    }
+
+    /// Five steps each screenshotting the same open drawer, under their own
+    /// names, keep one: the last one taken.
+    #[test]
+    fn a_later_screenshot_of_the_same_view_replaces_the_earlier_one() {
+        let tmp = tempfile::tempdir().unwrap();
+        let artifacts = tmp.path().join("artifacts");
+        let shots_dir = artifacts.join("screenshots");
+        for f in [
+            "plp-filter-drawer-desktop.png",
+            "plp-simplification-desktop.png",
+            "architecture-plp-desktop.png",
+            "plp-filter-drawer-mobile.png",
+            "search-desktop.png",
+        ] {
+            write(&shots_dir, f, b"png");
+        }
+        write(
+            &shots_dir,
+            "screenshots.json",
+            br#"[
+              {"file": "plp-filter-drawer-desktop.png", "page": "/category/women", "view": "filter-open", "viewport": "1440x900", "note": "after the change"},
+              {"file": "plp-filter-drawer-mobile.png", "page": "/category/women", "view": "filter-open", "viewport": "390x844"},
+              {"file": "plp-simplification-desktop.png", "page": "/category/women (filter drawer, Certificates expanded)", "view": "Filter-Open", "viewport": "1440x900"},
+              {"file": "architecture-plp-desktop.png", "page": "/category/women/", "view": "filter-open", "viewport": "1440x900", "note": "the last look"},
+              {"file": "search-desktop.png", "page": "/search", "view": "filter-open", "viewport": "1440x900"}
+            ]"#,
+        );
+        let root = tmp.path().join("kept");
+
+        assert_eq!(keep(&artifacts, &root, "task-2"), 3);
+        let dir = root.join("task-2");
+        let kept: Vec<String> = shots(&dir).into_iter().map(|s| s.file).collect();
+        assert!(
+            kept.contains(&"architecture-plp-desktop.png".to_string()),
+            "{kept:?}"
+        );
+        assert!(
+            kept.contains(&"plp-filter-drawer-mobile.png".to_string()),
+            "another width stays"
+        );
+        assert!(
+            kept.contains(&"search-desktop.png".to_string()),
+            "another page stays"
+        );
+        assert!(!dir.join("plp-filter-drawer-desktop.png").exists());
+        assert!(!dir.join("plp-simplification-desktop.png").exists());
+
+        // Entries that don't say which view they are can't be compared, so
+        // they are all kept.
+        let undescribed = [
+            Shot {
+                file: "a.png".into(),
+                page: Some("/p".into()),
+                viewport: None,
+                view: None,
+                note: None,
+            },
+            Shot {
+                file: "b.png".into(),
+                page: Some("/p".into()),
+                viewport: None,
+                view: None,
+                note: None,
+            },
+        ];
+        assert!(superseded(&undescribed).is_empty());
+        assert_eq!(page_path("/Category/Women/ (drawer)"), "/category/women");
+        assert_eq!(page_path(""), "/");
     }
 
     #[test]

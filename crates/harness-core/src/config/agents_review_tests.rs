@@ -6,18 +6,13 @@ fn review_config_defaults_to_local_first_provider_ids() {
 
     assert!(config.enabled);
     assert_eq!(config.strategy, ReviewStrategy::LocalFirst);
-    assert_eq!(config.required_providers, vec!["codex_cli_review"]);
+    assert!(config.required_providers.is_empty());
     assert_eq!(
         config.advisory_providers,
         vec!["gemini_github_bot", "codex_github_bot"]
     );
     assert!(!config.external_required);
     assert!(!config.publish_local_review_comment);
-    assert!(config.codex_cli_review.enabled);
-    assert_eq!(config.codex_cli_review.cli_path, PathBuf::from("codex"));
-    assert_eq!(config.codex_cli_review.base_ref, "origin/main");
-    assert_eq!(config.codex_cli_review.timeout_secs, 1800);
-    assert!(!config.codex_agent_review.enabled);
     assert_eq!(config.gemini_github_bot.trigger_command, "/gemini review");
     assert_eq!(
         config.gemini_github_bot.reviewer_name,
@@ -31,19 +26,10 @@ fn review_config_deserializes_provider_settings() {
     let toml_str = r#"
         enabled = true
         strategy = "local_first"
-        required_providers = ["codex_cli_review"]
+        required_providers = ["local_review"]
         advisory_providers = ["gemini_github_bot"]
         external_required = true
         publish_local_review_comment = true
-
-        [codex_cli_review]
-        enabled = true
-        cli_path = "/opt/bin/codex"
-        model = "gpt-5.5"
-        reasoning_effort = "xhigh"
-        base_ref = "main"
-        timeout_secs = 2400
-        output_format = "json"
 
         [gemini_github_bot]
         enabled = true
@@ -56,18 +42,10 @@ fn review_config_deserializes_provider_settings() {
     let config: AgentReviewConfig = toml::from_str(toml_str).unwrap();
 
     assert_eq!(config.strategy, ReviewStrategy::LocalFirst);
-    assert_eq!(config.required_providers, vec!["codex_cli_review"]);
+    assert_eq!(config.required_providers, vec!["local_review"]);
     assert_eq!(config.advisory_providers, vec!["gemini_github_bot"]);
     assert!(config.external_required);
     assert!(config.publish_local_review_comment);
-    assert_eq!(
-        config.codex_cli_review.cli_path,
-        PathBuf::from("/opt/bin/codex")
-    );
-    assert_eq!(config.codex_cli_review.model, "gpt-5.5");
-    assert_eq!(config.codex_cli_review.reasoning_effort, "xhigh");
-    assert_eq!(config.codex_cli_review.base_ref, "main");
-    assert_eq!(config.codex_cli_review.timeout_secs, 2400);
     assert_eq!(config.gemini_github_bot.wait_secs, 120);
     assert_eq!(config.gemini_github_bot.max_rounds, 1);
 }
@@ -114,17 +92,13 @@ fn review_config_partial_providers_inherit_legacy_review_defaults() -> Result<()
         review_bot_command = "/alt review"
         reviewer_name = "alt-reviewer[bot]"
 
-        [codex_agent_review]
-        enabled = true
-
         [gemini_github_bot]
         wait_secs = 60
     "#;
     let config: AgentReviewConfig = toml::from_str(toml_str)?;
 
-    assert!(config.codex_agent_review.enabled);
-    assert_eq!(config.codex_agent_review.reviewer_agent, "claude");
-    assert_eq!(config.codex_agent_review.max_rounds, 5);
+    assert_eq!(config.reviewer_agent, "claude");
+    assert_eq!(config.max_rounds, 5);
     assert_eq!(config.gemini_github_bot.trigger_command, "/alt review");
     assert_eq!(config.gemini_github_bot.reviewer_name, "alt-reviewer[bot]");
     assert!(config.gemini_github_bot.auto_trigger);

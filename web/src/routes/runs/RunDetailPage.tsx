@@ -215,6 +215,9 @@ export function RunDetailPage() {
                 verdictNode={declaredReport.verdict_node}
                 actions={declaredReport.actions ?? []}
                 status={declaredReport.status ?? "none"}
+                layout={declaredReport.layout ?? "list"}
+                apply={declaredReport.apply ?? null}
+                runTitle={run.title ?? null}
               />
             </div>
           ) : (

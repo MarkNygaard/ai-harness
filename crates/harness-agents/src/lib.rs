@@ -2,9 +2,6 @@ pub mod anthropic_api;
 pub mod claude;
 pub mod claude_adapter;
 mod claude_stream;
-mod cloud_setup;
-pub mod codex;
-pub mod codex_adapter;
 pub mod registry;
 mod streaming;
 
@@ -112,8 +109,6 @@ pub fn restore_own_keys(cmd: &mut tokio::process::Command, keys: &[&str]) {
 /// variable and sign in with `~/.claude/.credentials.json`, which the server
 /// keeps fresh.
 pub const CLAUDE_KEYS: &[&str] = &["ANTHROPIC_API_KEY"];
-/// The key the Codex CLI may take from the environment.
-pub const CODEX_KEYS: &[&str] = &["OPENAI_API_KEY"];
 
 /// Place the child process into its own process group.
 ///

@@ -18,6 +18,16 @@ import type { WorkflowUi } from "@/types/authoring";
 import type { NodeView, RunDetail } from "@/types/run";
 
 export interface WorkflowFinding {
+  /**
+   * Unique within the run. A report with many findings sets it, since two can
+   * share a category and title (a test name repeated in two files); it is
+   * then the finding's key.
+   */
+  id?: string;
+  /** 0–1, where the finding has a score of its own (a table column). */
+  score?: number;
+  /** How long the thing found takes, e.g. a test's runtime (a table column). */
+  duration_ms?: number;
   title?: string;
   summary?: string;
   severity?: string;
@@ -147,6 +157,8 @@ export function useWorkflowUi(
 
 /** Stable key for a finding within a run's report (`category::title`). */
 export function findingKey(f: WorkflowFinding): string {
+  // A report with many findings names them: two tests can share a title.
+  if (f.id) return `id::${f.id}`;
   const title = f.title ?? f.summary ?? "";
   return `${f.category ?? ""}::${title}`;
 }
@@ -300,7 +312,16 @@ export function useReportHistory(
  * state slot per finding.
  */
 export type FindingAction =
-  "built" | "issued" | "ignored" | "checked" | "passed" | "failed";
+  | "built"
+  | "issued"
+  | "ignored"
+  | "checked"
+  | "passed"
+  | "failed"
+  // A decision on what the finding proposes, and the apply run taking it.
+  | "approved"
+  | "rejected"
+  | "applied";
 
 /** A remembered finding action (mirrors the server's `FindingState`). */
 export interface FindingState {
@@ -348,6 +369,61 @@ export function useSetFindingState(runId: string | null) {
       ),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["findings", runId] }),
   });
+}
+
+/**
+ * One state for many findings at once ("approve all shown", or marking what
+ * an apply run took); `action: null` forgets theirs. All or nothing.
+ */
+export function useBatchFindingState(runId: string | null) {
+  const qc = useQueryClient();
+  return useMutation<
+    { updated: number },
+    Error,
+    {
+      finding_keys: string[];
+      action: FindingAction | null;
+      ref_run_id?: string;
+    }
+  >({
+    mutationFn: (body) =>
+      apiJson<{ updated: number }>(
+        `/api/runs/${encodeURIComponent(runId!)}/findings/batch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      ),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["findings", runId] }),
+  });
+}
+
+/**
+ * The input an apply run gets: which report it came from, and the approved
+ * findings with what a workflow needs to act on each. Plain text first, so
+ * the run reads sensibly in a list; the JSON is what a step parses.
+ */
+export function applyDescription(
+  sourceRunId: string,
+  findings: WorkflowFinding[],
+): string {
+  const items = findings.map((f) => ({
+    id: f.id ?? null,
+    title: f.title ?? f.summary ?? null,
+    category: f.category ?? null,
+    location: f.location ?? null,
+    score: f.score ?? null,
+    duration_ms: f.duration_ms ?? null,
+    detail: f.detail ?? null,
+  }));
+  return [
+    `Apply ${findings.length} approved finding${findings.length === 1 ? "" : "s"} from run ${sourceRunId}.`,
+    "",
+    "```json",
+    JSON.stringify({ source_run: sourceRunId, findings: items }, null, 2),
+    "```",
+  ].join("\n");
 }
 
 /** Forget a finding's state — the "Rebuild" / "Unignore" action. */

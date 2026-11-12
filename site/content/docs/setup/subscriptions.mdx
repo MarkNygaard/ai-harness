@@ -17,7 +17,7 @@ GitHub and Linear are not here either; they live under
 | Account | Connected by | Backs |
 | --- | --- | --- |
 | **Claude** | Pasting an OAuth token, or the full `~/.claude/.credentials.json` | Claude Code nodes |
-| **ChatGPT** | **Connect ChatGPT**, an OAuth flow | The `codex` CLI **and** `openai-codex/*` models on Pi |
+| **ChatGPT** | **Connect ChatGPT**, an OAuth flow | `openai-codex/*` models on Pi |
 | **Kimi-for-Coding** | **Connect Kimi**, a device login | `kimi-code/*` models on Pi |
 | **Cursor** | Pasting an API key | `cursor-agent` nodes |
 
@@ -41,15 +41,14 @@ The same model can fall on either side depending on which agent reaches it.
 `sonnet` on Claude Code is the Claude subscription. `sonnet` on the Anthropic
 API provider is a per-token bill.
 
-## Connect ChatGPT covers two providers
+## Connect ChatGPT signs Pi in
 
 Worth knowing, because it saves a step people often go looking for.
 
-One **Connect ChatGPT** provisions both places the tokens are needed: it writes
-`~/.codex/auth.json` for the `codex` provider, and hands the same tokens to Pi
-so `pi` nodes can run `openai-codex/*` models. The server does the second half
-through `omp auth-broker import` during the same connect, and the request fails
-loudly if it does not take. A successful connect means both are set.
+**Connect ChatGPT** hands the ChatGPT tokens to Pi, so `pi` nodes can run
+`openai-codex/*` models. The server does this through `omp auth-broker import`
+during the connect, and the request fails loudly if it does not take. A
+successful connect means Pi is signed in.
 
 <Callout>
 There is no separate login for Pi. If you find a runbook telling you to open a
@@ -71,7 +70,7 @@ your account actually exposes, run `omp` on the container and then `/model`.
 
 <Callout type="warn">
 A ChatGPT subscription exposes the general models, not the `-codex` variants.
-Those need API-key authentication on the dedicated `codex` provider.
+Those need API-key authentication, which the harness does not offer.
 </Callout>
 
 ## Subscriptions and API keys behave differently
@@ -80,10 +79,10 @@ A subscription login is an OAuth token pair that refreshes itself. An API key is
 a static string. That difference produces two behaviours worth knowing about
 before you debug something.
 
-**Stored credentials are seeded, not overwritten.** Claude Code and the Codex
-CLI both rotate their refresh token in place on disk. If the harness wrote its
+**Stored credentials are seeded, not overwritten.** Claude Code rotates its
+refresh token in place on disk. If the harness wrote its
 stored copy back on every run, it would re-present a token that has already been
-spent, and authentication would start failing within a day. So those files are
+spent, and authentication would start failing within a day. So that file is
 written only when missing. Pasting a fresh credential still takes effect
 immediately.
 

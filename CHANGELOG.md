@@ -77,6 +77,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **The Codex CLI agent (`provider: codex`).** Its adapters, its
+  `[agents.codex]` config, its Settings → Agents row, its models in the editor
+  and its `@openai/codex` install in the image are gone; Pi (omp) replaces it.
+  GPT models stay available through Pi's `openai-codex/*` on the ChatGPT
+  subscription, and **Connect ChatGPT** now signs in Pi only (no
+  `~/.codex/auth.json`). A workflow still naming `provider: codex` fails at
+  that step with "no agent registered". The GitHub `@codex` review bot is
+  unaffected.
 - **The bundled `idea-to-pr`, `merge-pr` and `revise-pr` workflows.** `task`,
   `task-merge` and `revise-task` replace them, and `task` is now the default
   workflow: a run, CLI call or "Build this" that names no workflow runs `task`.
@@ -127,6 +135,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An issue waiting for a free slot shows as queued.** A Linear trigger's (or
+  binding's) **Max simultaneous tasks** was enforced only by the poller, which
+  skipped the whole trigger while it was full: an issue moved into the status
+  then sat there, eligible but in no list, until the slot freed (ECOM-854 behind
+  a running revision). The poller now claims it and its run is parked as
+  **queued**, visible in the runs list, and starts when a slot frees. The limit is
+  checked where any run starts and where the queue dispatches, and it now reads
+  the trigger's limit under the trigger system; before, the dispatcher looked
+  only at classic bindings, so delegated runs ignored a trigger's limit.
 - **Runs can reach every Linear route again where sign-in is required.** Five of
   the routes a run calls with its run token (`/api/run/linear/labels`,
   `ready-state`, `release`, `issues`, `epic-review-state`) were missing from the

@@ -127,19 +127,25 @@ pub struct SubIssue {
     pub sort_order: f64,
 }
 
-/// A comment on a Linear issue (reviewer feedback fed to `revise-task`).
-#[derive(Debug, Clone, Serialize)]
+/// A comment on a Linear issue (reviewer feedback fed to `revise-task`, and
+/// what `harness linear comments` prints).
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct Comment {
-    /// Markdown body of the comment.
-    pub body: String,
+    /// Linear's id for the comment.
+    pub id: String,
     /// Display name of the author, or "unknown" if absent.
     pub author: String,
-    /// ISO-8601 creation timestamp (Linear `createdAt`).
-    pub created_at: String,
     /// Written by the account the harness authenticates as: its own plans,
     /// summaries and status notes, never reviewer feedback. Matched on
     /// Linear's `isMe`, because the app's display name varies per install.
+    #[serde(rename = "is_harness")]
     pub by_harness: bool,
+    /// ISO-8601 creation timestamp (Linear `createdAt`).
+    pub created_at: String,
+    /// The comment this one replies to; `None` for a top-level comment.
+    pub parent_id: Option<String>,
+    /// Markdown body of the comment.
+    pub body: String,
 }
 
 /// Something linked to an issue under **Resources**: a Sentry issue, a pull
@@ -309,11 +315,19 @@ struct IssueCommentsNode {
 }
 #[derive(Deserialize)]
 struct CommentNode {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    parent: Option<IdNode>,
     body: String,
     #[serde(default)]
     user: Option<CommentUserNode>,
     #[serde(rename = "createdAt")]
     created_at: String,
+}
+#[derive(Deserialize)]
+struct IdNode {
+    id: String,
 }
 #[derive(Deserialize)]
 struct CommentUserNode {
@@ -541,7 +555,21 @@ const COMMENTS_QUERY: &str = r#"
 query Comments($id: String!) {
   issue(id: $id) {
     comments(first: 50) {
-      nodes { body createdAt user { name isMe } }
+      nodes { id body createdAt parent { id } user { name isMe } }
+    }
+  }
+}"#;
+
+// Every comment on an issue, a page at a time, for `harness linear comments`.
+// `COMMENTS_QUERY` stays one page: it feeds a run's task text, where a long
+// thread's oldest comments matter least. A step that asks for the comments
+// asked for all of them, so this one pages to the end.
+const ALL_COMMENTS_QUERY: &str = r#"
+query AllComments($id: String!, $after: String) {
+  issue(id: $id) {
+    comments(first: 100, after: $after) {
+      nodes { id body createdAt parent { id } user { name isMe } }
+      pageInfo { hasNextPage endCursor }
     }
   }
 }"#;
@@ -702,14 +730,63 @@ pub fn parse_comments(json: &[u8]) -> Result<Vec<Comment>, LinearError> {
         .map(|i| i.comments.nodes)
         .unwrap_or_default()
         .into_iter()
-        .map(|c| Comment {
-            body: c.body,
-            by_harness: c.user.as_ref().is_some_and(|u| u.is_me),
-            author: c.user.map(|u| u.name).unwrap_or_else(|| "unknown".into()),
-            created_at: c.created_at,
-        })
+        .map(comment_of)
         .collect();
     Ok(comments)
+}
+
+fn comment_of(c: CommentNode) -> Comment {
+    Comment {
+        id: c.id,
+        by_harness: c.user.as_ref().is_some_and(|u| u.is_me),
+        author: c.user.map(|u| u.name).unwrap_or_else(|| "unknown".into()),
+        created_at: c.created_at,
+        parent_id: c.parent.map(|p| p.id),
+        body: c.body,
+    }
+}
+
+/// One page of an issue's comments, and the cursor for the next page if
+/// there is one.
+pub type CommentsPage = (Vec<Comment>, Option<String>);
+
+/// One page of [`ALL_COMMENTS_QUERY`]: the comments and the cursor after them.
+/// `None` when the issue doesn't resolve, which the caller reports rather than
+/// printing an empty thread for a mistyped identifier.
+pub fn parse_comments_page(json: &[u8]) -> Result<Option<CommentsPage>, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        issue: Option<Issue>,
+    }
+    #[derive(Deserialize)]
+    struct Issue {
+        comments: Page,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Page {
+        #[serde(default)]
+        nodes: Vec<CommentNode>,
+        page_info: PageInfo,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct PageInfo {
+        has_next_page: bool,
+        end_cursor: Option<String>,
+    }
+    let data: Data = gql_data(json)?;
+    Ok(data.issue.map(|i| {
+        let next = i
+            .comments
+            .page_info
+            .has_next_page
+            .then_some(i.comments.page_info.end_cursor)
+            .flatten();
+        let page = i.comments.nodes.into_iter().map(comment_of).collect();
+        (page, next)
+    }))
 }
 
 /// Parse an issue's `attachments` connection into [`LinkedResource`]s. An
@@ -1873,6 +1950,40 @@ impl LinearClient {
             "variables": { "id": issue_id },
         });
         parse_comments(&self.post(body).await?)
+    }
+
+    /// Every comment on an issue, oldest first, read a page at a time to the
+    /// end. `issue` is an id or an identifier (`ECOM-12`). An issue that
+    /// doesn't resolve is an error, and so is a thread too long to read whole:
+    /// a caller is never handed part of one as if it were all.
+    pub async fn list_all_comments(&self, issue: &str) -> Result<Vec<Comment>, LinearError> {
+        // 100 pages of 100: far beyond any real thread, and a stop for a
+        // cursor that never ends.
+        const MAX_PAGES: usize = 100;
+        let mut out = Vec::new();
+        let mut after: Option<String> = None;
+        for _ in 0..MAX_PAGES {
+            let body = serde_json::json!({
+                "query": ALL_COMMENTS_QUERY,
+                "variables": { "id": issue, "after": after },
+            });
+            let Some((page, next)) = parse_comments_page(&self.post(body).await?)? else {
+                return Err(LinearError(format!("no Linear issue `{issue}`")));
+            };
+            out.extend(page);
+            match next {
+                Some(cursor) => after = Some(cursor),
+                None => {
+                    // Oldest first, whatever order the pages came in.
+                    out.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+                    return Ok(out);
+                }
+            }
+        }
+        Err(LinearError(format!(
+            "`{issue}` has more than {} comments; refusing to return part of the thread",
+            MAX_PAGES * 100
+        )))
     }
 
     /// An issue's linked resources (attachments), read-only. `issue_id` is the
@@ -3696,6 +3807,48 @@ mod tests {
         assert!(parse_attachments(br#"{"data":{"issue":null}}"#)
             .unwrap()
             .is_empty());
+    }
+
+    /// What `harness linear comments` prints: the id, the reply it belongs
+    /// to, and `is_harness` (not `by_harness`) — the names #505 asked for.
+    #[test]
+    fn a_comment_prints_its_id_parent_and_whether_the_harness_wrote_it() {
+        let json = br#"{"data":{"issue":{"comments":{"nodes":[
+            {"id":"c-1","body":"Which size chart?","createdAt":"2026-11-10T08:00:00Z",
+             "parent":null,"user":{"name":"AI Harness","isMe":true}},
+            {"id":"c-2","body":"The EU one","createdAt":"2026-11-10T09:00:00Z",
+             "parent":{"id":"c-1"},"user":{"name":"Andrius"}}
+        ]}}}}"#;
+        let comments = parse_comments(json).unwrap();
+        assert_eq!(comments[0].id, "c-1");
+        assert_eq!(comments[0].parent_id, None);
+        assert_eq!(comments[1].parent_id.as_deref(), Some("c-1"));
+        let printed = serde_json::to_value(&comments[0]).unwrap();
+        assert_eq!(printed["is_harness"], true);
+        assert!(printed.get("by_harness").is_none());
+        assert_eq!(printed["parent_id"], serde_json::Value::Null);
+    }
+
+    /// A page says whether there is another; the last one ends the read, and
+    /// an issue that doesn't resolve is told apart from an empty thread.
+    #[test]
+    fn comment_pages_chain_to_the_end_and_a_missing_issue_is_reported() {
+        let first = br#"{"data":{"issue":{"comments":{
+            "nodes":[{"id":"c-1","body":"a","createdAt":"2026-11-10T08:00:00Z"}],
+            "pageInfo":{"hasNextPage":true,"endCursor":"cur-1"}}}}}"#;
+        let (page, next) = parse_comments_page(first).unwrap().unwrap();
+        assert_eq!(page.len(), 1);
+        assert_eq!(next.as_deref(), Some("cur-1"));
+
+        let last = br#"{"data":{"issue":{"comments":{"nodes":[],
+            "pageInfo":{"hasNextPage":false,"endCursor":"cur-9"}}}}}"#;
+        let (page, next) = parse_comments_page(last).unwrap().unwrap();
+        assert!(page.is_empty());
+        assert_eq!(next, None, "no next page, whatever the cursor says");
+
+        assert!(parse_comments_page(br#"{"data":{"issue":null}}"#)
+            .unwrap()
+            .is_none());
     }
 
     #[test]

@@ -3,9 +3,9 @@
 //! [`providers`] reports what each agent provider's CLI actually is in this
 //! image -- present or missing, and at what version -- which the credentials
 //! page needs in order to say anything truthful about whether a provider can
-//! run. Updating covers Claude Code and Codex (npm) and `cursor-agent` (its
-//! vendor install script) — different fetches, the same destination. Only npm
-//! answers "what is the newest", so those two get an *update available* badge
+//! run. Updating covers Claude Code (npm) and `cursor-agent` (its vendor
+//! install script) — different fetches, the same destination. Only npm
+//! answers "what is the newest", so Claude Code gets an *update available* badge
 //! while Cursor gets a Reinstall button and no claim about whether one is due.
 //! `omp` comes from bun into `/opt`, which this user cannot write, so it reports
 //! its version and nothing more. The image bakes a copy via
@@ -71,11 +71,6 @@ const AGENT_CLIS: &[AgentCli] = &[
         install: Some(Installer::Npm("@anthropic-ai/claude-code")),
     },
     AgentCli {
-        provider: "codex",
-        binary: "codex",
-        install: Some(Installer::Npm("@openai/codex")),
-    },
-    AgentCli {
         provider: "pi",
         binary: "omp",
         install: None,
@@ -118,7 +113,7 @@ fn agent_cli(provider: &str) -> Option<&'static AgentCli> {
 /// What we can tell about one provider's CLI without running a job.
 #[derive(Serialize)]
 pub(crate) struct ProviderHealth {
-    /// Credential-store key: `claude`, `codex`, `pi`, `cursor`.
+    /// Credential-store key: `claude`, `pi`, `cursor`.
     provider: String,
     /// Executable the harness spawns for it.
     binary: String,
@@ -257,7 +252,7 @@ fn which(binary: &str) -> bool {
 /// Version reported by `<binary> --version`.
 ///
 /// Each of these CLIs prints its version somewhere in a line of prose
-/// (`"2.1.223 (Claude Code)"`, `"codex-cli 0.5.0"`), so take the first token
+/// (`"2.1.223 (Claude Code)"`, `"cursor-agent version v1.4.2"`), so take the first token
 /// that looks like a version rather than assuming a position.
 async fn cli_version(binary: &str) -> Option<String> {
     let out = tokio::time::timeout(
@@ -976,7 +971,7 @@ mod tests {
             .filter(|c| c.install.is_some())
             .map(|c| c.provider)
             .collect();
-        assert_eq!(installable, vec!["claude", "codex", "cursor"]);
+        assert_eq!(installable, vec!["claude", "cursor"]);
 
         // Installable *and* knowable — the "update available" badge. Only npm
         // has a registry to ask; Cursor publishes no version endpoint, so
@@ -986,7 +981,7 @@ mod tests {
             .filter(|c| c.npm_package().is_some())
             .map(|c| c.provider)
             .collect();
-        assert_eq!(knowable, vec!["claude", "codex"]);
+        assert_eq!(knowable, vec!["claude"]);
 
         // omp comes from bun into /opt, which the non-root user cannot write.
         assert!(agent_cli("pi").expect("pi").install.is_none());
@@ -1021,13 +1016,13 @@ mod tests {
 
     #[test]
     fn picks_the_version_wherever_each_cli_puts_it() {
-        // Real shapes: leading (Claude Code), trailing after a name (Codex),
-        // and a `v` prefix.
+        // Real shapes: leading (Claude Code), trailing after a name, and a `v`
+        // prefix.
         assert_eq!(
             pick_version("2.1.223 (Claude Code)"),
             Some("2.1.223".to_string())
         );
-        assert_eq!(pick_version("codex-cli 0.5.0"), Some("0.5.0".to_string()));
+        assert_eq!(pick_version("some-cli 0.5.0"), Some("0.5.0".to_string()));
         assert_eq!(
             pick_version("cursor-agent version v1.4.2"),
             Some("1.4.2".to_string())
@@ -1054,11 +1049,16 @@ mod tests {
     #[test]
     fn the_queue_forgets_providers_this_build_cannot_install() {
         assert_eq!(
-            parse_pending("claude,codex"),
-            ["claude", "codex"]
+            parse_pending("claude,cursor"),
+            ["claude", "cursor"]
                 .into_iter()
                 .map(str::to_string)
                 .collect::<BTreeSet<_>>()
+        );
+        // `codex`, queued by a build that still had the Codex CLI.
+        assert_eq!(
+            parse_pending("codex,claude"),
+            ["claude"].into_iter().map(str::to_string).collect()
         );
         // Whitespace and empties, as a hand-edited row or an emptied list.
         assert_eq!(
