@@ -103,6 +103,30 @@ pub async fn issue(
     }
 }
 
+/// `POST /api/run/linear/comments` — every comment on an issue, oldest first.
+///
+/// Read-only, like `issue` and `children`. A trigger run already gets the
+/// comments in its task text; a scheduled run gets no issue at all, and a step
+/// that triages issues needs to read the answers people left there.
+pub async fn comments(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Json(req): Json<IssueRef>,
+) -> Response {
+    let g = match grant(&headers) {
+        Ok(g) => g,
+        Err((s, m)) => return err(s, m),
+    };
+    let c = match client(&state, &g).await {
+        Ok(c) => c,
+        Err((s, m)) => return err(s, m),
+    };
+    match c.list_all_comments(&req.issue).await {
+        Ok(comments) => Json(comments).into_response(),
+        Err(e) => err(UPSTREAM_FAILED, e.0),
+    }
+}
+
 /// `POST /api/run/linear/children` — an epic's sub-issues, in board order.
 pub async fn children(
     Extension(state): Extension<Arc<RunsState>>,

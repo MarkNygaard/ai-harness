@@ -535,6 +535,10 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/run/s3/upload-url", post(run_s3_routes::upload_url))
         .route("/api/run/linear/issue", post(run_linear_routes::issue))
         .route(
+            "/api/run/linear/comments",
+            post(run_linear_routes::comments),
+        )
+        .route(
             "/api/run/linear/children",
             post(run_linear_routes::children),
         )

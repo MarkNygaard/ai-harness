@@ -757,6 +757,15 @@ each one and write back with `harness linear comment` and `harness linear label`
   `--without-label` drops issues that have any of them. Both are repeatable.
   A trailing `*` matches a prefix, and a label group's name matches every
   label in the group. `--limit` defaults to 25, with a maximum of 100.
+- **Reading the comments.** `issues` doesn't include them. When a person
+  answers the triage's questions in a comment, read the thread with
+  `harness linear comments --issue <identifier>`. It prints every comment as a
+  JSON array, oldest first: `id`, `author`, `is_harness`, `created_at`,
+  `parent_id` (null for a top-level comment) and `body`. `is_harness` is true
+  for the harness's own comments, so a step can find what came after its last
+  question without matching an author's name. It reads all pages, and fails
+  rather than return part of a thread. A run started from a Linear trigger
+  already has the comments in `$ARGUMENTS`.
 - **`label` only uses labels that exist.** It looks for the name in the issue's
   team, then in the workspace. An unknown name fails the step before anything
   changes. Adding a label the issue already has, or removing one it doesn't,
