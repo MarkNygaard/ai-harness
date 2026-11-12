@@ -228,6 +228,15 @@ pub async fn labels(issue_id: &str, add: &[String], remove: &[String]) -> Result
     .await
 }
 
+/// Every comment on an issue as JSON, oldest first. Read-only.
+pub async fn comments(issue_id: &str) -> Result<String, String> {
+    ask(
+        "/api/run/linear/comments",
+        &serde_json::json!({ "issue": issue_id }),
+    )
+    .await
+}
+
 /// An epic's sub-issues as JSON, in board order.
 pub async fn children(issue_id: &str) -> Result<String, String> {
     ask(

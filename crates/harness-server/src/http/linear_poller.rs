@@ -2459,7 +2459,7 @@ mod tests {
             body: body.into(),
             author: author.into(),
             created_at: "2026-06-01T10:00:00Z".into(),
-            by_harness: false,
+            ..Default::default()
         }
     }
     /// `revise-task` dates new feedback from the harness's latest comment, and
