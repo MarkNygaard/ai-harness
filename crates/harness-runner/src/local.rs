@@ -107,6 +107,7 @@ impl LocalRunner {
         args: &[&str],
         label: &str,
         timeout: Option<u64>,
+        step_env: &StepEnv,
     ) -> Result<NodeOutput, RunnerError> {
         let mut cmd = Command::new(program);
         cmd.args(args)
@@ -116,6 +117,8 @@ impl LocalRunner {
         // plane's DB URL / secrets out of their environment.
         harness_agents::strip_inherited_secrets(&mut cmd);
         cmd.envs(crate::mcp_servers::env_for_step(&self.env_vars, &[]));
+        // The run's own values, readable without pasting them into the script.
+        cmd.envs(step_env.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())));
 
         let fut = cmd.output();
         let output = match timeout {
@@ -246,6 +249,7 @@ impl LocalRunner {
         &self,
         script: &str,
         timeout: Option<u64>,
+        step_env: &StepEnv,
     ) -> Result<NodeOutput, RunnerError> {
         if !bash_script_needs_file(script, &self.shell) {
             return self
@@ -254,6 +258,7 @@ impl LocalRunner {
                     &[self.shell.command_flag.as_str(), script],
                     "bash node",
                     timeout,
+                    step_env,
                 )
                 .await;
         }
@@ -272,6 +277,7 @@ impl LocalRunner {
                 &[path.as_str()],
                 "bash node",
                 timeout,
+                step_env,
             )
             .await;
         drop(file);
@@ -289,6 +295,7 @@ impl LocalRunner {
         runtime: ScriptRuntime,
         deps: &[String],
         timeout: Option<u64>,
+        step_env: &StepEnv,
     ) -> Result<NodeOutput, RunnerError> {
         use std::io::Write as _;
 
@@ -307,7 +314,7 @@ impl LocalRunner {
 
         let result = match runtime {
             ScriptRuntime::Bun => {
-                self.run_process("bun", &[path.as_str()], "bun script", timeout)
+                self.run_process("bun", &[path.as_str()], "bun script", timeout, step_env)
                     .await
             }
             ScriptRuntime::Uv => {
@@ -317,7 +324,8 @@ impl LocalRunner {
                     args.push(dep.as_str());
                 }
                 args.push(path.as_str());
-                self.run_process("uv", &args, "uv script", timeout).await
+                self.run_process("uv", &args, "uv script", timeout, step_env)
+                    .await
             }
         };
         // Keep the temp file alive until execution finishes, then clean up.
@@ -476,7 +484,10 @@ impl LocalRunner {
 impl NodeRunner for LocalRunner {
     async fn execute(&self, req: NodeRequest<'_>) -> Result<NodeOutput, RunnerError> {
         match &req.body {
-            NodeBody::Bash(script) => self.run_bash(script, req.timeout).await,
+            NodeBody::Bash(script) => {
+                let env = StepEnv::of(req.vars)?;
+                self.run_bash(script, req.timeout, &env).await
+            }
             NodeBody::Prompt(text) => {
                 // Inline prompt text is already substituted by the driver.
                 self.run_prompt(text.clone(), &req).await
@@ -493,7 +504,9 @@ impl NodeRunner for LocalRunner {
                 deps,
             } => {
                 // Script text is already variable-substituted by the driver.
-                self.run_script(script, *runtime, deps, req.timeout).await
+                let env = StepEnv::of(req.vars)?;
+                self.run_script(script, *runtime, deps, req.timeout, &env)
+                    .await
             }
             // Already substituted by the driver, which has also established
             // that this run has an issue to act on — so a missing `ISSUE_ID`
@@ -606,6 +619,59 @@ const BASH_INLINE_MAX: usize = 100 * 1024;
 /// shell (`-c`) can run a script file this way; `cmd /C` keeps the old path.
 fn bash_script_needs_file(script: &str, shell: &Shell) -> bool {
     shell.command_flag == "-c" && script.len() >= BASH_INLINE_MAX
+}
+
+/// Largest value passed as an environment variable itself. Linux refuses
+/// one environment string over 128 KiB, as it does one argument, and the
+/// process would then not start at all.
+const ENV_VALUE_MAX: usize = 64 * 1024;
+/// What all of a step's values may add up to in its environment, well under
+/// the ~2 MiB Linux allows for arguments and environment together. A long
+/// workflow carries every earlier step's output.
+const ENV_TOTAL_MAX: usize = 512 * 1024;
+
+/// A `bash` or `script` step's view of the run: every value the harness
+/// substitutes (see [`harness_dag::VarContext::env`]), as environment
+/// variables, so a script can quote them like any other variable.
+///
+/// A value too big for the environment is written to a file instead, and
+/// `<NAME>_FILE` holds its path: `$HARNESS_ARGUMENTS_FILE` when the run's
+/// input is a 300 KB report. The files live outside the workspace, so
+/// `git add -A` can't commit one, and last as long as this does.
+struct StepEnv {
+    vars: Vec<(String, String)>,
+    _files: Vec<tempfile::NamedTempFile>,
+}
+
+impl StepEnv {
+    fn of(vars: &harness_dag::VarContext) -> Result<Self, RunnerError> {
+        use std::io::Write as _;
+        let mut out = Vec::new();
+        let mut files = Vec::new();
+        let mut total = 0;
+        for (name, value) in vars.env() {
+            if value.len() <= ENV_VALUE_MAX && total + value.len() <= ENV_TOTAL_MAX {
+                total += value.len();
+                out.push((name, value));
+                continue;
+            }
+            let mut file = tempfile::Builder::new()
+                .prefix("harness-var-")
+                .tempfile()
+                .map_err(|e| RunnerError(format!("failed to create a file for {name}: {e}")))?;
+            file.write_all(value.as_bytes())
+                .map_err(|e| RunnerError(format!("failed to write {name} to a file: {e}")))?;
+            out.push((
+                format!("{name}_FILE"),
+                file.path().to_string_lossy().to_string(),
+            ));
+            files.push(file);
+        }
+        Ok(Self {
+            vars: out,
+            _files: files,
+        })
+    }
 }
 
 fn browser_preamble(dir: &std::path::Path) -> String {
@@ -910,6 +976,88 @@ mod tests {
             .unwrap();
         assert!(out.success);
         assert!(out.text.contains("hello"), "got: {:?}", out.text);
+    }
+
+    /// resolve-conflicts-1794902366359: a push's commit message, quotes and
+    /// backticks included, pasted into `case "$ARGUMENTS" in` broke the script
+    /// before it ran. Read from the environment it is only data.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_bash_step_reads_the_run_input_from_its_environment() {
+        let dir = TempDir::new().unwrap();
+        let (runner, _agent) = runner_at(dir.path(), vec![]);
+        let input = "feat(web): a market's \"multiple\" answer type\n`optionKeys` → $(rm -rf /)\n";
+        let vars = VarContext::new()
+            .set("ARGUMENTS", input)
+            .set_node_output("epic-start", "{\"found\":true}");
+        let script = r#"case "$HARNESS_ARGUMENTS" in
+  *dry-run*) echo dry ;;
+  *) echo "real: ${#HARNESS_ARGUMENTS} chars" ;;
+esac
+printf '%s' "$HARNESS_ARGUMENTS" > input.txt
+echo "out=$HARNESS_OUTPUT_EPIC_START""#;
+        let out = runner
+            .execute(request(NodeBody::Bash(script.into()), &vars))
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.text);
+        assert!(out.text.contains("real: "), "{}", out.text);
+        assert!(out.text.contains("out={\"found\":true}"), "{}", out.text);
+        let written = std::fs::read_to_string(dir.path().join("input.txt")).unwrap();
+        assert_eq!(written, input, "the value arrives byte for byte");
+    }
+
+    /// A value too big for the environment comes as a file, so the step still
+    /// starts and can still read all of it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_value_too_big_for_the_environment_comes_as_a_file() {
+        let dir = TempDir::new().unwrap();
+        let (runner, _agent) = runner_at(dir.path(), vec![]);
+        let big = "y".repeat(ENV_VALUE_MAX + 1);
+        let vars = VarContext::new().set("ARGUMENTS", big.as_str());
+        let script =
+            r#"echo "inline=${HARNESS_ARGUMENTS:-unset}"; wc -c < "$HARNESS_ARGUMENTS_FILE""#;
+        let out = runner
+            .execute(request(NodeBody::Bash(script.into()), &vars))
+            .await
+            .unwrap();
+        assert!(out.success, "{}", out.text);
+        assert!(out.text.contains("inline=unset"), "{}", out.text);
+        assert!(out.text.contains(&big.len().to_string()), "{}", out.text);
+    }
+
+    /// Each value stays under the one-string limit, and all of them under a
+    /// total, whatever a run carries; the rest go to files.
+    #[test]
+    fn the_step_environment_stays_within_what_a_process_accepts() {
+        let mut vars = VarContext::new().set("ARGUMENTS", "small");
+        // 20 outputs of 40 KiB: each fits, together they don't.
+        for i in 0..20 {
+            vars = vars.set_node_output(format!("step-{i:02}"), "z".repeat(40 * 1024));
+        }
+        let env = StepEnv::of(&vars).unwrap();
+        let inline: usize = env
+            .vars
+            .iter()
+            .filter(|(k, _)| !k.ends_with("_FILE"))
+            .map(|(_, v)| v.len())
+            .sum();
+        assert!(inline <= ENV_TOTAL_MAX, "{inline} bytes inline");
+        assert!(env
+            .vars
+            .iter()
+            .any(|(k, v)| k == "HARNESS_ARGUMENTS" && v == "small"));
+        let files: Vec<&String> = env
+            .vars
+            .iter()
+            .filter(|(k, _)| k.ends_with("_FILE"))
+            .map(|(_, v)| v)
+            .collect();
+        assert!(!files.is_empty(), "the overflow goes to files");
+        for path in files {
+            assert_eq!(std::fs::read_to_string(path).unwrap().len(), 40 * 1024);
+        }
     }
 
     /// A script bigger than one argument may be (a step that writes a large

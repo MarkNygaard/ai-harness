@@ -90,6 +90,32 @@ impl VarContext {
         self
     }
 
+    /// Every value this context substitutes, as environment variables for a
+    /// `bash` or `script` step: `$ARGUMENTS` as `HARNESS_ARGUMENTS`, and
+    /// `$pick.output` as `HARNESS_OUTPUT_PICK` (see [`output_env_name`]).
+    ///
+    /// Substitution pastes text into the script as-is, so a value with a quote
+    /// in it — a commit message, an issue description — breaks the script
+    /// before it runs. Read from the environment, it is data:
+    /// `case "$HARNESS_ARGUMENTS" in …` is safe whatever it contains.
+    ///
+    /// Sorted by name, so a step sees the same environment every time.
+    pub fn env(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .named
+            .iter()
+            .filter(|(name, _)| RECOGNIZED_VARS.contains(&name.as_str()))
+            .map(|(name, value)| (format!("HARNESS_{name}"), value.clone()))
+            .chain(
+                self.node_outputs
+                    .iter()
+                    .map(|(id, value)| (output_env_name(id), value.clone())),
+            )
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
+    }
+
     /// Whether `name` is a recognized variable (named or positional) regardless
     /// of whether it currently has a value.
     fn is_recognized(name: &str) -> bool {
@@ -197,6 +223,23 @@ pub fn referenced_node_ids(text: &str) -> Vec<String> {
         .filter_map(|caps| caps.get(2).or_else(|| caps.get(4)))
         .filter_map(|m| m.as_str().split('.').next().map(str::to_string))
         .collect()
+}
+
+/// The environment variable a node's output is exposed as: `HARNESS_OUTPUT_`
+/// and the node id upper-cased, with anything but a letter or digit made `_`,
+/// so `epic-start` is `HARNESS_OUTPUT_EPIC_START`.
+pub fn output_env_name(node_id: &str) -> String {
+    let id: String = node_id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("HARNESS_OUTPUT_{id}")
 }
 
 fn is_positional(name: &str) -> bool {
@@ -374,6 +417,28 @@ mod tests {
         );
         // A node that produced non-JSON, asked for a field → empty.
         assert_eq!(substitute("[$create-plan.output.x]", &ctx()).unwrap(), "[]");
+    }
+
+    /// What a `bash` step's environment carries: every recognized value, by
+    /// name, and every earlier step's output, by node id.
+    #[test]
+    fn every_substituted_value_has_an_environment_name() {
+        let ctx = VarContext::new()
+            .set("ARGUMENTS", "it's \"quoted\"")
+            .set("PROJECT", "dilling-ecom")
+            .set("NOT_A_HARNESS_VAR", "x")
+            .set_node_output("epic-start", "{\"ok\":true}")
+            .set_node_output("pick", "[]");
+        assert_eq!(
+            ctx.env(),
+            vec![
+                ("HARNESS_ARGUMENTS".into(), "it's \"quoted\"".into()),
+                ("HARNESS_OUTPUT_EPIC_START".into(), "{\"ok\":true}".into()),
+                ("HARNESS_OUTPUT_PICK".into(), "[]".into()),
+                ("HARNESS_PROJECT".into(), "dilling-ecom".into()),
+            ]
+        );
+        assert_eq!(output_env_name("a.b-c_1"), "HARNESS_OUTPUT_A_B_C_1");
     }
 
     #[test]

@@ -53,7 +53,7 @@ pub use model::{
 };
 pub use parse::parse_workflow;
 pub use signal::{detect_signal, validate_signal};
-pub use vars::{referenced_node_ids, substitute, VarContext, RECOGNIZED_VARS};
+pub use vars::{output_env_name, referenced_node_ids, substitute, VarContext, RECOGNIZED_VARS};
 
 #[cfg(test)]
 mod tests;
