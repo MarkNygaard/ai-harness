@@ -425,7 +425,36 @@ Substituted in `prompt`, `bash`, `script`, `when`, and resolved-`command` text.
 
 Referencing a **recognized harness variable** that is unset is a hard error
 (fail-loud). Unknown `$tokens` (e.g. shell `$HOME`, `${arr[@]}`) pass through
-verbatim, so bash bodies are safe.
+verbatim, so a bash body's own shell variables are left alone.
+
+### Reading run values in `bash` and `script` steps
+
+Substitution pastes the value into the script as text. It isn't quoted for
+the shell, so a value containing a `"`, `'`, `` ` `` or `$` can break the
+script before it runs. A commit message or an issue description often does.
+
+In a `bash` or `script` step, read the value from the environment instead.
+Every substituted value is also there:
+
+| Environment variable | Same value as |
+|---|---|
+| `HARNESS_ARGUMENTS` | `$ARGUMENTS` |
+| `HARNESS_<NAME>` | `$<NAME>`, for every variable above (`HARNESS_PROJECT`, `HARNESS_BASE_BRANCH`, …) |
+| `HARNESS_OUTPUT_<ID>` | `$id.output`, with the node id upper-cased and anything but a letter or digit made `_` (`epic-start` → `HARNESS_OUTPUT_EPIC_START`) |
+
+```yaml
+- id: settle
+  bash: |
+    case "$HARNESS_ARGUMENTS" in
+      *dry-run*) echo "dry run" ;;
+      *) sleep 120 ;;
+    esac
+```
+
+A value over 64 KB, or past 512 KB for the step's values together, comes as a
+file instead: `HARNESS_ARGUMENTS_FILE` holds its path, and `HARNESS_ARGUMENTS`
+is unset. A JSON field of an output (`$id.output.field`) has no environment
+variable. Read `HARNESS_OUTPUT_<ID>` with `jq`.
 
 > **Worktree gotcha (learned the hard way):** in a per-run worktree there is no
 > local `main` branch — only the remote-tracking `origin/main`. Always diff
