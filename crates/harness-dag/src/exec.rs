@@ -101,6 +101,9 @@ pub struct NodeRequest<'a> {
     pub hooks: Option<&'a crate::model::NodeHooks>,
     /// External MCP servers the step asked for by name (e.g. `sentry`).
     pub mcp: &'a [crate::model::McpUse],
+    /// Whether the agent gets the headless browser (AI bodies only). From
+    /// the node's `browser:`, on unless the step turned it off.
+    pub browser: bool,
     /// Optional sink for live activity updates (AI bodies only; a streaming
     /// runner reports the node's latest line here). `None` = no live progress.
     pub progress: Option<ProgressSink>,
@@ -1127,6 +1130,7 @@ async fn execute_body<R: NodeRunner>(
         output_format: node.output_format.as_ref(),
         hooks: node.hooks.as_ref(),
         mcp: &node.mcp,
+        browser: node.browser,
         progress: progress.clone(),
     })
     .await;
@@ -1374,6 +1378,7 @@ async fn run_loop<R: NodeRunner>(
             output_format: node.output_format.as_ref(),
             hooks: node.hooks.as_ref(),
             mcp: &node.mcp,
+            browser: node.browser,
             progress: progress.clone(),
         })
         .await;
@@ -1441,6 +1446,7 @@ async fn run_loop<R: NodeRunner>(
                         output_format: None,
                         hooks: None,
                         mcp: &[],
+                        browser: false,
                         progress: None,
                     };
                     match runner.execute(bash_req).await {

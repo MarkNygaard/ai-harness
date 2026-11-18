@@ -337,6 +337,8 @@ export interface EditorNode {
   mcp?: McpEntry[];
   /** Post this step's output to the Linear issue when the run completes. */
   linear_comment?: boolean;
+  /** `false` takes the headless browser away from this step. On by default. */
+  browser?: boolean;
   /** This step grades the run; its grade is recorded under the scorer. */
   scorer?: ScorerConfig;
   // Mutually exclusive bodies:

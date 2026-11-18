@@ -17,6 +17,14 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
+pub(crate) fn yes() -> bool {
+    true
+}
+
+fn is_true(b: &bool) -> bool {
+    *b
+}
+
 /// Session-handling mode for an AI node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -510,6 +518,14 @@ pub struct Node {
     /// connected; otherwise the step runs without it. AI bodies only.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp: Vec<McpUse>,
+    /// Whether this step's agent gets the headless browser and the
+    /// instructions for it. On by default, so UI work is looked at and not
+    /// only typechecked. `browser: false` takes both away, for a step that
+    /// must not start the app, such as one that checks a PR title or judges
+    /// structure: given a browser, agents use it, and each extra session
+    /// costs a dev server and a round of the same click timeouts.
+    #[serde(default = "yes", skip_serializing_if = "is_true")]
+    pub browser: bool,
     /// When the run was started from a Linear issue, post this node's output
     /// to the issue when the run completes — in place of the bare "completed"
     /// note. At most one node per workflow.

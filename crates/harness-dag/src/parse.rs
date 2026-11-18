@@ -67,6 +67,8 @@ struct RawNode {
     hooks: Option<NodeHooks>,
     #[serde(default)]
     mcp: Vec<crate::model::McpUse>,
+    #[serde(default = "crate::model::yes")]
+    browser: bool,
     #[serde(default)]
     linear_comment: bool,
     #[serde(default)]
@@ -184,6 +186,7 @@ impl RawNode {
             output_format,
             hooks,
             mcp,
+            browser,
             linear_comment,
             scorer,
         } = self;
@@ -277,6 +280,7 @@ impl RawNode {
                 output_format,
                 hooks,
                 mcp,
+                browser,
                 linear_comment,
                 scorer,
             },
@@ -302,6 +306,7 @@ struct NodeKindParts {
     output_format: Option<serde_json::Value>,
     hooks: Option<NodeHooks>,
     mcp: Vec<crate::model::McpUse>,
+    browser: bool,
     linear_comment: bool,
     scorer: Option<crate::model::ScorerConfig>,
 }
@@ -374,6 +379,7 @@ pub fn parse_workflow(yaml: &str) -> Result<Workflow, DagError> {
             output_format: parts.output_format,
             hooks: parts.hooks,
             mcp: parts.mcp,
+            browser: parts.browser,
             linear_comment: parts.linear_comment,
             scorer: parts.scorer,
             kind: parts.kind,

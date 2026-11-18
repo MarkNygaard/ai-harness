@@ -140,6 +140,7 @@ nodes:
     prompt: look
     mcp: [sentry]
     linear_comment: true
+    browser: false
     retries: 2
     scorer:
       name: redundant-tests
@@ -157,6 +158,10 @@ nodes:
     expect(back.nodes[0].mcp).toEqual(["sentry"]);
     expect(back.nodes[0].linear_comment).toBe(true);
     expect(back.nodes[1].linear_comment).toBeUndefined();
+    expect(back.nodes[0].browser).toBe(false);
+    // On is the default and is never written out.
+    expect(back.nodes[1].browser).toBeUndefined();
+    expect(toYaml(back)).not.toMatch(/browser: true/);
     expect(back.nodes[0].retries).toBe(2);
     expect(back.nodes[0].scorer).toEqual({
       name: "redundant-tests",
