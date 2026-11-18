@@ -434,6 +434,7 @@ query IssueContext($id: String!) {
     delegate { id }
     parent { id identifier }
     labels { nodes { name } }
+    cycle { id number startsAt endsAt }
   }
 }"#;
 
@@ -1228,6 +1229,102 @@ pub struct IssueContext {
     /// Label names on the issue. `corrective` is how a fix round is counted,
     /// since the count lives in Linear rather than in a table here.
     pub labels: Vec<String>,
+    /// The cycle the issue is in, `None` when it is in none.
+    pub cycle: Option<Cycle>,
+}
+
+/// A team's cycle, as an issue sits in one or a step names one.
+///
+/// Printed as `{ number, starts_at, ends_at }`: the number is what people say
+/// ("cycle 42"), and the id is only for writing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Cycle {
+    #[serde(skip)]
+    pub id: String,
+    pub number: u32,
+    pub starts_at: Option<String>,
+    pub ends_at: Option<String>,
+}
+
+/// A cycle as Linear sends it. `number` is a `Float` in Linear's schema,
+/// although it is only ever a whole number.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CycleWire {
+    id: String,
+    number: f64,
+    #[serde(default)]
+    starts_at: Option<String>,
+    #[serde(default)]
+    ends_at: Option<String>,
+}
+
+impl From<CycleWire> for Cycle {
+    fn from(w: CycleWire) -> Self {
+        Self {
+            id: w.id,
+            number: w.number.max(0.0) as u32,
+            starts_at: w.starts_at,
+            ends_at: w.ends_at,
+        }
+    }
+}
+
+/// Which of a team's cycles a step means.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CycleRef {
+    /// The cycle running now.
+    Current,
+    /// The team's upcoming cycle.
+    Next,
+    /// The cycle with this number.
+    Number(u32),
+}
+
+impl CycleRef {
+    /// `current`, `next` or a cycle number. `none` is not a cycle, so it is
+    /// the caller's to handle.
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.eq_ignore_ascii_case("current") {
+            Some(Self::Current)
+        } else if s.eq_ignore_ascii_case("next") {
+            Some(Self::Next)
+        } else {
+            s.parse().ok().map(Self::Number)
+        }
+    }
+
+    /// This cycle as a Linear `CycleFilter`, without the team.
+    fn filter(self) -> serde_json::Value {
+        match self {
+            Self::Current => serde_json::json!({ "isActive": { "eq": true } }),
+            Self::Next => serde_json::json!({ "isNext": { "eq": true } }),
+            Self::Number(n) => serde_json::json!({ "number": { "eq": n } }),
+        }
+    }
+}
+
+impl std::fmt::Display for CycleRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Current => f.write_str("current"),
+            Self::Next => f.write_str("next"),
+            Self::Number(n) => write!(f, "{n}"),
+        }
+    }
+}
+
+/// Which issues a listing keeps, by cycle.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CycleFilter {
+    /// In a cycle or not.
+    #[default]
+    Any,
+    /// Only issues in no cycle.
+    None,
+    /// Only issues in this cycle.
+    In(CycleRef),
 }
 
 /// Parse who set an issue in motion.
@@ -1367,6 +1464,8 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
         parent: Option<NamedRef>,
         #[serde(default)]
         labels: Option<Conn<IssueLabelNode>>,
+        #[serde(default)]
+        cycle: Option<CycleWire>,
     }
     #[derive(Deserialize)]
     struct IdRef {
@@ -1403,6 +1502,7 @@ pub fn parse_issue_context(json: &[u8]) -> Result<IssueContext, LinearError> {
             .labels
             .map(|l| l.nodes.into_iter().map(|n| n.name).collect())
             .unwrap_or_default(),
+        cycle: issue.cycle.map(Cycle::from),
     })
 }
 
@@ -2022,11 +2122,27 @@ impl LinearClient {
     /// it. So an assignee that appears with the move is taken off again. One
     /// the issue already had is never touched.
     pub async fn set_issue_state(&self, issue_id: &str, state_id: &str) -> Result<(), LinearError> {
+        self.move_issue(issue_id, state_id, None).await
+    }
+
+    /// [`set_issue_state`](Self::set_issue_state), and the cycle with it, in
+    /// one update (write).
+    ///
+    /// `cycle`: `None` leaves the cycle alone, `Some(None)` takes the issue out
+    /// of its cycle, and `Some(Some(id))` puts it in that cycle. One update
+    /// rather than two, so an issue is never in the new status with the old
+    /// cycle.
+    pub async fn move_issue(
+        &self,
+        issue_id: &str,
+        state_id: &str,
+        cycle: Option<Option<&str>>,
+    ) -> Result<(), LinearError> {
         // Unknown (the read failed) is not "unassigned": leave it alone then.
         let before = self.issue_assignee(issue_id).await.ok();
         let body = serde_json::json!({
-            "query": "mutation($id:String!,$s:String!){ issueUpdate(id:$id, input:{stateId:$s}){ success issue { assignee { id } } } }",
-            "variables": { "id": issue_id, "s": state_id },
+            "query": "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id, input:$input){ success issue { assignee { id } } } }",
+            "variables": { "id": issue_id, "input": move_input(state_id, cycle) },
         });
         let resp = self.post(body).await?;
         expect_mutation_success(&resp, "issueUpdate")?;
@@ -2087,6 +2203,40 @@ impl LinearClient {
             "variables": { "id": issue_id },
         });
         expect_mutation_success(&self.post(body).await?, "issueUpdate")
+    }
+
+    /// Replace an issue's description, set its cycle, or both, in one update,
+    /// and change nothing else (write).
+    ///
+    /// `cycle` reads as in [`move_issue`](Self::move_issue): `None` leaves it,
+    /// `Some(None)` takes the issue out of its cycle.
+    pub async fn update_issue(
+        &self,
+        issue_id: &str,
+        description_md: Option<&str>,
+        cycle: Option<Option<&str>>,
+    ) -> Result<(), LinearError> {
+        let body = serde_json::json!({
+            "query": "mutation($id:String!,$input:IssueUpdateInput!){ issueUpdate(id:$id, input:$input){ success } }",
+            "variables": { "id": issue_id, "input": update_input(description_md, cycle) },
+        });
+        expect_mutation_success(&self.post(body).await?, "issueUpdate")
+    }
+
+    /// One of a team's cycles, `None` when the team has no such cycle (read).
+    ///
+    /// `None` is the answer for `next` before the team has planned one, and
+    /// for every cycle in a team with cycles turned off.
+    pub async fn find_cycle(
+        &self,
+        team_id: &str,
+        which: CycleRef,
+    ) -> Result<Option<Cycle>, LinearError> {
+        let body = serde_json::json!({
+            "query": CYCLE_QUERY,
+            "variables": { "filter": cycle_filter(team_id, which) },
+        });
+        parse_cycles(&self.post(body).await?).map(|c| c.into_iter().next())
     }
 
     /// Add a comment to an issue (write).
@@ -2266,6 +2416,7 @@ query TeamIssues($filter: IssueFilter!, $first: Int!, $after: String) {
       state { name }
       assignee { name email }
       labels(first: 20) { nodes { name parent { name } } }
+      cycle { id number startsAt endsAt }
     }
     pageInfo { hasNextPage endCursor }
   }
@@ -2291,6 +2442,56 @@ query LabelsNamed($name: String!) {
   }
 }"#;
 
+// One team cycle by filter: the current one, the next one, or a number.
+const CYCLE_QUERY: &str = r#"
+query Cycle($filter: CycleFilter!) {
+  cycles(filter: $filter, first: 1) {
+    nodes { id number startsAt endsAt }
+  }
+}"#;
+
+/// The `CycleFilter` for `which` of `team_id`'s cycles.
+fn cycle_filter(team_id: &str, which: CycleRef) -> serde_json::Value {
+    let mut filter = which.filter();
+    filter["team"] = serde_json::json!({ "id": { "eq": team_id } });
+    filter
+}
+
+/// The cycles a [`CYCLE_QUERY`] answer holds.
+pub fn parse_cycles(json: &[u8]) -> Result<Vec<Cycle>, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        cycles: Nodes,
+    }
+    #[derive(Deserialize)]
+    struct Nodes {
+        nodes: Vec<CycleWire>,
+    }
+    let data: Data = gql_data(json)?;
+    Ok(data.cycles.nodes.into_iter().map(Cycle::from).collect())
+}
+
+/// The `IssueUpdateInput` for a status move, with the cycle when one is given.
+fn move_input(state_id: &str, cycle: Option<Option<&str>>) -> serde_json::Value {
+    let mut input = update_input(None, cycle);
+    input["stateId"] = serde_json::json!(state_id);
+    input
+}
+
+/// The `IssueUpdateInput` that sets only what is given. An absent key leaves
+/// that field as it is, which is what keeps the rest of the issue untouched.
+fn update_input(description_md: Option<&str>, cycle: Option<Option<&str>>) -> serde_json::Value {
+    let mut input = serde_json::json!({});
+    if let Some(description) = description_md {
+        input["description"] = serde_json::json!(description);
+    }
+    if let Some(cycle) = cycle {
+        // `null` is how Linear is told to take the issue out of its cycle.
+        input["cycleId"] = serde_json::json!(cycle);
+    }
+    input
+}
+
 /// Whose issues [`IssueQuery`] asks for.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum AssigneeFilter {
@@ -2315,6 +2516,8 @@ pub struct IssueQuery {
     pub with_labels: Vec<String>,
     /// Only issues carrying **none** of these labels (patterns).
     pub without_labels: Vec<String>,
+    /// Only issues in this cycle, or in none.
+    pub cycle: CycleFilter,
     /// At most this many issues, after label filtering.
     pub limit: usize,
 }
@@ -2334,6 +2537,11 @@ impl IssueQuery {
             AssigneeFilter::Email(email) => {
                 filter["assignee"] = serde_json::json!({ "email": { "eqIgnoreCase": email } });
             }
+        }
+        match self.cycle {
+            CycleFilter::Any => {}
+            CycleFilter::None => filter["cycle"] = serde_json::json!({ "null": true }),
+            CycleFilter::In(which) => filter["cycle"] = which.filter(),
         }
         filter
     }
@@ -2382,6 +2590,8 @@ pub struct TeamIssue {
     #[serde(skip)]
     pub label_groups: Vec<Option<String>>,
     pub created_at: Option<String>,
+    /// The cycle the issue is in, `None` when it is in none.
+    pub cycle: Option<Cycle>,
 }
 
 /// One page of [`TEAM_ISSUES_QUERY`]: the issues and the cursor after them.
@@ -2420,6 +2630,8 @@ pub fn parse_team_issues(json: &[u8]) -> Result<(Vec<TeamIssue>, Option<String>)
         assignee: Option<UserWire>,
         #[serde(default)]
         labels: Option<Labels>,
+        #[serde(default)]
+        cycle: Option<CycleWire>,
     }
     #[derive(Deserialize)]
     struct Named {
@@ -2462,6 +2674,7 @@ pub fn parse_team_issues(json: &[u8]) -> Result<(Vec<TeamIssue>, Option<String>)
                     .collect(),
                 labels: labels.into_iter().map(|l| l.name).collect(),
                 created_at: n.created_at,
+                cycle: n.cycle.map(Cycle::from),
             }
         })
         .collect();
@@ -3195,6 +3408,7 @@ mod tests {
             assignee: AssigneeFilter::Unassigned,
             with_labels: vec![],
             without_labels: vec!["wayfinder:*".into(), "harness:*".into()],
+            cycle: CycleFilter::Any,
             limit: 5,
         };
         assert_eq!(
@@ -3216,6 +3430,7 @@ mod tests {
             labels: labels.iter().map(|l| l.to_string()).collect(),
             label_groups: vec![None; labels.len()],
             created_at: None,
+            cycle: None,
         };
         assert!(q.keeps(&issue(&[])));
         assert!(q.keeps(&issue(&["bug"])));
@@ -3237,6 +3452,138 @@ mod tests {
             mine.filter()["assignee"],
             serde_json::json!({ "email": { "eqIgnoreCase": "a@x.test" } })
         );
+    }
+
+    #[test]
+    fn a_listing_narrows_by_cycle_in_linear() {
+        let q = |cycle| {
+            IssueQuery {
+                team_id: "t-1".into(),
+                cycle,
+                limit: 5,
+                ..IssueQuery::default()
+            }
+            .filter()
+        };
+        assert!(q(CycleFilter::Any).get("cycle").is_none());
+        assert_eq!(
+            q(CycleFilter::None)["cycle"],
+            serde_json::json!({ "null": true })
+        );
+        assert_eq!(
+            q(CycleFilter::In(CycleRef::Current))["cycle"],
+            serde_json::json!({ "isActive": { "eq": true } })
+        );
+        assert_eq!(
+            q(CycleFilter::In(CycleRef::Next))["cycle"],
+            serde_json::json!({ "isNext": { "eq": true } })
+        );
+        assert_eq!(
+            q(CycleFilter::In(CycleRef::Number(42)))["cycle"],
+            serde_json::json!({ "number": { "eq": 42 } })
+        );
+    }
+
+    #[test]
+    fn a_cycle_is_named_current_next_or_by_number() {
+        assert_eq!(CycleRef::parse("next"), Some(CycleRef::Next));
+        assert_eq!(CycleRef::parse(" Current "), Some(CycleRef::Current));
+        assert_eq!(CycleRef::parse("42"), Some(CycleRef::Number(42)));
+        // `none` is not a cycle: the caller decides what it means.
+        assert_eq!(CycleRef::parse("none"), None);
+        assert_eq!(CycleRef::parse("-1"), None);
+        assert_eq!(CycleRef::parse("upcoming"), None);
+    }
+
+    #[test]
+    fn a_cycle_is_looked_up_in_the_issues_own_team() {
+        // Two teams both have a "next" cycle; the wrong one is a valid id that
+        // Linear refuses on an issue of the other team.
+        assert_eq!(
+            cycle_filter("t-ecom", CycleRef::Next),
+            serde_json::json!({
+                "isNext": { "eq": true },
+                "team": { "id": { "eq": "t-ecom" } },
+            })
+        );
+        let cycles = parse_cycles(
+            br#"{"data":{"cycles":{"nodes":[
+                {"id":"c-43","number":43.0,"startsAt":"2026-11-24T00:00:00.000Z","endsAt":"2026-12-08T00:00:00.000Z"}]}}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            cycles,
+            vec![Cycle {
+                id: "c-43".into(),
+                number: 43,
+                starts_at: Some("2026-11-24T00:00:00.000Z".into()),
+                ends_at: Some("2026-12-08T00:00:00.000Z".into()),
+            }]
+        );
+        assert!(parse_cycles(br#"{"data":{"cycles":{"nodes":[]}}}"#)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn a_move_sets_the_cycle_only_when_asked() {
+        // No key leaves the cycle alone; a null key takes the issue out of it.
+        assert_eq!(
+            move_input("s-1", None),
+            serde_json::json!({ "stateId": "s-1" })
+        );
+        assert_eq!(
+            move_input("s-1", Some(None)),
+            serde_json::json!({ "stateId": "s-1", "cycleId": null })
+        );
+        assert_eq!(
+            move_input("s-1", Some(Some("c-43"))),
+            serde_json::json!({ "stateId": "s-1", "cycleId": "c-43" })
+        );
+    }
+
+    #[test]
+    fn an_update_sends_only_the_fields_it_was_given() {
+        // Every other field of the issue -- title, status, labels, assignee --
+        // is absent from the input, which is what leaves it as it was.
+        assert_eq!(
+            update_input(Some("## Problem"), None),
+            serde_json::json!({ "description": "## Problem" })
+        );
+        assert_eq!(
+            update_input(None, Some(Some("c-43"))),
+            serde_json::json!({ "cycleId": "c-43" })
+        );
+        assert_eq!(
+            update_input(Some("x"), Some(None)),
+            serde_json::json!({ "description": "x", "cycleId": null })
+        );
+    }
+
+    #[test]
+    fn an_issue_prints_its_cycle_or_null() {
+        let ctx = parse_issue_context(
+            br#"{"data":{"issue":{"team":{"id":"t1"},"state":{"id":"s1","name":"Todo"},
+                 "cycle":{"id":"c-42","number":42,"startsAt":"2026-11-10T00:00:00.000Z","endsAt":"2026-11-24T00:00:00.000Z"}}}}"#,
+        )
+        .unwrap();
+        let printed = serde_json::to_value(&ctx).unwrap();
+        // The id is for writing, not for a step to read.
+        assert_eq!(
+            printed["cycle"],
+            serde_json::json!({
+                "number": 42,
+                "starts_at": "2026-11-10T00:00:00.000Z",
+                "ends_at": "2026-11-24T00:00:00.000Z",
+            })
+        );
+        let none = parse_issue_context(
+            br#"{"data":{"issue":{"team":{"id":"t1"},"state":{"id":"s1","name":"Backlog"},"cycle":null}}}"#,
+        )
+        .unwrap();
+        assert!(serde_json::to_value(&none).unwrap()["cycle"].is_null());
+        assert!(ISSUE_CONTEXT_QUERY.contains("cycle {"));
+        assert!(TEAM_ISSUES_QUERY.contains("cycle {"));
     }
 
     #[test]

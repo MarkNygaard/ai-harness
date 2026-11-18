@@ -551,6 +551,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             post(run_linear_routes::create_issue),
         )
         .route("/api/run/linear/state", post(run_linear_routes::move_state))
+        .route("/api/run/linear/update", post(run_linear_routes::update))
         .route("/api/run/linear/comment", post(run_linear_routes::comment))
         .route("/api/run/linear/issues", post(run_linear_routes::issues))
         .route("/api/run/linear/labels", post(run_linear_routes::labels))
