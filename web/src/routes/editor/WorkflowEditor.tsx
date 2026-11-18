@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import {
+  Link,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from "react-router-dom";
+import { useImprovements } from "@/lib/improvements";
 import {
   addEdge,
   Background,
@@ -94,6 +100,14 @@ function Editor() {
   // which theme is active rather than inheriting it from the page.
   const { resolved } = useTheme();
   const { name: routeName = null } = useParams();
+  // `?node=<id>` opens the editor on that step, as the Improvements page
+  // links to the step a suggestion is about.
+  const [searchParams] = useSearchParams();
+  const wantedNode = searchParams.get("node");
+  const openSuggestions = useImprovements(
+    { workflow: routeName ?? undefined, status: "new" },
+    !!routeName,
+  ).data?.suggestions.length;
   const catalog = useCatalog();
   const source = useWorkflowSource(routeName);
   // Every name already in use here, so "Save as a copy" can refuse one that
@@ -136,8 +150,11 @@ function Editor() {
       improvements: wf.improvements,
       handles_epics: wf.handles_epics,
     });
+    if (wantedNode && wf.nodes.some((n) => n.id === wantedNode)) {
+      setSelectedId(wantedNode);
+    }
     loadedFor.current = source.data.name;
-  }, [source.data, setNodes, setEdges]);
+  }, [source.data, setNodes, setEdges, wantedNode]);
 
   const currentWorkflow = useCallback(
     () => fromGraph(nodes, edges, meta),
@@ -577,6 +594,21 @@ function Editor() {
             : "off"}
         </span>
       </Button>
+      {openSuggestions ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          render={
+            <Link
+              to={`/improvements?workflow=${encodeURIComponent(meta.name)}`}
+            />
+          }
+          title="Suggestions from this workflow's runs, waiting on a decision"
+        >
+          {openSuggestions} open{" "}
+          {openSuggestions === 1 ? "suggestion" : "suggestions"}
+        </Button>
+      ) : null}
       <Button
         variant="outline"
         size="sm"

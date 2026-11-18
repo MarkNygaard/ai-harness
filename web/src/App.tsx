@@ -8,6 +8,7 @@ import { AbTestsPage } from "./routes/runs/AbTestsPage";
 import { WorkflowReportsPage } from "./routes/runs/WorkflowReportsPage";
 import { ScorerPage } from "./routes/scorers/ScorerPage";
 import { ScorersPage } from "./routes/scorers/ScorersPage";
+import { ImprovementsPage } from "./routes/improvements/ImprovementsPage";
 import { WorkflowEditor } from "./routes/editor/WorkflowEditor";
 import { WorkflowsList } from "./routes/editor/WorkflowsList";
 import { ProjectsPage } from "./routes/projects/ProjectsPage";
@@ -66,6 +67,7 @@ export function App() {
             <Route path="/runs" element={<RunsPage />} />
             <Route path="/scorers" element={<ScorersPage />} />
             <Route path="/scorers/:name" element={<ScorerPage />} />
+            <Route path="/improvements" element={<ImprovementsPage />} />
             <Route path="/ab" element={<AbTestsPage />} />
             <Route path="/chat" element={<ChatPage />} />
             <Route path="/triggers" element={<TriggersPage />} />

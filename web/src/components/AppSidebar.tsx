@@ -1,6 +1,7 @@
 import { Link, useLocation } from "react-router-dom";
 import {
   IconBolt,
+  IconBulb,
   IconClipboardCheck,
   IconGauge,
   IconGitCompare,
@@ -18,6 +19,7 @@ import { useHiddenNav } from "@/lib/nav-prefs";
 import { useRuns } from "@/lib/runs";
 import { useWorkflowList } from "@/lib/authoring";
 import { useScorers } from "@/lib/scorers";
+import { useImprovements } from "@/lib/improvements";
 import { AccountMenu } from "@/components/AccountMenu";
 import {
   Sidebar,
@@ -28,6 +30,7 @@ import {
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
@@ -52,6 +55,8 @@ export interface NavItem {
   /** Active when the path equals href, or (for prefixes) starts with `match`. */
   match?: string;
   group: NavGroup;
+  /** A count shown beside the label, such as open suggestions. */
+  badge?: number;
 }
 
 /** Curated icon allow-list for workflow-declared nav entries (`ui.nav.icon`),
@@ -88,6 +93,7 @@ export function useOperationsNav(): NavItem[] {
   const runs = useRuns({});
   const workflows = useWorkflowList();
   const scorers = useScorers();
+  const improvements = useImprovements({ status: "new" });
   const hasRun = (name: string) =>
     !!runs.data?.some((r) => r.workflow_name === name);
 
@@ -154,6 +160,22 @@ export function useOperationsNav(): NavItem[] {
           },
         ]
       : []),
+    // Suggestions from workflows' own runs, once any workflow is reviewed
+    // or has suggestions; the count is what is still waiting on a person.
+    ...(improvements.data &&
+    (improvements.data.workflows.length > 0 ||
+      improvements.data.suggestions.length > 0)
+      ? [
+          {
+            href: "/improvements",
+            label: "Improvements",
+            icon: IconBulb,
+            match: "/improvements",
+            group: "harness" as const,
+            badge: improvements.data.suggestions.length || undefined,
+          },
+        ]
+      : []),
     ...declaredNav,
   ];
 }
@@ -206,6 +228,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         <item.icon />
                         <span>{item.label}</span>
                       </SidebarMenuButton>
+                      {item.badge ? (
+                        <SidebarMenuBadge>{item.badge}</SidebarMenuBadge>
+                      ) : null}
                     </SidebarMenuItem>
                   ))}
                 </SidebarMenu>
