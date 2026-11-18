@@ -409,11 +409,13 @@ impl LocalRunner {
         // A browser on every agent step that can drive one, so UI work is
         // looked at and not only typechecked: Claude through Playwright's MCP
         // server, omp through its own browser tool. Not something a step asks
-        // for; there is nothing to configure.
+        // for, only something it can turn off with `browser: false`, which
+        // takes away both the tool and the instructions: told about a browser,
+        // an agent uses it, whatever the step is for.
         let screenshots = req
             .vars
             .get("ARTIFACTS_DIR")
-            .filter(|d| !d.is_empty())
+            .filter(|d| req.browser && !d.is_empty())
             .map(|d| PathBuf::from(d).join(SCREENSHOTS_DIR));
         let has_browser = match (&screenshots, &self.chromium) {
             (Some(dir), Some(chromium)) if is_claude(req.provider) => {
@@ -955,6 +957,7 @@ mod tests {
             output_format: None,
             hooks: None,
             mcp: &[],
+            browser: true,
             progress: None,
         }
     }
@@ -1425,6 +1428,28 @@ echo "out=$HARNESS_OUTPUT_EPIC_START""#;
         assert!(prompt.starts_with("## Browser"), "{prompt}");
         assert!(prompt.ends_with("change the header"), "{prompt}");
         assert!(artifacts.join(SCREENSHOTS_DIR).is_dir());
+    }
+
+    /// `browser: false`: a step that checks a PR title, given a browser and
+    /// told to screenshot UI changes, started a dev server and drove pages
+    /// for 100 tool calls. Off means no instructions and no tool.
+    #[tokio::test]
+    async fn a_step_that_turns_the_browser_off_is_not_told_about_one() {
+        let dir = TempDir::new().unwrap();
+        let artifacts = dir.path().join("artifacts");
+        let vars = VarContext::new().set("ARTIFACTS_DIR", artifacts.to_string_lossy());
+        let (runner, agent) = runner_at(dir.path(), vec![]);
+        let runner = runner.with_browser(Some(PathBuf::from("/usr/bin/chromium")));
+        let req = NodeRequest {
+            browser: false,
+            ..request(NodeBody::Prompt("check the title".into()), &vars)
+        };
+        runner.execute(req).await.unwrap();
+        assert_eq!(
+            agent.last_prompt.lock().unwrap().as_deref(),
+            Some("check the title")
+        );
+        assert!(!artifacts.join(SCREENSHOTS_DIR).exists());
     }
 
     #[tokio::test]

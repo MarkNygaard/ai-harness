@@ -231,6 +231,8 @@ export function nodeToDoc(n: EditorNode): Record<string, unknown> {
     mcp: n.mcp,
     // `false` is the default, so only `true` is written.
     linear_comment: n.linear_comment || undefined,
+    // `true` is the default, so only `false` is written.
+    browser: n.browser === false ? false : undefined,
     scorer: n.scorer,
     prompt: n.prompt,
     bash: n.bash,
@@ -301,6 +303,7 @@ export function fromYaml(text: string): EditorWorkflow {
     hooks: n.hooks ?? undefined,
     mcp: mcpFromDoc(n.mcp),
     linear_comment: n.linear_comment === true ? true : undefined,
+    browser: n.browser === false ? false : undefined,
     scorer:
       n.scorer && typeof n.scorer === "object"
         ? (n.scorer as ScorerConfig)

@@ -883,11 +883,27 @@ fn linear_text_is_substitutable_so_a_comment_can_carry_vars() {
         output_format: None,
         hooks: None,
         mcp: vec![],
+        browser: true,
         linear_comment: false,
         scorer: None,
         kind: NodeKind::Linear(LinearAction::Comment("see $plan.output".into())),
     };
     assert_eq!(node.substitutable_text(), vec!["see $plan.output"]);
+}
+
+#[test]
+fn a_step_has_the_browser_unless_it_turns_it_off() {
+    let wf = crate::parse::parse_workflow(
+        "name: b\nnodes:\n  - id: build\n    prompt: x\n  - id: title\n    prompt: y\n    browser: false\n",
+    )
+    .unwrap();
+    assert!(wf.nodes[0].browser, "on by default");
+    assert!(!wf.nodes[1].browser);
+    // Written only when it is off, so existing workflows serialize unchanged.
+    let json = serde_json::to_value(&wf.nodes[0]).unwrap();
+    assert!(json.get("browser").is_none(), "{json}");
+    let json = serde_json::to_value(&wf.nodes[1]).unwrap();
+    assert_eq!(json["browser"], serde_json::json!(false));
 }
 
 #[test]

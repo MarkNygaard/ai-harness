@@ -202,6 +202,7 @@ Every node has an `id` and exactly **one body** (`prompt` / `bash` / `command` /
 | `retries` | Re-run **this node only** on failure, up to N times, before the run fails (default `0` = run once). Same worktree/session — for transient failures (tests, builds, flaky network). Do **not** set on side-effecting steps (e.g. a push/PR step), where a retry could double-act. Capped at 10. |
 | `output_format` | JSON schema the AI body's output should match (see [output_format](#output_format)). |
 | `mcp` | External tools for this step's agent: servers by name (`[sentry]`), or narrowed to some tools (`[{server: m365, tools: [outlook_email_search]}]`). See [External tools](#external-tools-mcp). |
+| `browser` | `false` takes the headless browser away from this step: no browser tool, and no instructions about screenshots. Every Claude and Pi step has one by default. Turn it off on a step that must not start the app, such as one that checks a PR title or reviews structure. Given a browser, an agent tends to use it, and every extra session costs a dev server. |
 | `linear_comment` | `true` on one node: when a Linear issue started the run, this node's output is posted to the issue when the run completes (see [Reporting back to Linear](#reporting-back-to-linear)). |
 | `scorer` | `{ name, pass_at?, description? }`: this node grades the run (see [Scorers](#scorers)). |
 
