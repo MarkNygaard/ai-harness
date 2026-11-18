@@ -779,8 +779,8 @@ each one and write back with `harness linear comment` and `harness linear label`
 ```
 
 - **`issues` is read-only.** It prints a JSON array, newest first: `id`,
-  `identifier`, `title`, `description`, `url`, `state`, `assignee`, `labels`
-  and `created_at`.
+  `identifier`, `title`, `description`, `url`, `state`, `assignee`, `labels`,
+  `created_at` and `cycle`.
 - **Filters.** `--state` takes a status name. `--assignee` takes `none` or an
   email address. `--label` keeps issues that have every label named, and
   `--without-label` drops issues that have any of them. Both are repeatable.
@@ -807,6 +807,36 @@ start the build, set the build workflow's binding to
 [also start on that label](/docs/setup/linear#start-by-label). The binding
 builds every issue the triage run labels, so the triage run decides how many:
 `--limit 5` on `issues` queues at most five per run.
+
+### Refining issues
+
+A step can rewrite an issue's description and move it between cycles. This is
+for a workflow that turns a rough issue into a ready one and then sends it on:
+
+```bash
+# Replace the description, and nothing else.
+harness linear update --issue ECOM-12 --description-file "$ARTIFACTS_DIR/refined.md"
+
+# Move it to Todo in the team's next cycle, in one update.
+harness linear move-state --issue ECOM-12 --state Todo --cycle next
+
+# Back to Backlog, out of any cycle.
+harness linear move-state --issue ECOM-12 --state Backlog --cycle none
+```
+
+- **`update` changes only what you name.** `--description` or
+  `--description-file` replaces the description in full. `--cycle` sets the
+  cycle. With both, they change in one write. Title, status, labels and
+  assignee stay as they were. An empty description is refused.
+- **Cycles** are named `current`, `next` (the team's upcoming cycle), `none`
+  (out of any cycle), or by number. They are looked up in the issue's own team.
+  If the team has no such cycle, for example no upcoming cycle has been planned
+  yet or cycles are turned off, the step fails and nothing about the issue
+  changes. No cycle is ever created.
+- **Reading the cycle.** `issue` and `issues` print a `cycle` field:
+  `{ "number", "starts_at", "ends_at" }`, or `null` when the issue is in no
+  cycle. `issues --cycle current` (or `next`, `none`, a number) lists only
+  the issues in that cycle.
 
 ## Saved steps
 

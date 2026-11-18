@@ -109,6 +109,28 @@ pub enum LinearAction {
         issue: String,
         #[arg(long)]
         state: String,
+        /// Set the cycle in the same update: `current`, `next` (the team's
+        /// upcoming cycle), `none`, or a cycle number. Omitted = unchanged
+        #[arg(long)]
+        cycle: Option<String>,
+    },
+    /// Replace an issue's description, set its cycle, or both. Nothing else
+    /// about the issue changes
+    Update {
+        /// The issue's id or identifier, e.g. ECOM-12
+        #[arg(long)]
+        issue: String,
+        /// The new description in full; use --description-file for anything
+        /// with newlines
+        #[arg(long, conflicts_with = "description_file")]
+        description: Option<String>,
+        /// Read the new description from a file
+        #[arg(long)]
+        description_file: Option<PathBuf>,
+        /// `current`, `next` (the team's upcoming cycle), `none`, or a cycle
+        /// number
+        #[arg(long)]
+        cycle: Option<String>,
     },
     /// Comment on an issue — the epic ledger
     Comment {
@@ -119,7 +141,7 @@ pub enum LinearAction {
         #[arg(long)]
         body_file: Option<PathBuf>,
     },
-    /// Print one issue's team, state, parent and labels as JSON
+    /// Print one issue's team, state, parent, labels and cycle as JSON
     Issue {
         #[arg(long)]
         issue: String,
@@ -143,6 +165,10 @@ pub enum LinearAction {
         /// Only issues without this label; repeatable, same patterns
         #[arg(long = "without-label")]
         without_labels: Vec<String>,
+        /// Only issues in this cycle: `current`, `next`, a cycle number, or
+        /// `none` for issues in no cycle
+        #[arg(long)]
+        cycle: Option<String>,
         /// At most this many issues (default 25, at most 100)
         #[arg(long)]
         limit: Option<usize>,
@@ -1425,6 +1451,87 @@ mod tests {
         assert!(Cli::try_parse_from(["harness", "linear", "comments"]).is_err());
     }
 
+    /// The three commands #509 asked for: rewrite a description, and read and
+    /// set a cycle.
+    #[test]
+    fn cli_parses_linear_update_and_cycles() {
+        let cli = Cli::try_parse_from([
+            "harness",
+            "linear",
+            "update",
+            "--issue",
+            "ECOM-12",
+            "--description-file",
+            "refined.md",
+            "--cycle",
+            "next",
+        ])
+        .expect("linear update should parse");
+        match cli.command {
+            Command::Linear {
+                action:
+                    LinearAction::Update {
+                        issue,
+                        description,
+                        description_file,
+                        cycle,
+                    },
+            } => {
+                assert_eq!(issue, "ECOM-12");
+                assert!(description.is_none());
+                assert_eq!(description_file, Some(PathBuf::from("refined.md")));
+                assert_eq!(cycle.as_deref(), Some("next"));
+            }
+            _ => panic!("expected linear update"),
+        }
+        // Inline and from a file at once is ambiguous.
+        assert!(Cli::try_parse_from([
+            "harness",
+            "linear",
+            "update",
+            "--issue",
+            "ECOM-12",
+            "--description",
+            "x",
+            "--description-file",
+            "y.md",
+        ])
+        .is_err());
+
+        let cli = Cli::try_parse_from([
+            "harness",
+            "linear",
+            "move-state",
+            "--issue",
+            "ECOM-12",
+            "--state",
+            "Todo",
+            "--cycle",
+            "next",
+        ])
+        .expect("move-state with a cycle should parse");
+        match cli.command {
+            Command::Linear {
+                action: LinearAction::MoveState { state, cycle, .. },
+            } => {
+                assert_eq!(state, "Todo");
+                assert_eq!(cycle.as_deref(), Some("next"));
+            }
+            _ => panic!("expected linear move-state"),
+        }
+
+        let cli = Cli::try_parse_from([
+            "harness", "linear", "issues", "--team", "ECOM", "--cycle", "current",
+        ])
+        .expect("issues with a cycle should parse");
+        match cli.command {
+            Command::Linear {
+                action: LinearAction::Issues { cycle, .. },
+            } => assert_eq!(cycle.as_deref(), Some("current")),
+            _ => panic!("expected linear issues"),
+        }
+    }
+
     #[test]
     fn cli_rejects_exec_without_prompt() {
         let result = Cli::try_parse_from(["harness", "exec"]);
@@ -1717,8 +1824,22 @@ async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
             )
             .await
         }
-        LinearAction::MoveState { issue, state } => {
-            harness_server::linear_cli::move_state(&issue, &state).await
+        LinearAction::MoveState {
+            issue,
+            state,
+            cycle,
+        } => harness_server::linear_cli::move_state(&issue, &state, cycle.as_deref()).await,
+        LinearAction::Update {
+            issue,
+            description,
+            description_file,
+            cycle,
+        } => {
+            let body = match (description, description_file) {
+                (None, None) => None,
+                (inline, file) => Some(markdown_arg(inline, file, "description")?),
+            };
+            harness_server::linear_cli::update(&issue, body.as_deref(), cycle.as_deref()).await
         }
         LinearAction::Comment {
             issue,
@@ -1737,6 +1858,7 @@ async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
             assignee,
             labels,
             without_labels,
+            cycle,
             limit,
         } => {
             harness_server::linear_cli::issues(&harness_server::linear_cli::IssueFilter {
@@ -1745,6 +1867,7 @@ async fn run_linear_action(action: LinearAction) -> anyhow::Result<String> {
                 assignee,
                 labels,
                 without_labels,
+                cycle,
                 limit,
             })
             .await

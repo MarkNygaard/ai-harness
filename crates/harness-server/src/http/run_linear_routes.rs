@@ -8,9 +8,10 @@
 //! A run is never asked which project it is, so it cannot answer wrongly.
 //!
 //! Deliberately few operations, matching what workflows need: read an issue,
-//! read its children, list a team's issues, file a sub-issue, move one,
-//! comment on one, label one with an existing label, and file a standalone
-//! issue for a workflow's result. No delete, no creating labels, and no way out
+//! read its children, list a team's issues, file a sub-issue, move one (and
+//! set its cycle), rewrite its description, comment on one, label one with an
+//! existing label, and file a standalone issue for a workflow's result. No
+//! delete, no creating labels or cycles, and no way out
 //! of the project's own workspace: the operations that name a team can only
 //! name a team that workspace has.
 
@@ -371,6 +372,61 @@ fn with_run_link(description: &str, run_id: &str, base: Option<String>) -> Strin
 pub struct MoveRequest {
     pub issue: String,
     pub state: String,
+    /// `current`, `next`, `none` or a cycle number, set with the status.
+    /// Omitted = the cycle stays as it is.
+    #[serde(default)]
+    pub cycle: Option<String>,
+}
+
+/// What a step wrote for a cycle: `Ok(None)` for `none`, a cycle otherwise.
+///
+/// Read before anything is asked of Linear, so a typo fails the step without
+/// a round trip and without changing the issue.
+fn cycle_choice(wanted: &str) -> Result<Option<harness_sources::linear::CycleRef>, String> {
+    let w = wanted.trim();
+    if w.eq_ignore_ascii_case("none") {
+        return Ok(None);
+    }
+    harness_sources::linear::CycleRef::parse(w)
+        .map(Some)
+        .ok_or_else(|| format!("cycle `{w}` is not `current`, `next`, `none` or a cycle number"))
+}
+
+/// The cycle a step named, looked up in the issue's own team.
+///
+/// `Ok(None)` is `none`: take the issue out of its cycle. A cycle the team
+/// doesn't have is refused with a message that says which, because "next" is
+/// missing for an ordinary reason (the team hasn't planned it yet) that the
+/// step's author should see.
+async fn resolve_cycle(
+    c: &harness_sources::linear::LinearClient,
+    team_id: &str,
+    team_label: &str,
+    wanted: &str,
+) -> Result<Option<harness_sources::linear::Cycle>, Refusal> {
+    let Some(which) = cycle_choice(wanted).map_err(|m| (StatusCode::BAD_REQUEST, m))? else {
+        return Ok(None);
+    };
+    match c.find_cycle(team_id, which).await {
+        Ok(Some(cycle)) => Ok(Some(cycle)),
+        Ok(None) => Err((StatusCode::BAD_REQUEST, no_such_cycle(team_label, which))),
+        Err(e) => Err((UPSTREAM_FAILED, e.0)),
+    }
+}
+
+/// Why a named cycle can't be used. `team_label` names the team, such as
+/// "team ECOM" or "ECOM-12's team".
+fn no_such_cycle(team_label: &str, which: harness_sources::linear::CycleRef) -> String {
+    use harness_sources::linear::CycleRef;
+    match which {
+        CycleRef::Next => format!(
+            "{team_label} has no upcoming cycle yet (or cycles are turned off); nothing was changed"
+        ),
+        CycleRef::Current => format!(
+            "{team_label} has no cycle running now (or cycles are turned off); nothing was changed"
+        ),
+        CycleRef::Number(n) => format!("{team_label} has no cycle {n}; nothing was changed"),
+    }
 }
 
 /// `POST /api/run/linear/state` — move an issue to a workflow state.
@@ -444,14 +500,132 @@ pub async fn move_state(
         );
     };
 
-    match c.set_issue_state(&issue.id, &target.id).await {
-        Ok(()) => Json(serde_json::json!({
-            "moved": issue.identifier,
-            "state": target.name,
-        }))
-        .into_response(),
+    // The cycle too, before anything is written: a cycle the team doesn't have
+    // must not leave the issue moved with only half of what was asked.
+    let cycle = match req.cycle.as_deref().filter(|s| !s.trim().is_empty()) {
+        None => None,
+        Some(wanted) => {
+            match resolve_cycle(&c, &team.id, &format!("team {}", team.key), wanted).await {
+                Ok(found) => Some(found),
+                Err((s, m)) => return err(s, m),
+            }
+        }
+    };
+    let cycle_id = cycle.as_ref().map(|c| c.as_ref().map(|c| c.id.as_str()));
+
+    match c.move_issue(&issue.id, &target.id, cycle_id).await {
+        Ok(()) => {
+            let mut out = serde_json::json!({
+                "moved": issue.identifier,
+                "state": target.name,
+            });
+            if let Some(cycle) = &cycle {
+                out["cycle"] = serde_json::json!(cycle.as_ref().map(|c| c.number));
+            }
+            Json(out).into_response()
+        }
         Err(e) => err(UPSTREAM_FAILED, e.0),
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateRequest {
+    /// The issue's id or identifier (`ECOM-12`).
+    pub issue: String,
+    /// The new description, in full. Omitted = left as it is.
+    #[serde(default)]
+    pub description: Option<String>,
+    /// `current`, `next`, `none` or a cycle number. Omitted = left as it is.
+    #[serde(default)]
+    pub cycle: Option<String>,
+}
+
+/// `POST /api/run/linear/update` — replace an issue's description, set its
+/// cycle, or both. Nothing else about the issue changes.
+///
+/// What a refinement step needs: it rewrites an issue into a ready shape, and
+/// posting the rewrite as a comment would leave two versions with the stale
+/// one on top. The status is `move-state`'s, which also takes a cycle, so the
+/// two can move together.
+pub async fn update(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Json(req): Json<UpdateRequest>,
+) -> Response {
+    let g = match grant(&headers) {
+        Ok(g) => g,
+        Err((s, m)) => return err(s, m),
+    };
+    let wanted_cycle = req.cycle.as_deref().filter(|s| !s.trim().is_empty());
+    if req.description.is_none() && wanted_cycle.is_none() {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "name a description or a cycle to set",
+        );
+    }
+    // An empty description would wipe the issue; a step that produced nothing
+    // should fail loudly instead, as an empty comment does.
+    if req
+        .description
+        .as_deref()
+        .is_some_and(|d| d.trim().is_empty())
+    {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "refusing to replace a description with an empty one",
+        );
+    }
+    // A bad cycle name fails here, before Linear is asked anything.
+    if let Some(wanted) = wanted_cycle {
+        if let Err(m) = cycle_choice(wanted) {
+            return err(StatusCode::BAD_REQUEST, m);
+        }
+    }
+    let c = match client(&state, &g).await {
+        Ok(c) => c,
+        Err((s, m)) => return err(s, m),
+    };
+    let issue = match c.issue_labels(&req.issue).await {
+        Ok(i) => i,
+        Err(e) => return err(StatusCode::NOT_FOUND, e.0),
+    };
+    // Every lookup before the first write, so an unknown cycle changes nothing.
+    let cycle = match wanted_cycle {
+        None => None,
+        Some(wanted) => {
+            let Some(team) = issue.team_id.as_deref() else {
+                return err(
+                    UPSTREAM_FAILED,
+                    format!(
+                        "could not read {}'s team, so no cycle can be found",
+                        issue.identifier
+                    ),
+                );
+            };
+            let label = format!("{}'s team", issue.identifier);
+            match resolve_cycle(&c, team, &label, wanted).await {
+                Ok(found) => Some(found),
+                Err((s, m)) => return err(s, m),
+            }
+        }
+    };
+
+    // One write for both, so the issue never has the new text and the old cycle.
+    let cycle_id = cycle.as_ref().map(|c| c.as_ref().map(|c| c.id.as_str()));
+    if let Err(e) = c
+        .update_issue(&issue.id, req.description.as_deref(), cycle_id)
+        .await
+    {
+        return err(UPSTREAM_FAILED, e.0);
+    }
+    let mut out = serde_json::json!({ "updated": issue.identifier });
+    if req.description.is_some() {
+        out["description"] = serde_json::json!(true);
+    }
+    if let Some(cycle) = &cycle {
+        out["cycle"] = serde_json::json!(cycle.as_ref().map(|c| c.number));
+    }
+    Json(out).into_response()
 }
 
 #[derive(Debug, Deserialize)]
@@ -627,6 +801,9 @@ pub struct IssuesRequest {
     /// Label patterns the issue must carry none of.
     #[serde(default)]
     pub without_labels: Vec<String>,
+    /// `current`, `next`, `none` or a cycle number.
+    #[serde(default)]
+    pub cycle: Option<String>,
     #[serde(default)]
     pub limit: Option<usize>,
 }
@@ -636,7 +813,7 @@ fn issue_query(
     discovery: &harness_sources::linear::Discovery,
     req: &IssuesRequest,
 ) -> Result<harness_sources::linear::IssueQuery, String> {
-    use harness_sources::linear::{AssigneeFilter, IssueQuery};
+    use harness_sources::linear::{AssigneeFilter, CycleFilter, IssueQuery};
     let place = resolve_placement(
         discovery,
         &CreateIssueRequest {
@@ -662,12 +839,20 @@ fn issue_query(
             ))
         }
     };
+    let cycle = match req.cycle.as_deref().filter(|c| !c.trim().is_empty()) {
+        None => CycleFilter::Any,
+        Some(wanted) => match cycle_choice(wanted)? {
+            None => CycleFilter::None,
+            Some(which) => CycleFilter::In(which),
+        },
+    };
     Ok(IssueQuery {
         team_id: place.team,
         state_id: place.state,
         assignee,
         with_labels: req.labels.clone(),
         without_labels: req.without_labels.clone(),
+        cycle,
         limit: req.limit.unwrap_or(ISSUES_DEFAULT).clamp(1, ISSUES_MAX),
     })
 }
@@ -871,8 +1056,51 @@ mod tests {
             assignee: assignee.map(str::to_string),
             labels: vec![],
             without_labels: vec!["harness:*".into()],
+            cycle: None,
             limit,
         }
+    }
+
+    #[test]
+    fn a_listing_narrows_by_cycle_and_refuses_a_cycle_it_cannot_read() {
+        use harness_sources::linear::{CycleFilter, CycleRef};
+        let with = |cycle: &str| {
+            issue_query(
+                &workspace(),
+                &IssuesRequest {
+                    cycle: Some(cycle.into()),
+                    ..issues_req(None, None)
+                },
+            )
+        };
+        assert_eq!(
+            issue_query(&workspace(), &issues_req(None, None))
+                .unwrap()
+                .cycle,
+            CycleFilter::Any
+        );
+        assert_eq!(with("none").unwrap().cycle, CycleFilter::None);
+        assert_eq!(with("NEXT").unwrap().cycle, CycleFilter::In(CycleRef::Next));
+        assert_eq!(
+            with("42").unwrap().cycle,
+            CycleFilter::In(CycleRef::Number(42))
+        );
+        let err = with("upcoming").unwrap_err();
+        assert!(err.contains("`current`, `next`, `none`"), "{err}");
+    }
+
+    #[test]
+    fn a_missing_cycle_says_which_and_that_nothing_changed() {
+        use harness_sources::linear::CycleRef;
+        let next = no_such_cycle("team ECOM", CycleRef::Next);
+        assert!(next.contains("team ECOM has no upcoming cycle"), "{next}");
+        assert!(next.contains("nothing was changed"), "{next}");
+        let numbered = no_such_cycle("ECOM-12's team", CycleRef::Number(7));
+        assert!(
+            numbered.contains("ECOM-12's team has no cycle 7"),
+            "{numbered}"
+        );
+        assert_eq!(cycle_choice(" None ").unwrap(), None);
     }
 
     #[test]

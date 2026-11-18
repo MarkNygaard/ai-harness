@@ -137,11 +137,36 @@ pub async fn create_issue(
     .await
 }
 
-/// Move an issue to a workflow state — how a piece advances a column.
-pub async fn move_state(issue_id: &str, state_id: &str) -> Result<String, String> {
+/// Move an issue to a workflow state — how a piece advances a column. With
+/// `cycle` (`current`, `next`, `none` or a number), the cycle moves with it.
+pub async fn move_state(
+    issue_id: &str,
+    state_id: &str,
+    cycle: Option<&str>,
+) -> Result<String, String> {
     ask(
         "/api/run/linear/state",
-        &serde_json::json!({ "issue": issue_id, "state": state_id }),
+        &serde_json::json!({ "issue": issue_id, "state": state_id, "cycle": cycle }),
+    )
+    .await
+}
+
+/// Replace an issue's description, set its cycle, or both. Nothing else about
+/// the issue changes.
+pub async fn update(
+    issue_id: &str,
+    description: Option<&str>,
+    cycle: Option<&str>,
+) -> Result<String, String> {
+    if description.is_none() && cycle.is_none() {
+        return Err("provide --description, --description-file or --cycle".to_string());
+    }
+    if description.is_some_and(|d| d.trim().is_empty()) {
+        return Err("refusing to replace a description with an empty one".to_string());
+    }
+    ask(
+        "/api/run/linear/update",
+        &serde_json::json!({ "issue": issue_id, "description": description, "cycle": cycle }),
     )
     .await
 }
@@ -193,7 +218,7 @@ pub async fn release(issue_id: &str) -> Result<String, String> {
     .await
 }
 
-/// One issue's context as JSON: identifier, team, state, parent, labels.
+/// One issue's context as JSON: identifier, team, state, parent, labels, cycle.
 pub async fn issue(issue_id: &str) -> Result<String, String> {
     ask(
         "/api/run/linear/issue",
@@ -211,6 +236,8 @@ pub struct IssueFilter {
     pub assignee: Option<String>,
     pub labels: Vec<String>,
     pub without_labels: Vec<String>,
+    /// `current`, `next`, `none` or a cycle number.
+    pub cycle: Option<String>,
     pub limit: Option<usize>,
 }
 
@@ -259,6 +286,15 @@ mod tests {
             let err = comment("issue", blank).await.unwrap_err();
             assert!(err.contains("empty"), "{err}");
         }
+    }
+
+    #[tokio::test]
+    async fn an_update_that_would_change_nothing_or_blank_the_issue_is_refused() {
+        // Both before the network, like the empty comment above.
+        let err = update("ECOM-12", None, None).await.unwrap_err();
+        assert!(err.contains("--cycle"), "{err}");
+        let err = update("ECOM-12", Some("  \n"), None).await.unwrap_err();
+        assert!(err.contains("empty"), "{err}");
     }
 
     #[test]
