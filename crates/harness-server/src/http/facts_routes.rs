@@ -56,6 +56,8 @@ const RETRY_AFTER_FAILURE_MINS: i64 = 60;
 const STALE_REVIEW_HOURS: i64 = 6;
 /// Facts kept from one review, and the length of each.
 const FACTS_PER_REVIEW: usize = 5;
+/// Every prompt in a project carries its facts, so each is kept short. The
+/// `learn-facts` workflow is told this number; a test holds the two together.
 const FACT_MAX_CHARS: usize = 300;
 /// "What the agent did next", per sample run of a failure.
 const NEXT_LINES: usize = 8;
@@ -473,13 +475,35 @@ pub(crate) fn parse_answer(text: &str, shown: &[String]) -> Result<Vec<Proposed>
         .collect())
 }
 
+fn one_line(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// A learned fact, cut to [`FACT_MAX_CHARS`] if the review wrote a longer one.
+///
+/// It keeps the whole sentences that fit. Cutting at the limit itself left
+/// facts ending mid-word ("…Dismiss the consent dialog first, becaus"), the
+/// how-to lost and every later run told half an instruction. Only a first
+/// sentence too long on its own is cut inside, at a word, and marked `…`.
 fn clip_fact(s: &str) -> String {
-    let s = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    let s = one_line(s);
     if s.chars().count() <= FACT_MAX_CHARS {
-        s
-    } else {
-        s.chars().take(FACT_MAX_CHARS).collect()
+        return s;
     }
+    let byte_at = |chars: usize| s.char_indices().nth(chars).map_or(s.len(), |(i, _)| i);
+    let fits = &s[..byte_at(FACT_MAX_CHARS)];
+    // A sentence ends at `.`, `!` or `?` followed by a space; a full stop
+    // inside `package.json` is not one.
+    let sentences = fits
+        .rmatch_indices(['.', '!', '?'])
+        .map(|(i, _)| i + 1)
+        .find(|&end| s[end..].starts_with(' '));
+    if let Some(end) = sentences {
+        return fits[..end].to_string();
+    }
+    let room = &s[..byte_at(FACT_MAX_CHARS - 1)];
+    let word = room.rfind(' ').map_or(room, |i| &room[..i]);
+    format!("{}…", word.trim_end_matches([',', ';', ':']))
 }
 
 /// The JSON object in an agent's answer: all of it, or the outermost `{…}`.
@@ -838,10 +862,23 @@ pub struct FactBody {
     pub text: String,
 }
 
+/// A fact a person wrote. One that is too long is refused rather than cut:
+/// they can choose what to leave out, and a cut they never see is how a fact
+/// ends mid-sentence.
 fn fact_text(body: &FactBody) -> Result<String, Refusal> {
-    let text = clip_fact(&body.text);
+    let text = one_line(&body.text);
     if text.is_empty() {
         return Err((StatusCode::BAD_REQUEST, "a fact needs some text".into()));
+    }
+    let len = text.chars().count();
+    if len > FACT_MAX_CHARS {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            format!(
+                "a fact is at most {FACT_MAX_CHARS} characters and this one is {len}: \
+                 keep the command or path, and cut the explanation"
+            ),
+        ));
     }
     Ok(text)
 }
@@ -1152,6 +1189,56 @@ mod tests {
             ]
         );
         assert!(parse_answer("no json here", &shown).is_err());
+    }
+
+    /// A long learned fact keeps its whole sentences; a cut mid-word left
+    /// dilling-ecom's runs told "Dismiss the consent dialog first, becaus".
+    #[test]
+    fn a_long_fact_keeps_the_sentences_that_fit() {
+        let first = format!(
+            "Run `pnpm install` from `frontend/` first, {}.",
+            "x".repeat(200)
+        );
+        let fact = format!(
+            "{first} Then check `package.json` before you {}.",
+            "y".repeat(120)
+        );
+        assert!(fact.chars().count() > FACT_MAX_CHARS);
+        assert_eq!(clip_fact(&fact), first);
+
+        // A full stop inside a path is not a sentence end.
+        let path = format!(
+            "Read `apps/web/package.json` for the {}",
+            "word ".repeat(80)
+        );
+        let clipped = clip_fact(&path);
+        assert!(clipped.chars().count() <= FACT_MAX_CHARS, "{clipped}");
+        assert!(clipped.ends_with("word…"), "{clipped}");
+
+        let short = "Use `sed -i`.\n  `sd` is not installed.";
+        assert_eq!(clip_fact(short), "Use `sed -i`. `sd` is not installed.");
+    }
+
+    /// A person's fact is refused, not cut, so they choose what goes.
+    #[test]
+    fn a_fact_a_person_writes_too_long_is_refused() {
+        let body = |text: String| FactBody { text };
+        assert!(fact_text(&body("x".repeat(FACT_MAX_CHARS))).is_ok());
+        let (status, message) = fact_text(&body("x".repeat(FACT_MAX_CHARS + 1))).unwrap_err();
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            message.contains("at most 300 characters and this one is 301"),
+            "{message}"
+        );
+        assert!(fact_text(&body("  \n ".into())).is_err());
+    }
+
+    /// The review is told the same limit the server enforces.
+    #[test]
+    fn learn_facts_is_told_the_limit() {
+        let yaml = harness_runner::default_workflow(harness_runner::FACTS_WORKFLOW).unwrap();
+        let limit = format!("at most {FACT_MAX_CHARS} characters");
+        assert_eq!(yaml.matches(&limit).count(), 2, "{limit}");
     }
 
     #[test]

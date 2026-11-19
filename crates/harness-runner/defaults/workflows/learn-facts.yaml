@@ -45,8 +45,8 @@ nodes:
               text:
                 type: string
                 description: >-
-                  The fact, one or two sentences, as every later run will be
-                  told it.
+                  The fact, one or two sentences and at most 300 characters,
+                  as every later run will be told it.
               failures:
                 type: array
                 items: { type: string }
@@ -81,8 +81,10 @@ nodes:
         succeeded right after the failing one.
       - It is **specific to this repository**. Nothing that is true of every
         repository ("read the error message", "run the tests").
-      - It is **short**: one or two sentences, with the exact command or path
-        in backticks. Several failures with one cause get one fact.
+      - It is **short**: one or two sentences and at most 300 characters,
+        with the exact command or path in backticks. Put the instruction
+        first and the reason after it: a longer fact keeps only its whole
+        sentences that fit. Several failures with one cause get one fact.
       - It isn't already known. If a known fact says it, answer with that
         fact's id in `same_as` and the failures; that strengthens it. Don't
         repeat a **retired** fact in any wording: it was removed by a person
