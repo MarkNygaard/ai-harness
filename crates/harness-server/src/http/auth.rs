@@ -146,6 +146,7 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
             // these authenticates itself against that grant and refuses
             // without one (see `run_grants`).
             | "/api/run/s3/upload-url"
+            | "/api/run/title"
             | "/api/run/improvements/evidence"
             | "/api/run/facts/evidence"
             | "/api/run/guard"
