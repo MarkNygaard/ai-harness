@@ -685,7 +685,11 @@ fn browser_preamble(dir: &std::path::Path) -> String {
          styling or copy.\n\n\
          1. Look at what earlier steps in this run saw: read \
          `{dir}/{SCREENSHOTS_MANIFEST}` and open the images it lists before you \
-         start the app. They show each view as the last step that changed it \
+         start the app. Open each one by its full path, `{dir}/<file name>`, \
+         even if its entry gives a shorter path: a relative path is not found \
+         from where your tools run. If the manifest is not there, no step has \
+         taken a screenshot yet; that is not an error. The screenshots show \
+         each view as the last step that changed it \
          left it, so use them: look for what is wrong in them. Start the app \
          only for what they can't tell you: a view nobody has taken, an \
          interaction, a console error, or a view your own step has changed \
@@ -712,7 +716,8 @@ fn browser_preamble(dir: &std::path::Path) -> String {
          until the page has settled (no animation running, images loaded) \
          before you take it.\n\
          \x20  - For each screenshot, add or replace its entry in the manifest, \
-         a JSON array of objects with `file`, `page` (the URL path only), \
+         a JSON array of objects with `file` (the image's full path, \
+         `{dir}/<name>.png`, never a relative one), `page` (the URL path only), \
          `view` (the state, or empty), `viewport` (`1440x900` or `390x844`) \
          and `note` (what it shows). One entry per file.\n\
          4. Stop the dev server, if you started one, when you are done.\n\n\
@@ -887,6 +892,14 @@ mod tests {
         assert!(text.contains("Wait until the page has settled"));
         // A later step looks at what earlier ones saw before starting the app.
         assert!(text.contains("open the images it lists before you"));
+        // Relative screenshot paths did not resolve for the steps reading them
+        // (ecom-task: every review pass failed `Path '.harness/artifacts/…'
+        // not found`), so both reading and writing go by the full path.
+        assert!(text.contains("by its full path, `/w/.harness/artifacts/screenshots/<file name>`"));
+        assert!(text.contains(
+            "`file` (the image's full path, `/w/.harness/artifacts/screenshots/<name>.png`, never a relative one)"
+        ));
+        assert!(text.contains("If the manifest is not there, no step has taken a screenshot yet"));
         assert!(text.contains("Start the app only for what they can't tell you"));
         assert!(text.contains("not a reason to fail the step"));
         assert!(text.contains("Skip all of this for work that changes nothing a user sees"));
