@@ -159,6 +159,9 @@ tests are the source of truth.*
   `cargo test -p harness-agents`.
 - **Pi/Kimi (`omp`)** — `PiAgent` in `crates/harness-runner/src/pi.rs`
   (`build_args` builds the `omp` invocation; `OMP_PLUGIN_DIRS` → `--plugin-dir`).
+  omp finds project skills only at and above its working directory, so in a
+  multi-repo run each repo's `.agents/skills` / `.claude/skills` reach it
+  through a `--config` overlay (`repo_skills_overlay`).
   Verify with `cargo test -p harness-runner`.
 - **Cursor (`cursor-agent`)** — `CursorAgent` in `crates/harness-runner/src/cursor.rs`
   (`provider: cursor`). Headless: `cursor-agent -p "<prompt>" --output-format json

@@ -225,6 +225,40 @@ fn thinking_args(effort: Option<&str>) -> Vec<String> {
     }
 }
 
+/// Where a repo keeps its skills: `.agents/skills` for most agents, and
+/// `.claude/skills` for Claude Code (often symlinks into the first, which omp
+/// loads only once).
+const REPO_SKILL_DIRS: &[&str] = &[".agents/skills", ".claude/skills"];
+
+/// A `--config` overlay naming each repo's skill folders, for a multi-repo run.
+///
+/// omp looks for project skills in its working directory and the folders
+/// above it, never below. A multi-repo run starts it in the container that
+/// holds one checkout per repo, so every repo's own skills went unseen: a
+/// frontend's `verify-web-changes`, written for exactly the browser trouble
+/// its pi steps kept hitting, was never offered to them. A single-repo run
+/// starts omp in the repo itself, where it finds them unaided.
+fn repo_skills_overlay(cwd: &Path, env: &HashMap<String, String>) -> Option<String> {
+    let raw = env.get("HARNESS_REPOS").filter(|v| !v.trim().is_empty())?;
+    let repos: Vec<serde_json::Value> = serde_json::from_str(raw).ok()?;
+    let dirs: Vec<String> = repos
+        .iter()
+        .filter_map(|r| r.get("folder").and_then(|f| f.as_str()))
+        .flat_map(|folder| {
+            REPO_SKILL_DIRS
+                .iter()
+                .map(move |sub| cwd.join(folder).join(sub))
+        })
+        .filter(|dir| dir.is_dir())
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .collect();
+    if dirs.is_empty() {
+        return None;
+    }
+    let overlay = serde_json::json!({ "skills": { "customDirectories": dirs } });
+    serde_yaml::to_string(&overlay).ok()
+}
+
 #[async_trait]
 impl PromptAgent for PiAgent {
     async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
@@ -270,6 +304,21 @@ impl PromptAgent for PiAgent {
             Some(dir)
         } else {
             None
+        };
+
+        let _skills_overlay = match repo_skills_overlay(&req.cwd, &req.env_vars) {
+            Some(yaml) => {
+                let dir = tempfile::Builder::new()
+                    .prefix("harness-omp-skills-")
+                    .tempdir()
+                    .map_err(|e| AgentError(e.to_string()))?;
+                let file = dir.path().join("config.yml");
+                std::fs::write(&file, yaml).map_err(|e| AgentError(e.to_string()))?;
+                args.push("--config".to_string());
+                args.push(file.to_string_lossy().into_owned());
+                Some(dir)
+            }
+            None => None,
         };
 
         let env_vars = if let Some(hooks) = req.hooks.as_ref() {
@@ -1337,6 +1386,53 @@ mod tests {
                 "omp has no thinking level `{level}`"
             );
         }
+    }
+
+    /// A multi-repo run hands omp each repo's skill folders, since omp
+    /// started at the container root never looks inside the repos for them.
+    #[test]
+    fn a_multi_repo_run_names_each_repos_skill_folders() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("frontend/.agents/skills/verify")).unwrap();
+        std::fs::create_dir_all(root.path().join("frontend/.claude/skills")).unwrap();
+        // A repo without skills, and one listed but not checked out.
+        std::fs::create_dir_all(root.path().join("backend/src")).unwrap();
+        let env = HashMap::from([(
+            "HARNESS_REPOS".to_string(),
+            r#"[{"folder":"frontend"},{"folder":"backend"},{"folder":"gone"}]"#.to_string(),
+        )]);
+
+        let yaml = repo_skills_overlay(root.path(), &env).expect("an overlay");
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let dirs: Vec<PathBuf> = parsed["skills"]["customDirectories"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .map(|d| PathBuf::from(d.as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            dirs,
+            [
+                root.path().join("frontend/.agents/skills"),
+                root.path().join("frontend/.claude/skills"),
+            ]
+        );
+    }
+
+    /// A single-repo run starts omp in the repo, where it finds the skills
+    /// itself; a multi-repo run with none gets no overlay either.
+    #[test]
+    fn no_overlay_without_repo_skills() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(repo_skills_overlay(root.path(), &HashMap::new()).is_none());
+        let env = HashMap::from([(
+            "HARNESS_REPOS".to_string(),
+            r#"[{"folder":"backend"}]"#.to_string(),
+        )]);
+        std::fs::create_dir_all(root.path().join("backend")).unwrap();
+        assert!(repo_skills_overlay(root.path(), &env).is_none());
+        let broken = HashMap::from([("HARNESS_REPOS".to_string(), "not json".to_string())]);
+        assert!(repo_skills_overlay(root.path(), &broken).is_none());
     }
 
     #[test]
