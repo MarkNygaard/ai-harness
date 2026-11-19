@@ -9,9 +9,9 @@ use super::{
     auth, auth_routes, billing_routes, categories_routes, chat_routes, credentials_routes,
     finding_routes, github_sso, health_check, identities_routes, invites_routes, library_routes,
     linear_agent, linear_connections, linear_oauth, linear_routes, linear_source_routes,
-    mcp_routes, oidc, password_reset, run_linear_routes, run_s3_routes, runs_routes,
-    schedules_routes, settings_routes, state::AppState, system_routes, tokens_routes, users_routes,
-    workflows_routes,
+    mcp_routes, oidc, password_reset, run_linear_routes, run_s3_routes, run_title_routes,
+    runs_routes, schedules_routes, settings_routes, state::AppState, system_routes, tokens_routes,
+    users_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -533,6 +533,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // token: a run holds a capability scoped to one project, never a
         // credential. See `run_grants`.
         .route("/api/run/s3/upload-url", post(run_s3_routes::upload_url))
+        .route("/api/run/title", post(run_title_routes::set_title))
         .route("/api/run/linear/issue", post(run_linear_routes::issue))
         .route(
             "/api/run/linear/comments",

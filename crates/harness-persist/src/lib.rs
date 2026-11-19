@@ -688,13 +688,17 @@ impl RunStore {
     ) -> Result<(), PersistError> {
         let mut tx = self.pool.begin().await?;
 
-        // COALESCE keeps a title/description set at start time if this final write passes None.
+        // COALESCE keeps a description set at start time if this final write
+        // passes None. The title is the other way round: the stored one wins,
+        // because a run may have renamed itself (`set_run_title`) once it knew
+        // what it was working on, and this final write only carries the name it
+        // started with.
         sqlx::query(
             "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, recorded_at)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
-                title         = COALESCE(excluded.title, harness_workflow_runs.title),
+                title         = COALESCE(harness_workflow_runs.title, excluded.title),
                 description   = COALESCE(excluded.description, harness_workflow_runs.description),
                 status        = CASE
                                   WHEN harness_workflow_runs.status = 'cancelled'
@@ -1248,6 +1252,18 @@ impl RunStore {
         .bind(scan_limit.max(1))
         .fetch_all(&self.pool)
         .await?)
+    }
+
+    /// Rename a run, from inside it: a webhook or schedule names its run before
+    /// the run has found out what it will work on. Returns whether the run
+    /// exists.
+    pub async fn set_run_title(&self, run_id: &str, title: &str) -> Result<bool, PersistError> {
+        let res = sqlx::query("UPDATE harness_workflow_runs SET title = $2 WHERE id = $1")
+            .bind(run_id)
+            .bind(title)
+            .execute(&self.pool)
+            .await?;
+        Ok(res.rows_affected() > 0)
     }
 
     /// Mark a run's terminal status (run finished). Only updates a run that is
@@ -2261,6 +2277,20 @@ mod tests {
             Some("Incremental description"),
             "COALESCE must preserve start-time description"
         );
+
+        // A run that renamed itself keeps the name through its final write,
+        // which carries only the name it started with.
+        assert!(store
+            .set_run_title(&run_id, "Resolve conflicts: #12")
+            .await
+            .unwrap());
+        store
+            .record_run(&run_id, Some("Incremental task"), None, None, &report)
+            .await
+            .unwrap();
+        let detail = store.get_run(&run_id).await.unwrap().unwrap();
+        assert_eq!(detail.run.title.as_deref(), Some("Resolve conflicts: #12"));
+        assert!(!store.set_run_title("no-such-run", "x").await.unwrap());
 
         // finish_run → terminal status.
         store

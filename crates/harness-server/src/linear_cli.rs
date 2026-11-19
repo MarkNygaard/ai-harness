@@ -47,7 +47,7 @@ pub(crate) fn grant() -> Result<Grant, String> {
 /// the message is read in a run log by somebody who did not write the workflow.
 fn from_parts(base: Option<String>, token: Option<String>) -> Result<Grant, String> {
     let base = base.map(|b| b.trim().to_string()).filter(|b| !b.is_empty()).ok_or(
-        "HARNESS_RUN_URL is not set — `harness linear` runs inside a workflow run, and needs the harness's public URL (Settings -> General)",
+        "HARNESS_RUN_URL is not set — this command runs inside a workflow run, and needs the harness's public URL (Settings -> General)",
     )?;
     let token = token
         .map(|t| t.trim().to_string())
