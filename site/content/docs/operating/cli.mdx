@@ -127,6 +127,20 @@ The run never holds the access key. The server signs a short-lived upload link
 for that one object under the project's folder, and the file goes straight to
 S3. Prints the object as JSON.
 
+## `harness title`
+
+Rename the run a step belongs to. A webhook or a schedule names its run when it
+fires, before the run has found out what it will work on. A step that knows can
+say so, and the runs list shows the new name.
+
+```bash
+harness title "Resolve conflicts: #1182, #1171"
+```
+
+One line, at most 200 characters. The run is the one whose grant the step
+holds, so a step can only rename its own run. The name stays when the run
+finishes.
+
 ## `harness admin`
 
 Break-glass account recovery.

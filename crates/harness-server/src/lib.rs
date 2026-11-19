@@ -24,6 +24,7 @@ pub mod http;
 pub mod linear_cli;
 pub mod s3;
 pub mod s3_cli;
+pub mod title_cli;
 /// Credential detection for the authoring catalog (shared with `harness-cli`).
 pub use http::credentials_routes::connected_clis;
 pub mod notify;

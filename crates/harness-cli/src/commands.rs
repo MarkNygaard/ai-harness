@@ -264,6 +264,12 @@ pub enum Command {
         #[command(subcommand)]
         action: S3Action,
     },
+    /// Rename the run this step belongs to, once it knows what it is working on
+    /// (used by workflow steps)
+    Title {
+        /// The new title: one line, at most 200 characters
+        title: String,
+    },
 
     /// Execute a prompt non-interactively
     Exec {
@@ -800,6 +806,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             // Same grant as `harness linear`; the server signs, the key stays
             // there. See `harness_server::s3`.
             let message = harness_server::s3_cli::upload(&file, name.as_deref())
+                .await
+                .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{message}");
+        }
+        Command::Title { title } => {
+            // Same grant as `harness linear`, which names the run: a step can
+            // only ever rename its own. See `harness_server::title_cli`.
+            let message = harness_server::title_cli::set(&title)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))?;
             println!("{message}");
@@ -1436,6 +1450,18 @@ mod tests {
             }
             _ => panic!("expected Pr Loop command"),
         }
+    }
+
+    /// `harness title "<text>"` renames the run a step belongs to.
+    #[test]
+    fn cli_parses_title() {
+        let cli = Cli::try_parse_from(["harness", "title", "Resolve conflicts: #1182"])
+            .expect("title should parse");
+        match cli.command {
+            Command::Title { title } => assert_eq!(title, "Resolve conflicts: #1182"),
+            _ => panic!("expected title"),
+        }
+        assert!(Cli::try_parse_from(["harness", "title"]).is_err());
     }
 
     /// `harness linear comments --issue ECOM-12`, the read #505 asked for.
