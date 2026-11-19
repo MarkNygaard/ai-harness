@@ -796,6 +796,12 @@ each one and write back with `harness linear comment` and `harness linear label`
   question without matching an author's name. It reads all pages, and fails
   rather than return part of a thread. A run started from a Linear trigger
   already has the comments in `$ARGUMENTS`.
+- **Checking for blockers.** `issues` doesn't include relations either.
+  `harness linear issue --issue <identifier>` prints `blocked_by` and `blocks`,
+  each a list of `{ identifier, title, state_name, state_type }`, and `[]` when
+  there are none. `state_type` is Linear's: `triage`, `backlog`, `unstarted`,
+  `started`, `completed` or `canceled`, so a blocker is still open unless it is
+  `completed` or `canceled`. Related and duplicate links are left out.
 - **`label` only uses labels that exist.** It looks for the name in the issue's
   team, then in the workspace. An unknown name fails the step before anything
   changes. Adding a label the issue already has, or removing one it doesn't,

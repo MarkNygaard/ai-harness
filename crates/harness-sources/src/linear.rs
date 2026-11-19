@@ -438,6 +438,26 @@ query IssueContext($id: String!) {
   }
 }"#;
 
+// An issue's blocking relations, both ways. Kept out of `ISSUE_CONTEXT_QUERY`:
+// that one runs on every webhook, and only a workflow step reading an issue
+// needs to know what blocks it.
+//
+// Linear stores a relation once, on the issue it was made from. `relations`
+// are the ones this issue holds (`blocks` there means this issue blocks the
+// related one); `inverseRelations` are the ones held by others (`blocks` there
+// means the other issue blocks this one).
+const ISSUE_RELATIONS_QUERY: &str = r#"
+query IssueRelations($id: String!) {
+  issue(id: $id) {
+    relations(first: 100) {
+      nodes { type relatedIssue { identifier title state { name type } } }
+    }
+    inverseRelations(first: 100) {
+      nodes { type issue { identifier title state { name type } } }
+    }
+  }
+}"#;
+
 // One user — who mentioned the agent or replied to it — for matching to a
 // harness account by email.
 const USER_QUERY: &str = r#"
@@ -1233,6 +1253,97 @@ pub struct IssueContext {
     pub cycle: Option<Cycle>,
 }
 
+/// What blocks an issue and what it blocks. Related and duplicate links are
+/// left out: neither stops work.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+pub struct IssueRelations {
+    pub blocked_by: Vec<RelatedIssue>,
+    pub blocks: Vec<RelatedIssue>,
+}
+
+/// The other end of a relation, with enough of its state to tell an open
+/// blocker from a finished one without a second read.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct RelatedIssue {
+    pub identifier: String,
+    pub title: Option<String>,
+    pub state_name: Option<String>,
+    /// Linear's state type: `triage`, `backlog`, `unstarted`, `started`,
+    /// `completed` or `canceled`.
+    pub state_type: Option<String>,
+}
+
+/// Parse an issue's blocking relations. An unresolvable issue id yields no
+/// relations rather than an error, as [`parse_issue_context`] does.
+pub fn parse_issue_relations(json: &[u8]) -> Result<IssueRelations, LinearError> {
+    #[derive(Deserialize)]
+    struct Data {
+        #[serde(default)]
+        issue: Option<IssueNode>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct IssueNode {
+        #[serde(default)]
+        relations: Option<Conn<RelationNode>>,
+        #[serde(default)]
+        inverse_relations: Option<Conn<RelationNode>>,
+    }
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct RelationNode {
+        #[serde(rename = "type")]
+        kind: String,
+        // `relatedIssue` on a held relation, `issue` on an inverse one: the
+        // query asks for whichever is the other end.
+        #[serde(default)]
+        related_issue: Option<OtherIssue>,
+        #[serde(default)]
+        issue: Option<OtherIssue>,
+    }
+    #[derive(Deserialize)]
+    struct OtherIssue {
+        identifier: String,
+        #[serde(default)]
+        title: Option<String>,
+        #[serde(default)]
+        state: Option<StateWire>,
+    }
+    #[derive(Deserialize)]
+    struct StateWire {
+        #[serde(default)]
+        name: Option<String>,
+        #[serde(default, rename = "type")]
+        kind: Option<String>,
+    }
+    fn blocking(conn: Option<Conn<RelationNode>>) -> Vec<RelatedIssue> {
+        conn.map(|c| c.nodes)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|n| n.kind == "blocks")
+            .filter_map(|n| n.related_issue.or(n.issue))
+            .map(|o| {
+                let (state_name, state_type) = o.state.map_or((None, None), |s| (s.name, s.kind));
+                RelatedIssue {
+                    identifier: o.identifier,
+                    title: o.title,
+                    state_name,
+                    state_type,
+                }
+            })
+            .collect()
+    }
+
+    let data: Data = gql_data(json)?;
+    let Some(issue) = data.issue else {
+        return Ok(IssueRelations::default());
+    };
+    Ok(IssueRelations {
+        blocked_by: blocking(issue.inverse_relations),
+        blocks: blocking(issue.relations),
+    })
+}
+
 /// A team's cycle, as an issue sits in one or a step names one.
 ///
 /// Printed as `{ number, starts_at, ends_at }`: the number is what people say
@@ -1898,6 +2009,15 @@ impl LinearClient {
             "variables": { "id": issue_id },
         });
         parse_issue_context(&self.post(body).await?)
+    }
+
+    /// What blocks an issue and what it blocks.
+    pub async fn issue_relations(&self, issue_id: &str) -> Result<IssueRelations, LinearError> {
+        let body = serde_json::json!({
+            "query": ISSUE_RELATIONS_QUERY,
+            "variables": { "id": issue_id },
+        });
+        parse_issue_relations(&self.post(body).await?)
     }
 
     /// Who set this issue in motion: its assignee, and — when `into_state` is
@@ -3331,6 +3451,53 @@ mod tests {
             IssueContext::default()
         );
         assert!(parse_issue_context(br#"{"errors":[{"message":"no"}]}"#).is_err());
+    }
+
+    #[test]
+    fn parse_issue_relations_splits_blockers_by_direction() {
+        // ECOM-898 holds "blocks ECOM-900"; ECOM-896 and ECOM-897 each hold
+        // "blocks ECOM-898", so they arrive as inverse relations. The related
+        // and duplicate links are not blocking and are dropped.
+        let json = br#"{"data":{"issue":{
+            "relations":{"nodes":[
+                {"type":"blocks","relatedIssue":{"identifier":"ECOM-900","title":"Later",
+                    "state":{"name":"Backlog","type":"backlog"}}},
+                {"type":"related","relatedIssue":{"identifier":"ECOM-1","title":"x",
+                    "state":{"name":"Todo","type":"unstarted"}}}
+            ]},
+            "inverseRelations":{"nodes":[
+                {"type":"blocks","issue":{"identifier":"ECOM-896","title":"First",
+                    "state":{"name":"In Progress","type":"started"}}},
+                {"type":"blocks","issue":{"identifier":"ECOM-897","title":"Second",
+                    "state":{"name":"Done","type":"completed"}}},
+                {"type":"duplicate","issue":{"identifier":"ECOM-2","title":"y",
+                    "state":{"name":"Canceled","type":"canceled"}}}
+            ]}
+        }}}"#;
+        let r = parse_issue_relations(json).unwrap();
+        let ids = |v: &[RelatedIssue]| v.iter().map(|i| i.identifier.clone()).collect::<Vec<_>>();
+        assert_eq!(ids(&r.blocked_by), ["ECOM-896", "ECOM-897"]);
+        assert_eq!(ids(&r.blocks), ["ECOM-900"]);
+        assert_eq!(r.blocked_by[0].state_name.as_deref(), Some("In Progress"));
+        assert_eq!(r.blocked_by[1].state_type.as_deref(), Some("completed"));
+        assert_eq!(r.blocked_by[0].title.as_deref(), Some("First"));
+    }
+
+    #[test]
+    fn parse_issue_relations_prints_empty_lists_when_there_are_none() {
+        let json =
+            br#"{"data":{"issue":{"relations":{"nodes":[]},"inverseRelations":{"nodes":[]}}}}"#;
+        let r = parse_issue_relations(json).unwrap();
+        assert_eq!(r, IssueRelations::default());
+        assert_eq!(
+            serde_json::to_value(&r).unwrap(),
+            serde_json::json!({ "blocked_by": [], "blocks": [] })
+        );
+        assert_eq!(
+            parse_issue_relations(br#"{"data":{"issue":null}}"#).unwrap(),
+            IssueRelations::default()
+        );
+        assert!(parse_issue_relations(br#"{"errors":[{"message":"no"}]}"#).is_err());
     }
 
     #[test]

@@ -218,7 +218,8 @@ pub async fn release(issue_id: &str) -> Result<String, String> {
     .await
 }
 
-/// One issue's context as JSON: identifier, team, state, parent, labels, cycle.
+/// One issue's context as JSON: identifier, team, state, parent, labels, cycle,
+/// and its blocking relations (`blocked_by`, `blocks`).
 pub async fn issue(issue_id: &str) -> Result<String, String> {
     ask(
         "/api/run/linear/issue",
