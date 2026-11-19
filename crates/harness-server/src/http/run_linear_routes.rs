@@ -84,7 +84,21 @@ pub struct IssueRef {
     pub issue: String,
 }
 
-/// `POST /api/run/linear/issue` — one issue's team, state, parent and labels.
+/// What `issue` prints: the issue's context with its blocking relations beside
+/// it, as one flat object so nothing reading the existing fields has to change.
+#[derive(serde::Serialize)]
+struct IssueView {
+    #[serde(flatten)]
+    context: harness_sources::linear::IssueContext,
+    #[serde(flatten)]
+    relations: harness_sources::linear::IssueRelations,
+}
+
+/// `POST /api/run/linear/issue` — one issue's team, state, parent, labels,
+/// cycle, and what blocks it or it blocks.
+///
+/// The relations are a second query rather than part of `issue_context`,
+/// which also runs on every webhook where nothing needs them.
 pub async fn issue(
     Extension(state): Extension<Arc<RunsState>>,
     headers: HeaderMap,
@@ -98,9 +112,11 @@ pub async fn issue(
         Ok(c) => c,
         Err((s, m)) => return err(s, m),
     };
-    match c.issue_context(&req.issue).await {
-        Ok(ctx) => Json(ctx).into_response(),
-        Err(e) => err(UPSTREAM_FAILED, e.0),
+    let (context, relations) =
+        tokio::join!(c.issue_context(&req.issue), c.issue_relations(&req.issue));
+    match (context, relations) {
+        (Ok(context), Ok(relations)) => Json(IssueView { context, relations }).into_response(),
+        (Err(e), _) | (_, Err(e)) => err(UPSTREAM_FAILED, e.0),
     }
 }
 

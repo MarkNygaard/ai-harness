@@ -141,7 +141,8 @@ pub enum LinearAction {
         #[arg(long)]
         body_file: Option<PathBuf>,
     },
-    /// Print one issue's team, state, parent, labels and cycle as JSON
+    /// Print one issue's team, state, parent, labels, cycle and blocking
+    /// relations (`blocked_by`, `blocks`) as JSON
     Issue {
         #[arg(long)]
         issue: String,

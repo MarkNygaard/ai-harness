@@ -96,7 +96,7 @@ node.
 | `update` | Replace an issue's description, set its cycle, or both. Nothing else changes. See [Refining issues](/docs/workflows/authoring#refining-issues). |
 | `comment` | Comment on an issue. The epic ledger. |
 | `comments` | Print every comment on an issue as JSON, oldest first. Read-only. |
-| `issue` | Print one issue's team, state, parent, labels and cycle as JSON. |
+| `issue` | Print one issue's team, state, parent, labels, cycle, and what blocks it or it blocks (`blocked_by`, `blocks`) as JSON. |
 | `issues` | Print a team's issues as JSON, filtered by status, assignee, labels and cycle. Read-only. See [Triaging issues](/docs/workflows/authoring#triaging-issues). |
 | `label` | Add or remove an issue's labels by name. Existing labels only. |
 | `children` | Print an epic's sub-issues as JSON, in board order. |
