@@ -1,3 +1,4 @@
+import { NotifyMeButton } from "@/components/notifications/NotifyMeButton";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
@@ -500,6 +501,10 @@ function Editor() {
 
   const editorActions = (
     <>
+      {/* A workflow's runs are what people follow; a new one has none yet. */}
+      {routeName && (
+        <NotifyMeButton scope="workflow" value={routeName} name={routeName} />
+      )}
       <ValidationStatus
         pending={validate.isPending}
         valid={validate.data?.valid}

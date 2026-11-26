@@ -222,7 +222,9 @@ export function RunTriggerPage() {
             kind={t.kind}
             title={t.name}
             state={triggerState(row, system.data ?? "classic")}
-            actions={<NotifyMeButton triggerId={t.id} name={t.name} />}
+            actions={
+              <NotifyMeButton scope="trigger" value={t.id} name={t.name} />
+            }
             subtitle={
               <>
                 {describeWhen(row)} → starts{" "}
@@ -476,7 +478,11 @@ export function ScheduleTriggerPage() {
             title={schedule.name}
             state={schedule.enabled ? "on" : "off"}
             actions={
-              <NotifyMeButton triggerId={schedule.id} name={schedule.name} />
+              <NotifyMeButton
+                scope="trigger"
+                value={schedule.id}
+                name={schedule.name}
+              />
             }
             subtitle={
               <>
