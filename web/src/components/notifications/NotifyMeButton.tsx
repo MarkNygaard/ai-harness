@@ -29,23 +29,33 @@ import {
   useUnsubscribe,
 } from "@/lib/notifications";
 
-/** What a person most likely wants to hear about one trigger. */
+/**
+ * What a person most likely wants to hear about one trigger or one workflow:
+ * that it broke. For a workflow, "trigger couldn't start a run" covers every
+ * trigger that starts it.
+ */
 const DEFAULT_EVENTS: NotificationEvent[] = ["trigger_failed", "run_failed"];
 
 /**
- * Subscribe to one trigger or schedule — the case of wanting to hear about
- * this one and nothing else. Shows "Notifying you" once subscribed, and the
- * same dialog then turns it off.
+ * Subscribe to one trigger or schedule, or one workflow — the case of wanting
+ * to hear about this one and nothing else. Shows "Notifying you" once
+ * subscribed, and the same dialog then turns it off.
  *
  * Renders nothing on a harness without accounts, where notifications have
  * nobody to belong to.
  */
 export function NotifyMeButton({
-  triggerId,
+  scope,
+  value,
   name,
+  compact = false,
 }: {
-  triggerId: string;
+  /** A trigger or schedule by id, or a workflow by name. */
+  scope: "trigger" | "workflow";
+  value: string;
   name: string;
+  /** Just the bell, for a crowded toolbar; the state is in its tooltip. */
+  compact?: boolean;
 }) {
   const available = useNotificationsAvailable();
   const subscriptions = useSubscriptions();
@@ -57,7 +67,7 @@ export function NotifyMeButton({
 
   if (!available) return null;
   const existing = (subscriptions.data ?? []).filter(
-    (s) => s.scope_kind === "trigger" && s.scope_value === triggerId,
+    (s) => s.scope_kind === scope && s.scope_value === value,
   );
   const busy = subscribe.isPending || unsubscribe.isPending;
 
@@ -80,24 +90,27 @@ export function NotifyMeButton({
       <DialogTrigger
         render={
           <Button
-            size="sm"
+            size={compact ? "icon-sm" : "sm"}
             variant="outline"
             disabled={subscriptions.isLoading}
+            aria-label={existing.length > 0 ? "Notifying you" : "Notify me"}
             title={
               existing.length > 0
-                ? `You hear about: ${describeEvents(existing.flatMap((s) => s.events))}`
-                : "Get notified about this trigger"
+                ? `Notifying you about: ${describeEvents(existing.flatMap((s) => s.events))}`
+                : `Notify me about this ${scope}`
             }
           />
         }
       >
         {existing.length > 0 ? (
           <>
-            <IconBellRinging /> Notifying you
+            <IconBellRinging />
+            {!compact && " Notifying you"}
           </>
         ) : (
           <>
-            <IconBell /> Notify me
+            <IconBell />
+            {!compact && " Notify me"}
           </>
         )}
       </DialogTrigger>
@@ -158,8 +171,8 @@ export function NotifyMeButton({
                 subscribe.mutate(
                   {
                     events,
-                    scope_kind: "trigger",
-                    scope_value: triggerId,
+                    scope_kind: scope,
+                    scope_value: value,
                     channels: channels.channels,
                     slack_channel: channels.slackChannel.trim() || null,
                   },

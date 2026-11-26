@@ -1,3 +1,4 @@
+import { NotifyMeButton } from "@/components/notifications/NotifyMeButton";
 import { RUN_STATUS_VARIANT } from "@/components/runflow/format";
 /**
  * Generic list page for a workflow that declares `ui.nav` — the declaration-
@@ -40,7 +41,12 @@ export function WorkflowReportsPage() {
   const rows = (runs.data ?? []).filter((r) => r.workflow_name === workflow);
 
   return (
-    <AppShell title={label}>
+    <AppShell
+      title={label}
+      actions={
+        <NotifyMeButton scope="workflow" value={workflow} name={label} />
+      }
+    >
       <div className="mx-auto flex max-w-5xl flex-col gap-6 p-6">
         <NewRunForm workflow={workflow} label={label} />
         <section className="flex flex-col gap-2">
