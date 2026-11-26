@@ -78,6 +78,8 @@ export interface WebhookTriggerConfig {
   task_template: string;
   delivery_header?: string | null;
   base_branch?: string | null;
+  /** The most runs of the workflow at once; more wait in the queue. Unset: no limit. */
+  max_concurrent_runs?: number | null;
 }
 
 interface RunTriggerBase {
