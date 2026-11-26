@@ -12,10 +12,15 @@
 //!
 //! Each is matched against the subscriptions in
 //! [`harness_persist::NotificationStore`] and written to the inbox of everyone
-//! it concerns. Nothing is sent to anybody who did not subscribe. Both run in
-//! the background: telling people must never hold up, or fail, the thing that
-//! happened.
+//! it concerns, once per person however many of their subscriptions match.
+//! It then goes wherever those subscriptions also asked: an email, a Slack
+//! direct message, a Slack channel (posted once, however many people route
+//! the same thing there). A failure to reach one of those is kept on the
+//! inbox entry. Nothing is sent to anybody who did not subscribe. All of it
+//! runs in the background: telling people must never hold up, or fail, the
+//! thing that happened.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use axum::extract::{Extension, Path as AxumPath, Query};
@@ -23,8 +28,9 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use harness_persist::{
-    EventSubject, NewNotification, SubscriptionInput, EVENT_RUN_CANCELLED, EVENT_RUN_COMPLETED,
-    EVENT_RUN_FAILED, EVENT_TRIGGER_FAILED,
+    EventSubject, NewNotification, NotificationStore, NotificationSubscription, SubscriptionInput,
+    CHANNEL_EMAIL, CHANNEL_SLACK_CHANNEL, CHANNEL_SLACK_DM, EVENT_RUN_CANCELLED,
+    EVENT_RUN_COMPLETED, EVENT_RUN_FAILED, EVENT_TRIGGER_FAILED,
 };
 use serde::Deserialize;
 use serde_json::json;
@@ -32,6 +38,7 @@ use sha2::{Digest, Sha256};
 
 use super::accounts::{authenticated_user, Mode};
 use super::runs_routes::RunsState;
+use super::slack::{SlackClient, SlackMessage};
 
 /// How long the inbox keeps a notification, read or not.
 const RETENTION_DAYS: i64 = 90;
@@ -163,24 +170,17 @@ async fn trigger_failed_inner(
     let body = truncate(&failure.error, MAX_BODY);
     let link = failure.link();
     let dedupe_key = failure.dedupe_key(chrono::Utc::now());
-    for sub in &subscriptions {
-        store
-            .notify(&NewNotification {
-                user_id: &sub.user_id,
-                subscription_id: Some(&sub.id),
-                event: EVENT_TRIGGER_FAILED,
-                title: &title,
-                body: &body,
-                link: Some(&link),
-                run_id: None,
-                trigger_id: failure.trigger_id.as_deref(),
-                project: Some(&failure.project),
-                dedupe_key: &dedupe_key,
-            })
-            .await
-            .map_err(|e| e.to_string())?;
-    }
-    Ok(())
+    let outgoing = Outgoing {
+        event: EVENT_TRIGGER_FAILED,
+        title: &title,
+        body: &body,
+        link: &link,
+        run_id: None,
+        trigger_id: failure.trigger_id.as_deref(),
+        project: Some(&failure.project),
+        dedupe_key: &dedupe_key,
+    };
+    send(state, store, &subscriptions, &outgoing, None).await
 }
 
 /// Tell subscribers that a run reached a final status. Returns at once.
@@ -275,27 +275,208 @@ async fn run_ended_inner(
     let (title, body) = run_message(&detail, event);
     let link = format!("/runs/{run_id}");
     let dedupe_key = format!("run:{run_id}:{event}");
+    let outgoing = Outgoing {
+        event,
+        title: &title,
+        body: &body,
+        link: &link,
+        run_id: Some(run_id),
+        trigger_id: trigger_id.as_deref(),
+        project: detail.run.project.as_deref(),
+        dedupe_key: &dedupe_key,
+    };
+    send(state, store, &subscriptions, &outgoing, actor).await
+}
+
+/// One thing to tell people.
+struct Outgoing<'a> {
+    event: &'a str,
+    title: &'a str,
+    body: &'a str,
+    /// A path in the web UI, e.g. `/runs/<id>`.
+    link: &'a str,
+    run_id: Option<&'a str>,
+    trigger_id: Option<&'a str>,
+    project: Option<&'a str>,
+    dedupe_key: &'a str,
+}
+
+/// Where one person's notification goes, merged across every subscription of
+/// theirs that matched.
+#[derive(Debug, Default, PartialEq)]
+struct Route {
+    /// The first matching subscription, recorded on the inbox entry.
+    subscription_id: String,
+    email: bool,
+    slack_dm: bool,
+    slack_channels: BTreeSet<String>,
+}
+
+/// Group matching subscriptions by person, leaving out `skip`.
+fn routes(
+    subscriptions: &[NotificationSubscription],
+    skip: Option<&str>,
+) -> BTreeMap<String, Route> {
+    let mut out: BTreeMap<String, Route> = BTreeMap::new();
     for sub in subscriptions
         .iter()
-        .filter(|s| Some(s.user_id.as_str()) != actor)
+        .filter(|s| Some(s.user_id.as_str()) != skip)
     {
-        store
+        let route = out.entry(sub.user_id.clone()).or_insert_with(|| Route {
+            subscription_id: sub.id.clone(),
+            ..Route::default()
+        });
+        for channel in sub.channels.iter() {
+            match channel.as_str() {
+                CHANNEL_EMAIL => route.email = true,
+                CHANNEL_SLACK_DM => route.slack_dm = true,
+                CHANNEL_SLACK_CHANNEL => {
+                    if let Some(c) = &sub.slack_channel {
+                        route.slack_channels.insert(c.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// Write `outgoing` to each subscriber's inbox, then send it on to email and
+/// Slack where they asked. A person who already has it is not sent it again.
+async fn send(
+    state: &Arc<RunsState>,
+    store: &NotificationStore,
+    subscriptions: &[NotificationSubscription],
+    outgoing: &Outgoing<'_>,
+    skip: Option<&str>,
+) -> Result<(), String> {
+    for (user_id, route) in routes(subscriptions, skip) {
+        let written = store
             .notify(&NewNotification {
-                user_id: &sub.user_id,
-                subscription_id: Some(&sub.id),
-                event,
-                title: &title,
-                body: &body,
-                link: Some(&link),
-                run_id: Some(run_id),
-                trigger_id: trigger_id.as_deref(),
-                project: detail.run.project.as_deref(),
-                dedupe_key: &dedupe_key,
+                user_id: &user_id,
+                subscription_id: Some(&route.subscription_id),
+                event: outgoing.event,
+                title: outgoing.title,
+                body: outgoing.body,
+                link: Some(outgoing.link),
+                run_id: outgoing.run_id,
+                trigger_id: outgoing.trigger_id,
+                project: outgoing.project,
+                dedupe_key: outgoing.dedupe_key,
             })
             .await
             .map_err(|e| e.to_string())?;
+        let Some(notification) = written else {
+            continue;
+        };
+        if !route.email && !route.slack_dm && route.slack_channels.is_empty() {
+            continue;
+        }
+        let errors = deliver(state, store, &user_id, &route, outgoing).await;
+        if !errors.is_empty() {
+            let joined = errors.join("; ");
+            tracing::warn!(
+                "notifications: {} for {user_id}: {joined}",
+                outgoing.dedupe_key
+            );
+            let _ = store
+                .set_delivery_error(notification.id, Some(&truncate(&joined, MAX_BODY)))
+                .await;
+        }
     }
     Ok(())
+}
+
+/// The harness's own address joined to `path`, when it has been set.
+fn absolute(state: &Arc<RunsState>, path: &str) -> Option<String> {
+    state.public_url().map(|base| format!("{base}{path}"))
+}
+
+/// Send one notification to email and Slack. Returns what failed, as a person
+/// reads it; an empty list when everything arrived.
+async fn deliver(
+    state: &Arc<RunsState>,
+    store: &NotificationStore,
+    user_id: &str,
+    route: &Route,
+    outgoing: &Outgoing<'_>,
+) -> Vec<String> {
+    let mut errors = Vec::new();
+    let email = match state.user_store().await {
+        Ok(users) => users.get(user_id).await.ok().flatten().map(|u| u.email),
+        Err(_) => None,
+    };
+    let url = absolute(state, outgoing.link);
+    let settings_url = absolute(state, SETTINGS_PATH);
+
+    if route.email {
+        match &email {
+            Some(to) => {
+                let text = email_body(outgoing.body, url.as_deref(), settings_url.as_deref());
+                if let Err(e) = super::mail::send(state, to, outgoing.title, &text).await {
+                    errors.push(format!("Email: {e}"));
+                }
+            }
+            None => errors.push("Email: no address on the account".into()),
+        }
+    }
+
+    if route.slack_dm || !route.slack_channels.is_empty() {
+        let Some(token) = super::slack::token(state).await else {
+            errors.push("Slack: not connected (Settings → Integrations)".into());
+            return errors;
+        };
+        let client = SlackClient::new(token);
+        let message = SlackMessage {
+            title: outgoing.title,
+            body: outgoing.body,
+            url: url.as_deref(),
+            settings_url: settings_url.as_deref(),
+        };
+        if route.slack_dm {
+            let result = match &email {
+                Some(address) => match super::slack::user_id(&client, address).await {
+                    Ok(slack_user) => client.post(&slack_user, &message).await,
+                    Err(e) => Err(e),
+                },
+                None => Err("no address on the account".into()),
+            };
+            if let Err(e) = result {
+                errors.push(format!("Slack DM: {e}"));
+            }
+        }
+        for channel in &route.slack_channels {
+            // Several people can route the same thing to one channel.
+            match store.claim_channel_post(channel, outgoing.dedupe_key).await {
+                Ok(true) => {
+                    if let Err(e) = client.post(channel, &message).await {
+                        errors.push(format!("Slack #{channel}: {e}"));
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => errors.push(format!("Slack #{channel}: {e}")),
+            }
+        }
+    }
+    errors
+}
+
+/// Where a person changes what they hear about.
+const SETTINGS_PATH: &str = "/settings/notifications";
+
+/// A notification as plain-text mail.
+fn email_body(body: &str, url: Option<&str>, settings_url: Option<&str>) -> String {
+    let mut text = body.trim().to_string();
+    if let Some(url) = url {
+        text.push_str(&format!("\n\n{url}"));
+    }
+    text.push_str("\n\n—\nYou get this because you follow it in the harness.");
+    if let Some(settings) = settings_url {
+        text.push_str(&format!(" Change what you hear about: {settings}"));
+    }
+    text.push('\n');
+    text
 }
 
 /// Clear out old notifications now and then.
@@ -450,6 +631,25 @@ pub async fn subscribe(
         Ok(i) => i,
         Err(e) => return err(StatusCode::BAD_REQUEST, e),
     };
+    // Refuse a channel that cannot deliver now, rather than accept it and fail
+    // every time something happens.
+    let available = channels(&state).await;
+    if input.channels.iter().any(|c| c == CHANNEL_EMAIL) && !available.email {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "email isn't set up on this harness (Settings → Email)",
+        );
+    }
+    let wants_slack = input
+        .channels
+        .iter()
+        .any(|c| c == CHANNEL_SLACK_DM || c == CHANNEL_SLACK_CHANNEL);
+    if wants_slack && !available.slack {
+        return err(
+            StatusCode::BAD_REQUEST,
+            "Slack isn't connected to this harness (Settings → Integrations)",
+        );
+    }
     let store = match state.notification_store().await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
@@ -458,6 +658,116 @@ pub async fn subscribe(
         Ok(sub) => (StatusCode::CREATED, Json(sub)).into_response(),
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     }
+}
+
+/// Which channels besides the inbox can deliver on this harness.
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+struct Available {
+    email: bool,
+    slack: bool,
+}
+
+async fn channels(state: &Arc<RunsState>) -> Available {
+    let email = match state.cred_store().await {
+        Ok(store) => super::mail::config(store).await.is_some(),
+        Err(_) => false,
+    };
+    Available {
+        email,
+        slack: super::slack::token(state).await.is_some(),
+    }
+}
+
+/// `GET /api/me/notification-channels` — where notifications can go here, and
+/// the address email goes to.
+pub async fn list_channels(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+) -> Response {
+    let user = match me(&state, &headers).await {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let available = channels(&state).await;
+    Json(json!({
+        "email": { "available": available.email, "address": user.email },
+        "slack": { "available": available.slack },
+    }))
+    .into_response()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TestRequest {
+    /// `email`, `slack_dm` or `slack_channel`.
+    channel: String,
+    #[serde(default)]
+    slack_channel: Option<String>,
+}
+
+/// `POST /api/me/notifications/test` — send the caller a test notification on
+/// one channel, and say what happened. Nothing is written to the inbox.
+pub async fn send_test(
+    Extension(state): Extension<Arc<RunsState>>,
+    headers: HeaderMap,
+    Json(req): Json<TestRequest>,
+) -> Response {
+    let user = match me(&state, &headers).await {
+        Ok(u) => u,
+        Err(resp) => return resp,
+    };
+    let store = match state.notification_store().await {
+        Ok(s) => s,
+        Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
+    };
+    let mut route = Route::default();
+    match req.channel.as_str() {
+        CHANNEL_EMAIL => route.email = true,
+        CHANNEL_SLACK_DM => route.slack_dm = true,
+        CHANNEL_SLACK_CHANNEL => {
+            let Some(channel) = req
+                .slack_channel
+                .as_deref()
+                .map(|c| c.trim().trim_start_matches('#').to_string())
+                .filter(|c| !c.is_empty())
+            else {
+                return err(StatusCode::BAD_REQUEST, "name the Slack channel to test");
+            };
+            route.slack_channels.insert(channel);
+        }
+        other => {
+            return err(
+                StatusCode::BAD_REQUEST,
+                format!("unknown channel `{other}`"),
+            )
+        }
+    }
+    // A fresh key, so a test to a channel is never taken for a repeat.
+    let dedupe_key = format!("test:{}", uuid::Uuid::new_v4());
+    let outgoing = Outgoing {
+        event: "test",
+        title: "Test notification from the harness",
+        body: "If you can read this, notifications reach you here.",
+        link: SETTINGS_PATH,
+        run_id: None,
+        trigger_id: None,
+        project: None,
+        dedupe_key: &dedupe_key,
+    };
+    let errors = deliver(&state, store, &user.id, &route, &outgoing).await;
+    if errors.is_empty() {
+        Json(json!({ "sent": true })).into_response()
+    } else {
+        err(StatusCode::BAD_GATEWAY, errors.join("; "))
+    }
+}
+
+/// `GET /api/integrations/slack/manifest` — the Slack app to create, as JSON.
+pub async fn slack_manifest() -> Response {
+    (
+        [(axum::http::header::CONTENT_TYPE, "application/json")],
+        super::slack::MANIFEST,
+    )
+        .into_response()
 }
 
 /// `DELETE /api/me/notification-subscriptions/{id}` — unsubscribe.
@@ -537,6 +847,62 @@ mod tests {
         assert!(failure(TriggerKind::Binding, None, "x")
             .dedupe_key(at(3))
             .starts_with("trigger:p/w:"));
+    }
+
+    fn sub(
+        id: &str,
+        user: &str,
+        channels: &[&str],
+        slack: Option<&str>,
+    ) -> NotificationSubscription {
+        serde_json::from_value(json!({
+            "id": id, "user_id": user, "events": ["run_failed"], "scope_kind": "mine",
+            "scope_value": "", "channels": channels, "slack_channel": slack,
+            "created_at": "2026-11-26T00:00:00Z",
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn one_route_per_person_with_every_channel_they_asked_for() {
+        let subs = [
+            sub("s1", "ada", &["in_app", "email"], None),
+            sub("s2", "ada", &["in_app", "slack_channel"], Some("builds")),
+            sub("s3", "bob", &["in_app"], None),
+            sub("s4", "cy", &["in_app", "slack_dm"], None),
+        ];
+        let all = routes(&subs, None);
+        assert_eq!(all.len(), 3);
+        let ada = &all["ada"];
+        assert_eq!(ada.subscription_id, "s1", "the first match is recorded");
+        assert!(ada.email && !ada.slack_dm);
+        assert_eq!(ada.slack_channels.iter().collect::<Vec<_>>(), ["builds"]);
+        assert_eq!(
+            all["bob"],
+            Route {
+                subscription_id: "s3".into(),
+                ..Route::default()
+            }
+        );
+        assert!(all["cy"].slack_dm);
+
+        // Whoever caused it is left out.
+        assert!(!routes(&subs, Some("ada")).contains_key("ada"));
+    }
+
+    #[test]
+    fn email_links_the_thing_and_the_settings() {
+        let text = email_body(
+            "`task` in `shop`",
+            Some("https://h.example/runs/1"),
+            Some("https://h.example/settings/notifications"),
+        );
+        assert!(text.starts_with("`task` in `shop`\n\nhttps://h.example/runs/1\n\n—\n"));
+        assert!(
+            text.contains("Change what you hear about: https://h.example/settings/notifications")
+        );
+        // Without a public address there is nothing to link.
+        assert!(!email_body("x", None, None).contains("http"));
     }
 
     #[test]

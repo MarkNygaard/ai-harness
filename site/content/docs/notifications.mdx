@@ -1,12 +1,12 @@
 ---
 title: "Notifications"
-description: "Hear about the runs and triggers you care about, and nothing else. Every notification is one you asked for."
+description: "Hear about the runs and triggers you care about, in the app, by email or on Slack, and nothing else. Every notification is one you asked for."
 ---
 
 The harness does not notify anybody by default. You choose what to hear about,
 and it lands in your **Inbox** in the sidebar, with a count of what is unread.
 A notification that arrives while the app is open also shows briefly in the
-corner.
+corner. It can also go to [email and Slack](#email-and-slack).
 
 Notifications belong to a person, so they need
 [sign-in](/docs/setup/deploy#sign-in-and-tokens) to be switched on.
@@ -46,3 +46,40 @@ A trigger that keeps failing the same way, such as a webhook sender retrying
 with a bad signature, notifies you once an hour, not once per attempt.
 
 The inbox keeps notifications for 90 days.
+
+## Email and Slack
+
+Every notification reaches your inbox. Each subscription can also send it on:
+
+| Where | Goes to |
+| --- | --- |
+| Email | The address on your account |
+| Slack direct message | The Slack account with the same email address as yours here |
+| Slack channel | The channel you name, such as `#builds`. If several people send the same event to one channel, it is posted there once |
+
+A channel the harness can't deliver to yet is shown but greyed out, with what
+it needs. **Settings → Notifications → Try your channels** sends you a test, so
+you find out that Slack doesn't know your address before a real failure goes
+missing. A notification that couldn't reach email or Slack says why in the
+inbox.
+
+Links in email and Slack need the harness's own address, set by an
+administrator under **Settings → General**. Without it, they arrive without
+links.
+
+### Connecting Slack
+
+An administrator does this once, under **Settings → Integrations → Slack**:
+
+1. At [api.slack.com/apps](https://api.slack.com/apps?new_app=1), create an app
+   **from a manifest** and paste the one shown on that page. It asks only for
+   what posting messages and finding people by email address need.
+2. Install it to your workspace.
+3. Paste its **Bot User OAuth Token** (`xoxb-…`) into the field there.
+
+Nobody needs to link their Slack account: people are found by the email
+address they sign in with. Public channels work without inviting the app;
+a private channel needs the app invited to it.
+
+Email uses the mail server set up under **Settings → Email**, the same one
+invites use.

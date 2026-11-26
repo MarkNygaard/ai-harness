@@ -130,6 +130,11 @@ function InboxRow({ n, onOpen }: { n: Notification; onOpen: () => void }) {
             {n.body}
           </div>
         )}
+        {n.delivery_error && (
+          <div className="mt-0.5 text-[11px] text-destructive">
+            Not delivered everywhere: {n.delivery_error}
+          </div>
+        )}
       </div>
       {unread && <span className="sr-only">Unread</span>}
     </div>
