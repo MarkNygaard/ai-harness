@@ -26,6 +26,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { LinearTriggerForm } from "@/components/triggers/LinearTriggerForm";
 import { ScheduleForm, formatWhen } from "@/components/triggers/ScheduleForm";
+import { NotifyMeButton } from "@/components/notifications/NotifyMeButton";
 import { Provenance } from "@/components/triggers/Provenance";
 import { TriggerKindIcon } from "@/components/triggers/TriggerKindIcon";
 import { WebhookTriggerForm } from "@/components/triggers/WebhookTriggerForm";
@@ -99,11 +100,14 @@ function TriggerHeader({
   title,
   subtitle,
   state,
+  actions,
 }: {
   kind: TriggerKind;
   title: string;
   subtitle?: React.ReactNode;
   state?: TriggerState;
+  /** Beside the title, at the right: things you do with this trigger. */
+  actions?: React.ReactNode;
 }) {
   return (
     <div className="flex items-start gap-3">
@@ -118,6 +122,7 @@ function TriggerHeader({
           {subtitle && <> · {subtitle}</>}
         </div>
       </div>
+      {actions && <div className="flex shrink-0 gap-2">{actions}</div>}
     </div>
   );
 }
@@ -217,6 +222,7 @@ export function RunTriggerPage() {
             kind={t.kind}
             title={t.name}
             state={triggerState(row, system.data ?? "classic")}
+            actions={<NotifyMeButton triggerId={t.id} name={t.name} />}
             subtitle={
               <>
                 {describeWhen(row)} → starts{" "}
@@ -469,6 +475,9 @@ export function ScheduleTriggerPage() {
             kind="schedule"
             title={schedule.name}
             state={schedule.enabled ? "on" : "off"}
+            actions={
+              <NotifyMeButton triggerId={schedule.id} name={schedule.name} />
+            }
             subtitle={
               <>
                 starts <span className="font-mono">{schedule.workflow}</span> in{" "}

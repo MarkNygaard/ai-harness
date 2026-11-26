@@ -393,6 +393,7 @@ async fn fire(state: &Arc<RunsState>, schedule: &Schedule) -> Result<String, (St
         trigger_source: Some(SOURCE_SCHEDULE.to_string()),
         // Who a reader should see behind it: the schedule, by name.
         trigger_actor: Some(format!("Schedule “{}”", schedule.name)),
+        trigger_id: Some(schedule.id.clone()),
         workflow: schedule.workflow.clone(),
         title: Some(run_title(schedule, Utc::now())),
         description: schedule.task.clone(),
@@ -449,7 +450,19 @@ async fn tick(state: &Arc<RunsState>) {
             Ok(true) => match fire(state, &schedule).await {
                 Ok(run_id) => tracing::info!("scheduler: `{}` started run {run_id}", schedule.name),
                 Err((_, e)) => {
-                    tracing::warn!("scheduler: `{}` could not start: {e}", schedule.name)
+                    tracing::warn!("scheduler: `{}` could not start: {e}", schedule.name);
+                    super::notifications::trigger_failed(
+                        state,
+                        super::notifications::TriggerFailure {
+                            kind: super::notifications::TriggerKind::Schedule,
+                            trigger_id: Some(schedule.id.clone()),
+                            name: schedule.name.clone(),
+                            project: schedule.project.clone(),
+                            workflow: schedule.workflow.clone(),
+                            owner: schedule.created_by.clone(),
+                            error: e,
+                        },
+                    );
                 }
             },
             // Another replica took it, or it was edited meanwhile.

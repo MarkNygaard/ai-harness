@@ -651,7 +651,7 @@ async fn start_delegated_run(
     // makes whoever delegates an issue its assignee. No state is passed: there
     // is no column move to attribute here, and asking for one would find the
     // last unrelated status change instead.
-    let trigger = linear_trigger(
+    let mut trigger = linear_trigger(
         state,
         &client,
         event.issue_id.as_deref(),
@@ -660,10 +660,12 @@ async fn start_delegated_run(
         super::runs_routes::SOURCE_LINEAR_WEBHOOK,
     )
     .await;
+    trigger.trigger_id = binding_trigger_id(state, &binding).await;
     let req = CreateRunRequest {
         triggered_by: trigger.user_id.clone(),
         trigger_source: trigger.source.clone(),
         trigger_actor: trigger.actor.clone(),
+        trigger_id: trigger.trigger_id.clone(),
         workflow: route.0.clone(),
         title,
         description,
@@ -747,6 +749,15 @@ async fn start_delegated_run(
                 "linear webhook: failed to start run for session {session}: {} {message}",
                 status.as_u16()
             );
+            let issue = event.issue_identifier.as_deref().unwrap_or(&session);
+            super::notifications::linear_trigger_failed(
+                state,
+                trigger.trigger_id.as_deref(),
+                &binding.project,
+                &binding.workflow,
+                &format!("{issue}: {message}"),
+            )
+            .await;
             let _ = client
                 .create_agent_activity(
                     &session,
@@ -762,6 +773,15 @@ async fn start_delegated_run(
     }
 }
 
+/// The Linear trigger `binding` stands for; `None` under classic bindings.
+async fn binding_trigger_id(state: &Arc<RunsState>, binding: &LinearSource) -> Option<String> {
+    if !super::triggers_routes::uses_triggers(state).await {
+        return None;
+    }
+    let pairs = super::triggers_routes::linear_bindings(state).await;
+    super::triggers_routes::trigger_id_for(&pairs, binding)
+}
+
 /// When `binding` stands for a Linear trigger, record that `issue_id` fired it
 /// with `run_id`. A no-op under classic bindings.
 async fn record_trigger_entry(
@@ -770,11 +790,7 @@ async fn record_trigger_entry(
     issue_id: &str,
     run_id: &str,
 ) {
-    if !super::triggers_routes::uses_triggers(state).await {
-        return;
-    }
-    let pairs = super::triggers_routes::linear_bindings(state).await;
-    let Some(trigger_id) = super::triggers_routes::trigger_id_for(&pairs, binding) else {
+    let Some(trigger_id) = binding_trigger_id(state, binding).await else {
         return;
     };
     let Ok(store) = state.trigger_store().await else {

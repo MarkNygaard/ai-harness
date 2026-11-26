@@ -9,9 +9,9 @@ use super::{
     auth, auth_routes, billing_routes, categories_routes, chat_routes, credentials_routes,
     finding_routes, github_sso, health_check, identities_routes, invites_routes, library_routes,
     linear_agent, linear_connections, linear_oauth, linear_routes, linear_source_routes,
-    mcp_routes, oidc, password_reset, run_linear_routes, run_s3_routes, run_title_routes,
-    runs_routes, schedules_routes, settings_routes, state::AppState, system_routes, tokens_routes,
-    users_routes, workflows_routes,
+    mcp_routes, notifications, oidc, password_reset, run_linear_routes, run_s3_routes,
+    run_title_routes, runs_routes, schedules_routes, settings_routes, state::AppState,
+    system_routes, tokens_routes, users_routes, workflows_routes,
 };
 
 pub(super) fn build_router(state: Arc<AppState>) -> Router {
@@ -51,6 +51,7 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
     // Periodically reap runs whose lease has gone stale (crashed/orphaned), so a
     // lost run doesn't linger as `running`. Live runs heartbeat and are skipped.
     runs_routes::spawn_reaper(runs_state.clone());
+    notifications::spawn_pruner(runs_state.clone());
     // Reclaim worktrees left behind by hard kills (normal completion cleans up via
     // RAII); keeps `.worktrees/` from accumulating junk on the server.
     runs_routes::spawn_worktree_sweeper(runs_state.clone());
@@ -132,6 +133,17 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         .route(
             "/api/me/identities/{id}",
             delete(identities_routes::unlink_mine),
+        )
+        // Your notifications: the inbox, and what you asked to hear about.
+        .route("/api/me/notifications", get(notifications::inbox))
+        .route("/api/me/notifications/read", post(notifications::mark_read))
+        .route(
+            "/api/me/notification-subscriptions",
+            get(notifications::list_subscriptions).post(notifications::subscribe),
+        )
+        .route(
+            "/api/me/notification-subscriptions/{id}",
+            delete(notifications::unsubscribe),
         )
         .route(
             "/api/users/{id}/identities",
