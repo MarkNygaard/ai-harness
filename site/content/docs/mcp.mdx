@@ -229,6 +229,23 @@ these waits for you to confirm.
 | `linear_bindings` | Which columns are bound to which workflows |
 | `linear_check` | Diagnose a binding. Usually the answer to "why did nothing happen?" |
 
+## Skills and prompts
+
+The endpoint also teaches the assistant how to use these tools, so every editor
+gets the same guidance without a copy in each repository.
+
+| | What it is | What it covers |
+| --- | --- | --- |
+| `author-workflows` | Skill | Writing or changing a workflow with the `workflow_*` tools. Ships this site's [authoring reference](/docs/workflows/authoring) as a supporting file |
+| `diagnose-runs` | Skill | Finding out what happened in a run: which step stopped it, what a skipped or cancelled step means, and where to look next |
+| `diagnose-run` | Prompt | Takes a run id and starts a diagnosis with the `diagnose-runs` guide. Claude Code shows it as `/mcp__<server>__diagnose-run` |
+
+Skills reach a client over the stateless MCP revision (`2026-07-28`) through
+the [skills extension](https://modelcontextprotocol.io/extensions/skills/overview),
+which the endpoint serves alongside the older `initialize` protocol. A client
+that has not adopted the extension still gets the prompt, and can read both
+skills' files as resources (`skill://harness/...`).
+
 ## Comparing models
 
 `run_trigger_pair` starts one task on two arms with different models, holding
