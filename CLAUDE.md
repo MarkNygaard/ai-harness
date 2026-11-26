@@ -80,9 +80,11 @@ Always: `cargo fmt --all` (or `cd web && bunx prettier`) before committing.
   server binary and is deployed on its own; see [site/README.md](site/README.md).
   The product name lives in `site/lib/config.ts` and nowhere else in `site/app`.
 - The web dashboard is bundled into `harness-server` at build time via `bun`
-  (see `crates/harness-server/build.rs`). For Rust-only iteration, set
-  `HARNESS_SKIP_WEB_BUILD=1` (a stub UI is embedded). Release builds require
-  `bun` and a built `web/dist`. The `web/` app depends on `sdk/typescript` for
+  (see `crates/harness-server/build.rs`). For Rust-only iteration,
+  `HARNESS_SKIP_WEB_BUILD=1` skips `bun` and embeds the existing `web/dist`;
+  it **fails** when `web/dist` has not been built. On a machine with no `bun`
+  and no `web/dist`, leave the variable unset instead: a non-release build then
+  embeds a stub UI. Release builds require `bun` and a built `web/dist`. The `web/` app depends on `sdk/typescript` for
   shared API types.
 
 ## Web UI
