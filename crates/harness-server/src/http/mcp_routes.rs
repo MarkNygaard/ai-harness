@@ -26,11 +26,11 @@ use axum::Json;
 use harness_runner::authoring;
 use serde_json::{json, Value};
 
-use super::mcp_key;
 use super::runs_routes::{
     resolve_workflow_models, start_run, start_run_pair, CreateRunPairRequest, CreateRunRequest,
     ModelRef, RunsState,
 };
+use super::{mcp_key, mcp_skills};
 
 const MCP_PROTOCOL_VERSION: &str = "2024-11-05";
 const JSONRPC_METHOD_NOT_FOUND: i32 = -32601;
@@ -73,9 +73,12 @@ pub async fn handle_mcp(
             .into_response();
     }
     if let Some(batch) = body.as_array() {
+        // Batches predate the stateless protocol, which has none; the status
+        // of a single reply does not apply to the array.
         let mut out = Vec::new();
         for req in batch {
-            if let Some(resp) = handle_one(&state, &actor, chat.as_ref(), req).await {
+            if let (_, Some(resp)) = handle_one(&state, &actor, chat.as_ref(), &headers, req).await
+            {
                 out.push(resp);
             }
         }
@@ -84,68 +87,231 @@ pub async fn handle_mcp(
         }
         return Json(Value::Array(out)).into_response();
     }
-    match handle_one(&state, &actor, chat.as_ref(), &body).await {
-        Some(resp) => Json(resp).into_response(),
-        None => StatusCode::ACCEPTED.into_response(),
+    match handle_one(&state, &actor, chat.as_ref(), &headers, &body).await {
+        (status, Some(resp)) => (status, Json(resp)).into_response(),
+        (_, None) => StatusCode::ACCEPTED.into_response(),
     }
+}
+
+/// The stateless protocol revision this server speaks besides the
+/// `initialize` one. A request says it speaks it by carrying
+/// `params._meta["io.modelcontextprotocol/protocolVersion"]`; there is no
+/// handshake and no session.
+const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
+const META_PROTOCOL_VERSION: &str = "io.modelcontextprotocol/protocolVersion";
+const META_CLIENT_CAPABILITIES: &str = "io.modelcontextprotocol/clientCapabilities";
+const META_SERVER_INFO: &str = "io.modelcontextprotocol/serverInfo";
+
+/// Errors the stateless revision defines. Each is sent with HTTP 400.
+const HEADER_MISMATCH: i32 = -32020;
+const UNSUPPORTED_PROTOCOL_VERSION: i32 = -32022;
+
+/// How long a client may reuse a listing. The lists only change on a
+/// deploy; `private` because every call here is authenticated.
+const CACHE_TTL_MS: u64 = 5 * 60 * 1000;
+/// Results that carry `ttlMs` and `cacheScope` in the stateless revision.
+const CACHEABLE: &[&str] = &[
+    "server/discover",
+    "tools/list",
+    "prompts/list",
+    "resources/list",
+    "resources/read",
+    "skills/list",
+    "skills/get",
+];
+
+/// Shown to the model on connect, in either protocol.
+const INSTRUCTIONS: &str = "Runs and workflows on an ai-harness server. Two skills explain the \
+    tools: `author-workflows` for writing or changing a workflow, and `diagnose-runs` for \
+    finding out what happened in a run. Read the matching one before a non-trivial task.";
+
+/// Which protocol a request speaks, or the error that refuses it.
+///
+/// A request without the per-request protocol `_meta` is the `initialize`
+/// protocol, as every client before 2026-07-28 sends it. One with it must name
+/// the revision this server speaks and carry the client's capabilities; the
+/// optional `MCP-Protocol-Version` and `Mcp-Method` headers must agree with the
+/// body when present. A modern client tells this server from an older one by
+/// these errors, so they are only ever sent to a request that asked to be
+/// modern.
+fn request_era(
+    method: &str,
+    params: &Value,
+    headers: &HeaderMap,
+) -> Result<bool, (StatusCode, i32, String, Option<Value>)> {
+    let meta = params.get("_meta");
+    let Some(requested) = meta.and_then(|m| m.get(META_PROTOCOL_VERSION)) else {
+        if method == "server/discover" {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                mcp_skills::INVALID_PARAMS,
+                format!("server/discover needs `_meta[\"{META_PROTOCOL_VERSION}\"]`"),
+                None,
+            ));
+        }
+        return Ok(false);
+    };
+    let requested = requested.as_str().unwrap_or_default();
+    if requested != MODERN_PROTOCOL_VERSION {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            UNSUPPORTED_PROTOCOL_VERSION,
+            "Unsupported protocol version".into(),
+            Some(json!({ "supported": [MODERN_PROTOCOL_VERSION], "requested": requested })),
+        ));
+    }
+    if meta.and_then(|m| m.get(META_CLIENT_CAPABILITIES)).is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            mcp_skills::INVALID_PARAMS,
+            format!("`_meta[\"{META_CLIENT_CAPABILITIES}\"]` is required"),
+            None,
+        ));
+    }
+    for (header, expected) in [("mcp-protocol-version", requested), ("mcp-method", method)] {
+        if let Some(value) = headers.get(header).and_then(|v| v.to_str().ok()) {
+            if value != expected {
+                return Err((
+                    StatusCode::BAD_REQUEST,
+                    HEADER_MISMATCH,
+                    format!(
+                        "Header mismatch: {header} header value '{value}' does not match body value '{expected}'"
+                    ),
+                    None,
+                ));
+            }
+        }
+    }
+    Ok(true)
+}
+
+fn server_info() -> Value {
+    json!({ "name": "harness", "version": env!("CARGO_PKG_VERSION") })
 }
 
 async fn handle_one(
     state: &Arc<RunsState>,
     actor: &super::runs_routes::TriggerInfo,
     chat: Option<&super::chat_routes::ChatCaller>,
+    headers: &HeaderMap,
     req: &Value,
-) -> Option<Value> {
+) -> (StatusCode, Option<Value>) {
     let id = req.get("id").cloned();
     let method = req.get("method").and_then(Value::as_str).unwrap_or("");
     let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
 
+    let modern = match request_era(method, &params, headers) {
+        Ok(modern) => modern,
+        Err((status, code, message, data)) => {
+            return (status, error_with_data(id, code, message, data));
+        }
+    };
+    // Any notification (initialized, cancelled, …) — no reply.
+    if method.starts_with("notifications/") {
+        return (StatusCode::ACCEPTED, None);
+    }
+
+    let outcome = if method == "tools/call" {
+        let name = params
+            .get("name")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let args = params
+            .get("arguments")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        Ok(match chat {
+            // Starting a run or deleting something must not happen on the
+            // model's say-so: park it for the person to confirm.
+            Some(c) if NEEDS_CONFIRMATION.contains(&name.as_str()) => {
+                super::chat_routes::hold_for_confirmation(state, c, &name, &args).await
+            }
+            _ => call_tool(state, actor, &name, &args).await,
+        })
+    } else {
+        reply_to(method, &params, modern)
+    };
+    finish(id, method, modern, outcome)
+}
+
+/// Every method but `tools/call`, which needs the server's state.
+fn reply_to(method: &str, params: &Value, modern: bool) -> Result<Value, (i32, String)> {
     match method {
-        "initialize" => {
+        // `initialize` selects the older, session-style protocol.
+        "initialize" if !modern => {
             // Echo the client's requested protocol version when present.
             let pv = params
                 .get("protocolVersion")
                 .and_then(Value::as_str)
                 .unwrap_or(MCP_PROTOCOL_VERSION)
                 .to_string();
-            success(
-                id,
-                json!({
-                    "protocolVersion": pv,
-                    "capabilities": { "tools": { "listChanged": false } },
-                    "serverInfo": { "name": "harness", "version": env!("CARGO_PKG_VERSION") },
-                }),
-            )
+            Ok(json!({
+                "protocolVersion": pv,
+                "capabilities": {
+                    "tools": { "listChanged": false },
+                    "prompts": { "listChanged": false },
+                    "resources": { "listChanged": false },
+                },
+                "serverInfo": server_info(),
+                "instructions": INSTRUCTIONS,
+            }))
         }
-        "ping" => success(id, json!({})),
-        "tools/list" => success(id, json!({ "tools": mcp_tools() })),
-        "tools/call" => {
-            let name = params
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-            let args = params
-                .get("arguments")
-                .cloned()
-                .unwrap_or_else(|| json!({}));
-            let result = match chat {
-                // Starting a run or deleting something must not happen on the
-                // model's say-so: park it for the person to confirm.
-                Some(c) if NEEDS_CONFIRMATION.contains(&name.as_str()) => {
-                    super::chat_routes::hold_for_confirmation(state, c, &name, &args).await
-                }
-                _ => call_tool(state, actor, &name, &args).await,
-            };
-            success(id, result)
-        }
-        // Any notification (initialized, cancelled, …) — no reply.
-        m if m.starts_with("notifications/") => None,
-        other => error(
-            id,
+        "server/discover" if modern => Ok(json!({
+            "supportedVersions": [MODERN_PROTOCOL_VERSION],
+            "capabilities": {
+                "tools": {},
+                "prompts": {},
+                "resources": {},
+                "extensions": { (mcp_skills::SKILLS_EXTENSION): {} },
+            },
+            "instructions": INSTRUCTIONS,
+            "_meta": { (META_SERVER_INFO): server_info() },
+        })),
+        "ping" => Ok(json!({})),
+        "tools/list" => Ok(json!({ "tools": mcp_tools() })),
+        "prompts/list" => Ok(mcp_skills::prompts_list()),
+        "prompts/get" => mcp_skills::prompts_get(params),
+        "resources/list" => Ok(mcp_skills::resources_list()),
+        "resources/read" => mcp_skills::resources_read(params),
+        // Clients only ask for skills over the stateless protocol.
+        "skills/list" if modern => Ok(mcp_skills::skills_list()),
+        "skills/get" if modern => mcp_skills::skills_get(params),
+        other => Err((
             JSONRPC_METHOD_NOT_FOUND,
             format!("method not found: {other}"),
-        ),
+        )),
+    }
+}
+
+/// Wrap a method's outcome in its JSON-RPC reply and HTTP status. A modern
+/// result says it is complete and, for a listing, how long it may be reused.
+fn finish(
+    id: Option<Value>,
+    method: &str,
+    modern: bool,
+    outcome: Result<Value, (i32, String)>,
+) -> (StatusCode, Option<Value>) {
+    match outcome {
+        Ok(mut result) => {
+            if modern {
+                result["resultType"] = json!("complete");
+                if CACHEABLE.contains(&method) {
+                    result["ttlMs"] = json!(CACHE_TTL_MS);
+                    result["cacheScope"] = json!("private");
+                }
+            }
+            (StatusCode::OK, success(id, result))
+        }
+        Err((code, message)) => {
+            // The stateless revision answers an unknown method with a 404.
+            let status = if modern && code == JSONRPC_METHOD_NOT_FOUND {
+                StatusCode::NOT_FOUND
+            } else {
+                StatusCode::OK
+            };
+            (status, error(id, code, message))
+        }
     }
 }
 
@@ -1429,12 +1595,21 @@ fn success(id: Option<Value>, result: Value) -> Option<Value> {
 }
 
 fn error(id: Option<Value>, code: i32, message: impl Into<String>) -> Option<Value> {
+    error_with_data(id, code, message, None)
+}
+
+fn error_with_data(
+    id: Option<Value>,
+    code: i32,
+    message: impl Into<String>,
+    data: Option<Value>,
+) -> Option<Value> {
     let id = id.unwrap_or(Value::Null);
-    Some(json!({
-        "jsonrpc": "2.0",
-        "id": id,
-        "error": { "code": code, "message": message.into() },
-    }))
+    let mut body = json!({ "code": code, "message": message.into() });
+    if let Some(data) = data {
+        body["data"] = data;
+    }
+    Some(json!({ "jsonrpc": "2.0", "id": id, "error": body }))
 }
 
 /// A successful tool result: human text + structured content.
@@ -1899,6 +2074,162 @@ mod tests {
         assert_eq!(r["structuredContent"]["run_id"], "x");
         assert_eq!(r["content"][0]["text"], "hi");
         assert_eq!(tool_error("boom")["isError"], true);
+    }
+
+    fn modern_params() -> Value {
+        json!({ "_meta": {
+            META_PROTOCOL_VERSION: MODERN_PROTOCOL_VERSION,
+            META_CLIENT_CAPABILITIES: {},
+            "io.modelcontextprotocol/clientInfo": { "name": "test", "version": "1" },
+        } })
+    }
+
+    #[test]
+    fn a_request_without_protocol_meta_is_the_initialize_protocol() {
+        let headers = HeaderMap::new();
+        assert_eq!(request_era("tools/list", &json!({}), &headers), Ok(false));
+        // Other `_meta` (a progress token) does not make a request modern.
+        let params = json!({ "_meta": { "progressToken": 1 } });
+        assert_eq!(request_era("tools/call", &params, &headers), Ok(false));
+        // An older client's header alone does not either.
+        let mut old = HeaderMap::new();
+        old.insert("mcp-protocol-version", "2025-06-18".parse().unwrap());
+        assert_eq!(request_era("tools/list", &json!({}), &old), Ok(false));
+        // server/discover only exists in the stateless protocol.
+        let (status, code, ..) = request_era("server/discover", &json!({}), &headers).unwrap_err();
+        assert_eq!(
+            (status, code),
+            (StatusCode::BAD_REQUEST, mcp_skills::INVALID_PARAMS)
+        );
+    }
+
+    #[test]
+    fn a_modern_request_is_checked_before_it_is_served() {
+        let headers = HeaderMap::new();
+        assert_eq!(
+            request_era("server/discover", &modern_params(), &headers),
+            Ok(true)
+        );
+
+        let mut params = modern_params();
+        params["_meta"][META_PROTOCOL_VERSION] = json!("2099-01-01");
+        let (status, code, _, data) = request_era("tools/list", &params, &headers).unwrap_err();
+        assert_eq!(
+            (status, code),
+            (StatusCode::BAD_REQUEST, UNSUPPORTED_PROTOCOL_VERSION)
+        );
+        let data = data.unwrap();
+        assert_eq!(data["supported"], json!([MODERN_PROTOCOL_VERSION]));
+        assert_eq!(data["requested"], "2099-01-01");
+
+        let mut params = modern_params();
+        params["_meta"]
+            .as_object_mut()
+            .unwrap()
+            .remove(META_CLIENT_CAPABILITIES);
+        let (_, code, ..) = request_era("tools/list", &params, &headers).unwrap_err();
+        assert_eq!(code, mcp_skills::INVALID_PARAMS);
+
+        let mut wrong = HeaderMap::new();
+        wrong.insert("mcp-method", "tools/call".parse().unwrap());
+        let (_, code, ..) = request_era("tools/list", &modern_params(), &wrong).unwrap_err();
+        assert_eq!(code, HEADER_MISMATCH);
+        let mut right = HeaderMap::new();
+        right.insert("mcp-method", "tools/list".parse().unwrap());
+        right.insert(
+            "mcp-protocol-version",
+            MODERN_PROTOCOL_VERSION.parse().unwrap(),
+        );
+        assert_eq!(
+            request_era("tools/list", &modern_params(), &right),
+            Ok(true)
+        );
+    }
+
+    #[test]
+    fn discover_declares_the_skills_extension() {
+        let (status, reply) = finish(
+            Some(json!(1)),
+            "server/discover",
+            true,
+            reply_to("server/discover", &modern_params(), true),
+        );
+        assert_eq!(status, StatusCode::OK);
+        let r = &reply.unwrap()["result"];
+        assert_eq!(r["resultType"], "complete");
+        assert_eq!(r["supportedVersions"], json!([MODERN_PROTOCOL_VERSION]));
+        assert!(
+            r["capabilities"]["resources"].is_object(),
+            "skills need resources"
+        );
+        assert!(r["capabilities"]["extensions"][mcp_skills::SKILLS_EXTENSION].is_object());
+        assert_eq!(r["_meta"][META_SERVER_INFO]["name"], "harness");
+        assert_eq!(r["cacheScope"], "private");
+        assert!(r["ttlMs"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn skills_are_served_only_over_the_stateless_protocol() {
+        let modern = finish(
+            Some(json!(1)),
+            "skills/list",
+            true,
+            reply_to("skills/list", &json!({}), true),
+        );
+        let r = &modern.1.unwrap()["result"];
+        assert_eq!(r["skills"].as_array().unwrap().len(), 2);
+        assert!(r["ttlMs"].is_u64());
+
+        // A legacy client asking gets "method not found", with HTTP 200 as
+        // before; a modern one asking for an unknown method gets a 404.
+        let (status, reply) = finish(
+            Some(json!(2)),
+            "skills/list",
+            false,
+            reply_to("skills/list", &json!({}), false),
+        );
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(reply.unwrap()["error"]["code"], JSONRPC_METHOD_NOT_FOUND);
+        let (status, _) = finish(
+            Some(json!(3)),
+            "nope",
+            true,
+            reply_to("nope", &json!({}), true),
+        );
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn legacy_replies_are_unchanged_apart_from_new_capabilities() {
+        let (_, reply) = finish(
+            Some(json!(1)),
+            "initialize",
+            false,
+            reply_to(
+                "initialize",
+                &json!({ "protocolVersion": "2025-06-18" }),
+                false,
+            ),
+        );
+        let r = &reply.unwrap()["result"];
+        assert_eq!(r["protocolVersion"], "2025-06-18");
+        assert!(r["capabilities"]["prompts"].is_object());
+        assert!(r["capabilities"]["resources"].is_object());
+        assert!(r["capabilities"].get("extensions").is_none());
+
+        let (_, reply) = finish(
+            Some(json!(2)),
+            "tools/list",
+            false,
+            reply_to("tools/list", &json!({}), false),
+        );
+        let r = &reply.unwrap()["result"];
+        assert!(r.get("resultType").is_none() && r.get("ttlMs").is_none());
+        // Prompts and resources work for every client.
+        assert!(reply_to("prompts/list", &json!({}), false).is_ok());
+        assert!(reply_to("resources/list", &json!({}), false).is_ok());
+        // `initialize` is not part of the stateless protocol.
+        assert!(reply_to("initialize", &json!({}), true).is_err());
     }
 }
 

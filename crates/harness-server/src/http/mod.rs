@@ -40,6 +40,7 @@ pub(crate) mod mcp_gateway;
 pub(crate) mod mcp_key;
 pub(crate) mod mcp_registry;
 pub(crate) mod mcp_routes;
+pub(crate) mod mcp_skills;
 pub(crate) mod misc_routes;
 pub(crate) mod oidc;
 pub(crate) mod pr_tracking;
