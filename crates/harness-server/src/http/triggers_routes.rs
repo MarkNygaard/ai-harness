@@ -987,17 +987,31 @@ pub async fn receive_hook(
             .and_then(|f| f.get("secret").cloned()),
         Err(_) => None,
     };
+    // A delivery that cannot start a run because of how the hook is set up,
+    // or how the sender signs, is a failure its subscribers hear about.
+    let failed = |error: &str| {
+        super::notifications::trigger_failed(
+            &state,
+            super::notifications::TriggerFailure {
+                kind: super::notifications::TriggerKind::Webhook,
+                trigger_id: Some(trigger.id.clone()),
+                name: trigger.name.clone(),
+                project: trigger.project.clone(),
+                workflow: trigger.workflow.clone(),
+                owner: trigger.created_by.clone(),
+                error: error.to_string(),
+            },
+        )
+    };
     let Some(secret) = secret else {
-        return err(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "this hook has no secret — rotate it on the trigger's page",
-        );
+        const NO_SECRET: &str = "this hook has no secret — rotate it on the trigger's page";
+        failed(NO_SECRET);
+        return err(StatusCode::SERVICE_UNAVAILABLE, NO_SECRET);
     };
     if !authentic(cfg.auth, &secret, &headers, q.token.as_deref(), &body) {
-        return err(
-            StatusCode::UNAUTHORIZED,
-            "the delivery is not signed with this hook's secret",
-        );
+        const UNSIGNED: &str = "the delivery is not signed with this hook's secret";
+        failed(UNSIGNED);
+        return err(StatusCode::UNAUTHORIZED, UNSIGNED);
     }
 
     let delivery = match cfg.delivery_header.as_deref() {
@@ -1036,6 +1050,7 @@ pub async fn receive_hook(
         triggered_by: None,
         trigger_source: Some(SOURCE_WEBHOOK.to_string()),
         trigger_actor: Some(format!("webhook “{}”", trigger.name)),
+        trigger_id: Some(trigger.id.clone()),
         workflow: trigger.workflow.clone(),
         title: Some(format!(
             "{} — {}",
@@ -1061,6 +1076,7 @@ pub async fn receive_hook(
         }
         Err((status, message)) => {
             let _ = store.record_error(&id, &message).await;
+            failed(&message);
             err(status, message)
         }
     }

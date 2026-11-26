@@ -100,6 +100,7 @@ impl ChatCaller {
             source: Some(SOURCE_CHAT.to_string()),
             user_id: self.user_id.clone(),
             actor: self.actor.clone(),
+            trigger_id: None,
         }
     }
 }

@@ -1,0 +1,174 @@
+/**
+ * Notifications: what you asked to hear about, and the inbox it lands in.
+ *
+ * Nothing is on by default — every notification comes from a subscription
+ * somebody made. They need accounts, so these hooks stay idle on a harness
+ * without sign-in.
+ */
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { apiFetch, apiJson } from "./api";
+import { useAuthStatus } from "./auth";
+
+export type NotificationEvent =
+  "run_failed" | "run_cancelled" | "run_completed" | "trigger_failed";
+
+export type SubscriptionScope = "trigger" | "workflow" | "project" | "mine";
+
+/** Every event, in the order a person reads them, with what each means. */
+export const EVENTS: {
+  value: NotificationEvent;
+  label: string;
+  description: string;
+}[] = [
+  {
+    value: "trigger_failed",
+    label: "Trigger couldn't start a run",
+    description:
+      "A trigger or schedule fired, but no run started: a bad webhook secret or signature, a schedule error, a Linear claim that failed.",
+  },
+  {
+    value: "run_failed",
+    label: "Run failed",
+    description: "A run ended with a failed step.",
+  },
+  {
+    value: "run_cancelled",
+    label: "Run cancelled",
+    description:
+      "A run was stopped: by a person, or by the server when its worker went away.",
+  },
+  {
+    value: "run_completed",
+    label: "Run finished",
+    description: "A run completed successfully.",
+  },
+];
+
+export const SCOPES: { value: SubscriptionScope; label: string }[] = [
+  { value: "mine", label: "My runs and triggers" },
+  { value: "project", label: "A project" },
+  { value: "workflow", label: "A workflow" },
+  { value: "trigger", label: "One trigger or schedule" },
+];
+
+export interface NotificationSubscription {
+  id: string;
+  user_id: string;
+  events: NotificationEvent[];
+  scope_kind: SubscriptionScope;
+  scope_value: string;
+  channels: string[];
+  created_at: string;
+}
+
+export interface SubscriptionInput {
+  events: NotificationEvent[];
+  scope_kind: SubscriptionScope;
+  scope_value: string;
+}
+
+export interface Notification {
+  id: number;
+  event: NotificationEvent;
+  title: string;
+  body: string;
+  /** Where in this UI it points, e.g. `/runs/<id>`. */
+  link: string | null;
+  run_id: string | null;
+  trigger_id: string | null;
+  project: string | null;
+  created_at: string;
+  read_at: string | null;
+}
+
+interface InboxResponse {
+  notifications: Notification[];
+  unread: number;
+}
+
+/** Notifications belong to a signed-in person. */
+export function useNotificationsAvailable(): boolean {
+  const auth = useAuthStatus().data;
+  return auth?.mode === "accounts" && !!auth.user;
+}
+
+const INBOX_KEY = ["notifications", "inbox"];
+const SUBSCRIPTIONS_KEY = ["notifications", "subscriptions"];
+
+/** The inbox, newest first. Polls like the rest of the UI. */
+export function useInbox() {
+  const enabled = useNotificationsAvailable();
+  return useQuery<InboxResponse, Error>({
+    queryKey: INBOX_KEY,
+    enabled,
+    queryFn: ({ signal }) =>
+      apiJson<InboxResponse>("/api/me/notifications?limit=100", { signal }),
+    retry: false,
+    refetchInterval: 15_000,
+  });
+}
+
+/** Mark the given notifications read, or every one when `ids` is omitted. */
+export function useMarkRead() {
+  const qc = useQueryClient();
+  return useMutation<{ marked: number }, Error, number[] | undefined>({
+    mutationFn: (ids) =>
+      apiJson<{ marked: number }>("/api/me/notifications/read", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(ids ? { ids } : {}),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: INBOX_KEY }),
+  });
+}
+
+export function useSubscriptions() {
+  const enabled = useNotificationsAvailable();
+  return useQuery<NotificationSubscription[], Error>({
+    queryKey: SUBSCRIPTIONS_KEY,
+    enabled,
+    queryFn: async ({ signal }) =>
+      (
+        await apiJson<{ subscriptions: NotificationSubscription[] }>(
+          "/api/me/notification-subscriptions",
+          { signal },
+        )
+      ).subscriptions,
+    retry: false,
+    refetchInterval: false,
+  });
+}
+
+export function useSubscribe() {
+  const qc = useQueryClient();
+  return useMutation<NotificationSubscription, Error, SubscriptionInput>({
+    mutationFn: (body) =>
+      apiJson<NotificationSubscription>("/api/me/notification-subscriptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: SUBSCRIPTIONS_KEY }),
+  });
+}
+
+export function useUnsubscribe() {
+  const qc = useQueryClient();
+  return useMutation<void, Error, string>({
+    // 204 with no body, so not `apiJson`.
+    mutationFn: async (id) => {
+      await apiFetch(
+        `/api/me/notification-subscriptions/${encodeURIComponent(id)}`,
+        { method: "DELETE" },
+      );
+    },
+    onSuccess: () => qc.invalidateQueries({ queryKey: SUBSCRIPTIONS_KEY }),
+  });
+}
+
+/** "Run failed, Run cancelled" — the events of a subscription, as read. */
+export function describeEvents(events: NotificationEvent[]): string {
+  return EVENTS.filter((e) => events.includes(e.value))
+    .map((e) => e.label)
+    .join(", ");
+}

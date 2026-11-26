@@ -287,6 +287,7 @@ async fn settle_and_learn(state: &Arc<RunsState>, project: &str) -> Result<(), S
         triggered_by: None,
         trigger_source: Some(SOURCE_FACTS.to_string()),
         trigger_actor: Some("Learned facts".to_string()),
+        trigger_id: None,
         workflow: FACTS_WORKFLOW.to_string(),
         title: Some(format!("Learn facts — {} recurring failures", show.len())),
         description: format!(

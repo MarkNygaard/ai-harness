@@ -44,6 +44,14 @@ pub use users::{
 mod tokens;
 pub use tokens::{AccessToken, TokenStore};
 
+mod notifications;
+pub use notifications::{
+    EventSubject, NewNotification, Notification, NotificationStore, NotificationSubscription,
+    SubscriptionInput, CHANNELS, CHANNEL_IN_APP, EVENTS, EVENT_RUN_CANCELLED, EVENT_RUN_COMPLETED,
+    EVENT_RUN_FAILED, EVENT_TRIGGER_FAILED, SCOPES, SCOPE_MINE, SCOPE_PROJECT, SCOPE_TRIGGER,
+    SCOPE_WORKFLOW,
+};
+
 mod invites;
 pub use invites::{Invite, InviteStore, KIND_INVITE, KIND_RESET};
 
@@ -139,6 +147,9 @@ pub struct Trigger<'a> {
     pub source: Option<&'a str>,
     pub user_id: Option<&'a str>,
     pub actor: Option<&'a str>,
+    /// The trigger or schedule that started the run, by id — what lets someone
+    /// follow one trigger's runs. `None` for a run nothing standing started.
+    pub trigger_id: Option<&'a str>,
 }
 
 /// A/B pairing metadata stamped on a run at start time (borrowed for binding).
@@ -473,6 +484,9 @@ const ALTER_RUNS_TRIGGER_SOURCE: &str =
 /// The initiator's display label. Idempotent.
 const ALTER_RUNS_TRIGGER_ACTOR: &str =
     "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS trigger_actor text";
+/// The trigger or schedule that started the run. Idempotent.
+const ALTER_RUNS_TRIGGER_ID: &str =
+    "ALTER TABLE harness_workflow_runs ADD COLUMN IF NOT EXISTS trigger_id text";
 /// Move the one source label `triggered_by` ever held into its own column.
 ///
 /// That column used to mean "a user id, or the string `linear`", which made it
@@ -625,6 +639,9 @@ impl RunStore {
             .execute(&self.pool)
             .await?;
         sqlx::query(ALTER_RUNS_TRIGGER_ACTOR)
+            .execute(&self.pool)
+            .await?;
+        sqlx::query(ALTER_RUNS_TRIGGER_ID)
             .execute(&self.pool)
             .await?;
         // After the columns exist, never before.
@@ -783,8 +800,8 @@ impl RunStore {
         // heartbeat goes stale. A/B fields are stamped once at start and preserved
         // on conflict (COALESCE) so a re-`start_run` never drops the pairing.
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, owner, ab_pair_id, ab_arm, ab_label, triggered_by, trigger_source, trigger_actor, heartbeat_at, recorded_at)
-             VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now(), now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, owner, ab_pair_id, ab_arm, ab_label, triggered_by, trigger_source, trigger_actor, trigger_id, heartbeat_at, recorded_at)
+             VALUES ($1, $2, $3, $4, 'running', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now(), now())
              ON CONFLICT (id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 title         = COALESCE(excluded.title, harness_workflow_runs.title),
@@ -800,6 +817,7 @@ impl RunStore {
                 triggered_by   = COALESCE(harness_workflow_runs.triggered_by, excluded.triggered_by),
                 trigger_source = COALESCE(harness_workflow_runs.trigger_source, excluded.trigger_source),
                 trigger_actor  = COALESCE(harness_workflow_runs.trigger_actor, excluded.trigger_actor),
+                trigger_id     = COALESCE(harness_workflow_runs.trigger_id, excluded.trigger_id),
                 heartbeat_at  = now()",
         )
         .bind(run_id)
@@ -816,6 +834,7 @@ impl RunStore {
         .bind(trigger.and_then(|t| t.user_id))
         .bind(trigger.and_then(|t| t.source))
         .bind(trigger.and_then(|t| t.actor))
+        .bind(trigger.and_then(|t| t.trigger_id))
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -844,8 +863,8 @@ impl RunStore {
         request: &serde_json::Value,
     ) -> Result<(), PersistError> {
         sqlx::query(
-            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, ab_pair_id, ab_arm, ab_label, triggered_by, trigger_source, trigger_actor, queued_request, recorded_at)
-             VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, now())
+            "INSERT INTO harness_workflow_runs (id, workflow_name, title, description, status, project, node_count, graph, ab_pair_id, ab_arm, ab_label, triggered_by, trigger_source, trigger_actor, trigger_id, queued_request, recorded_at)
+             VALUES ($1, $2, $3, $4, 'queued', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, now())
              ON CONFLICT (id) DO NOTHING",
         )
         .bind(run_id)
@@ -861,6 +880,7 @@ impl RunStore {
         .bind(trigger.and_then(|t| t.user_id))
         .bind(trigger.and_then(|t| t.source))
         .bind(trigger.and_then(|t| t.actor))
+        .bind(trigger.and_then(|t| t.trigger_id))
         .bind(Json(request))
         .execute(&self.pool)
         .await?;
@@ -1327,7 +1347,8 @@ impl RunStore {
     /// Reap runs whose **lease has gone stale**: a run still marked `running`
     /// whose `heartbeat_at` is older than `stale_after` (or never set) has no
     /// live executor renewing it — flip it (and its in-flight node rows) to
-    /// `cancelled`. Returns the run count.
+    /// `cancelled`. Returns the ids of the runs it cancelled, so the caller
+    /// can tell whoever follows them.
     ///
     /// Crucially this is **scoped by liveness**, not "all running": a run a
     /// different instance is actively heartbeating is left alone, so a second
@@ -1337,7 +1358,7 @@ impl RunStore {
     pub async fn reconcile_orphaned_runs(
         &self,
         stale_after: std::time::Duration,
-    ) -> Result<u64, PersistError> {
+    ) -> Result<Vec<String>, PersistError> {
         let secs = stale_after.as_secs_f64();
         let mut tx = self.pool.begin().await?;
         // Node rows first (while their runs are still `running` so the subquery
@@ -1352,16 +1373,27 @@ impl RunStore {
         .bind(secs)
         .execute(&mut *tx)
         .await?;
-        let res = sqlx::query(
+        let reaped: Vec<(String,)> = sqlx::query_as(
             "UPDATE harness_workflow_runs SET status = 'cancelled', recorded_at = now()
              WHERE status = 'running'
-               AND (heartbeat_at IS NULL OR heartbeat_at < now() - ($1 * interval '1 second'))",
+               AND (heartbeat_at IS NULL OR heartbeat_at < now() - ($1 * interval '1 second'))
+             RETURNING id",
         )
         .bind(secs)
-        .execute(&mut *tx)
+        .fetch_all(&mut *tx)
         .await?;
         tx.commit().await?;
-        Ok(res.rows_affected())
+        Ok(reaped.into_iter().map(|r| r.0).collect())
+    }
+
+    /// The trigger or schedule that started a run, if one did.
+    pub async fn run_trigger_id(&self, run_id: &str) -> Result<Option<String>, PersistError> {
+        let row: Option<(Option<String>,)> =
+            sqlx::query_as("SELECT trigger_id FROM harness_workflow_runs WHERE id = $1")
+                .bind(run_id)
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(row.and_then(|r| r.0))
     }
 
     /// Fetch a run's status string, if present (for read-back / tests).
@@ -2633,22 +2665,25 @@ mod tests {
 
         // A fresh lease survives reconcile with a generous staleness window —
         // this is what protects a live run from a stray reconcile call.
-        let n = store
+        let reaped = store
             .reconcile_orphaned_runs(std::time::Duration::from_secs(3600))
             .await
             .unwrap();
+        assert!(
+            !reaped.contains(&run_id),
+            "fresh-heartbeat run must NOT be reaped"
+        );
         assert_eq!(
             store.run_status(&run_id).await.unwrap().as_deref(),
             Some("running"),
-            "fresh-heartbeat run must NOT be reaped (reaped {n})"
         );
 
         // With a zero window every running run is stale → reaped.
-        let n = store
+        let reaped = store
             .reconcile_orphaned_runs(std::time::Duration::ZERO)
             .await
             .unwrap();
-        assert!(n >= 1, "reconciled at least our orphan");
+        assert!(reaped.contains(&run_id), "reaped our orphan, by id");
         assert_eq!(
             store.run_status(&run_id).await.unwrap().as_deref(),
             Some("cancelled")

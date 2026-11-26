@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useLocation } from "react-router-dom";
 import {
   IconArrowLeft,
+  IconBell,
   IconBinaryTree2,
   IconRobot,
   IconServer2,
@@ -59,6 +60,12 @@ const GROUPS: { label: string; items: SettingsNavItem[] }[] = [
         label: "Preferences",
         icon: IconSettings2,
         keywords: "theme appearance dark light sidebar menu",
+      },
+      {
+        href: "/settings/notifications",
+        label: "Notifications",
+        icon: IconBell,
+        keywords: "notify alert inbox trigger failed run failed subscribe",
       },
       {
         href: "/settings/mcp",

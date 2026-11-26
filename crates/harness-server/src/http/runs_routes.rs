@@ -109,6 +109,11 @@ pub struct RunsState {
     chat_store: OnceCell<harness_persist::ChatStore>,
     schedule_store: OnceCell<harness_persist::ScheduleStore>,
     trigger_store: OnceCell<harness_persist::TriggerStore>,
+    notification_store: OnceCell<harness_persist::NotificationStore>,
+    /// Runs the first store connection cancelled as orphans. That happens
+    /// inside [`Self::store`], which has no `Arc` to start notifying with, so
+    /// the reaper loop picks them up on its next tick.
+    reaped_on_connect: std::sync::Mutex<Vec<String>>,
     pr_store: OnceCell<harness_persist::PrStore>,
     improvement_store: OnceCell<harness_persist::ImprovementStore>,
     fact_store: OnceCell<harness_persist::FactStore>,
@@ -227,6 +232,8 @@ impl RunsState {
             chat_store: OnceCell::new(),
             schedule_store: OnceCell::new(),
             trigger_store: OnceCell::new(),
+            notification_store: OnceCell::new(),
+            reaped_on_connect: std::sync::Mutex::new(Vec::new()),
             pr_store: OnceCell::new(),
             improvement_store: OnceCell::new(),
             fact_store: OnceCell::new(),
@@ -576,6 +583,23 @@ impl RunsState {
             .await
     }
 
+    /// Lazily connect the notification store: subscriptions and the inbox.
+    pub(crate) async fn notification_store(
+        &self,
+    ) -> Result<&harness_persist::NotificationStore, String> {
+        let url = self
+            .db_url
+            .as_deref()
+            .ok_or("no database configured (set server.database_url)")?;
+        self.notification_store
+            .get_or_try_init(|| async {
+                harness_persist::NotificationStore::connect(url)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+    }
+
     /// Lazily connect the store of steps saved from the workflow builder.
     pub(crate) async fn saved_step_store(
         &self,
@@ -823,8 +847,11 @@ impl RunsState {
                     .reconcile_orphaned_runs(std::time::Duration::from_secs(RECONCILE_STALE_SECS))
                     .await
                 {
-                    Ok(n) if n > 0 => {
-                        tracing::info!("reconciled {n} orphaned run(s) → cancelled")
+                    Ok(ids) if !ids.is_empty() => {
+                        tracing::info!("reconciled {} orphaned run(s) → cancelled", ids.len());
+                        if let Ok(mut pending) = self.reaped_on_connect.lock() {
+                            pending.extend(ids);
+                        }
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("orphaned-run reconcile failed: {e}"),
@@ -1049,6 +1076,8 @@ pub struct TriggerInfo {
     pub source: Option<String>,
     pub user_id: Option<String>,
     pub actor: Option<String>,
+    /// The trigger or schedule that started the run, by id.
+    pub trigger_id: Option<String>,
 }
 
 impl TriggerInfo {
@@ -1063,6 +1092,7 @@ impl TriggerInfo {
             source: Some(source.to_string()),
             user_id,
             actor,
+            trigger_id: None,
         }
     }
 
@@ -1071,6 +1101,7 @@ impl TriggerInfo {
             source: self.source.as_deref(),
             user_id: self.user_id.as_deref(),
             actor: self.actor.as_deref(),
+            trigger_id: self.trigger_id.as_deref(),
         }
     }
 }
@@ -1092,6 +1123,10 @@ pub struct CreateRunRequest {
     /// `triggered_by` is not, for a person with no account here.
     #[serde(skip_deserializing)]
     pub trigger_actor: Option<String>,
+    /// The trigger or schedule that started the run, by id. Server-set like
+    /// the rest of the trigger fields.
+    #[serde(default, skip_deserializing)]
+    pub trigger_id: Option<String>,
     /// Workflow path or bundled/project name.
     pub workflow: String,
     /// Human task title — names the run; exposed to nodes as `$TASK_TITLE`.
@@ -1256,15 +1291,25 @@ pub(crate) fn spawn_reaper(state: Arc<RunsState>) {
         loop {
             tick.tick().await;
             if let Ok(store) = state.store().await {
+                let mut reaped = state
+                    .reaped_on_connect
+                    .lock()
+                    .map(|mut pending| std::mem::take(&mut *pending))
+                    .unwrap_or_default();
                 match store
                     .reconcile_orphaned_runs(std::time::Duration::from_secs(RECONCILE_STALE_SECS))
                     .await
                 {
-                    Ok(n) if n > 0 => {
-                        tracing::info!("reaper: cancelled {n} stale-lease run(s)")
+                    Ok(ids) => {
+                        if !ids.is_empty() {
+                            tracing::info!("reaper: cancelled {} stale-lease run(s)", ids.len());
+                        }
+                        reaped.extend(ids);
                     }
-                    Ok(_) => {}
                     Err(e) => tracing::warn!("reaper: reconcile failed: {e}"),
+                }
+                for run_id in &reaped {
+                    super::notifications::run_ended(&state, run_id, None);
                 }
             }
         }
@@ -1969,6 +2014,7 @@ pub async fn judge_run_pair(
         triggered_by: trigger.user_id.clone(),
         trigger_source: trigger.source.clone(),
         trigger_actor: trigger.actor.clone(),
+        trigger_id: None,
         workflow: "judge-ab".to_string(),
         // The judge grades two runs; it is not itself about an issue.
         issue_id: None,
@@ -2070,6 +2116,7 @@ pub async fn rerun_run(
         triggered_by: trigger.user_id.clone(),
         trigger_source: trigger.source.clone(),
         trigger_actor: trigger.actor.clone(),
+        trigger_id: None,
         workflow: detail.run.workflow_name.clone(),
         title: detail.run.title.clone(),
         issue_id,
@@ -2168,6 +2215,7 @@ pub(crate) async fn start_run_pair(
         triggered_by: req.triggered_by.clone(),
         trigger_source: req.trigger_source.clone(),
         trigger_actor: req.trigger_actor.clone(),
+        trigger_id: None,
         workflow: req.workflow.clone(),
         title: req.title.clone(),
         // An A/B pair compares models on a task; neither arm should write to an
@@ -2407,15 +2455,17 @@ fn skips_queue(workflow: &harness_dag::Workflow) -> bool {
 /// run was refused as an internal workflow started by hand.
 fn parked_request(v: serde_json::Value) -> Result<CreateRunRequest, serde_json::Error> {
     let field = |name: &str| v.get(name).and_then(|x| x.as_str()).map(str::to_string);
-    let (triggered_by, trigger_source, trigger_actor) = (
+    let (triggered_by, trigger_source, trigger_actor, trigger_id) = (
         field("triggered_by"),
         field("trigger_source"),
         field("trigger_actor"),
+        field("trigger_id"),
     );
     let mut req: CreateRunRequest = serde_json::from_value(v)?;
     req.triggered_by = triggered_by;
     req.trigger_source = trigger_source;
     req.trigger_actor = trigger_actor;
+    req.trigger_id = trigger_id;
     Ok(req)
 }
 
@@ -2450,6 +2500,7 @@ async fn start_run_inner(
         source: req.trigger_source.clone(),
         user_id: req.triggered_by.clone(),
         actor: req.trigger_actor.clone(),
+        trigger_id: req.trigger_id.clone(),
     };
     let project = match req
         .project
@@ -3456,6 +3507,7 @@ pub async fn stream_run(
 /// misses and the row flips straight to cancelled.
 pub async fn cancel_run(
     Extension(state): Extension<Arc<RunsState>>,
+    headers: axum::http::HeaderMap,
     AxumPath(id): AxumPath<String>,
 ) -> Response {
     // Abort the live task and drop its broadcast channel, if we own it. Aborting
@@ -3468,7 +3520,12 @@ pub async fn cancel_run(
         Err(e) => return err(StatusCode::SERVICE_UNAVAILABLE, e),
     };
     match store.cancel_run(&id).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(true) => {
+            // Whoever cancelled it knows; everyone else following it is told.
+            let (canceller, _) = super::accounts::caller_trigger(&state, &headers).await;
+            super::notifications::run_ended(&state, &id, canceller);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Ok(false) => err(
             StatusCode::CONFLICT,
             format!("run `{id}` is neither running nor queued (already finished or unknown)"),
@@ -3521,6 +3578,7 @@ mod tests {
             triggered_by: source.map(|_| "user-1".to_string()),
             trigger_source: source.map(str::to_string),
             trigger_actor: source.map(|_| "Learned facts".to_string()),
+            trigger_id: None,
             workflow: "learn-facts".into(),
             title: Some("Learn facts".into()),
             description: "review".into(),

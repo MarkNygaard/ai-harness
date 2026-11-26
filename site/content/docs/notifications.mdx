@@ -1,0 +1,48 @@
+---
+title: "Notifications"
+description: "Hear about the runs and triggers you care about, and nothing else. Every notification is one you asked for."
+---
+
+The harness does not notify anybody by default. You choose what to hear about,
+and it lands in your **Inbox** in the sidebar, with a count of what is unread.
+A notification that arrives while the app is open also shows briefly in the
+corner.
+
+Notifications belong to a person, so they need
+[sign-in](/docs/setup/deploy#sign-in-and-tokens) to be switched on.
+
+## Following one trigger
+
+Open a trigger or schedule on the **Triggers** page and choose **Notify me**.
+By default you hear when it couldn't start a run and when a run it started
+failed. Choose **Notifying you** on the same page to turn it off.
+
+This is the setting for "tell me if the nightly sync breaks". It doesn't cover
+every other trigger in the project.
+
+## Everything else
+
+**Settings → Notifications** lists what you follow and adds more. A
+subscription is about one of these:
+
+| About | Covers |
+| --- | --- |
+| My runs and triggers | Runs you started, and triggers you created |
+| A project | Every run and trigger in the project |
+| A workflow | Every run of the workflow, in any project, and every trigger that starts it |
+| One trigger or schedule | That trigger, and the runs it starts |
+
+And you hear about any of these events:
+
+| Event | When |
+| --- | --- |
+| Trigger couldn't start a run | A trigger or schedule fired, but no run started: a webhook with no secret or a bad signature, a schedule whose run was refused, a Linear issue that could not be claimed |
+| Run failed | A run ended with a failed step. The notification names the step |
+| Run cancelled | A run was stopped, by a person or by the server when the run's worker went away. Whoever cancels a run is not told about it |
+| Run finished | A run completed |
+
+If several of your subscriptions match the same run, you get one notification.
+A trigger that keeps failing the same way, such as a webhook sender retrying
+with a bad signature, notifies you once an hour, not once per attempt.
+
+The inbox keeps notifications for 90 days.

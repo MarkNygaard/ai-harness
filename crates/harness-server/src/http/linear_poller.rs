@@ -694,7 +694,7 @@ async fn claim_and_fire(
     // the assignee would credit the first. `delegate_id` is the harness's own
     // Linear identity, excluded so its pickup and completion moves never read
     // as a request.
-    let trigger = super::linear_agent::linear_trigger(
+    let mut trigger = super::linear_agent::linear_trigger(
         state,
         client,
         Some(issue.id.as_str()),
@@ -703,10 +703,12 @@ async fn claim_and_fire(
         super::runs_routes::SOURCE_LINEAR_POLLER,
     )
     .await;
+    trigger.trigger_id = trigger_id.map(str::to_string);
     let req = CreateRunRequest {
         triggered_by: trigger.user_id.clone(),
         trigger_source: trigger.source.clone(),
         trigger_actor: trigger.actor.clone(),
+        trigger_id: trigger.trigger_id.clone(),
         workflow,
         title: Some(format!("{} {}", issue.identifier, issue.title)),
         issue_id: Some(issue.id.clone()),
@@ -890,6 +892,14 @@ async fn claim_and_fire(
                 let _ = store.leave(id, &issue.id).await;
                 let _ = store.record_error(id, &e).await;
             }
+            super::notifications::linear_trigger_failed(
+                state,
+                trigger_id,
+                &b.project,
+                &b.workflow,
+                &format!("{}: {e}", issue.identifier),
+            )
+            .await;
             // And give the label back, or the issue would wait for a person.
             if let Some(label_id) = &trigger_label_id {
                 if let Err(e) = client.add_label(&issue.id, label_id).await {

@@ -1,5 +1,6 @@
 import { Link, useLocation } from "react-router-dom";
 import {
+  IconBell,
   IconBolt,
   IconBulb,
   IconClipboardCheck,
@@ -20,6 +21,7 @@ import { useRuns } from "@/lib/runs";
 import { useWorkflowList } from "@/lib/authoring";
 import { useScorers } from "@/lib/scorers";
 import { useImprovements } from "@/lib/improvements";
+import { useInbox, useNotificationsAvailable } from "@/lib/notifications";
 import { AccountMenu } from "@/components/AccountMenu";
 import {
   Sidebar,
@@ -94,6 +96,8 @@ export function useOperationsNav(): NavItem[] {
   const workflows = useWorkflowList();
   const scorers = useScorers();
   const improvements = useImprovements({ status: "new" });
+  const notificationsOn = useNotificationsAvailable();
+  const inbox = useInbox();
   const hasRun = (name: string) =>
     !!runs.data?.some((r) => r.workflow_name === name);
 
@@ -131,6 +135,20 @@ export function useOperationsNav(): NavItem[] {
       icon: IconMessageCircle,
       group: "harness",
     },
+    // What you asked to be told about, with how much of it is unread. Only
+    // with accounts: a notification belongs to somebody.
+    ...(notificationsOn
+      ? [
+          {
+            href: "/inbox",
+            label: "Inbox",
+            icon: IconBell,
+            match: "/inbox",
+            group: "harness" as const,
+            badge: inbox.data?.unread || undefined,
+          },
+        ]
+      : []),
     // Linear triggers, webhooks and schedules: everything that starts a run
     // by itself.
     {

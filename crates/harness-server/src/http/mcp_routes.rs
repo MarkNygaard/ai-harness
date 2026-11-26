@@ -363,6 +363,7 @@ pub(crate) async fn call_tool(
         // ── Run control ─────────────────────────────────────────────────────
         "run_trigger" => {
             let req = CreateRunRequest {
+                trigger_id: None,
                 // An editor triggering a run is not acting on a Linear issue.
                 issue_id: None,
                 triggered_by: actor.user_id.clone(),

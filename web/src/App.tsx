@@ -18,6 +18,8 @@ import { SubscriptionsPage } from "./routes/credentials/SubscriptionsPage";
 import { IntegrationsPage } from "./routes/credentials/IntegrationsPage";
 import { CategoriesPage } from "./routes/categories/CategoriesPage";
 import { PreferencesPage } from "./routes/settings/PreferencesPage";
+import { NotificationsPage } from "./routes/settings/NotificationsPage";
+import { InboxPage } from "./routes/inbox/InboxPage";
 import { EditorConnectionPage } from "./routes/settings/EditorConnectionPage";
 import { McpServersPage } from "./routes/settings/McpServersPage";
 import { MembersPage } from "./routes/settings/MembersPage";
@@ -29,6 +31,7 @@ import { ForgotPasswordPage } from "./routes/auth/ForgotPasswordPage";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { Toaster } from "./components/ui/sonner";
 import { AgentUpdateToast } from "./components/AgentUpdateToast";
+import { NotificationToasts } from "./components/notifications/NotificationToasts";
 import { TokenPrompt } from "./components/TokenPrompt";
 import { LoginPage, SetupPage } from "./routes/auth/SignInPage";
 import { RequireSignIn } from "./components/RequireSignIn";
@@ -65,6 +68,7 @@ export function App() {
             <Route path="/setup" element={<SetupPage />} />
             <Route path="/" element={<DashboardPage />} />
             <Route path="/runs" element={<RunsPage />} />
+            <Route path="/inbox" element={<InboxPage />} />
             <Route path="/scorers" element={<ScorersPage />} />
             <Route path="/scorers/:name" element={<ScorerPage />} />
             <Route path="/improvements" element={<ImprovementsPage />} />
@@ -108,6 +112,10 @@ export function App() {
               element={<Navigate to="/settings/preferences" replace />}
             />
             <Route path="/settings/preferences" element={<PreferencesPage />} />
+            <Route
+              path="/settings/notifications"
+              element={<NotificationsPage />}
+            />
             <Route path="/settings/mcp" element={<EditorConnectionPage />} />
             <Route path="/settings/mcp-servers" element={<McpServersPage />} />
             {/* Public: whoever holds one of these links has not signed in yet. */}
@@ -177,6 +185,7 @@ export function App() {
             rather than the page, and the notice fires once per load however you
             arrived. */}
           <AgentUpdateToast />
+          <NotificationToasts />
           <Toaster />
           {/* One panel for the whole app, opened from any page's header. */}
           <ChatPanel />
