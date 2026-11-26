@@ -14,6 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { EventPicker } from "@/components/notifications/EventPicker";
 import {
+  type ChannelChoice,
+  ChannelPicker,
+  channelChoiceComplete,
+  NO_CHANNELS,
+} from "@/components/notifications/ChannelPicker";
+import {
+  describeChannels,
   describeEvents,
   type NotificationEvent,
   useNotificationsAvailable,
@@ -46,6 +53,7 @@ export function NotifyMeButton({
   const unsubscribe = useUnsubscribe();
   const [open, setOpen] = useState(false);
   const [events, setEvents] = useState<NotificationEvent[]>(DEFAULT_EVENTS);
+  const [channels, setChannels] = useState<ChannelChoice>(NO_CHANNELS);
 
   if (!available) return null;
   const existing = (subscriptions.data ?? []).filter(
@@ -62,7 +70,10 @@ export function NotifyMeButton({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (next) setEvents(DEFAULT_EVENTS);
+        if (next) {
+          setEvents(DEFAULT_EVENTS);
+          setChannels(NO_CHANNELS);
+        }
         setOpen(next);
       }}
     >
@@ -94,8 +105,8 @@ export function NotifyMeButton({
         <DialogHeader>
           <DialogTitle>Notifications for “{name}”</DialogTitle>
           <DialogDescription>
-            Only you are notified, in your inbox. Everything else you follow is
-            under{" "}
+            Only you are notified: in your inbox, and wherever else you choose.
+            Everything else you follow is under{" "}
             <Link to="/settings/notifications" className="underline">
               Settings → Notifications
             </Link>
@@ -103,12 +114,21 @@ export function NotifyMeButton({
           </DialogDescription>
         </DialogHeader>
         {existing.length > 0 ? (
-          <p className="text-[13px]">
-            You are told when:{" "}
-            {describeEvents(existing.flatMap((s) => s.events))}.
-          </p>
+          <div className="flex flex-col gap-1 text-[13px]">
+            {existing.map((s) => (
+              <p key={s.id}>
+                {describeEvents(s.events)} → {describeChannels(s)}
+              </p>
+            ))}
+          </div>
         ) : (
-          <EventPicker value={events} onChange={setEvents} />
+          <div className="flex flex-col gap-4">
+            <EventPicker value={events} onChange={setEvents} />
+            <div className="flex flex-col gap-1.5">
+              <span className="text-[13px] font-medium">Where</span>
+              <ChannelPicker value={channels} onChange={setChannels} />
+            </div>
+          </div>
         )}
         {(subscribe.isError || unsubscribe.isError) && (
           <p role="alert" className="text-[11px] text-destructive">
@@ -131,10 +151,18 @@ export function NotifyMeButton({
             </Button>
           ) : (
             <Button
-              disabled={busy || events.length === 0}
+              disabled={
+                busy || events.length === 0 || !channelChoiceComplete(channels)
+              }
               onClick={() =>
                 subscribe.mutate(
-                  { events, scope_kind: "trigger", scope_value: triggerId },
+                  {
+                    events,
+                    scope_kind: "trigger",
+                    scope_value: triggerId,
+                    channels: channels.channels,
+                    slack_channel: channels.slackChannel.trim() || null,
+                  },
                   { onSuccess: () => setOpen(false) },
                 )
               }

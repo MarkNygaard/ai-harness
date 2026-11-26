@@ -137,6 +137,15 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // Your notifications: the inbox, and what you asked to hear about.
         .route("/api/me/notifications", get(notifications::inbox))
         .route("/api/me/notifications/read", post(notifications::mark_read))
+        .route("/api/me/notifications/test", post(notifications::send_test))
+        .route(
+            "/api/me/notification-channels",
+            get(notifications::list_channels),
+        )
+        .route(
+            "/api/integrations/slack/manifest",
+            get(notifications::slack_manifest),
+        )
         .route(
             "/api/me/notification-subscriptions",
             get(notifications::list_subscriptions).post(notifications::subscribe),

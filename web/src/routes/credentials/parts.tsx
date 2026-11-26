@@ -221,6 +221,19 @@ const PROVIDERS: ProviderDef[] = [
     ],
   },
   {
+    id: "slack",
+    label: "Slack",
+    help: "Sends notifications people subscribe to as Slack direct messages and channel posts. Create the app from the manifest below, install it to your workspace, and paste its bot token. People need no setup: their Slack account is found by their email address here.",
+    fields: [
+      {
+        key: "bot_token",
+        label: "Bot User OAuth Token",
+        placeholder: "xoxb-…",
+        help: "In the Slack app: OAuth & Permissions → Bot User OAuth Token, after installing it to the workspace.",
+      },
+    ],
+  },
+  {
     id: "linear",
     label: "Linear",
     help: "The OAuth application backing the workspace connection above. Create it in Linear → Settings → API → OAuth applications, registering the callback URL shown above.",

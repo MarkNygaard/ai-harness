@@ -57,7 +57,9 @@ export interface NotificationSubscription {
   events: NotificationEvent[];
   scope_kind: SubscriptionScope;
   scope_value: string;
-  channels: string[];
+  channels: NotificationChannel[];
+  /** Where a `slack_channel` subscription posts. */
+  slack_channel: string | null;
   created_at: string;
 }
 
@@ -65,6 +67,30 @@ export interface SubscriptionInput {
   events: NotificationEvent[];
   scope_kind: SubscriptionScope;
   scope_value: string;
+  /** Besides the inbox, which every subscription has. */
+  channels?: NotificationChannel[];
+  slack_channel?: string | null;
+}
+
+export type NotificationChannel =
+  "in_app" | "email" | "slack_dm" | "slack_channel";
+
+/** Where a notification can go besides the inbox, and what each means. */
+export const CHANNELS: {
+  value: Exclude<NotificationChannel, "in_app">;
+  label: string;
+  /** Which of the harness's connections it needs. */
+  needs: "email" | "slack";
+}[] = [
+  { value: "email", label: "Email", needs: "email" },
+  { value: "slack_dm", label: "Slack direct message", needs: "slack" },
+  { value: "slack_channel", label: "Slack channel", needs: "slack" },
+];
+
+/** What this harness can deliver with, and where email goes. */
+export interface ChannelAvailability {
+  email: { available: boolean; address: string };
+  slack: { available: boolean };
 }
 
 export interface Notification {
@@ -79,6 +105,8 @@ export interface Notification {
   project: string | null;
   created_at: string;
   read_at: string | null;
+  /** Why it did not reach email or Slack, when it didn't. */
+  delivery_error: string | null;
 }
 
 interface InboxResponse {
@@ -171,4 +199,44 @@ export function describeEvents(events: NotificationEvent[]): string {
   return EVENTS.filter((e) => events.includes(e.value))
     .map((e) => e.label)
     .join(", ");
+}
+
+export function useNotificationChannels() {
+  const enabled = useNotificationsAvailable();
+  return useQuery<ChannelAvailability, Error>({
+    queryKey: ["notifications", "channels"],
+    enabled,
+    queryFn: ({ signal }) =>
+      apiJson<ChannelAvailability>("/api/me/notification-channels", {
+        signal,
+      }),
+    retry: false,
+    refetchInterval: false,
+  });
+}
+
+/** Send yourself a test on one channel. Rejects with what went wrong. */
+export function useSendTest() {
+  return useMutation<
+    { sent: boolean },
+    Error,
+    { channel: Exclude<NotificationChannel, "in_app">; slack_channel?: string }
+  >({
+    mutationFn: (body) =>
+      apiJson<{ sent: boolean }>("/api/me/notifications/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+  });
+}
+
+/** "Inbox, Email, Slack #builds" — where a subscription delivers. */
+export function describeChannels(s: NotificationSubscription): string {
+  const out = ["Inbox"];
+  if (s.channels.includes("email")) out.push("Email");
+  if (s.channels.includes("slack_dm")) out.push("Slack DM");
+  if (s.channels.includes("slack_channel") && s.slack_channel)
+    out.push(`Slack #${s.slack_channel}`);
+  return out.join(", ");
 }

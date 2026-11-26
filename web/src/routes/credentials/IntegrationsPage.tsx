@@ -4,6 +4,7 @@ import { Switch } from "@/components/ui/switch";
 import { useCredentials } from "@/lib/credentials";
 import { useGeneralSettings, useSetGeneralSettings } from "@/lib/settings";
 import { LinearCallbackBanner } from "@/components/credentials/LinearConnect";
+import { SlackSetup } from "@/components/credentials/SlackSetup";
 import {
   LinearAccounts,
   ProviderCard,
@@ -129,6 +130,18 @@ export function IntegrationsPage() {
             configured={is("s3")}
           >
             <ProviderCard provider={providerDef("s3")} configured={is("s3")} />
+          </ProviderSummary>
+          <ProviderSummary
+            provider="slack"
+            label={providerDef("slack").label}
+            help={providerDef("slack").help}
+            configured={is("slack")}
+          >
+            <SlackSetup />
+            <ProviderCard
+              provider={providerDef("slack")}
+              configured={is("slack")}
+            />
           </ProviderSummary>
           <ProviderSummary
             provider="linear"

@@ -47,7 +47,18 @@ pub const SCOPES: &[&str] = &[SCOPE_TRIGGER, SCOPE_WORKFLOW, SCOPE_PROJECT, SCOP
 
 /// The inbox in the web UI. Every subscription writes there.
 pub const CHANNEL_IN_APP: &str = "in_app";
-pub const CHANNELS: &[&str] = &[CHANNEL_IN_APP];
+/// An email to the person's account address.
+pub const CHANNEL_EMAIL: &str = "email";
+/// A Slack direct message, to the Slack account with the person's address.
+pub const CHANNEL_SLACK_DM: &str = "slack_dm";
+/// A post in a Slack channel, named on the subscription.
+pub const CHANNEL_SLACK_CHANNEL: &str = "slack_channel";
+pub const CHANNELS: &[&str] = &[
+    CHANNEL_IN_APP,
+    CHANNEL_EMAIL,
+    CHANNEL_SLACK_DM,
+    CHANNEL_SLACK_CHANNEL,
+];
 
 const CREATE_SUBSCRIPTIONS: &str = "
 CREATE TABLE IF NOT EXISTS harness_notification_subscriptions (
@@ -93,8 +104,26 @@ const CREATE_NOTIFICATIONS_DEDUPE_IDX: &str = "CREATE UNIQUE INDEX IF NOT EXISTS
 const CREATE_NOTIFICATIONS_INBOX_IDX: &str = "CREATE INDEX IF NOT EXISTS \
     harness_notifications_inbox_idx ON harness_notifications (user_id, created_at DESC)";
 
+/// The Slack channel a `slack_channel` subscription posts to.
+const ADD_SUBSCRIPTION_SLACK_CHANNEL: &str = "ALTER TABLE harness_notification_subscriptions \
+    ADD COLUMN IF NOT EXISTS slack_channel text";
+
+/// Why a notification did not reach somewhere it should have (email, Slack).
+const ADD_NOTIFICATION_DELIVERY_ERROR: &str =
+    "ALTER TABLE harness_notifications ADD COLUMN IF NOT EXISTS delivery_error text";
+
+/// A post to a shared channel, once per thing however many people route it
+/// there.
+const CREATE_CHANNEL_POSTS: &str = "
+CREATE TABLE IF NOT EXISTS harness_notification_channel_posts (
+    channel    text NOT NULL,
+    dedupe_key text NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (channel, dedupe_key)
+)";
+
 /// A standing request to be told about something.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct NotificationSubscription {
     pub id: String,
     pub user_id: String,
@@ -102,6 +131,8 @@ pub struct NotificationSubscription {
     pub scope_kind: String,
     pub scope_value: String,
     pub channels: Json<Vec<String>>,
+    /// Where a `slack_channel` subscription posts: a channel name or id.
+    pub slack_channel: Option<String>,
     pub created_at: DateTime<Utc>,
 }
 
@@ -114,6 +145,9 @@ pub struct SubscriptionInput {
     pub scope_value: String,
     #[serde(default)]
     pub channels: Vec<String>,
+    /// Required with the `slack_channel` channel; ignored otherwise.
+    #[serde(default)]
+    pub slack_channel: Option<String>,
 }
 
 impl SubscriptionInput {
@@ -153,6 +187,23 @@ impl SubscriptionInput {
         {
             return Err(format!("unknown channel `{bad}`"));
         }
+        // `#builds` and `builds` are the same channel; keep one spelling.
+        self.slack_channel = self
+            .slack_channel
+            .as_deref()
+            .map(|c| c.trim().trim_start_matches('#').trim().to_string())
+            .filter(|c| !c.is_empty());
+        if self.channels.iter().any(|c| c == CHANNEL_SLACK_CHANNEL) {
+            match &self.slack_channel {
+                None => return Err("name the Slack channel to post to".into()),
+                Some(c) if c.chars().any(char::is_whitespace) => {
+                    return Err(format!("`{c}` is not a Slack channel name"))
+                }
+                Some(_) => {}
+            }
+        } else {
+            self.slack_channel = None;
+        }
         Ok(self)
     }
 }
@@ -184,6 +235,8 @@ pub struct Notification {
     pub project: Option<String>,
     pub created_at: DateTime<Utc>,
     pub read_at: Option<DateTime<Utc>>,
+    /// Why it did not reach email or Slack, when it didn't.
+    pub delivery_error: Option<String>,
 }
 
 /// A notification to write.
@@ -201,10 +254,10 @@ pub struct NewNotification<'a> {
     pub dedupe_key: &'a str,
 }
 
-const SUBSCRIPTION_COLUMNS: &str =
-    "s.id, s.user_id, s.events, s.scope_kind, s.scope_value, s.channels, s.created_at";
+const SUBSCRIPTION_COLUMNS: &str = "s.id, s.user_id, s.events, s.scope_kind, s.scope_value, \
+    s.channels, s.slack_channel, s.created_at";
 const NOTIFICATION_COLUMNS: &str = "id, user_id, subscription_id, event, title, body, link, \
-    run_id, trigger_id, project, created_at, read_at";
+    run_id, trigger_id, project, created_at, read_at, delivery_error";
 
 /// Postgres-backed subscriptions and inbox.
 pub struct NotificationStore {
@@ -231,6 +284,9 @@ impl NotificationStore {
             CREATE_NOTIFICATIONS,
             CREATE_NOTIFICATIONS_DEDUPE_IDX,
             CREATE_NOTIFICATIONS_INBOX_IDX,
+            ADD_SUBSCRIPTION_SLACK_CHANNEL,
+            ADD_NOTIFICATION_DELIVERY_ERROR,
+            CREATE_CHANNEL_POSTS,
         ] {
             sqlx::query(stmt).execute(&pool).await?;
         }
@@ -245,8 +301,8 @@ impl NotificationStore {
     ) -> Result<NotificationSubscription, PersistError> {
         let sql = format!(
             "INSERT INTO harness_notification_subscriptions AS s
-                 (id, user_id, events, scope_kind, scope_value, channels)
-             VALUES ($1, $2, $3, $4, $5, $6) RETURNING {SUBSCRIPTION_COLUMNS}"
+                 (id, user_id, events, scope_kind, scope_value, channels, slack_channel)
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING {SUBSCRIPTION_COLUMNS}"
         );
         Ok(sqlx::query_as::<_, NotificationSubscription>(&sql)
             .bind(uuid::Uuid::new_v4().to_string())
@@ -255,6 +311,7 @@ impl NotificationStore {
             .bind(&input.scope_kind)
             .bind(&input.scope_value)
             .bind(Json(&input.channels))
+            .bind(&input.slack_channel)
             .fetch_one(&self.pool)
             .await?)
     }
@@ -400,10 +457,49 @@ impl NotificationStore {
         Ok(result.rows_affected())
     }
 
+    /// Record why a notification did not reach email or Slack, or clear it.
+    pub async fn set_delivery_error(
+        &self,
+        id: i64,
+        error: Option<&str>,
+    ) -> Result<(), PersistError> {
+        sqlx::query("UPDATE harness_notifications SET delivery_error = $2 WHERE id = $1")
+            .bind(id)
+            .bind(error)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Claim the one post `dedupe_key` gets in a shared `channel`. `false`
+    /// when somebody else's subscription already posted it there.
+    pub async fn claim_channel_post(
+        &self,
+        channel: &str,
+        dedupe_key: &str,
+    ) -> Result<bool, PersistError> {
+        let result = sqlx::query(
+            "INSERT INTO harness_notification_channel_posts (channel, dedupe_key)
+             VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        )
+        .bind(channel)
+        .bind(dedupe_key)
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
     /// Delete notifications older than `days`, read or not.
     pub async fn prune(&self, days: i64) -> Result<u64, PersistError> {
         let result = sqlx::query(
             "DELETE FROM harness_notifications WHERE created_at < now() - ($1 * interval '1 day')",
+        )
+        .bind(days as f64)
+        .execute(&self.pool)
+        .await?;
+        sqlx::query(
+            "DELETE FROM harness_notification_channel_posts
+             WHERE created_at < now() - ($1 * interval '1 day')",
         )
         .bind(days as f64)
         .execute(&self.pool)
@@ -423,6 +519,7 @@ mod tests {
             scope_kind: scope.into(),
             scope_value: value.into(),
             channels: vec![],
+            slack_channel: None,
         }
     }
 
@@ -455,6 +552,32 @@ mod tests {
         let mut bad_channel = input(&["run_failed"], "mine", "");
         bad_channel.channels = vec!["carrier-pigeon".into()];
         assert!(bad_channel.validated().is_err());
+    }
+
+    #[test]
+    fn a_slack_channel_needs_a_name_and_only_with_that_channel() {
+        let mut to_channel = input(&["run_failed"], "mine", "");
+        to_channel.channels = vec!["slack_channel".into()];
+        assert!(to_channel.clone().validated().is_err(), "no channel named");
+
+        to_channel.slack_channel = Some("  #builds ".into());
+        let ok = to_channel.clone().validated().unwrap();
+        assert_eq!(ok.slack_channel.as_deref(), Some("builds"));
+        assert_eq!(ok.channels, [CHANNEL_IN_APP, CHANNEL_SLACK_CHANNEL]);
+
+        to_channel.slack_channel = Some("two words".into());
+        assert!(to_channel.validated().is_err());
+
+        // A channel name without the channel that uses it is dropped.
+        let mut dm_only = input(&["run_failed"], "mine", "");
+        dm_only.channels = vec!["slack_dm".into(), "email".into()];
+        dm_only.slack_channel = Some("builds".into());
+        let ok = dm_only.validated().unwrap();
+        assert_eq!(ok.slack_channel, None);
+        assert_eq!(
+            ok.channels,
+            [CHANNEL_EMAIL, CHANNEL_IN_APP, CHANNEL_SLACK_DM]
+        );
     }
 
     fn db_url() -> Option<String> {
@@ -546,6 +669,22 @@ mod tests {
         );
         assert_eq!(store.unread_count(&alice).await.unwrap(), 0);
         assert_eq!(store.inbox(&alice, false, 50).await.unwrap().len(), 1);
+
+        // A delivery failure is kept on the notification.
+        store
+            .set_delivery_error(inbox[0].id, Some("Slack: channel_not_found"))
+            .await
+            .unwrap();
+        let again = store.inbox(&alice, false, 50).await.unwrap();
+        assert_eq!(
+            again[0].delivery_error.as_deref(),
+            Some("Slack: channel_not_found")
+        );
+
+        // A shared channel gets one post per thing.
+        let channel = format!("builds-{}", uuid::Uuid::new_v4());
+        assert!(store.claim_channel_post(&channel, &key).await.unwrap());
+        assert!(!store.claim_channel_post(&channel, &key).await.unwrap());
 
         // Only the owner can unsubscribe.
         let subs = store.subscriptions(&alice).await.unwrap();

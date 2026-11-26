@@ -34,6 +34,7 @@ use super::runs_routes::RunsState;
 /// API rather than as provider cards — see [`is_known_provider`].
 const PROVIDERS: &[&str] = &[
     "claude", "codex", "pi", "github", "cursor", "linear", "registry", "sentry", "grafana", "s3",
+    "slack",
 ];
 
 /// Whether `provider` is one the UI may write to.

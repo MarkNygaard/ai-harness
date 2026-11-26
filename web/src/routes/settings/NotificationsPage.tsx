@@ -3,7 +3,14 @@ import { Link } from "react-router-dom";
 import { IconTrash } from "@tabler/icons-react";
 import { SettingsShell } from "@/components/SettingsShell";
 import { EventPicker } from "@/components/notifications/EventPicker";
+import {
+  type ChannelChoice,
+  ChannelPicker,
+  channelChoiceComplete,
+  NO_CHANNELS,
+} from "@/components/notifications/ChannelPicker";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import {
@@ -15,12 +22,15 @@ import {
 } from "@/components/ui/select";
 import { useWorkflowList } from "@/lib/authoring";
 import {
+  describeChannels,
   describeEvents,
   type NotificationEvent,
   type NotificationSubscription,
   SCOPES,
   type SubscriptionScope,
+  useNotificationChannels,
   useNotificationsAvailable,
+  useSendTest,
   useSubscribe,
   useSubscriptions,
   useUnsubscribe,
@@ -52,6 +62,7 @@ export function NotificationsPage() {
           <>
             <SubscriptionList />
             <NewSubscription />
+            <TryChannels />
           </>
         ) : (
           <p className="text-sm text-muted-foreground">
@@ -132,7 +143,7 @@ function SubscriptionList() {
                     <ScopeLabel s={s} />
                   </div>
                   <div className="text-[11px] text-muted-foreground">
-                    {describeEvents(s.events)}
+                    {describeEvents(s.events)} → {describeChannels(s)}
                   </div>
                 </div>
                 <Button
@@ -161,6 +172,7 @@ function NewSubscription() {
   const [events, setEvents] = useState<NotificationEvent[]>(["run_failed"]);
   const [scope, setScope] = useState<SubscriptionScope>("mine");
   const [value, setValue] = useState("");
+  const [channels, setChannels] = useState<ChannelChoice>(NO_CHANNELS);
 
   const options: { value: string; label: string }[] =
     scope === "project"
@@ -174,7 +186,10 @@ function NewSubscription() {
             }))
           : [];
   const needsValue = scope !== "mine";
-  const ready = events.length > 0 && (!needsValue || value !== "");
+  const ready =
+    events.length > 0 &&
+    (!needsValue || value !== "") &&
+    channelChoiceComplete(channels);
 
   return (
     <section className="flex flex-col gap-2">
@@ -233,6 +248,10 @@ function NewSubscription() {
             <Label>When</Label>
             <EventPicker value={events} onChange={setEvents} />
           </div>
+          <div className="flex flex-col gap-1.5">
+            <Label>Where</Label>
+            <ChannelPicker value={channels} onChange={setChannels} />
+          </div>
           {subscribe.isError && (
             <p role="alert" className="text-[11px] text-destructive">
               {subscribe.error.message}
@@ -243,7 +262,13 @@ function NewSubscription() {
               disabled={!ready || subscribe.isPending}
               onClick={() =>
                 subscribe.mutate(
-                  { events, scope_kind: scope, scope_value: value },
+                  {
+                    events,
+                    scope_kind: scope,
+                    scope_value: value,
+                    channels: channels.channels,
+                    slack_channel: channels.slackChannel.trim() || null,
+                  },
                   {
                     onSuccess: () => {
                       setValue("");
@@ -255,6 +280,84 @@ function NewSubscription() {
               {subscribe.isPending ? "Saving…" : "Notify me"}
             </Button>
           </div>
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+/**
+ * Send yourself a test on each channel that can deliver here — the way to find
+ * out that Slack cannot see your address before a real failure goes missing.
+ */
+function TryChannels() {
+  const available = useNotificationChannels().data;
+  const test = useSendTest();
+  const [channel, setChannel] = useState("");
+  if (!available || (!available.email.available && !available.slack.available))
+    return null;
+  const sent = test.isSuccess && !test.isPending;
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        Try your channels
+      </h2>
+      <Card>
+        <CardContent className="flex flex-col gap-3 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {available.email.available && (
+              <Button
+                variant="outline"
+                disabled={test.isPending}
+                onClick={() => test.mutate({ channel: "email" })}
+              >
+                Email me a test
+              </Button>
+            )}
+            {available.slack.available && (
+              <>
+                <Button
+                  variant="outline"
+                  disabled={test.isPending}
+                  onClick={() => test.mutate({ channel: "slack_dm" })}
+                >
+                  Slack me a test
+                </Button>
+                <Input
+                  className="w-40"
+                  placeholder="#channel"
+                  aria-label="Slack channel to test"
+                  value={channel}
+                  onChange={(e) => setChannel(e.target.value)}
+                />
+                <Button
+                  variant="outline"
+                  disabled={test.isPending || channel.trim() === ""}
+                  onClick={() =>
+                    test.mutate({
+                      channel: "slack_channel",
+                      slack_channel: channel,
+                    })
+                  }
+                >
+                  Post a test there
+                </Button>
+              </>
+            )}
+          </div>
+          {test.isPending && (
+            <p className="text-[11px] text-muted-foreground">Sending…</p>
+          )}
+          {sent && (
+            <p className="text-[11px] text-muted-foreground">
+              Sent. Check that it arrived.
+            </p>
+          )}
+          {test.isError && (
+            <p role="alert" className="text-[11px] text-destructive">
+              {test.error.message}
+            </p>
+          )}
         </CardContent>
       </Card>
     </section>

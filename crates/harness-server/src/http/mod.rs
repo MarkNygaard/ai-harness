@@ -57,6 +57,7 @@ pub(crate) mod runs_routes;
 pub(crate) mod schedules_routes;
 pub(crate) mod scorer_routes;
 pub(crate) mod settings_routes;
+pub(crate) mod slack;
 pub(crate) mod sso_flow;
 pub(crate) mod state;
 pub(crate) mod system_routes;
