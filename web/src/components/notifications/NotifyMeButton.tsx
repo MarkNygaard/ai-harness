@@ -48,11 +48,14 @@ export function NotifyMeButton({
   scope,
   value,
   name,
+  compact = false,
 }: {
   /** A trigger or schedule by id, or a workflow by name. */
   scope: "trigger" | "workflow";
   value: string;
   name: string;
+  /** Just the bell, for a crowded toolbar; the state is in its tooltip. */
+  compact?: boolean;
 }) {
   const available = useNotificationsAvailable();
   const subscriptions = useSubscriptions();
@@ -87,24 +90,27 @@ export function NotifyMeButton({
       <DialogTrigger
         render={
           <Button
-            size="sm"
+            size={compact ? "icon-sm" : "sm"}
             variant="outline"
             disabled={subscriptions.isLoading}
+            aria-label={existing.length > 0 ? "Notifying you" : "Notify me"}
             title={
               existing.length > 0
-                ? `You hear about: ${describeEvents(existing.flatMap((s) => s.events))}`
-                : `Get notified about this ${scope}`
+                ? `Notifying you about: ${describeEvents(existing.flatMap((s) => s.events))}`
+                : `Notify me about this ${scope}`
             }
           />
         }
       >
         {existing.length > 0 ? (
           <>
-            <IconBellRinging /> Notifying you
+            <IconBellRinging />
+            {!compact && " Notifying you"}
           </>
         ) : (
           <>
-            <IconBell /> Notify me
+            <IconBell />
+            {!compact && " Notify me"}
           </>
         )}
       </DialogTrigger>

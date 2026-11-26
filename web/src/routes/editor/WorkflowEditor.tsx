@@ -26,8 +26,13 @@ import {
 import "@xyflow/react/dist/style.css";
 import {
   Check,
+  ChevronDown,
   Copy,
+  History,
+  LayoutGrid,
   Loader2,
+  MoreHorizontal,
+  PanelLeft,
   RotateCcw,
   Save,
   FileText,
@@ -36,6 +41,13 @@ import {
   Trash2,
   TriangleAlert,
 } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { SettingsShell } from "@/components/SettingsShell";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -133,6 +145,7 @@ function Editor() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const [improvementsOpen, setImprovementsOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const loadedFor = useRef<string | null>(null);
 
   // Load an existing workflow once its source arrives.
@@ -499,12 +512,24 @@ function Editor() {
     </span>
   );
 
+  /** Open one of the workflow's side panels, closing whatever else is open. */
+  const openPanel = (panel: "description" | "ui" | "improvements") => {
+    setSelectedId(null);
+    setDescriptionOpen(panel === "description");
+    setSettingsOpen(panel === "ui");
+    setImprovementsOpen(panel === "improvements");
+  };
+  const savedHere = source.data?.source === "project";
+  const canSave = !(
+    save.isPending ||
+    validate.data?.valid === false ||
+    nodes.length === 0
+  );
+
+  // Five things at most: whether it is valid, following it, its settings,
+  // everything occasional, and Save — the one action the page is for.
   const editorActions = (
     <>
-      {/* A workflow's runs are what people follow; a new one has none yet. */}
-      {routeName && (
-        <NotifyMeButton scope="workflow" value={routeName} name={routeName} />
-      )}
       <ValidationStatus
         pending={validate.isPending}
         valid={validate.data?.valid}
@@ -512,140 +537,144 @@ function Editor() {
         count={validate.data?.nodes.length}
         warnings={validate.data?.warnings ?? []}
       />
-      {source.data?.has_bundled_default && source.data.source === "project" && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={doReset}
-          disabled={reset.isPending}
-          title="Discard the project copy and revert to the bundled default"
-        >
-          <RotateCcw className="h-3.5 w-3.5" />
-          {reset.isPending ? "Resetting…" : "Reset to default"}
-        </Button>
+      {/* A workflow's runs are what people follow; a new one has none yet. */}
+      {routeName && (
+        <NotifyMeButton
+          compact
+          scope="workflow"
+          value={routeName}
+          name={routeName}
+        />
       )}
-      {source.data?.source === "project" &&
-        !source.data.has_bundled_default && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={doDelete}
-            disabled={reset.isPending}
-            title="Delete this custom workflow"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {reset.isPending ? "Deleting…" : "Delete"}
-          </Button>
-        )}
-      {/* Only a workflow saved here has a history; a built-in one is the
-          binary's, until somebody saves over it. Clearing `loadedFor` reloads
-          the restored version, as Reset does. */}
-      {routeName && source.data?.source === "project" && (
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="outline"
+              size="sm"
+              title="This workflow's description, navigation and improvement suggestions"
+            />
+          }
+        >
+          <Settings2 className="h-3.5 w-3.5" />
+          Workflow
+          {openSuggestions ? (
+            <Badge variant="secondary" className="tabular-nums">
+              {openSuggestions}
+            </Badge>
+          ) : null}
+          <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-60">
+          <DropdownMenuItem onClick={() => openPanel("description")}>
+            <FileText />
+            Description
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => openPanel("ui")}>
+            <PanelLeft />
+            Navigation and report
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => openPanel("improvements")}>
+            <Lightbulb />
+            Improvements
+            <span className="ml-auto text-xs tabular-nums text-muted-foreground">
+              {meta.improvements?.every
+                ? `every ${meta.improvements.every} runs`
+                : "off"}
+            </span>
+          </DropdownMenuItem>
+          {openSuggestions ? (
+            <DropdownMenuItem
+              render={
+                <Link
+                  to={`/improvements?workflow=${encodeURIComponent(meta.name)}`}
+                />
+              }
+            >
+              <span className="pl-6">
+                {openSuggestions} open{" "}
+                {openSuggestions === 1 ? "suggestion" : "suggestions"}
+              </span>
+            </DropdownMenuItem>
+          ) : null}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label="More actions"
+              title="More actions"
+            />
+          }
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-52">
+          <DropdownMenuItem onClick={tidy} disabled={nodes.length === 0}>
+            <LayoutGrid />
+            Tidy layout
+          </DropdownMenuItem>
+          {/* Only once there is something to copy. On a new workflow there is
+              no original to leave alone, so the choice would be meaningless. */}
+          {routeName && (
+            <DropdownMenuItem onClick={doSaveAsCopy} disabled={!canSave}>
+              <Copy />
+              Save as a copy
+            </DropdownMenuItem>
+          )}
+          {/* Only a workflow saved here has a history; a built-in one is the
+              binary's, until somebody saves over it. */}
+          {routeName && savedHere && (
+            <DropdownMenuItem onClick={() => setHistoryOpen(true)}>
+              <History />
+              History
+            </DropdownMenuItem>
+          )}
+          {savedHere && (
+            <>
+              <DropdownMenuSeparator />
+              {source.data?.has_bundled_default ? (
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={doReset}
+                  disabled={reset.isPending}
+                >
+                  <RotateCcw />
+                  {reset.isPending ? "Resetting…" : "Reset to default"}
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={doDelete}
+                  disabled={reset.isPending}
+                >
+                  <Trash2 />
+                  {reset.isPending ? "Deleting…" : "Delete workflow"}
+                </DropdownMenuItem>
+              )}
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {/* Opened from the menu above. Clearing `loadedFor` reloads the
+          restored version, as Reset does. */}
+      {routeName && savedHere && (
         <VersionHistoryDialog
           name={routeName}
+          open={historyOpen}
+          onOpenChange={setHistoryOpen}
           onRestored={() => {
             loadedFor.current = null;
           }}
         />
       )}
       <Button
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          setSelectedId(null);
-          setSettingsOpen(false);
-          setImprovementsOpen(false);
-          setDescriptionOpen((o) => !o);
-        }}
-        title="Read and edit this workflow's description (shown on its card)"
-      >
-        <FileText className="h-3.5 w-3.5" />
-        Description
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          setSelectedId(null);
-          setDescriptionOpen(false);
-          setImprovementsOpen(false);
-          setSettingsOpen((o) => !o);
-        }}
-        title="Edit this workflow's nav entry and report tab (the UI block)"
-      >
-        <Settings2 className="h-3.5 w-3.5" />
-        UI
-      </Button>
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={() => {
-          setSelectedId(null);
-          setDescriptionOpen(false);
-          setSettingsOpen(false);
-          setImprovementsOpen((o) => !o);
-        }}
-        title={
-          meta.improvements?.every
-            ? `Improvement suggestions are on: a review every ${meta.improvements.every} finished runs per project`
-            : "Improvement suggestions are off for this workflow"
-        }
-      >
-        <Lightbulb className="h-3.5 w-3.5" />
-        Improvements
-        <span className="tabular-nums text-muted-foreground">
-          {meta.improvements?.every
-            ? `every ${meta.improvements.every}`
-            : "off"}
-        </span>
-      </Button>
-      {openSuggestions ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          render={
-            <Link
-              to={`/improvements?workflow=${encodeURIComponent(meta.name)}`}
-            />
-          }
-          title="Suggestions from this workflow's runs, waiting on a decision"
-        >
-          {openSuggestions} open{" "}
-          {openSuggestions === 1 ? "suggestion" : "suggestions"}
-        </Button>
-      ) : null}
-      <Button
-        variant="outline"
-        size="sm"
-        onClick={tidy}
-        disabled={nodes.length === 0}
-      >
-        Tidy
-      </Button>
-      {/* Only once there is something to copy. On a new workflow there is no
-          original to leave alone, so the choice would be meaningless. */}
-      {routeName && (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={doSaveAsCopy}
-          disabled={
-            save.isPending ||
-            validate.data?.valid === false ||
-            nodes.length === 0
-          }
-          title="Save under a new name and leave the original as it is"
-        >
-          <Copy className="h-3.5 w-3.5" />
-          Save as a copy
-        </Button>
-      )}
-      <Button
         size="sm"
         onClick={doSave}
-        disabled={
-          save.isPending || validate.data?.valid === false || nodes.length === 0
-        }
+        disabled={!canSave}
         title={
           source.data?.source === "bundled"
             ? "Replaces the built-in workflow of this name for this harness"

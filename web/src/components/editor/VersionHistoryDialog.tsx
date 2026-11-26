@@ -35,12 +35,26 @@ export function savedAgo(then: number, now: number): string {
 export function VersionHistoryDialog({
   name,
   onRestored,
+  open: openProp,
+  onOpenChange,
 }: {
   name: string;
   /** Called after a restore, so the editor reloads what is now current. */
   onRestored: () => void;
+  /**
+   * Controlled from outside, e.g. a menu item. The dialog then renders no
+   * button of its own.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [openState, setOpenState] = useState(false);
+  const controlled = openProp !== undefined;
+  const open = controlled ? openProp : openState;
+  const setOpen = (next: boolean) => {
+    if (!controlled) setOpenState(next);
+    onOpenChange?.(next);
+  };
   const [viewing, setViewing] = useState<string | null>(null);
   const versions = useWorkflowVersions(name, open);
   const yaml = useWorkflowVersion(name, viewing);
@@ -71,18 +85,20 @@ export function VersionHistoryDialog({
         if (!o) setViewing(null);
       }}
     >
-      <DialogTrigger
-        render={
-          <Button
-            variant="outline"
-            size="sm"
-            title="Earlier versions of this workflow"
-          />
-        }
-      >
-        <History className="h-3.5 w-3.5" />
-        History
-      </DialogTrigger>
+      {!controlled && (
+        <DialogTrigger
+          render={
+            <Button
+              variant="outline"
+              size="sm"
+              title="Earlier versions of this workflow"
+            />
+          }
+        >
+          <History className="h-3.5 w-3.5" />
+          History
+        </DialogTrigger>
+      )}
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>History</DialogTitle>
