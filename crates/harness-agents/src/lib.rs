@@ -121,6 +121,46 @@ pub fn set_process_group(cmd: &mut tokio::process::Command) {
     cmd.process_group(0);
 }
 
+/// Confine a step's process, and everything it starts, to writing only where
+/// a step may: its workspace, the git directories behind it, temp, and the
+/// per-user caches and agent state (see [`harness_sandbox::confine_step`]).
+/// Call it before spawning.
+///
+/// `env` looks up the step's own environment (where `ARTIFACTS_DIR` and cache
+/// overrides are), with the server's as the fallback. When the kernel cannot
+/// enforce it, the step runs unconfined, as it always did, and that is logged
+/// once per process so an unprotected host is visible rather than silent.
+#[cfg(unix)]
+pub fn confine_writes(
+    cmd: &mut tokio::process::Command,
+    cwd: &std::path::Path,
+    env: &dyn Fn(&str) -> Option<std::ffi::OsString>,
+) {
+    static NOTED: std::sync::Once = std::sync::Once::new();
+    match harness_sandbox::confine_step(cmd.as_std_mut(), cwd, env) {
+        Ok(true) => {}
+        Ok(false) => NOTED.call_once(|| {
+            tracing::info!("filesystem confinement for steps is switched off (HARNESS_FS_SANDBOX)")
+        }),
+        Err(why) => NOTED.call_once(|| {
+            tracing::warn!(
+                ?why,
+                "steps run without filesystem confinement: this kernel has no Landlock v2 (Linux 5.19+)"
+            )
+        }),
+    }
+}
+
+/// [`confine_writes`] for a step whose environment is a map.
+#[cfg(unix)]
+pub fn confine_writes_with(
+    cmd: &mut tokio::process::Command,
+    cwd: &std::path::Path,
+    env: &std::collections::HashMap<String, String>,
+) {
+    confine_writes(cmd, cwd, &|k| env.get(k).map(std::ffi::OsString::from));
+}
+
 /// Kills a spawned agent's whole process group when dropped.
 ///
 /// `kill_on_drop` kills the agent's own process only. The tools it started

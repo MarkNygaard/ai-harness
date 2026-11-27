@@ -202,6 +202,15 @@ tests are the source of truth.*
   an agent with a shell would then bypass the tool list. Save-time checks read
   the process-wide snapshot `mcp_servers::set_catalog`, refreshed on every
   registry change.
+- **Filesystem confinement** — every step's process (Claude, Pi, Cursor, and
+  `bash`/`script` bodies) is confined with Landlock to writing only in its
+  workspace, the clones' git dirs, temp, the shared caches and the agents' state
+  (`harness_sandbox::step_write_allowlist`). The spawn sites call
+  `harness_agents::confine_writes`; a NEW place that spawns a step must too, or
+  it runs unconfined. A cache env var added to `caches::DEPS_ENV` must also go
+  in `harness_sandbox::WRITABLE_ENV` (a test enforces it). On by default;
+  `HARNESS_FS_SANDBOX=off` disables it; a kernel without Landlock v2 runs steps
+  unconfined and logs it once.
 - **Multi-repo prompts** — in a multi-repo run the workspace root is not a git
   repo, so `LocalRunner::run_prompt` prepends a workspace-layout block to every
   `prompt`/`command`/loop node (`workspace_layout_preamble`, keyed on

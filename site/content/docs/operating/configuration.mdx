@@ -35,6 +35,7 @@ have to think about.
 | `HARNESS_DISPLAY_TZ` | none | Timezone for rendered timestamps. |
 | `HARNESS_MODEL_CATALOG` | `$HARNESS_DATA_DIR/model-catalog.json` if present | A file of extra models and prices, read without a restart. See [adding a model without a release](#adding-a-model-without-a-release). |
 | `HARNESS_USAGE_LIMIT_MAX_WAIT_MINS` | 360 | When an agent hits its subscription's usage limit and reports when the limit resets, the step waits for the reset and runs again rather than failing. This is the longest it waits. A later reset, such as a weekly limit, fails the step. `0` turns waiting off. |
+| `HARNESS_FS_SANDBOX` | on | Confines every step, agents and `bash`/`script` bodies alike, to writing only in its workspace, the git directories behind it, temp, the shared caches and the agents' own state. Everything else, toolchains included, stays readable but not writable. `off` turns it off. Needs Linux 5.19 or later; on an older kernel steps run unconfined and the server logs that once. See [step confinement](#step-confinement). |
 
 GitHub credentials are also read from the environment as a fallback:
 `GITHUB_TOKEN` or `GH_TOKEN`, and `GITHUB_WEBHOOK_SECRET`. Per-project
@@ -133,6 +134,29 @@ Control-plane secrets are **scrubbed** from the processes a run spawns. An agent
 cannot read the database URL or the encryption key out of its own environment,
 whatever it is asked to do.
 </Callout>
+
+## Step confinement
+
+Every step runs confined to writing only where a step needs to, using Linux
+Landlock. That covers agents (Claude, Pi, Cursor) and `bash`/`script` steps,
+and every process they start. A step may write:
+
+- its workspace, and the git directories of the clones its worktrees belong
+  to, so commits work;
+- `/tmp`, `/var/tmp` and `/dev`;
+- the shared dependency caches, `$CARGO_TARGET_DIR`, `$HARNESS_CACHE_DIR` and
+  `$ARTIFACTS_DIR`;
+- the caches and agent state under `$HOME`: `.cache`, `.cargo`, `.npm`,
+  `.bun`, `.claude`, `.omp`, `.config`, `.nuget`, `.dotnet` and similar.
+
+Everything else is readable and executable but not writable: the
+toolchains mise provisioned, `/usr`, other runs' worktrees and the clones'
+working trees. A step that tries gets "permission denied", which is what keeps
+an agent from overwriting a shared tool.
+
+A workflow that writes somewhere else on purpose should use `$HARNESS_CACHE_DIR`
+for what outlives the run and `$ARTIFACTS_DIR` or `/tmp` for what doesn't. To
+turn confinement off for a whole server, set `HARNESS_FS_SANDBOX=off`.
 
 ## Health
 

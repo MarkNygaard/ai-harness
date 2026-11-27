@@ -207,6 +207,8 @@ impl CodeAgent for ClaudeCodeAgent {
             .kill_on_drop(true);
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
+        #[cfg(unix)]
+        crate::confine_writes_with(&mut cmd, &req.project_root, &req.env_vars);
         crate::strip_claude_env(&mut cmd);
         crate::strip_inherited_secrets(&mut cmd);
         crate::restore_own_keys(&mut cmd, crate::CLAUDE_KEYS);
@@ -316,6 +318,8 @@ impl CodeAgent for ClaudeCodeAgent {
             .kill_on_drop(true);
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
+        #[cfg(unix)]
+        crate::confine_writes_with(&mut cmd, &req.project_root, &req.env_vars);
         crate::strip_claude_env(&mut cmd);
         crate::strip_inherited_secrets(&mut cmd);
         crate::restore_own_keys(&mut cmd, crate::CLAUDE_KEYS);

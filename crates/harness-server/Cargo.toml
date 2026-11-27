@@ -49,5 +49,6 @@ sysinfo = { workspace = true }
 regex = { workspace = true }
 
 [dev-dependencies]
+harness-sandbox = { workspace = true }
 http-body-util = "0.1"
 tokio-tungstenite = "0.26"
