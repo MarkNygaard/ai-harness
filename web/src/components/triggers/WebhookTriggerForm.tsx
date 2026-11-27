@@ -62,6 +62,10 @@ export function WebhookTriggerForm({
     c?.delivery_header ?? "",
   );
   const [baseBranch, setBaseBranch] = useState(c?.base_branch ?? "");
+  // Empty: no limit of its own.
+  const [maxRuns, setMaxRuns] = useState(
+    c?.max_concurrent_runs ? String(c.max_concurrent_runs) : "",
+  );
   const [enabled, setEnabled] = useState(trigger?.enabled ?? true);
   const save = useSaveTrigger();
 
@@ -100,6 +104,9 @@ export function WebhookTriggerForm({
       task_template: template,
       delivery_header: deliveryHeader.trim() || null,
       base_branch: baseBranch.trim() || null,
+      max_concurrent_runs: maxRuns
+        ? Math.min(20, Math.max(1, parseInt(maxRuns, 10) || 1))
+        : null,
     };
     save.mutate(
       {
@@ -255,6 +262,19 @@ export function WebhookTriggerForm({
               onChange={(e) => setBaseBranch(e.target.value)}
               placeholder="main"
               className="font-mono"
+            />
+          </Field>
+          <Field
+            label="Runs at once"
+            hint="More deliveries wait in the queue until one finishes, so each run sees what the last one did. Empty: no limit."
+          >
+            <Input
+              type="number"
+              min={1}
+              max={20}
+              value={maxRuns}
+              onChange={(e) => setMaxRuns(e.target.value)}
+              placeholder="no limit"
             />
           </Field>
         </div>

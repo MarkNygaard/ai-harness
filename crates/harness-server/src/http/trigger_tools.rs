@@ -62,7 +62,7 @@ pub(crate) fn tool_defs() -> Vec<Value> {
                     "status": { "type": "string", "description": "linear: the status an issue enters to start the run." },
                     "label": { "type": "string", "description": "linear: also start on issues with this label that nobody delegated. \"\" = delegation only." },
                     "base_branch": { "type": "string", "description": "linear/webhook: \"\" = the project's own." },
-                    "max_concurrent_runs": { "type": "integer", "minimum": 1, "maximum": 20, "description": "linear" },
+                    "max_concurrent_runs": { "type": "integer", "minimum": 0, "maximum": 20, "description": "linear/webhook: the most runs of the workflow in the project at once; more wait in the queue. webhook: 0 = no limit of its own." },
                     "auth": { "type": "string", "enum": ["signature", "token"], "description": "webhook" },
                     "filters": {
                         "type": "array",
@@ -493,6 +493,9 @@ fn apply_webhook(c: &mut WebhookConfig, args: &Value) -> Result<(), String> {
     if let Some(v) = given("base_branch") {
         c.base_branch = optional(v);
     }
+    if let Some(n) = args.get("max_concurrent_runs").and_then(Value::as_i64) {
+        c.max_concurrent_runs = (n > 0).then_some(n as i32);
+    }
     Ok(())
 }
 
@@ -658,6 +661,12 @@ mod tests {
         assert_eq!(c.auth, triggers::WebhookAuth::Token);
         assert_eq!(c.filters.len(), 1);
         assert!(apply_webhook(&mut c, &json!({ "auth": "password" })).is_err());
+
+        apply_webhook(&mut c, &json!({ "max_concurrent_runs": 1 })).unwrap();
+        assert_eq!(c.max_concurrent_runs, Some(1));
+        // 0 clears it: the webhook has no limit of its own.
+        apply_webhook(&mut c, &json!({ "max_concurrent_runs": 0 })).unwrap();
+        assert_eq!(c.max_concurrent_runs, None);
     }
 
     #[test]

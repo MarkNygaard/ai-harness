@@ -171,6 +171,14 @@ The **task** is what the run is asked to do, with parts of the delivery filled
 in: `Review {{body.pull_request.html_url}}`. Left empty, the run gets the whole
 payload.
 
+**Runs at once** limits how many runs of the workflow, in that project, go at
+the same time. A delivery over the limit waits in the queue and starts when
+one finishes. Use it for a workflow that every push starts and that has to see
+what the run before it did, such as resolving merge conflicts: with 1, two
+quick pushes give two runs one after the other, not two runs racing on the same
+pull request. Left empty, the webhook sets no limit. When several triggers
+start the same workflow, the largest limit among them applies.
+
 Webhooks work whichever system starts Linear runs. Only administrators create
 or change them, since each one is a public endpoint.
 

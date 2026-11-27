@@ -960,28 +960,42 @@ pub(crate) async fn workflow_has_room(
     }
 }
 
-/// The most runs of `workflow` in `project` the starting trigger or binding
-/// allows at once, or `None` when nothing limits it. Under the trigger system
-/// that is the largest limit among the enabled Linear triggers that start it;
-/// on the classic system, the binding's.
+/// The most runs of `workflow` in `project` its triggers allow at once, or
+/// `None` when nothing limits it. Under the trigger system that is the largest
+/// limit among the enabled Linear triggers that start it; on the classic
+/// system, the binding's. An enabled webhook trigger with a limit of its own
+/// counts too, under either system, and the largest limit wins: each trigger
+/// allows that many.
 ///
 /// A missing row or a database hiccup is `None`: work is not held back over
 /// it, and the global limit still applies.
 async fn workflow_run_limit(state: &Arc<RunsState>, project: &str, workflow: &str) -> Option<i32> {
-    if super::triggers_routes::uses_triggers(state).await {
+    let linear = if super::triggers_routes::uses_triggers(state).await {
         let triggers: Vec<harness_persist::LinearSource> =
             super::triggers_routes::linear_bindings(state)
                 .await
                 .into_iter()
                 .map(|(_, b)| b)
                 .collect();
-        return trigger_limit(&triggers, project, workflow);
-    }
-    let sources = state.linear_source_store().await.ok()?;
-    match sources.get(project, workflow).await {
-        Ok(Some(binding)) => Some(binding.max_concurrent_runs),
-        _ => None,
-    }
+        trigger_limit(&triggers, project, workflow)
+    } else {
+        match state.linear_source_store().await {
+            Ok(sources) => match sources.get(project, workflow).await {
+                Ok(Some(binding)) => Some(binding.max_concurrent_runs),
+                _ => None,
+            },
+            Err(_) => None,
+        }
+    };
+    let webhook = match state.trigger_store().await {
+        Ok(store) => super::triggers_routes::webhook_limit(
+            &store.list().await.unwrap_or_default(),
+            project,
+            workflow,
+        ),
+        Err(_) => None,
+    };
+    linear.max(webhook)
 }
 
 /// The limit the enabled Linear triggers starting `workflow` in `project` put

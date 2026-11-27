@@ -192,6 +192,12 @@ pub(crate) struct WebhookConfig {
     pub delivery_header: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
+    /// The most runs of the workflow, in this project, at once. A delivery over
+    /// it waits in the queue rather than starting beside the others: for a
+    /// workflow that every push starts, and that must see what the run before
+    /// it did. `None`: no limit of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_runs: Option<i32>,
 }
 
 /// What a create or update asks for.
@@ -276,6 +282,11 @@ pub(crate) fn validate(req: TriggerRequest) -> Result<TriggerInput, String> {
             }
             if c.task_template.len() > 20_000 {
                 return Err("`task_template` is longer than 20000 characters".into());
+            }
+            if c.max_concurrent_runs
+                .is_some_and(|n| !(1..=20).contains(&n))
+            {
+                return Err("`max_concurrent_runs` must be between 1 and 20".into());
             }
             c.delivery_header = trimmed(c.delivery_header);
             c.base_branch = trimmed(c.base_branch);
@@ -448,6 +459,26 @@ pub(crate) async fn linear_bindings(state: &Arc<RunsState>) -> Vec<(String, Line
         })
         .filter_map(|t| as_binding(t).map(|b| (t.id.clone(), b)))
         .collect()
+}
+
+/// The limit the enabled webhook triggers starting `workflow` in `project` put
+/// on it: the largest, when several set one. `None` when none does.
+pub(crate) fn webhook_limit(
+    triggers: &[harness_persist::RunTrigger],
+    project: &str,
+    workflow: &str,
+) -> Option<i32> {
+    triggers
+        .iter()
+        .filter(|t| {
+            t.kind == KIND_WEBHOOK && t.enabled && t.project == project && t.workflow == workflow
+        })
+        .filter_map(|t| {
+            serde_json::from_value::<WebhookConfig>(t.config.0.clone())
+                .ok()?
+                .max_concurrent_runs
+        })
+        .max()
 }
 
 /// The trigger a binding produced by [`as_binding`] came from.
@@ -1116,6 +1147,47 @@ mod tests {
             updated_at: at,
             updated_by: None,
         }
+    }
+
+    #[test]
+    fn a_webhook_limit_is_optional_and_bounded() {
+        let saved = validate(req(KIND_WEBHOOK, json!({ "max_concurrent_runs": 1 }))).unwrap();
+        assert_eq!(saved.config["max_concurrent_runs"], 1);
+        let unlimited = validate(req(KIND_WEBHOOK, json!({}))).unwrap();
+        assert!(unlimited.config.get("max_concurrent_runs").is_none());
+        for bad in [0, 21] {
+            let err =
+                validate(req(KIND_WEBHOOK, json!({ "max_concurrent_runs": bad }))).unwrap_err();
+            assert!(err.contains("between 1 and 20"), "{bad}: {err}");
+        }
+    }
+
+    #[test]
+    fn webhook_limits_count_only_enabled_webhooks_for_that_workflow() {
+        let hook = |id: &str, enabled: bool, workflow: &str, limit: Option<i32>| {
+            let mut t = linear_row(id, 0, enabled, json!({ "max_concurrent_runs": limit }));
+            t.kind = KIND_WEBHOOK.into();
+            t.workflow = workflow.into();
+            t
+        };
+        let rows = [
+            hook("a", true, "resolve-conflicts", Some(1)),
+            hook("b", true, "resolve-conflicts", None),
+            hook("c", false, "resolve-conflicts", Some(5)),
+            hook("d", true, "task", Some(4)),
+            // A Linear trigger's limit is read elsewhere, not here.
+            linear_row("e", 0, true, json!({ "max_concurrent_runs": 9 })),
+        ];
+        assert_eq!(webhook_limit(&rows, "niles", "resolve-conflicts"), Some(1));
+        assert_eq!(webhook_limit(&rows, "niles", "task"), Some(4));
+        assert_eq!(webhook_limit(&rows, "other", "task"), None);
+        let mut two = rows.to_vec();
+        two.push(hook("f", true, "resolve-conflicts", Some(3)));
+        assert_eq!(
+            webhook_limit(&two, "niles", "resolve-conflicts"),
+            Some(3),
+            "the largest wins: each trigger allows that many"
+        );
     }
 
     fn todo(project: Option<&str>) -> LinearConfig {
