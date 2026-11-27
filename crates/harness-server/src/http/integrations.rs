@@ -322,18 +322,7 @@ fn truncate(mut text: String) -> String {
     text
 }
 
-/// The message out of a JSON error body (Grafana's `message`, Loki's,
-/// Prometheus's and the harness's `error`, Sentry's `detail`), or the body.
-pub fn error_message(body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| {
-            ["error", "message", "detail"]
-                .iter()
-                .find_map(|k| v.get(k).and_then(|e| e.as_str()).map(str::to_string))
-        })
-        .unwrap_or_else(|| body.trim().chars().take(500).collect())
-}
+pub use harness_runner::integrations::error_message;
 
 #[cfg(test)]
 mod tests {

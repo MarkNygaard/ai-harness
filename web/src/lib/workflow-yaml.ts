@@ -32,6 +32,8 @@ export function nodeKind(node: EditorNode): NodeKindId {
   if (node.cancel !== undefined) return "cancel";
   if (node.linear !== undefined) return "linear";
   if (node.route !== undefined) return "route";
+  if (node.grafana !== undefined) return "grafana";
+  if (node.sentry !== undefined) return "sentry";
   return "prompt";
 }
 
@@ -70,6 +72,12 @@ export function emptyNode(kind: NodeKindId, id: string): EditorNode {
           default: "b",
         },
       };
+    // Loki first: logs are what the telemetry jobs write, and a range over a
+    // day is the usual shape.
+    case "grafana":
+      return { ...base, grafana: { loki: "", start: "now-1d" } };
+    case "sentry":
+      return { ...base, sentry: { issues: "is:unresolved" } };
     default:
       return { ...base, prompt: "" };
   }
@@ -245,7 +253,26 @@ export function nodeToDoc(n: EditorNode): Record<string, unknown> {
     cancel: n.cancel,
     linear,
     route,
+    grafana: n.grafana
+      ? oneOfToDoc(n.grafana, ["loki", "prometheus"])
+      : undefined,
+    sentry: n.sentry ? oneOfToDoc(n.sentry, ["issues", "issue"]) : undefined,
   });
+}
+
+/**
+ * A `grafana:`/`sentry:` body, terse, except that the key choosing what it
+ * does stays while still blank: dropping `loki: ""` would lose which kind of
+ * query the author picked. `latest_event: false` is the default, so dropped.
+ */
+function oneOfToDoc(body: object, keep: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(body)) {
+    if (v === undefined || v === null || v === false) continue;
+    if (v === "" && !keep.includes(k)) continue;
+    out[k] = v;
+  }
+  return out;
 }
 
 /** The `route:` body, terse: each route keeps its name even while blank. */
@@ -318,6 +345,8 @@ export function fromYaml(text: string): EditorWorkflow {
     approval: n.approval as EditorNode["approval"],
     cancel: n.cancel as string | undefined,
     linear: n.linear as EditorNode["linear"],
+    grafana: n.grafana as EditorNode["grafana"],
+    sentry: n.sentry as EditorNode["sentry"],
     route: n.route as EditorNode["route"],
   }));
   return {

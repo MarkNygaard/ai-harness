@@ -237,7 +237,9 @@ export type NodeKindId =
   | "approval"
   | "cancel"
   | "linear"
-  | "route";
+  | "route"
+  | "grafana"
+  | "sentry";
 
 export type ContextMode = "fresh" | "shared";
 export type TriggerRule =
@@ -271,6 +273,33 @@ export interface EditorLinear {
   comment?: string;
   add_labels?: string[];
   remove_labels?: string[];
+}
+
+/**
+ * Grafana body (mirrors `GrafanaStep`): one of `loki`/`prometheus` holds the
+ * query. Instant at `time`, or a range from `start` to `end` every `step`.
+ */
+export interface EditorGrafana {
+  loki?: string;
+  prometheus?: string;
+  time?: string;
+  start?: string;
+  end?: string;
+  step?: string;
+  limit?: number;
+  datasource?: string;
+}
+
+/**
+ * Sentry body (mirrors `SentryStep`): an `issues` search, or one `issue`.
+ */
+export interface EditorSentry {
+  issues?: string;
+  issue?: string;
+  latest_event?: boolean;
+  sort?: string;
+  period?: string;
+  limit?: number;
 }
 
 /** One way out of a route node (mirrors `RouteOption`). */
@@ -354,6 +383,8 @@ export interface EditorNode {
   cancel?: string;
   linear?: EditorLinear;
   route?: EditorRoute;
+  grafana?: EditorGrafana;
+  sentry?: EditorSentry;
 }
 
 /** A whole workflow in the flat editor shape (round-trips to YAML via js-yaml). */

@@ -164,6 +164,21 @@ impl LocalRunner {
         })
     }
 
+    /// The run's way to the server's Grafana and Sentry proxies.
+    fn integration_proxy(&self, kind: &str) -> Result<crate::integrations::RunProxy, RunnerError> {
+        crate::integrations::RunProxy::from_env(|k| self.env_vars.get(k).cloned())
+            .map_err(|e| RunnerError(format!("a {kind} step can't reach the harness: {e}")))
+    }
+
+    fn read_output(text: String) -> NodeOutput {
+        NodeOutput {
+            text,
+            session: None,
+            success: true,
+            usage: Usage::default(),
+        }
+    }
+
     /// Perform a `linear:` body against the server's run-scoped Linear API.
     ///
     /// Deliberately not a Linear client of its own: `HARNESS_RUN_URL` and
@@ -531,6 +546,24 @@ impl NodeRunner for LocalRunner {
                     ));
                 }
                 self.run_linear(action, issue).await
+            }
+            // Reads the server makes for the run; the output is the JSON
+            // answer, for `$<id>.output.…` downstream.
+            NodeBody::Grafana(step) => {
+                let proxy = self.integration_proxy("grafana")?;
+                let text = proxy
+                    .grafana_step(step)
+                    .await
+                    .map_err(|e| RunnerError(format!("grafana step: {e}")))?;
+                Ok(Self::read_output(text))
+            }
+            NodeBody::Sentry(step) => {
+                let proxy = self.integration_proxy("sentry")?;
+                let text = proxy
+                    .sentry_step(step)
+                    .await
+                    .map_err(|e| RunnerError(format!("sentry step: {e}")))?;
+                Ok(Self::read_output(text))
             }
         }
     }

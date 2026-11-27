@@ -302,6 +302,49 @@ node's output is `{"route": "<name>", "reason": "…", "by": "rule" | "model" |
 skipped. In the editor, a route node shows one exit per route. Connecting a
 step from an exit writes its `when:` for you.
 
+**`grafana`** — one LogQL or PromQL query against the connected
+[Grafana](/docs/setup/grafana), made by the harness. No agent, no token in the
+step. The node's output is the datasource's JSON answer:
+```yaml
+- id: lines
+  grafana:
+    loki: 'sum by (metric) (count_over_time({job="web-vitals"} [1d]))'
+    start: now-21d       # a range; leave start out for an instant query
+    step: 1d             # end defaults to now
+- id: up
+  grafana:
+    prometheus: 'up{job="web"}'
+    time: now-1h         # an instant query; default now
+```
+Times are `now`, `now-<n><s|m|h|d|w>`, Unix seconds or RFC 3339.
+`datasource:` picks one by name or uid (default: the default one of its kind),
+and `limit:` caps a Loki query's lines. Every field takes variables. Later steps
+read the answer as `$lines.output.data.result`. Without Grafana connected the
+step fails, saying so.
+
+**`sentry`** — an issue search, or one issue, from the connected
+[Sentry](/docs/setup/sentry), made by the harness. The node's output is
+Sentry's JSON:
+```yaml
+- id: errors
+  sentry:
+    issues: "is:unresolved level:error"   # Sentry search syntax
+    period: 24h                           # optional
+    sort: freq                            # date (default), new, freq, user
+    limit: 10                             # 1-100, default 25
+- id: trace
+  depends_on: [errors]
+  sentry:
+    issue: "$errors.output.0.id"
+    latest_event: true                    # its latest event, with the stack trace
+```
+A search is limited to the project's Sentry project unless it names one with
+`project:`. Without Sentry connected the step fails, saying so.
+
+For many queries in one step, or logic around them, use a `script` with
+[`harness grafana`](/docs/operating/cli#harness-grafana) or
+[`harness sentry`](/docs/operating/cli#harness-sentry) instead.
+
 **`approval`** — human gate. **Partially implemented:** the executor currently
 records an approval node as *skipped* with a "not yet supported" note (no input
 channel yet). Don't rely on it to actually pause a run.

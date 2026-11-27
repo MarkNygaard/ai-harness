@@ -54,6 +54,18 @@ Only reads, and only in the connected organization: issues, their events
 projects. Anything else, such as resolving or assigning an issue, is refused
 by the harness, and a read-only token refuses it again.
 
+In a workflow, a [`sentry:` step](/docs/workflows/authoring#node-bodies)
+reads one search or one issue, and its output is Sentry's JSON:
+
+```yaml
+- id: errors
+  sentry:
+    issues: "is:unresolved level:error"
+    period: 24h
+```
+
+A script uses `harness sentry` for the same reads:
+
 ```bash
 harness sentry issues --query "is:unresolved level:error" --period 24h
 harness sentry issue 4512 --latest-event

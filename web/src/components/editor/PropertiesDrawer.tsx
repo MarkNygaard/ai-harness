@@ -3,9 +3,11 @@ import { Plus, X } from "lucide-react";
 import { Markdown, ViewToggle } from "@/components/Markdown";
 import type {
   Catalog,
+  EditorGrafana,
   EditorLinear,
   EditorNode,
   EditorRoute,
+  EditorSentry,
   NodeKindId,
 } from "@/types/authoring";
 import { emptyNode, nodeKind } from "@/lib/workflow-yaml";
@@ -23,6 +25,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
 
 /** Body fields that define a node's kind — cleared/swapped when the kind changes. */
 const BODY_KEYS = [
@@ -37,6 +40,8 @@ const BODY_KEYS = [
   "cancel",
   "linear",
   "route",
+  "grafana",
+  "sentry",
 ] as const satisfies readonly (keyof EditorNode)[];
 
 /** Right drawer: edit the selected node's id, kind, body, and AI options. */
@@ -295,6 +300,18 @@ export function PropertiesDrawer({
           <LinearBody
             value={node.linear ?? {}}
             onChange={(linear) => set({ linear })}
+          />
+        )}
+        {kind === "grafana" && (
+          <GrafanaBody
+            value={node.grafana ?? {}}
+            onChange={(grafana) => set({ grafana })}
+          />
+        )}
+        {kind === "sentry" && (
+          <SentryBody
+            value={node.sentry ?? {}}
+            onChange={(sentry) => set({ sentry })}
           />
         )}
         {kind === "route" && node.route && (
@@ -768,6 +785,234 @@ function LinearBody({
         )}
         <span className="text-[10px] text-muted-foreground">{meta.help}</span>
       </Field>
+    </>
+  );
+}
+
+/** An optional text value: empty means "not set", so the key is dropped. */
+const opt = (v: string) => (v.trim() === "" ? undefined : v);
+
+/** An optional count: empty or not a positive number means "not set". */
+const optCount = (v: string) => {
+  const n = Number.parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+};
+
+/**
+ * The `grafana:` body: one LogQL or PromQL query, instant or over a range.
+ * Its output is the datasource's JSON, for later steps.
+ */
+function GrafanaBody({
+  value,
+  onChange,
+}: {
+  value: EditorGrafana;
+  onChange: (v: EditorGrafana) => void;
+}) {
+  const lang = value.prometheus !== undefined ? "prometheus" : "loki";
+  const query = value[lang] ?? "";
+  const range = value.start !== undefined;
+  const set = (patch: Partial<EditorGrafana>) =>
+    onChange({ ...value, ...patch });
+  return (
+    <>
+      <SelectField
+        label="Query language"
+        value={lang}
+        onValueChange={(next) => {
+          const { loki: _l, prometheus: _p, ...rest } = value;
+          // A Loki line limit means nothing to Prometheus.
+          if (next === "prometheus") delete rest.limit;
+          onChange({ ...rest, [next]: query });
+        }}
+      >
+        <SelectItem value="loki">LogQL (Loki)</SelectItem>
+        <SelectItem value="prometheus">PromQL (Prometheus)</SelectItem>
+      </SelectField>
+      <Field label="Query">
+        <Textarea
+          rows={4}
+          className="font-mono text-xs"
+          value={query}
+          onChange={(e) => set({ [lang]: e.target.value })}
+          placeholder={
+            lang === "loki"
+              ? 'sum by (job) (count_over_time({app="web"} [1d]))'
+              : "sum(rate(http_requests_total[5m]))"
+          }
+        />
+        <span className="text-[10px] text-muted-foreground">
+          Takes variables, e.g. $ARGUMENTS or an upstream step's output.
+        </span>
+      </Field>
+      <SelectField
+        label="When"
+        value={range ? "range" : "instant"}
+        onValueChange={(next) => {
+          const { time: _t, start: _s, end: _e, step: _st, ...rest } = value;
+          onChange(
+            next === "range"
+              ? { ...rest, start: "now-1d", step: "1h" }
+              : { ...rest },
+          );
+        }}
+      >
+        <SelectItem value="instant">One moment</SelectItem>
+        <SelectItem value="range">A time range</SelectItem>
+      </SelectField>
+      {range ? (
+        <div className="grid grid-cols-3 gap-2">
+          <Field label="From">
+            <Input
+              value={value.start ?? ""}
+              onChange={(e) => set({ start: e.target.value })}
+              placeholder="now-7d"
+            />
+          </Field>
+          <Field label="To">
+            <Input
+              value={value.end ?? ""}
+              onChange={(e) => set({ end: opt(e.target.value) })}
+              placeholder="now"
+            />
+          </Field>
+          <Field label="Every">
+            <Input
+              value={value.step ?? ""}
+              onChange={(e) => set({ step: opt(e.target.value) })}
+              placeholder="1h"
+            />
+          </Field>
+        </div>
+      ) : (
+        <Field label="At">
+          <Input
+            value={value.time ?? ""}
+            onChange={(e) => set({ time: opt(e.target.value) })}
+            placeholder="now"
+          />
+        </Field>
+      )}
+      <span className="text-[10px] text-muted-foreground">
+        Times are now, now-7d (s, m, h, d or w), Unix seconds or RFC 3339.
+      </span>
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Datasource">
+          <Input
+            value={value.datasource ?? ""}
+            onChange={(e) => set({ datasource: opt(e.target.value) })}
+            placeholder="the default"
+          />
+        </Field>
+        {lang === "loki" && (
+          <Field label="Most lines">
+            <Input
+              inputMode="numeric"
+              value={value.limit?.toString() ?? ""}
+              onChange={(e) => set({ limit: optCount(e.target.value) })}
+              placeholder="Loki's default"
+            />
+          </Field>
+        )}
+      </div>
+    </>
+  );
+}
+
+/**
+ * The `sentry:` body: an issue search, or one issue (or its latest event).
+ * Its output is Sentry's JSON, for later steps.
+ */
+function SentryBody({
+  value,
+  onChange,
+}: {
+  value: EditorSentry;
+  onChange: (v: EditorSentry) => void;
+}) {
+  const mode = value.issue !== undefined ? "issue" : "issues";
+  const set = (patch: Partial<EditorSentry>) =>
+    onChange({ ...value, ...patch });
+  return (
+    <>
+      <SelectField
+        label="Read"
+        value={mode}
+        onValueChange={(next) =>
+          // Replace, never merge: the search options mean nothing for one
+          // issue, and the parser refuses them there.
+          onChange(
+            next === "issue" ? { issue: "" } : { issues: "is:unresolved" },
+          )
+        }
+      >
+        <SelectItem value="issues">Search issues</SelectItem>
+        <SelectItem value="issue">One issue</SelectItem>
+      </SelectField>
+      {mode === "issues" ? (
+        <>
+          <Field label="Search">
+            <Input
+              className="font-mono text-xs"
+              value={value.issues ?? ""}
+              onChange={(e) => set({ issues: e.target.value })}
+              placeholder="is:unresolved level:error"
+            />
+            <span className="text-[10px] text-muted-foreground">
+              Sentry search syntax. Limited to the project's Sentry project
+              unless it names one with project:.
+            </span>
+          </Field>
+          <div className="grid grid-cols-3 gap-2">
+            <Field label="Period">
+              <Input
+                value={value.period ?? ""}
+                onChange={(e) => set({ period: opt(e.target.value) })}
+                placeholder="14d"
+              />
+            </Field>
+            <SelectField
+              label="Order"
+              value={value.sort ?? "date"}
+              onValueChange={(sort) =>
+                set({ sort: sort === "date" ? undefined : sort })
+              }
+            >
+              <SelectItem value="date">Last seen</SelectItem>
+              <SelectItem value="new">First seen</SelectItem>
+              <SelectItem value="freq">Events</SelectItem>
+              <SelectItem value="user">Users</SelectItem>
+            </SelectField>
+            <Field label="Most">
+              <Input
+                inputMode="numeric"
+                value={value.limit?.toString() ?? ""}
+                onChange={(e) => set({ limit: optCount(e.target.value) })}
+                placeholder="25"
+              />
+            </Field>
+          </div>
+        </>
+      ) : (
+        <>
+          <Field label="Issue id">
+            <Input
+              value={value.issue ?? ""}
+              onChange={(e) => set({ issue: e.target.value })}
+              placeholder="4512, or $find.output.id"
+            />
+          </Field>
+          <label className="flex items-center gap-2 text-sm">
+            <Switch
+              checked={value.latest_event ?? false}
+              onCheckedChange={(on) =>
+                set({ latest_event: on ? true : undefined })
+              }
+            />
+            Its latest event, with the stack trace
+          </label>
+        </>
+      )}
     </>
   );
 }

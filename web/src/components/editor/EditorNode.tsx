@@ -12,6 +12,8 @@ import {
   Terminal,
   Trash2,
   Zap,
+  Activity,
+  Bug,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NodeKindId } from "@/types/authoring";
@@ -29,6 +31,8 @@ const KIND_ICON: Record<NodeKindId, typeof Bot> = {
   cancel: CircleSlash,
   linear: Zap,
   route: Split,
+  grafana: Activity,
+  sentry: Bug,
 };
 
 const KIND_LABEL: Record<NodeKindId, string> = {
@@ -41,6 +45,8 @@ const KIND_LABEL: Record<NodeKindId, string> = {
   cancel: "Cancel",
   linear: "Linear",
   route: "Route",
+  grafana: "Grafana",
+  sentry: "Sentry",
 };
 
 /** A draggable, connectable workflow step on the editor canvas. */

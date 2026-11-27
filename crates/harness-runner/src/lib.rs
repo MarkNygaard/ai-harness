@@ -24,6 +24,7 @@ mod cursor;
 pub mod defaults;
 mod dispatch;
 mod hooks;
+pub mod integrations;
 mod local;
 pub mod mcp_servers;
 pub mod models;

@@ -29,7 +29,7 @@ pub enum DagError {
     InvalidCondition { expr: String, reason: String },
 
     /// A node declares no executable body (no `prompt`/`bash`/`command`/…).
-    #[error("node `{0}` has no body: expected exactly one of prompt, bash, command, script, loop, approval, cancel, linear, route")]
+    #[error("node `{0}` has no body: expected exactly one of prompt, bash, command, script, loop, approval, cancel, linear, route, grafana, sentry")]
     NoNodeKind(String),
 
     /// A node declares more than one mutually exclusive body.
@@ -59,6 +59,14 @@ pub enum DagError {
     /// A node's `scorer:` can't be recorded as written.
     #[error("node `{node}`: scorer {reason}")]
     InvalidScorer { node: String, reason: String },
+
+    /// A `grafana:` or `sentry:` step can't run as written.
+    #[error("node `{node}`: `{kind}:` {reason}")]
+    InvalidIntegrationStep {
+        node: String,
+        kind: &'static str,
+        reason: String,
+    },
 
     /// A `script` node is missing its required `runtime`.
     #[error("script node `{0}` is missing `runtime` (expected `bun` or `uv`)")]

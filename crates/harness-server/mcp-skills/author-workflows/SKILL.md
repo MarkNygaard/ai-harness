@@ -13,7 +13,7 @@ description: |
 
 A workflow is a DAG of `nodes` joined by `depends_on`, run in layers. Each
 node has exactly one body: `prompt`, `bash`, `command`, `script`, `loop`,
-`approval`, `cancel`, `linear` or `route`. Workflows are **global**: one saved
+`approval`, `cancel`, `linear`, `route`, `grafana` or `sentry`. Workflows are **global**: one saved
 workflow is runnable by every project on this harness, and a saved workflow
 with a built-in's name replaces that built-in everywhere.
 

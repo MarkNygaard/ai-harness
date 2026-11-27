@@ -15,7 +15,9 @@ use super::chat_routes::ChatCaller;
 use super::integrations::{self, Grafana, Sentry};
 use super::mcp_routes::{to_result, tool_error};
 use super::runs_routes::RunsState;
-use crate::grafana_cli::{pick_datasource, query_params, Datasource, Query, QueryKind};
+use harness_runner::integrations::{
+    pick_datasource, query_params, Datasource, IssueSearch, Query, QueryKind,
+};
 
 /// The tools, by name.
 pub(crate) const TOOL_NAMES: &[&str] = &[
@@ -35,7 +37,7 @@ pub(crate) fn tool_defs() -> Vec<Value> {
     vec![
         json!({
             "name": "grafana_query",
-            "description": "Run one LogQL (Loki) or PromQL (Prometheus) query against the connected Grafana. Instant at `time` (default now), or a range with `start`, `end` and `step`. Times are Unix seconds or RFC 3339. Returns the datasource's JSON. Read-only.",
+            "description": "Run one LogQL (Loki) or PromQL (Prometheus) query against the connected Grafana. Instant at `time` (default now), or a range from `start` to `end` (default now) every `step`. Times are `now`, `now-7d` (s/m/h/d/w), Unix seconds or RFC 3339. Returns the datasource's JSON. Read-only.",
             "inputSchema": {
                 "type": "object",
                 "additionalProperties": false,
@@ -159,41 +161,17 @@ pub(crate) async fn call(
                 let path = s("path").unwrap_or_default();
                 return text(sentry_get(&sentry, &path, &params_of(args)).await);
             }
-            let limit = args
-                .get("limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(25)
-                .clamp(1, 100);
-            let mut params = vec![
-                (
-                    "query".to_string(),
-                    issue_query(s("query").as_deref(), sentry.project.as_deref()),
-                ),
-                ("limit".to_string(), limit.to_string()),
-            ];
-            if let Some(sort) = s("sort") {
-                params.push(("sort".into(), sort));
+            let params = IssueSearch {
+                query: s("query"),
+                sort: s("sort"),
+                period: s("period"),
+                limit: args.get("limit").and_then(Value::as_u64).map(|n| n as u32),
             }
-            if let Some(period) = s("period") {
-                params.push(("statsPeriod".into(), period));
-            }
+            .params(sentry.project.as_deref());
             let path = format!("api/0/organizations/{}/issues/", sentry.org);
             text(sentry_get(&sentry, &path, &params).await)
         }
         other => tool_error(format!("unknown tool: {other}")),
-    }
-}
-
-/// The issue search: the person's query, or unresolved issues, limited to the
-/// project's Sentry project when it has one and the query names none.
-pub(crate) fn issue_query(query: Option<&str>, project: Option<&str>) -> String {
-    let query = query
-        .map(str::trim)
-        .filter(|q| !q.is_empty())
-        .unwrap_or("is:unresolved");
-    match project {
-        Some(p) if !query.contains("project:") => format!("project:{p} {query}"),
-        _ => query.to_string(),
     }
 }
 
@@ -223,14 +201,12 @@ async fn grafana_get(
 }
 
 async fn grafana_query(grafana: &Grafana, kind: QueryKind, q: &Query) -> Result<String, String> {
-    if q.expr.trim().is_empty() {
-        return Err("`query` is empty".into());
-    }
+    let now = chrono::Utc::now().timestamp();
+    let (range, params) = query_params(kind, q, now)?;
     let list = grafana_get(grafana, "api/datasources", &[]).await?;
     let all: Vec<Datasource> = serde_json::from_str(&list)
         .map_err(|e| format!("unexpected datasource list from Grafana: {e}"))?;
     let uid = pick_datasource(&all, kind, q.datasource.as_deref())?;
-    let (range, params) = query_params(kind, q)?;
     grafana_get(
         grafana,
         &format!("api/datasources/proxy/uid/{uid}/{}", kind.api(range)),
@@ -291,23 +267,6 @@ pub(crate) fn sentry_note(sentry: &Sentry) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_issue_search_is_scoped_to_the_project_unless_it_names_one() {
-        assert_eq!(issue_query(None, None), "is:unresolved");
-        assert_eq!(
-            issue_query(Some("  "), Some("web")),
-            "project:web is:unresolved"
-        );
-        assert_eq!(
-            issue_query(Some("level:error"), Some("web")),
-            "project:web level:error"
-        );
-        assert_eq!(
-            issue_query(Some("project:api level:error"), Some("web")),
-            "project:api level:error"
-        );
-    }
 
     #[test]
     fn every_tool_is_defined_and_read_only() {
