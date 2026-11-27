@@ -1,13 +1,21 @@
 ---
 title: "Sentry"
-description: "Let agents read production errors in Sentry: a read-only token, the organization, and each project's Sentry project."
+description: "Connect Sentry once, read-only, so workflow scripts and the chat can look up production errors without ever holding the token."
 ---
 
-With Sentry connected, an agent working on a bug can read the error itself:
-the stack trace, how often it happens, which release introduced it. That
-saves it guessing from the issue text. Agents use Sentry's own MCP server.
+With Sentry connected, the harness can read your production errors: the stack
+trace, how often an error happens, which release introduced it. A workflow's
+`bash` or `script` steps read it with
+[`harness sentry`](/docs/operating/cli#harness-sentry), and the chat reads it
+with its own tools.
 
 Connect it on **Settings → Integrations → Sentry**.
+
+Sentry is an **integration**: the harness holds the token and makes each read
+itself, and nothing it starts ever gets the token. If you also want agent
+steps to use Sentry's own MCP server as tools, add it under
+[MCP servers](/docs/setup/mcp-servers#sentry-and-grafana-as-mcp-servers).
+That's a separate setup.
 
 ## The token
 
@@ -25,38 +33,31 @@ won't work:
 - **Organization Tokens won't work.** They're for CI and source-map uploads,
   and can't read issues or events.
 
-The harness also runs Sentry's server with only its read-only tools, so agents
-can't resolve, assign or change anything. A read-only token makes that hold even
-if something upstream changes.
-
 Also enter the **organization slug**, the part after
-`sentry.io/organizations/` in the URL. Agents are limited to that organization.
+`sentry.io/organizations/` in the URL. Every read is limited to that
+organization.
+
+Leave **Sentry URL** empty for sentry.io. Set it for a self-hosted Sentry, or
+for a region such as `https://de.sentry.io`.
 
 ## Each project's Sentry project
 
 Under **Settings → Projects**, a project can name the **Sentry project** its
-errors are reported under. Agents looking at Sentry for that project are then
-limited to it, which keeps searches relevant and quick. Without one they can
-look across the organization.
+errors are reported under. Issue searches for that project are then limited to
+it (`harness sentry issues` and the chat's search), unless a search names
+another project. Without one, searches cover the organization.
 
-## Where agents use it
+## What can be read
 
-- **Workflow steps that ask for it** with `mcp: [sentry]`. See
-  [External tools](/docs/workflows/authoring#external-tools-mcp).
-- **The chat**, for questions like "what started erroring after yesterday's
-  deploy?"
+Only reads, and only in the connected organization: issues, their events
+(with stack traces) and tags, events, traces, releases and the list of
+projects. Anything else, such as resolving or assigning an issue, is refused
+by the harness, and a read-only token refuses it again.
 
-The token is never written to a file. It's handed to Sentry's server through
-the environment of the step or chat that uses it.
+```bash
+harness sentry issues --query "is:unresolved level:error" --period 24h
+harness sentry issue 4512 --latest-event
+```
 
-Only agent steps that list `mcp: [sentry]` get the token, as
-`$HARNESS_SENTRY_TOKEN` (with `$HARNESS_SENTRY_ORG` and
-`$HARNESS_SENTRY_PROJECT`). `bash` and `script` steps don't. The names are
-deliberately not `SENTRY_AUTH_TOKEN` and so on: those are what Sentry's build
-tooling reads to upload source maps, and a project's build would try an upload
-with this read-only token.
-
-Sentry's server can also run Seer, Sentry's AI debugger, but that's off here,
-because it uses your Sentry quota. Its natural-language search is off too:
-otherwise it would call OpenAI or Anthropic with keys the harness holds.
-Searches use Sentry's query syntax instead, which agents handle well.
+The chat gets the same reads, for questions like "what started erroring after
+yesterday's deploy?"

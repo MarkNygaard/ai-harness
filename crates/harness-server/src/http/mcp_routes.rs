@@ -227,8 +227,16 @@ async fn handle_one(
             Some(c) if NEEDS_CONFIRMATION.contains(&name.as_str()) => {
                 super::chat_routes::hold_for_confirmation(state, c, &name, &args).await
             }
+            // Grafana and Sentry reads, for the chat only.
+            Some(c) if super::chat_integrations::TOOL_NAMES.contains(&name.as_str()) => {
+                super::chat_integrations::call(state, c, &name, &args).await
+            }
             _ => call_tool(state, actor, &name, &args).await,
         })
+    } else if method == "tools/list" && chat.is_some() {
+        let mut tools = mcp_tools();
+        tools.extend(super::chat_integrations::tool_defs());
+        Ok(json!({ "tools": tools }))
     } else {
         reply_to(method, &params, modern)
     };

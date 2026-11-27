@@ -554,10 +554,15 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
         // token: a run holds a capability scoped to one project, never a
         // credential. See `run_grants`.
         .route("/api/run/s3/upload-url", post(run_s3_routes::upload_url))
-        // Grafana reads for `bash`/`script` steps; the token stays here.
+        // Grafana and Sentry reads for `bash`/`script` steps; the tokens
+        // stay here (see `integrations`).
         .route(
             "/api/run/grafana/{*path}",
-            get(super::run_grafana_routes::get),
+            get(super::integrations::grafana_get),
+        )
+        .route(
+            "/api/run/sentry/{*path}",
+            get(super::integrations::sentry_get),
         )
         .route("/api/run/title", post(run_title_routes::set_title))
         .route("/api/run/linear/issue", post(run_linear_routes::issue))

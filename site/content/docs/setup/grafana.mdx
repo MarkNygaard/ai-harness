@@ -1,14 +1,21 @@
 ---
 title: "Grafana"
-description: "Let agents read Prometheus metrics, Loki logs and dashboards from your Grafana, read-only, for reports, investigations and questions in the chat."
+description: "Connect Grafana once, read-only, so workflow scripts and the chat can query Prometheus metrics, Loki logs and dashboards without ever holding the token."
 ---
 
-With Grafana connected, agents can answer from your own data. They can look at
-traffic, latency, error rates, logs, or what a dashboard shows, for a report,
-while investigating an error, or when someone asks the chat. Agents use
-Grafana's own MCP server.
+With Grafana connected, the harness can read your own data: traffic, latency,
+error rates, logs, or what a dashboard shows. A workflow's `bash` or `script`
+steps query it with
+[`harness grafana`](/docs/operating/cli#harness-grafana), and the chat
+queries it with its own tools.
 
 Connect it on **Settings → Integrations → Grafana**.
+
+Grafana is an **integration**: the harness holds the token and makes each read
+itself, and nothing it starts ever gets the token. If you also want agent
+steps to use Grafana's own MCP server as tools, add it under
+[MCP servers](/docs/setup/mcp-servers#sentry-and-grafana-as-mcp-servers).
+That's a separate setup.
 
 ## The token
 
@@ -16,49 +23,41 @@ In Grafana, go to **Administration → Users and access → Service accounts**.
 Add a service account with the **Viewer** role, and create a token for it. It
 starts with `glsa_`.
 
-Give it Viewer, nothing more. The harness also runs Grafana's server with
-writing switched off, so agents can query and read but never create or change
-dashboards, alerts or anything else. A Viewer token makes that hold even if
-something upstream changes.
+Give it Viewer, nothing more. The harness only lets reads through, and a Viewer
+token makes that hold even if something changes upstream.
 
 Also enter the **Grafana URL** the harness reaches it at. It has to be
 reachable from where the harness runs.
 
-## What agents can use
+## What can be read
 
-The harness turns on the tools for reading:
+Only reads:
 
-- **Prometheus:** metric and label names, metadata, queries and histograms.
-- **Loki:** labels, log queries, patterns and stats.
-- **Dashboards and folders:** search, summaries, panel queries.
-- **Annotations, alert rules and silences** (read).
+- **Datasources:** the list, and one by name or uid.
+- **Loki and Prometheus,** through Grafana's datasource proxy: queries
+  (instant and range), label names and values, series, Loki patterns and
+  index stats, Prometheus metadata.
+- **Dashboards:** search, and one dashboard by uid.
 
-It leaves off the rest of what Grafana's server can do, such as OnCall,
-Incident, Tempo, rendering, and its raw API passthrough. Its anonymous usage
-reporting to Grafana Labs is off too.
+Anything else is refused.
 
-## Where agents use it
+## From a workflow
 
-- **Workflow steps that ask for it** with `mcp: [grafana]`. A report step is a
-  prompt that queries Grafana and writes up what it found. Combined with
-  [`linear_comment`](/docs/workflows/authoring#reporting-back-to-linear), it can
-  post that to a Linear issue. A step can have both Grafana and Sentry:
-  `mcp: [sentry, grafana]`.
-- **Bash and script steps**, with [`harness grafana`](/docs/operating/cli#harness-grafana).
-  For queries that should run the same way every time, such as a weekly
-  report's numbers, a script is cheaper and steadier than an agent. The script
-  never sees the token: the harness adds it, and lets only reads through.
-- **The chat**, for questions like "what did checkout latency look like
-  yesterday?"
+For queries that should run the same way every time, such as a weekly
+report's numbers, a script is cheaper and steadier than an agent:
 
-The token is never written to a file. It's handed to Grafana's server through
-the environment of the step or chat that uses it, and added by the harness
-itself to `harness grafana` queries.
+```yaml
+- id: collect
+  bash: |
+    harness grafana loki 'sum by (job) (count_over_time({app="web"} [1d]))' > "$ARTIFACTS_DIR/lines.json"
+```
 
-It's one connection with two ways in. The Grafana card under **Settings → MCP
-servers** is the same connection, listed there because agent steps reach it as
-an MCP server; there's nothing to set up on that page.
+A script that makes many queries can call the proxy directly, with the run's
+own grant; see the [CLI reference](/docs/operating/cli#harness-grafana).
 
-Agents are told to find the data source and metric or label names before
-querying, to keep time ranges tight, and to show the PromQL or LogQL they ran,
-with a link, so you can check what they found.
+## In the chat
+
+The chat can query Grafana for questions like "what did checkout latency look
+like yesterday?" It's told to find the datasource and label names before
+querying, to keep time ranges tight, and to show the query it ran so you can
+check what it found.

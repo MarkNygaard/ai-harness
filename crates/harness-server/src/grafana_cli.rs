@@ -25,7 +25,7 @@ impl QueryKind {
     }
 
     /// The datasource's own API under Grafana's proxy.
-    fn api(self, range: bool) -> &'static str {
+    pub(crate) fn api(self, range: bool) -> &'static str {
         match (self, range) {
             (QueryKind::Loki, false) => "loki/api/v1/query",
             (QueryKind::Loki, true) => "loki/api/v1/query_range",
@@ -79,7 +79,10 @@ pub async fn get(path: &str, params: &[(String, String)]) -> Result<String, Stri
     if status.is_success() {
         return Ok(text);
     }
-    Err(format!("{status}: {}", error_message(&text)))
+    Err(format!(
+        "{status}: {}",
+        crate::http::integrations::error_message(&text)
+    ))
 }
 
 /// Run `query` against a Loki or Prometheus datasource. Prints the
@@ -95,7 +98,10 @@ pub async fn query(kind: QueryKind, q: &Query) -> Result<String, String> {
 }
 
 /// The request parameters, and whether this is a range query.
-fn query_params(kind: QueryKind, q: &Query) -> Result<(bool, Vec<(String, String)>), String> {
+pub(crate) fn query_params(
+    kind: QueryKind,
+    q: &Query,
+) -> Result<(bool, Vec<(String, String)>), String> {
     let range = q.start.is_some() || q.end.is_some();
     if range && (q.start.is_none() || q.end.is_none()) {
         return Err("a range query needs both --start and --end".into());
@@ -126,7 +132,7 @@ fn query_params(kind: QueryKind, q: &Query) -> Result<(bool, Vec<(String, String
 }
 
 #[derive(Debug, Deserialize)]
-struct Datasource {
+pub(crate) struct Datasource {
     uid: String,
     name: String,
     #[serde(rename = "type")]
@@ -142,7 +148,7 @@ async fn datasource_uid(kind: QueryKind, wanted: Option<&str>) -> Result<String,
     pick_datasource(&all, kind, wanted)
 }
 
-fn pick_datasource(
+pub(crate) fn pick_datasource(
     all: &[Datasource],
     kind: QueryKind,
     wanted: Option<&str>,
@@ -177,19 +183,6 @@ fn pick_datasource(
         .or(of_kind.first())
         .map(|d| d.uid.clone())
         .ok_or_else(|| format!("Grafana has no {} datasource", kind.datasource_type()))
-}
-
-/// The message out of a JSON error body (the harness's `error`, Grafana's
-/// `message`, Loki's and Prometheus's `error`), or the body itself.
-fn error_message(body: &str) -> String {
-    serde_json::from_str::<serde_json::Value>(body)
-        .ok()
-        .and_then(|v| {
-            ["error", "message"]
-                .iter()
-                .find_map(|k| v.get(k).and_then(|e| e.as_str()).map(str::to_string))
-        })
-        .unwrap_or_else(|| body.trim().chars().take(500).collect())
 }
 
 #[cfg(test)]
@@ -265,18 +258,5 @@ mod tests {
             ..Query::default()
         };
         assert!(query_params(QueryKind::Prometheus, &prom_limit).is_err());
-    }
-
-    #[test]
-    fn errors_read_the_message_out_of_json() {
-        assert_eq!(
-            error_message(r#"{"error":"parse error at line 1"}"#),
-            "parse error at line 1"
-        );
-        assert_eq!(
-            error_message(r#"{"message":"Permission denied"}"#),
-            "Permission denied"
-        );
-        assert_eq!(error_message("bad gateway\n"), "bad gateway");
     }
 }

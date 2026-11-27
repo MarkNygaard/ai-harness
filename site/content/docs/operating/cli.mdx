@@ -148,6 +148,28 @@ const r = await fetch(
 );
 ```
 
+## `harness sentry`
+
+Read the connected Sentry from a `bash` or `script` step. Needs
+[Sentry connected](/docs/setup/sentry).
+
+```bash
+# Issues, in Sentry search syntax (default "is:unresolved")
+harness sentry issues --query "level:error release:1.4.2" --period 24h --limit 10
+# One issue, or its latest event with the stack trace
+harness sentry issue 4512 --latest-event
+# Any path the proxy allows; {org} is the connected organization
+harness sentry get 'api/0/organizations/{org}/events/' -p field=title -p field=count\(\) -p query=level:error
+```
+
+Issue searches are limited to the project's Sentry project when it names one,
+unless the query names another with `project:`. Every command prints Sentry's
+JSON.
+
+As with `harness grafana`, the step never holds the token, and only reads in
+the connected organization get through: issues and their events and tags,
+events, traces, releases and projects.
+
 ## `harness s3`
 
 Upload a file a workflow step produced to the project's S3 folder. Needs

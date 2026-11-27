@@ -104,6 +104,43 @@ impl GrafanaQueryArgs {
     }
 }
 
+/// What a workflow run may read from Sentry: the connected organization,
+/// read-only (see `harness_server::sentry_cli`).
+#[derive(Subcommand)]
+pub enum SentryAction {
+    /// Search issues (Sentry search syntax; default "is:unresolved"), limited
+    /// to the project's Sentry project when it has one. Prints Sentry's JSON
+    Issues {
+        /// e.g. "is:unresolved level:error release:1.4.2"
+        #[arg(long)]
+        query: Option<String>,
+        /// date, new, freq or user
+        #[arg(long)]
+        sort: Option<String>,
+        /// How far back, e.g. "24h" or "14d"
+        #[arg(long)]
+        period: Option<String>,
+        /// At most 100 (default 25)
+        #[arg(long)]
+        limit: Option<u32>,
+    },
+    /// One issue, or with --latest-event its latest event and stack trace
+    Issue {
+        /// The issue's id (the number in its URL)
+        id: String,
+        #[arg(long)]
+        latest_event: bool,
+    },
+    /// Read one Sentry API path; "{org}" is replaced with the organization,
+    /// e.g. "api/0/organizations/{org}/events/". Prints Sentry's JSON
+    Get {
+        path: String,
+        /// A query parameter, as key=value; repeatable
+        #[arg(short = 'p', long = "param", value_parser = parse_key_value)]
+        params: Vec<(String, String)>,
+    },
+}
+
 fn parse_key_value(s: &str) -> Result<(String, String), String> {
     s.split_once('=')
         .filter(|(k, _)| !k.is_empty())
@@ -328,6 +365,11 @@ pub enum Command {
     Grafana {
         #[command(subcommand)]
         action: GrafanaAction,
+    },
+    /// Read the connected Sentry: issues, events and traces (used by workflow steps)
+    Sentry {
+        #[command(subcommand)]
+        action: SentryAction,
     },
     /// Upload to the project's S3 folder (used by workflow steps)
     S3 {
@@ -882,6 +924,33 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
                 GrafanaAction::Prometheus(args) => {
                     grafana_cli::query(QueryKind::Prometheus, &args.into_query()).await
                 }
+            }
+            .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{answer}");
+        }
+        Command::Sentry { action } => {
+            // Same grant as `harness grafana`; the server adds the token and
+            // allows only reads of the connected organization.
+            use harness_server::sentry_cli;
+            let answer = match action {
+                SentryAction::Issues {
+                    query,
+                    sort,
+                    period,
+                    limit,
+                } => {
+                    sentry_cli::issues(&sentry_cli::IssueSearch {
+                        query,
+                        sort,
+                        period,
+                        limit,
+                    })
+                    .await
+                }
+                SentryAction::Issue { id, latest_event } => {
+                    sentry_cli::issue(&id, latest_event).await
+                }
+                SentryAction::Get { path, params } => sentry_cli::get(&path, &params).await,
             }
             .map_err(|e| anyhow::anyhow!(e))?;
             println!("{answer}");
@@ -1584,6 +1653,47 @@ mod tests {
             _ => panic!("expected grafana get"),
         }
         assert!(Cli::try_parse_from(["harness", "grafana", "get", "x", "-p", "novalue"]).is_err());
+    }
+
+    /// `harness sentry issues|issue|get`.
+    #[test]
+    fn cli_parses_sentry() {
+        let cli = Cli::try_parse_from([
+            "harness",
+            "sentry",
+            "issues",
+            "--query",
+            "level:error",
+            "--period",
+            "24h",
+        ])
+        .expect("sentry issues should parse");
+        assert!(matches!(
+            cli.command,
+            Command::Sentry {
+                action: SentryAction::Issues { query: Some(ref q), period: Some(_), .. }
+            } if q == "level:error"
+        ));
+        let cli = Cli::try_parse_from(["harness", "sentry", "issue", "4512", "--latest-event"])
+            .expect("sentry issue should parse");
+        assert!(matches!(
+            cli.command,
+            Command::Sentry {
+                action: SentryAction::Issue {
+                    latest_event: true,
+                    ..
+                }
+            }
+        ));
+        assert!(Cli::try_parse_from([
+            "harness",
+            "sentry",
+            "get",
+            "api/0/organizations/{org}/events/",
+            "-p",
+            "field=title",
+        ])
+        .is_ok());
     }
 
     /// `harness title "<text>"` renames the run a step belongs to.

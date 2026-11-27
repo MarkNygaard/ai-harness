@@ -583,18 +583,15 @@ per provider at dispatch.
 
 ## External tools: `mcp:`
 
-A step can give its agent extra tools from an outside service with `mcp:`.
-Two are built in:
+A step can give its agent extra tools from an outside service with `mcp:`,
+naming servers an admin added under **Settings → MCP servers**
+([setup](/docs/setup/mcp-servers)).
 
-- **`sentry`:** production errors, so a step that investigates or fixes a bug
-  can read the error itself ([setup](/docs/setup/sentry)).
-- **`grafana`:** Prometheus metrics, Loki logs and dashboards, for reports and
-  for investigating what happened around an error ([setup](/docs/setup/grafana)).
-  A `bash` or `script` step has no MCP; it queries Grafana with
-  [`harness grafana`](/docs/operating/cli#harness-grafana) instead.
+A `bash` or `script` step has no MCP. It reads Grafana and Sentry, when they're
+connected as integrations, with [`harness grafana`](/docs/operating/cli#harness-grafana)
+and [`harness sentry`](/docs/operating/cli#harness-sentry) instead.
 
-Any other MCP server can be added under **Settings → MCP servers**
-([setup](/docs/setup/mcp-servers)), and is then asked for by its name.
+With Sentry's and Grafana's servers added under those names:
 
 ```yaml
 - id: explore
@@ -624,8 +621,6 @@ To give the step fewer, name the tools:
 - **One shared account.** Every run uses the account the server was connected
   with, whoever started the run. Give a step write tools (send, update,
   delete) only when it needs them: text from a Linear issue can reach the agent.
-- **Read-only built-ins.** Agents can read Sentry issues, events and traces, and
-  query Grafana. They can't change anything in either.
 - **Claude and Pi steps.** A workflow that gives MCP servers to a `cursor`
   step can't be saved.
 
@@ -710,7 +705,8 @@ posted as a comment on this issue."
 
 A run with no issue behind it, such as a [scheduled](/docs/schedules) report,
 can hand its result to people as a new issue. Have one step write the report
-to an artifact, then file it from a `bash` step:
+to an artifact, then file it from a `bash` step (here the report step uses a
+Grafana MCP server added under Settings → MCP servers):
 
 ```yaml
 - id: report

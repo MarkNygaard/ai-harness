@@ -134,12 +134,12 @@ RUN BUN_INSTALL=/opt/bun /opt/bun/bin/bun install -g "@oh-my-pi/pi-coding-agent@
     && chmod -R a+rX /opt/bun \
     && ln -sf /opt/bun/bin/omp /usr/local/bin/omp
 
-# Sentry's MCP server (`sentry-mcp`), started by Claude and omp for workflow
-# steps that ask for `mcp: [sentry]`. Pinned for the reason omp is — an
+# Sentry's MCP server (`sentry-mcp`). Not built in: shipped so an admin can add
+# it under Settings → MCP servers as a local command (the docs give the
+# read-only flags, `--skills=inspect`). Pinned for the reason omp is — an
 # unpinned install is whatever was current when the layer was first built —
-# and because a step runs it with the project's Sentry token. Needs Node
-# >= 22.13 (the layer above installs 22.x). The harness runs it read-only
-# (`--skills=inspect`, see harness-runner/src/mcp_servers.rs).
+# and because it runs with a Sentry token. Needs Node >= 22.13 (the layer
+# above installs 22.x).
 ARG SENTRY_MCP_VERSION=0.42.0
 RUN npm install -g --prefix /opt/sentry-mcp "@sentry/mcp-server@${SENTRY_MCP_VERSION}" \
     && npm cache clean --force \
@@ -159,12 +159,11 @@ RUN PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 \
     && chmod -R a+rX /opt/playwright-mcp \
     && ln -sf /opt/playwright-mcp/bin/playwright-mcp /usr/local/bin/playwright-mcp
 
-# Grafana's MCP server (`mcp-grafana`), for `mcp: [grafana]` steps and the
-# chat. A single Go binary from the GitHub release, pinned by version AND
-# checksum (the release's own checksums file) — it runs with the install's
-# Grafana service-account token. The harness runs it read-only
-# (`--disable-write`, Prometheus/Loki/dashboard tools only, usage statistics
-# off; see harness-runner/src/mcp_servers.rs). Bump the version and both sums
+# Grafana's MCP server (`mcp-grafana`). Not built in: shipped so an admin can
+# add it under Settings → MCP servers as a local command (the docs give the
+# read-only flags, `--disable-write`). A single Go binary from the GitHub
+# release, pinned by version AND checksum (the release's own checksums file) —
+# it runs with a Grafana service-account token. Bump the version and both sums
 # together, from `mcp-grafana_<v>_checksums.txt`.
 ARG GRAFANA_MCP_VERSION=2.0.2
 ARG GRAFANA_MCP_SHA256_AMD64=624e997b78bcadf236f82f8086827890ba77b6dfdc6fd6446f7c48dfd9e586f0
