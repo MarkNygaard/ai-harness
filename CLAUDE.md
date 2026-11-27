@@ -191,17 +191,23 @@ tests are the source of truth.*
   `$ARTIFACTS_DIR/screenshots/`; the server keeps that folder after the run
   (`http/run_screenshots.rs`) for `HARNESS_SCREENSHOT_TTL_DAYS`. Do not add
   per-workflow screenshot prose.
-- **Step MCP servers (`mcp:`)** — Sentry/Grafana are built in
-  (`harness-runner/src/mcp_servers.rs`); anything else is a registry row
-  (`harness-persist` `McpServerStore`, secrets in `CredentialStore` under
-  `mcp:<name>`), managed by `harness-server/src/http/mcp_registry.rs`. A
-  registry server, or a built-in narrowed to some tools, reaches the agent only
+- **Step MCP servers (`mcp:`)** — none is built in. Every server is a
+  registry row (`harness-persist` `McpServerStore`, secrets in
+  `CredentialStore` under `mcp:<name>`), managed by
+  `harness-server/src/http/mcp_registry.rs`, and reaches the agent only
   through the **gateway** (`mcp_gateway.rs`, `/api/run/mcp/*`): the server
   holds the credentials and forwards only the step's allowed tools. Do NOT put
   an MCP server's credentials in the run env or an agent-readable config —
   an agent with a shell would then bypass the tool list. Save-time checks read
   the process-wide snapshot `mcp_servers::set_catalog`, refreshed on every
   registry change.
+- **Integrations vs MCP servers** — Sentry and Grafana are *integrations*
+  (Settings → Integrations), not MCP servers. Their tokens never reach a step:
+  scripts read them through run proxies (`/api/run/{grafana,sentry}/*`,
+  `http/integrations.rs`, GET-only path allowlists) via `harness grafana` /
+  `harness sentry`, and the chat through chat-only harness MCP tools
+  (`http/chat_integrations.rs`). Don't add a built-in MCP server; an admin adds
+  one under Settings → MCP servers like any other.
 - **Filesystem confinement** — every step's process (Claude, Pi, Cursor, and
   `bash`/`script` bodies) is confined with Landlock to writing only in its
   workspace, the clones' git dirs, temp, the shared caches and the agents' state

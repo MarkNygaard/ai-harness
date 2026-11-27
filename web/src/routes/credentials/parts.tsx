@@ -136,27 +136,34 @@ const PROVIDERS: ProviderDef[] = [
   {
     id: "sentry",
     label: "Sentry",
-    help: "Lets agents look up production errors in Sentry: workflow steps that ask for it (`mcp: [sentry]`) and the chat. Create a token with read access only. Best: Settings → Custom Integrations → Create New Integration → Internal Integration, with Read on Project, Team, Organization and Issue & Event; it belongs to the organization, so it keeps working when someone leaves. Or: Settings → Personal Tokens with the same four set to Read. Organization Tokens do not work: they are for CI only. Agents can then read issues, events and traces, but never resolve, assign or change anything.",
+    help: "Lets workflows and the chat look up production errors in Sentry: bash and script steps with `harness sentry`, the chat with its own tools. Neither ever sees the token, and both can only read. Create a token with read access only. Best: Settings → Custom Integrations → Create New Integration → Internal Integration, with Read on Project, Team, Organization and Issue & Event; it belongs to the organization, so it keeps working when someone leaves. Or: Settings → Personal Tokens with the same four set to Read. Organization Tokens do not work: they are for CI only. For Sentry's MCP server as agent tools, add it under Settings → MCP servers.",
     fields: [
       {
         key: "token",
         label: "Sentry token (read-only)",
         placeholder: "Custom integration or personal token",
-        help: "Given to Sentry's MCP server when a step or chat uses it. Never written to a file.",
+        help: "Added by the harness to the reads it makes for steps and the chat. Never written to a file, and never handed to a step.",
       },
       {
         key: "org",
         label: "Organization slug",
         secret: false,
         placeholder: "your-org",
-        help: "From sentry.io/organizations/<slug>/. Agents are limited to this organization. A project can name its own Sentry project under Settings → Projects.",
+        help: "From sentry.io/organizations/<slug>/. Reads are limited to this organization. A project can name its own Sentry project under Settings → Projects.",
+      },
+      {
+        key: "url",
+        label: "Sentry URL",
+        secret: false,
+        placeholder: "https://sentry.io",
+        help: "Leave empty for sentry.io. Set it for a self-hosted Sentry, or a region such as https://de.sentry.io.",
       },
     ],
   },
   {
     id: "grafana",
     label: "Grafana",
-    help: "Lets workflows read your metrics and logs in Grafana — Prometheus, Loki and dashboards. One connection, two ways in: agent steps and the chat get Grafana's MCP server (steps opt in with `mcp: [grafana]`), and bash or script steps query it with `harness grafana`, without ever seeing the token. Read-only: in Grafana, go to Administration → Users and access → Service accounts, add one with the Viewer role, and create a token for it. Agents can query and read dashboards, but never create or change anything.",
+    help: "Lets workflows and the chat read your metrics and logs in Grafana — Prometheus, Loki and dashboards: bash and script steps with `harness grafana`, the chat with its own tools. Neither ever sees the token, and both can only read. In Grafana, go to Administration → Users and access → Service accounts, add one with the Viewer role, and create a token for it. For Grafana's MCP server as agent tools, add it under Settings → MCP servers.",
     fields: [
       {
         key: "url",
@@ -169,7 +176,7 @@ const PROVIDERS: ProviderDef[] = [
         key: "token",
         label: "Service account token (Viewer)",
         placeholder: "glsa_…",
-        help: "Given to Grafana's MCP server when a step or chat uses it, and added by the harness to `harness grafana` queries. Never written to a file, and never handed to a script.",
+        help: "Added by the harness to the reads it makes for steps and the chat. Never written to a file, and never handed to a step.",
       },
     ],
   },

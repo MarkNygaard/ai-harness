@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   IconPencil,
@@ -72,14 +72,7 @@ export function McpServersPage() {
   const [editing, setEditing] = useState<McpServerView | "new" | null>(null);
   const [deleting, setDeleting] = useState<McpServerView | null>(null);
 
-  // Built-ins first, then the rest in the order the server sent them.
-  const list = useMemo(
-    () =>
-      [...(servers.data ?? [])].sort(
-        (a, b) => Number(b.builtin) - Number(a.builtin),
-      ),
-    [servers.data],
-  );
+  const list = servers.data ?? [];
 
   return (
     <SettingsShell title="MCP servers">
@@ -95,6 +88,12 @@ export function McpServersPage() {
               service mailbox, say), not per person. Steps get only the tools
               enabled here, and a new server starts with just its read-only
               tools enabled.
+            </p>
+            <p className="mt-2 max-w-prose text-sm text-muted-foreground">
+              Grafana and Sentry are{" "}
+              <Link to="/settings/integrations">integrations</Link>: scripts and
+              the chat read them without any server here. Add their MCP servers
+              only if agent steps should use them as tools.
             </p>
           </div>
           {isAdmin && (
@@ -122,9 +121,9 @@ export function McpServersPage() {
             onDelete={() => setDeleting(s)}
           />
         ))}
-        {servers.isSuccess && list.every((s) => s.builtin) && (
+        {servers.isSuccess && list.length === 0 && (
           <p className="text-sm text-muted-foreground">
-            No servers of your own yet.
+            No servers yet.
             {isAdmin && " Add one to give steps more tools."}
           </p>
         )}
@@ -224,7 +223,7 @@ function ServerCard({
 }) {
   const refresh = useRefreshMcpTools();
   const disconnect = useDisconnectMcpOAuth();
-  const canEdit = isAdmin && !s.builtin;
+  const canEdit = isAdmin;
   const summary = transportSummary(s);
   const error = refresh.error ?? disconnect.error;
 
@@ -236,31 +235,13 @@ function ServerCard({
           <code className="font-mono text-xs font-normal text-muted-foreground">
             {s.name}
           </code>
-          {s.builtin && <Badge variant="outline">Built-in</Badge>}
           <StatusBadge status={s.status} />
         </CardTitle>
         <CardDescription>
-          {s.builtin ? (
-            <>
-              Uses the connection under{" "}
-              <Link to="/settings/integrations">Settings → Integrations</Link>;
-              nothing to set up here. Its tools are fixed and only read.
-              {s.name === "grafana" && (
-                <>
-                  {" "}
-                  Bash and script steps read the same Grafana with{" "}
-                  <code className="font-mono text-xs">harness grafana</code>.
-                </>
-              )}
-            </>
-          ) : (
-            <>
-              <span className="mr-1">
-                {s.transport === "stdio" ? "Local command:" : "Remote URL:"}
-              </span>
-              <code className="font-mono text-xs break-all">{summary}</code>
-            </>
-          )}
+          <span className="mr-1">
+            {s.transport === "stdio" ? "Local command:" : "Remote URL:"}
+          </span>
+          <code className="font-mono text-xs break-all">{summary}</code>
         </CardDescription>
         {canEdit && (
           <CardAction className="flex gap-1">

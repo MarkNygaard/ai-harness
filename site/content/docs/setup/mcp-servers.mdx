@@ -7,8 +7,11 @@ An MCP server gives an agent tools for an outside service: a mailbox, a CRM,
 a ticket system. Add a server once, under **Settings → MCP servers**, and any
 workflow step can ask for it with [`mcp:`](/docs/workflows/authoring#external-tools-mcp).
 
-Sentry and Grafana are built in and are set up under
-[Integrations](/docs/setup/sentry). This page is about everything else.
+Nothing is built in: every server here is one an admin added. Sentry and
+Grafana are [integrations](/docs/setup/sentry) instead, which scripts and the
+chat read without any server here. To give agent steps their MCP servers as
+tools too, add them like any other; see
+[below](#sentry-and-grafana-as-mcp-servers).
 
 ## One account for the whole harness
 
@@ -88,3 +91,29 @@ harness forwards its calls to the real server:
 
 Claude and Pi (omp, Kimi) steps. A workflow that gives MCP servers to a
 `cursor` step can't be saved.
+
+## Sentry and Grafana as MCP servers
+
+The image ships both servers' commands, so they can be added as local
+commands. Use the same read-only tokens as the integrations.
+
+**Grafana**, as a local command:
+
+- Command: `mcp-grafana --usage-stats=disabled --disable-write --enabled-tools=search,datasource,prometheus,loki,dashboard,folder,navigation,annotations,alerting`
+- Secrets: `GRAFANA_URL` (the Grafana URL) and `GRAFANA_SERVICE_ACCOUNT_TOKEN`
+  (a Viewer service-account token).
+
+`--disable-write` drops every tool that creates or changes something, and
+`--enabled-tools` keeps the server to metrics, logs and dashboards.
+
+**Sentry**, either way:
+
+- **Remote, with OAuth:** URL `https://mcp.sentry.dev/mcp`, then **Connect**
+  and sign in as the shared account.
+- **Local command:** `sentry-mcp --skills=inspect --organization-slug=<your-org>`,
+  with the secret `SENTRY_ACCESS_TOKEN` (a read-only token).
+  `--skills=inspect` is the server's read-only set.
+
+Name them `grafana` and `sentry` if workflows already ask for them by those
+names with `mcp:`.
+

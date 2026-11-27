@@ -105,26 +105,10 @@ pub struct ChatTurn {
     /// The session to resume; `None` on the first turn.
     pub session: Option<String>,
     pub mcp: ChatMcp,
-    /// Read-only outside servers beside the harness (e.g. Sentry), as built
-    /// by [`crate::mcp_servers::resolve`]; `None` = none.
-    pub extra_mcp: Option<Value>,
-    /// Environment those servers' configs refer to (e.g. the Sentry token).
+    /// The agent's own environment (its login or key).
     pub env: Vec<(String, String)>,
     /// Live tool activity, for the "looking up runs…" lines while it works.
     pub progress: Option<ProgressSink>,
-}
-
-/// The extra servers' names, in a stable order.
-fn extra_servers(turn: &ChatTurn) -> Vec<String> {
-    let mut names: Vec<String> = turn
-        .extra_mcp
-        .as_ref()
-        .and_then(|d| d.get("mcpServers"))
-        .and_then(Value::as_object)
-        .map(|m| m.keys().cloned().collect())
-        .unwrap_or_default();
-    names.sort();
-    names
 }
 
 /// What came back.
@@ -140,20 +124,7 @@ pub struct ChatReply {
 pub async fn run_turn(turn: ChatTurn) -> Result<ChatReply, AgentError> {
     std::fs::create_dir_all(&turn.cwd)
         .map_err(|e| AgentError(format!("chat directory {}: {e}", turn.cwd.display())))?;
-    let mut config = mcp_config(&turn.mcp.url);
-    if let Some(extra) = turn
-        .extra_mcp
-        .as_ref()
-        .and_then(|d| d.get("mcpServers"))
-        .and_then(Value::as_object)
-    {
-        for (name, server) in extra {
-            // The harness server's name is ours; an extra can't replace it.
-            if name != SERVER_NAME {
-                config["mcpServers"][name] = server.clone();
-            }
-        }
-    }
+    let config = mcp_config(&turn.mcp.url);
     match turn.provider.as_str() {
         "claude" => {
             let file = turn.cwd.join(CLAUDE_MCP_FILE);
@@ -251,11 +222,7 @@ pub fn claude_args(turn: &ChatTurn, mcp_file: &Path) -> Vec<String> {
             String::new()
         },
         "--allowedTools".into(),
-        std::iter::once(SERVER_NAME.to_string())
-            .chain(extra_servers(turn).into_iter().filter(|n| n != SERVER_NAME))
-            .map(|n| format!("mcp__{n}__*"))
-            .collect::<Vec<_>>()
-            .join(","),
+        format!("mcp__{SERVER_NAME}__*"),
         "--permission-mode".into(),
         "dontAsk".into(),
         // Only the harness's own user settings. A project's
@@ -324,13 +291,6 @@ pub fn omp_args(turn: &ChatTurn, guard: &Path) -> Vec<String> {
         None => OMP_DEFAULT_MODEL.to_string(),
     };
     let mut tools: Vec<String> = turn.mcp.tools.iter().map(|t| omp_tool_name(t)).collect();
-    // An extra server's tools are listed by name too: `--tools` is the whole
-    // active set. Named as omp names them (`mcp__sentry_search_issues`).
-    for server in extra_servers(turn) {
-        for tool in crate::mcp_servers::tool_names(&server) {
-            tools.push(format!("mcp__{server}_{tool}"));
-        }
-    }
     if turn.code_dir.is_some() {
         tools.extend(OMP_CODE_TOOLS.iter().map(|t| t.to_string()));
     }
@@ -585,46 +545,9 @@ mod tests {
                 token: "hrn_chat_secret".into(),
                 tools: vec!["run_list".into(), "issue_prs".into()],
             },
-            extra_mcp: None,
             env: Vec::new(),
             progress: None,
         }
-    }
-
-    #[test]
-    fn a_turn_with_sentry_can_call_sentrys_tools_and_nothing_else_new() {
-        let env: std::collections::HashMap<String, String> = [
-            ("HARNESS_SENTRY_TOKEN", "t"),
-            ("HARNESS_SENTRY_ORG", "dilling"),
-        ]
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-        let (doc, _) = crate::mcp_servers::resolve(&["sentry".into()], &env);
-
-        let mut claude = turn("claude", None);
-        claude.extra_mcp = doc.clone();
-        let args = claude_args(&claude, Path::new("/x/mcp.json"));
-        let allowed = args
-            .windows(2)
-            .find(|w| w[0] == "--allowedTools")
-            .map(|w| w[1].clone())
-            .unwrap();
-        assert_eq!(allowed, "mcp__harness__*,mcp__sentry__*");
-        // Still no built-ins.
-        assert!(args.windows(2).any(|w| w == ["--tools", ""]));
-
-        let mut pi = turn("pi", None);
-        pi.extra_mcp = doc;
-        let args = omp_args(&pi, Path::new("/g.ts"));
-        let tools = args
-            .windows(2)
-            .find(|w| w[0] == "--tools")
-            .map(|w| w[1].clone())
-            .unwrap();
-        assert!(tools.contains("mcp__sentry_search_issues"), "{tools}");
-        assert!(tools.contains("mcp__sentry_get_sentry_resource"), "{tools}");
-        assert!(!tools.split(',').any(|t| t == "read" || t == "bash"));
     }
 
     #[test]

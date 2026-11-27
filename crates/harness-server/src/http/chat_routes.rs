@@ -782,33 +782,23 @@ async fn answer(
             list.push(act);
         }
     }));
-    // Outside read-only services, when connected. Sentry is scoped to the
-    // conversation's project when it names one with a Sentry project, else to
-    // the organization; Grafana is install-wide.
+    // Grafana and Sentry, when connected: read through the harness's own
+    // chat tools (`chat_integrations`), so the agent never holds their
+    // tokens. Sentry is scoped to the conversation's project when it names a
+    // Sentry project; Grafana is install-wide.
     let project = conv.context.0.get("project").and_then(Value::as_str);
-    let mut service_env = state.sentry_env(project).await;
-    service_env.extend(state.grafana_env().await);
-    let env_map: HashMap<String, String> = service_env.iter().cloned().collect();
-    let (extra_mcp, _) =
-        harness_runner::mcp_servers::resolve(&["sentry".into(), "grafana".into()], &env_map);
-    let attached = |name: &str| {
-        extra_mcp
-            .as_ref()
-            .is_some_and(|d| d["mcpServers"].get(name).is_some())
-    };
-    let sentry_note = attached("sentry").then(|| {
-        sentry_note(
-            env_map
-                .get(harness_runner::mcp_servers::SENTRY_PROJECT_ENV)
-                .map(String::as_str),
-        )
-    });
-    let grafana_note = attached("grafana").then(grafana_note);
-    // The chat agent's environment: the read-only services above, the GitHub
-    // token, and its own agent's key. Claude chat has always taken the
-    // subscription token from the environment; omp takes the Moonshot key.
-    let mut agent_env = service_env.clone();
-    agent_env.extend(secrets.github_env());
+    let sentry_note = state
+        .sentry(project)
+        .await
+        .map(|s| super::chat_integrations::sentry_note(&s));
+    let grafana_note = state
+        .grafana()
+        .await
+        .map(|_| super::chat_integrations::grafana_note());
+    // The chat agent's environment: the GitHub token and its own agent's key.
+    // Claude chat has always taken the subscription token from the
+    // environment; omp takes the Moonshot key.
+    let mut agent_env = secrets.github_env();
     match conv.provider.as_str() {
         "claude" => {
             if let Some(token) = &secrets.claude_oauth {
@@ -832,9 +822,15 @@ async fn answer(
         mcp: ChatMcp {
             url: mcp_url(),
             token: token.0.clone(),
-            tools: super::mcp_routes::tool_names(),
+            tools: super::mcp_routes::tool_names()
+                .into_iter()
+                .chain(
+                    super::chat_integrations::TOOL_NAMES
+                        .iter()
+                        .map(|t| t.to_string()),
+                )
+                .collect(),
         },
-        extra_mcp: extra_mcp.clone(),
         env: agent_env.clone(),
         progress: Some(progress.clone()),
     };
@@ -871,31 +867,6 @@ async fn answer(
     let mut t = turn(None, prompt);
     t.effort = effort;
     chat::run_turn(t).await.map_err(|e| e.0)
-}
-
-/// What the agent is told when Sentry is attached.
-/// What the agent is told when Grafana is attached.
-fn grafana_note() -> String {
-    "You also have Grafana (the `grafana` tools), read-only: Prometheus metrics, Loki logs, \
-     dashboards and alert rules. Use it for questions about traffic, latency, error rates, \
-     logs, or what a dashboard shows. Find the data source and metric or label names first \
-     (list_datasources, list_prometheus_metric_names, list_loki_label_names) rather than \
-     guessing, keep time ranges tight, and give the PromQL/LogQL you ran and a deeplink so a \
-     person can check it."
-        .to_string()
-}
-
-fn sentry_note(project: Option<&str>) -> String {
-    let scope = match project {
-        Some(p) => format!("limited to the Sentry project `{p}`"),
-        None => "across the organization".to_string(),
-    };
-    format!(
-        "You also have Sentry (the `sentry` tools), read-only and {scope}. Use it when the \
-         question is about an error, a crash, a spike, or what broke after a release: look up \
-         the issue, its events and stack trace, and link to it. Search with Sentry query syntax \
-         (e.g. `is:unresolved level:error`)."
-    )
 }
 
 // ── Code checkouts ─────────────────────────────────────────────────────────
@@ -1599,20 +1570,6 @@ mod tests {
         assert!(!resumed.contains("You are the assistant"));
         assert!(resumed.starts_with("(They cancelled"));
         assert!(resumed.ends_with("ok"));
-    }
-
-    #[test]
-    fn the_grafana_note_asks_for_checkable_queries() {
-        let n = grafana_note();
-        assert!(n.contains("read-only"));
-        assert!(n.contains("PromQL/LogQL"));
-    }
-
-    #[test]
-    fn the_sentry_note_says_how_far_it_reaches() {
-        assert!(sentry_note(Some("webshop")).contains("limited to the Sentry project `webshop`"));
-        assert!(sentry_note(None).contains("across the organization"));
-        assert!(sentry_note(None).contains("read-only"));
     }
 
     #[test]
