@@ -1,3 +1,4 @@
+import { ClaudeAccounts } from "./ClaudeAccounts";
 import { KeyRound } from "lucide-react";
 import { SettingsShell } from "@/components/SettingsShell";
 import { useCredentials } from "@/lib/credentials";
@@ -66,6 +67,7 @@ export function SubscriptionsPage() {
               provider={providerDef("claude")}
               configured={is("claude")}
             />
+            <ClaudeAccounts />
           </ProviderSummary>
           <ProviderSummary
             provider="codex"

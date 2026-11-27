@@ -11,12 +11,17 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::claude_pool::ClaudeAccountPool;
 use crate::{AgentError, PromptAgent, PromptRequest, PromptResult};
+use harness_dag::Activity;
 
 /// Provider names routed to the Pi/`omp` backend.
 const PI_PROVIDERS: &[&str] = &["pi", "omp", "kimi"];
 /// Provider names routed to the Cursor (`cursor-agent`) backend.
 const CURSOR_PROVIDERS: &[&str] = &["cursor"];
+
+/// Where Claude Code keeps an account's credentials, settings and sessions.
+const CLAUDE_CONFIG_DIR: &str = "CLAUDE_CONFIG_DIR";
 
 /// Routes a [`PromptRequest`] by `provider`: the Pi agent (`pi|omp|kimi`), the
 /// Cursor agent (`cursor`), or a fallback (everything else, typically the
@@ -28,6 +33,13 @@ pub struct DispatchAgent {
     /// Credentials per backend (`pi`, `cursor`, or the fallback's provider
     /// name), added to a step's environment only when it runs on that backend.
     provider_env: HashMap<String, HashMap<String, String>>,
+    /// The run's Claude accounts, when the harness has more than one.
+    claude_pool: Option<Arc<ClaudeAccountPool>>,
+}
+
+/// Steps Claude Code runs: no provider, or `claude`.
+fn is_claude(provider: Option<&str>) -> bool {
+    provider.is_none_or(|p| p == "claude")
 }
 
 impl DispatchAgent {
@@ -41,6 +53,74 @@ impl DispatchAgent {
             cursor,
             fallback,
             provider_env: HashMap::new(),
+            claude_pool: None,
+        }
+    }
+
+    /// Spread this run's Claude steps over several accounts (see
+    /// [`ClaudeAccountPool`]).
+    pub fn with_claude_pool(mut self, pool: Arc<ClaudeAccountPool>) -> Self {
+        self.claude_pool = Some(pool);
+        self
+    }
+
+    /// Run a Claude step on the pool's account, and when it hits that
+    /// account's usage limit, again on the next one that has room.
+    async fn run_on_pool(
+        &self,
+        pool: &ClaudeAccountPool,
+        mut req: PromptRequest,
+    ) -> Result<PromptResult, AgentError> {
+        let mut announced: Option<String> = None;
+        loop {
+            let Some((slot, session)) = pool.account_for(req.session.as_deref()).await else {
+                // No account usable at all: run as a single-account harness does.
+                return self.fallback.run(req).await;
+            };
+            req.session = session;
+            match &slot.config_dir {
+                Some(dir) => {
+                    req.env_vars
+                        .insert(CLAUDE_CONFIG_DIR.into(), dir.display().to_string());
+                }
+                None => {
+                    req.env_vars.remove(CLAUDE_CONFIG_DIR);
+                }
+            }
+            if announced.as_deref() != Some(slot.id.as_str()) {
+                if let Some(sink) = &req.progress {
+                    sink.report(Activity::text(format!("Claude account: {}", slot.label)));
+                }
+                announced = Some(slot.id.clone());
+            }
+            let result = self.fallback.run(req.clone()).await;
+            let failure = match &result {
+                Err(e) => Some(e.0.as_str()),
+                Ok(r) if !r.success => Some(r.text.as_str()),
+                Ok(_) => None,
+            };
+            let at_limit = failure.is_some_and(|text| {
+                harness_dag::usage_limit::reset_time(text, chrono::Utc::now()).is_some()
+            });
+            if at_limit {
+                if let Some(next) = pool.fail_over(&slot.id).await {
+                    if let Some(sink) = &req.progress {
+                        sink.report(Activity::text(format!(
+                            "Claude account “{}” reached its usage limit. Running this step again on “{}”.",
+                            slot.label, next.label
+                        )));
+                    }
+                    // The conversation stays with the account it started on.
+                    req.session = None;
+                    continue;
+                }
+            }
+            if let Ok(r) = &result {
+                if let Some(s) = &r.session {
+                    pool.note_session(s, &slot.id);
+                }
+            }
+            return result;
         }
     }
 
@@ -80,7 +160,10 @@ impl PromptAgent for DispatchAgent {
             if let Some(p) = provider {
                 self.add_env(p, &mut req);
             }
-            self.fallback.run(req).await
+            match &self.claude_pool {
+                Some(pool) if is_claude(provider) => self.run_on_pool(pool, req).await,
+                _ => self.fallback.run(req).await,
+            }
         }
     }
 }
@@ -228,5 +311,81 @@ mod provider_env_tests {
         // Claude, named or by default, gets neither.
         assert_eq!(keys(2), ["SHARED"]);
         assert_eq!(keys(3), ["SHARED"]);
+    }
+
+    /// Each call's config folder and session, in order.
+    type Calls = Arc<Mutex<Vec<(Option<String>, Option<String>)>>>;
+
+    /// Hits the usage limit on account `a`, succeeds anywhere else, and
+    /// records which config folder and session each call got.
+    struct LimitedOnA(Calls);
+
+    #[async_trait]
+    impl PromptAgent for LimitedOnA {
+        async fn run(&self, req: PromptRequest) -> Result<PromptResult, AgentError> {
+            let dir = req.env_vars.get(CLAUDE_CONFIG_DIR).cloned();
+            self.0
+                .lock()
+                .unwrap()
+                .push((dir.clone(), req.session.clone()));
+            if dir.as_deref() == Some("/accounts/a") {
+                return Err(AgentError(
+                    "usage limit reached, resets at unix 4102444800".into(),
+                ));
+            }
+            Ok(PromptResult {
+                text: "done".into(),
+                session: Some("new-session".into()),
+                success: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_claude_step_moves_to_another_account_at_the_limit() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let claude = Arc::new(LimitedOnA(calls.clone()));
+        let ranker = crate::claude_pool::tests::FixedRanker::new(&["a", "b"]);
+        let pool = Arc::new(ClaudeAccountPool::new(ranker.clone()));
+        let dispatch =
+            DispatchAgent::new(spy_unused(), spy_unused(), claude).with_claude_pool(pool.clone());
+
+        let mut first = req(None);
+        first.session = Some("old-session".into());
+        let out = dispatch.run(first).await.unwrap();
+        assert_eq!(out.text, "done");
+        let calls = calls.lock().unwrap().clone();
+        assert_eq!(
+            calls,
+            [
+                (Some("/accounts/a".into()), Some("old-session".into())),
+                // Started again on `b`, without the conversation from `a`.
+                (Some("/accounts/b".into()), None),
+            ]
+        );
+        assert_eq!((ranker.held("a"), ranker.held("b")), (0, 1));
+
+        // An omp step is not Claude's business.
+        let omp = dispatch.run(req(Some("pi"))).await.unwrap();
+        assert_eq!(omp.text, "unused");
+    }
+
+    /// A backend this test does not exercise; answers `unused`.
+    struct Unused;
+
+    #[async_trait]
+    impl PromptAgent for Unused {
+        async fn run(&self, _req: PromptRequest) -> Result<PromptResult, AgentError> {
+            Ok(PromptResult {
+                text: "unused".into(),
+                success: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    fn spy_unused() -> Arc<dyn PromptAgent> {
+        Arc::new(Unused)
     }
 }

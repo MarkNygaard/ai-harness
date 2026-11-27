@@ -1581,6 +1581,7 @@ name = "harness-runner"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "chrono",
  "harness-agents",
  "harness-core",
  "harness-dag",

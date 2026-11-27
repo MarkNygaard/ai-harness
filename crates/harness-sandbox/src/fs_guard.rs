@@ -44,8 +44,10 @@ fn switch_allows(value: Option<&str>) -> bool {
 /// `/usr/local`) are deliberately absent: they are installed by the harness,
 /// and overwriting one is the failure this guards against.
 const HOME_WRITABLE: &[&str] = &[
-    // Agent CLIs' state and config.
+    // Agent CLIs' state and config. `.claude-accounts` holds the config
+    // folders of further Claude subscriptions.
     ".claude",
+    ".claude-accounts",
     ".omp",
     ".cursor",
     ".config",

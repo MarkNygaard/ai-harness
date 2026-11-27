@@ -2974,14 +2974,18 @@ async fn execute_run_task(
         }
         // `provider: pi` → omp; `cursor` → cursor-agent; others → CodeAgent registry.
         let code = Arc::new(CodeAgentRunner::new(state.agent_registry.clone()));
-        Arc::new(
-            DispatchAgent::new(
-                Arc::new(PiAgent::from_env()),
-                Arc::new(CursorAgent::from_env()),
-                code,
-            )
-            .with_provider_env(secrets.agent_env()),
+        let mut dispatch = DispatchAgent::new(
+            Arc::new(PiAgent::from_env()),
+            Arc::new(CursorAgent::from_env()),
+            code,
         )
+        .with_provider_env(secrets.agent_env());
+        // Several Claude subscriptions: the run takes the one with the most
+        // room, and moves on when it hits a limit.
+        if let Some(pool) = super::claude_accounts::pool_for_run(&state).await {
+            dispatch = dispatch.with_claude_pool(pool);
+        }
+        Arc::new(dispatch)
     } else {
         Arc::new(EchoAgent)
     };

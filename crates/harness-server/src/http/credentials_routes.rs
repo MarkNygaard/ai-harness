@@ -47,6 +47,8 @@ const PROVIDERS: &[&str] = &[
 fn is_known_provider(provider: &str) -> bool {
     PROVIDERS.contains(&provider)
         || super::linear_connections::ConnectionId::from_provider_key(provider).is_some()
+        // Each further Claude subscription: `claude:<id>`.
+        || super::claude_accounts::id_for_key(provider).is_some()
 }
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
@@ -198,9 +200,9 @@ pub async fn set_credential(
             // seeds-if-missing (it won't clobber the CLI's self-refreshing file).
             // This is the one authoritative point where the DB copy overwrites
             // disk; thereafter the CLI owns and rotates the token in place.
-            if provider == "claude" {
+            if let Some(id) = super::claude_accounts::id_for_key(&provider) {
                 if let Some(json) = req.fields.get("credentials_json").filter(|v| !v.is_empty()) {
-                    write_secret_file(home_dir().join(".claude").join(".credentials.json"), json);
+                    write_secret_file(super::claude_accounts::credentials_path(&id), json);
                 }
             }
             // A usage-card visibility toggle takes effect on the next dashboard
@@ -230,8 +232,8 @@ pub async fn delete_credential(
             // `materialize` only seeds them when missing, so leaving the file
             // makes Clear a no-op for auth (the stale credential keeps being
             // used). Best-effort; absence is fine.
-            if provider == "claude" {
-                let _ = std::fs::remove_file(home_dir().join(".claude").join(".credentials.json"));
+            if let Some(id) = super::claude_accounts::id_for_key(&provider) {
+                let _ = std::fs::remove_file(super::claude_accounts::credentials_path(&id));
             }
             super::usage_routes::invalidate_cache().await;
             Json(serde_json::json!({ "deleted": true, "provider": provider })).into_response()
@@ -443,12 +445,30 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/home/harness"))
 }
 
+/// Write a credential file readable by the harness user only.
 fn write_secret_file(path: PathBuf, contents: &str) {
+    use std::io::Write as _;
     if let Some(dir) = path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    if let Err(e) = std::fs::write(&path, contents) {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.mode(0o600);
+    }
+    let written = options
+        .open(&path)
+        .and_then(|mut f| f.write_all(contents.as_bytes()));
+    if let Err(e) = written {
         tracing::warn!("failed to write credential file {}: {e}", path.display());
+    }
+    // An existing file keeps its old mode when opened; tighten it too.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
     }
 }
 
@@ -563,11 +583,30 @@ pub async fn materialize(store: &CredentialStore) -> ProviderSecrets {
         secrets.cursor = field(&cursor, "api_key");
     }
 
-    // Keep the Claude subscription token fresh for this run: its OAuth access
+    // Each further Claude subscription has its own config folder: seed its
+    // credential there the same way, only when missing.
+    for account in super::claude_accounts::list(store).await {
+        if account.id == super::claude_accounts::DEFAULT_ID {
+            continue;
+        }
+        let path = super::claude_accounts::credentials_path(&account.id);
+        if !file_non_empty(path.clone()) {
+            if let Ok(Some(fields)) = store.get(&account.key).await {
+                if let Some(json) = fields.get("credentials_json").filter(|v| !v.is_empty()) {
+                    write_secret_file(path, json);
+                }
+            }
+        }
+    }
+
+    // Keep every Claude subscription token fresh for this run: its OAuth access
     // token is short-lived (~8h) and the CLI doesn't reliably refresh it in
     // headless subscription runs, so an idle gap would otherwise 401 the run
     // mid-pipeline. No-op when there's no Claude credential or it's still valid.
-    let _ = ensure_fresh_claude_token(store).await;
+    for account in super::claude_accounts::list(store).await {
+        let path = super::claude_accounts::credentials_path(&account.id);
+        let _ = ensure_fresh_claude_token_for(store, &account.key, &path).await;
+    }
 
     *LAST_MATERIALIZED.lock().unwrap_or_else(|e| e.into_inner()) = Some(secrets.clone());
     secrets
@@ -630,15 +669,18 @@ fn oauth_expires_ms(root: &serde_json::Value) -> Option<i64> {
 
 /// Load the current Claude credential JSON: the CLI's live on-disk copy first,
 /// then the DB `credentials_json` fallback.
-async fn load_claude_creds_json(store: &CredentialStore) -> Option<String> {
-    let path = home_dir().join(".claude").join(".credentials.json");
-    if let Ok(s) = std::fs::read_to_string(&path) {
+async fn load_claude_creds_json(
+    store: &CredentialStore,
+    key: &str,
+    path: &std::path::Path,
+) -> Option<String> {
+    if let Ok(s) = std::fs::read_to_string(path) {
         if !s.trim().is_empty() {
             return Some(s);
         }
     }
     store
-        .get("claude")
+        .get(key)
         .await
         .ok()
         .flatten()?
@@ -682,7 +724,23 @@ fn apply_refreshed_tokens(
 /// (possibly just-refreshed) access token. Best-effort: on refresh failure it
 /// logs and returns the existing token; `None` only when no credential exists.
 pub(crate) async fn ensure_fresh_claude_token(store: &CredentialStore) -> Option<String> {
-    let raw = load_claude_creds_json(store).await?;
+    let id = super::claude_accounts::DEFAULT_ID;
+    ensure_fresh_claude_token_for(
+        store,
+        &super::claude_accounts::key_for(id),
+        &super::claude_accounts::credentials_path(id),
+    )
+    .await
+}
+
+/// [`ensure_fresh_claude_token`] for one Claude account: its credential row
+/// `key` and the credential file in its config folder.
+pub(crate) async fn ensure_fresh_claude_token_for(
+    store: &CredentialStore,
+    key: &str,
+    path: &std::path::Path,
+) -> Option<String> {
+    let raw = load_claude_creds_json(store, key, path).await?;
     let root: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let access = oauth_str(&root, "accessToken")?;
     match oauth_expires_ms(&root) {
@@ -694,7 +752,7 @@ pub(crate) async fn ensure_fresh_claude_token(store: &CredentialStore) -> Option
 
     let _guard = CLAUDE_REFRESH_LOCK.lock().await;
     // Re-read after locking: a concurrent caller may have just refreshed.
-    let raw = load_claude_creds_json(store).await?;
+    let raw = load_claude_creds_json(store, key, path).await?;
     let mut root: serde_json::Value = serde_json::from_str(&raw).ok()?;
     let access = oauth_str(&root, "accessToken")?;
     if let Some(exp) = oauth_expires_ms(&root) {
@@ -712,21 +770,21 @@ pub(crate) async fn ensure_fresh_claude_token(store: &CredentialStore) -> Option
             let new_expires = now_ms() + expires_in.max(0) * 1000;
             if apply_refreshed_tokens(&mut root, &new_access, &new_refresh, new_expires) {
                 if let Ok(json) = serde_json::to_string(&root) {
-                    write_secret_file(home_dir().join(".claude").join(".credentials.json"), &json);
+                    write_secret_file(path.to_path_buf(), &json);
                     // Write-back so the seed-if-missing fallback is never stale.
                     let _ = store
                         .set(
-                            "claude",
+                            key,
                             &BTreeMap::from([("credentials_json".to_string(), json)]),
                         )
                         .await;
                 }
             }
-            tracing::info!("claude token refresh: succeeded (expires in {expires_in}s)");
+            tracing::info!("claude token refresh ({key}): succeeded (expires in {expires_in}s)");
             Some(new_access)
         }
         Err(e) => {
-            tracing::warn!("claude token refresh failed: {e}");
+            tracing::warn!("claude token refresh ({key}) failed: {e}");
             Some(access)
         }
     }

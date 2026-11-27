@@ -202,6 +202,14 @@ tests are the source of truth.*
   an agent with a shell would then bypass the tool list. Save-time checks read
   the process-wide snapshot `mcp_servers::set_catalog`, refreshed on every
   registry change.
+- **Several Claude accounts** — the `claude` credential is the first account
+  (`~/.claude`); each further one is `claude:<id>` with its own config folder
+  `~/.claude-accounts/<id>`, reached through `CLAUDE_CONFIG_DIR`
+  (`harness-server` `http/claude_accounts.rs`). With two or more connected, a
+  run gets a `harness_runner::ClaudeAccountPool`: `DispatchAgent` pins its
+  Claude steps to the account with the most weighted headroom and fails over
+  at a usage limit. A code path that starts Claude for a run must go through
+  `DispatchAgent`, or it ignores the pool and uses the first account.
 - **Filesystem confinement** — every step's process (Claude, Pi, Cursor, and
   `bash`/`script` bodies) is confined with Landlock to writing only in its
   workspace, the clones' git dirs, temp, the shared caches and the agents' state

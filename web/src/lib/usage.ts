@@ -28,6 +28,14 @@ export interface SubscriptionUsage {
   /** Stable key (`claude` | `codex` | `kimi`). */
   cli: string;
   label: string;
+  /** Which of several accounts of `cli` this is; absent with one account. */
+  account?: string;
+  /** That account's own name, for a card grouping several. */
+  accountLabel?: string;
+  /** Its plan size relative to Pro (1, 5, 20). */
+  weight?: number;
+  /** The account a run starting now would take. */
+  next?: boolean;
   available: boolean;
   error: string | null;
   windows: UsageWindow[];
