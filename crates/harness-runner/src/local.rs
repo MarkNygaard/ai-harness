@@ -119,6 +119,16 @@ impl LocalRunner {
         cmd.envs(crate::mcp_servers::env_for_step(&self.env_vars, &[]));
         // The run's own values, readable without pasting them into the script.
         cmd.envs(step_env.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())));
+        // A script may write only where a step may, like an agent.
+        #[cfg(unix)]
+        harness_agents::confine_writes(&mut cmd, &self.workspace, &|key| {
+            step_env
+                .vars
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.into())
+                .or_else(|| self.env_vars.get(key).map(Into::into))
+        });
 
         let fut = cmd.output();
         let output = match timeout {

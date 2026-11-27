@@ -262,6 +262,23 @@ fn newest_mtime(dir: &Path) -> std::time::SystemTime {
 mod tests {
     use super::*;
 
+    /// Steps run confined, and may only write the caches the sandbox knows
+    /// about. A cache added here without being listed there would turn every
+    /// confined install into a cold one, or a failed one.
+    #[test]
+    fn every_shared_cache_is_writable_by_a_confined_step() {
+        for (var, _) in DEPS_ENV {
+            assert!(
+                harness_sandbox::WRITABLE_ENV.contains(var),
+                "`{var}` is a shared cache but not in harness_sandbox::WRITABLE_ENV"
+            );
+        }
+        // The other run caches `runs_routes` sets beside these.
+        for var in ["CARGO_TARGET_DIR", "HARNESS_CACHE_DIR"] {
+            assert!(harness_sandbox::WRITABLE_ENV.contains(&var), "{var}");
+        }
+    }
+
     fn write(path: &Path, bytes: usize) {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(path, vec![b'x'; bytes]).unwrap();

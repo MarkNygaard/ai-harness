@@ -362,6 +362,9 @@ impl CursorAgent {
         // cursor-agent starts along with cursor-agent itself.
         #[cfg(unix)]
         harness_agents::set_process_group(&mut cmd);
+        // It and its tools may write only where a step may.
+        #[cfg(unix)]
+        harness_agents::confine_writes_with(&mut cmd, cwd, env_vars);
 
         let mut child = cmd.spawn().map_err(|e| {
             AgentError(format!(

@@ -69,6 +69,8 @@ impl AgentAdapter for ClaudeAdapter {
             .kill_on_drop(true);
         #[cfg(unix)]
         crate::set_process_group(&mut cmd);
+        #[cfg(unix)]
+        crate::confine_writes(&mut cmd, &req.project_root, &|_| None);
         crate::strip_claude_env(&mut cmd);
         crate::strip_inherited_secrets(&mut cmd);
         crate::restore_own_keys(&mut cmd, crate::CLAUDE_KEYS);

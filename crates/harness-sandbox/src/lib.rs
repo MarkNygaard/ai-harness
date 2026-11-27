@@ -1,5 +1,5 @@
 pub mod fs_guard;
-pub use fs_guard::restrict_self_writes;
+pub use fs_guard::{confine_step, step_write_allowlist, Support, WRITABLE_ENV};
 
 use harness_core::config::agents::SandboxMode;
 use harness_core::error::SandboxError;

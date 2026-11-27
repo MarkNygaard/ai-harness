@@ -1604,6 +1604,7 @@ version = "0.1.0"
 dependencies = [
  "harness-core",
  "landlock",
+ "libc",
  "tempfile",
  "thiserror 2.0.18",
 ]
@@ -1630,6 +1631,7 @@ dependencies = [
  "harness-protocol",
  "harness-rules",
  "harness-runner",
+ "harness-sandbox",
  "harness-sources",
  "harness-workflow",
  "hmac",
