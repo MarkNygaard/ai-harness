@@ -113,6 +113,41 @@ Bodies with newlines go through `--description-file` / `--body-file` rather than
 `--description` / `--body`, which is the usual case since acceptance criteria
 are written to an artifact by a planning step.
 
+## `harness grafana`
+
+Read the connected Grafana from a `bash` or `script` step. Needs
+[Grafana connected](/docs/setup/grafana).
+
+```bash
+# Instant query, at a time or now
+harness grafana loki 'sum(count_over_time({job="web-vitals"} [1d]))' --time 1795600000
+# Range query
+harness grafana prometheus 'rate(http_requests_total[5m])' \
+  --start 2026-11-20T00:00:00Z --end 2026-11-27T00:00:00Z --step 1h
+# Any path the proxy allows, with query parameters
+harness grafana get api/datasources/name/Loki
+harness grafana get api/datasources/proxy/uid/<uid>/loki/api/v1/labels -p since=24h
+```
+
+`loki` and `prometheus` find the datasource themselves (the default one of its
+kind, or `--datasource <name or uid>`) and print the datasource's JSON answer.
+`--limit` caps a Loki query's log lines.
+
+The step never holds the Grafana token. The command asks the server with the
+run's grant, and the server adds the token. Only reads go through: datasource
+lookups, Loki and Prometheus queries, labels and series, and dashboard search
+and reads. Anything else is refused.
+
+A script can call the same proxy directly, which suits many queries in one
+step:
+
+```ts
+const r = await fetch(
+  `${process.env.HARNESS_RUN_URL}/api/run/grafana/api/datasources`,
+  { headers: { Authorization: `Bearer ${process.env.HARNESS_RUN_TOKEN}` } },
+);
+```
+
 ## `harness s3`
 
 Upload a file a workflow step produced to the project's S3 folder. Needs

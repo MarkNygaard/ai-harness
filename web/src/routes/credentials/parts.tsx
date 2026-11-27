@@ -156,7 +156,7 @@ const PROVIDERS: ProviderDef[] = [
   {
     id: "grafana",
     label: "Grafana",
-    help: "Lets agents read your metrics and logs in Grafana — Prometheus, Loki and dashboards — for reports, investigations and questions in the chat (workflow steps opt in with `mcp: [grafana]`). Read-only: in Grafana, go to Administration → Users and access → Service accounts, add one with the Viewer role, and create a token for it. Agents can query and read dashboards, but never create or change anything.",
+    help: "Lets workflows read your metrics and logs in Grafana — Prometheus, Loki and dashboards. One connection, two ways in: agent steps and the chat get Grafana's MCP server (steps opt in with `mcp: [grafana]`), and bash or script steps query it with `harness grafana`, without ever seeing the token. Read-only: in Grafana, go to Administration → Users and access → Service accounts, add one with the Viewer role, and create a token for it. Agents can query and read dashboards, but never create or change anything.",
     fields: [
       {
         key: "url",
@@ -169,7 +169,7 @@ const PROVIDERS: ProviderDef[] = [
         key: "token",
         label: "Service account token (Viewer)",
         placeholder: "glsa_…",
-        help: "Given to Grafana's MCP server when a step or chat uses it. Never written to a file.",
+        help: "Given to Grafana's MCP server when a step or chat uses it, and added by the harness to `harness grafana` queries. Never written to a file, and never handed to a script.",
       },
     ],
   },

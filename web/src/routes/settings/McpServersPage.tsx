@@ -242,9 +242,16 @@ function ServerCard({
         <CardDescription>
           {s.builtin ? (
             <>
-              Set up under{" "}
-              <Link to="/settings/integrations">Settings → Integrations</Link>.
-              Its tools are fixed and only read.
+              Uses the connection under{" "}
+              <Link to="/settings/integrations">Settings → Integrations</Link>;
+              nothing to set up here. Its tools are fixed and only read.
+              {s.name === "grafana" && (
+                <>
+                  {" "}
+                  Bash and script steps read the same Grafana with{" "}
+                  <code className="font-mono text-xs">harness grafana</code>.
+                </>
+              )}
             </>
           ) : (
             <>

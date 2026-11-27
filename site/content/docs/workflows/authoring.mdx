@@ -590,6 +590,8 @@ Two are built in:
   can read the error itself ([setup](/docs/setup/sentry)).
 - **`grafana`:** Prometheus metrics, Loki logs and dashboards, for reports and
   for investigating what happened around an error ([setup](/docs/setup/grafana)).
+  A `bash` or `script` step has no MCP; it queries Grafana with
+  [`harness grafana`](/docs/operating/cli#harness-grafana) instead.
 
 Any other MCP server can be added under **Settings → MCP servers**
 ([setup](/docs/setup/mcp-servers)), and is then asked for by its name.

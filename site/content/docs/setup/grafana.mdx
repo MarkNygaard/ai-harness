@@ -44,11 +44,20 @@ reporting to Grafana Labs is off too.
   [`linear_comment`](/docs/workflows/authoring#reporting-back-to-linear), it can
   post that to a Linear issue. A step can have both Grafana and Sentry:
   `mcp: [sentry, grafana]`.
+- **Bash and script steps**, with [`harness grafana`](/docs/operating/cli#harness-grafana).
+  For queries that should run the same way every time, such as a weekly
+  report's numbers, a script is cheaper and steadier than an agent. The script
+  never sees the token: the harness adds it, and lets only reads through.
 - **The chat**, for questions like "what did checkout latency look like
   yesterday?"
 
 The token is never written to a file. It's handed to Grafana's server through
-the environment of the step or chat that uses it.
+the environment of the step or chat that uses it, and added by the harness
+itself to `harness grafana` queries.
+
+It's one connection with two ways in. The Grafana card under **Settings → MCP
+servers** is the same connection, listed there because agent steps reach it as
+an MCP server; there's nothing to set up on that page.
 
 Agents are told to find the data source and metric or label names before
 querying, to keep time ranges tight, and to show the PromQL or LogQL they ran,

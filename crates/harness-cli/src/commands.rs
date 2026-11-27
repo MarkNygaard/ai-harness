@@ -46,6 +46,71 @@ pub enum AdminAction {
 /// which project it speaks for, and the server resolves that to a connection
 /// exactly as the poller would — so an epic's sub-issues cannot land in a
 /// workspace its build runs never watch, and a run cannot name somebody else's.
+/// What a workflow run may read from Grafana. Read-only; the server holds the
+/// token and forwards the request (see `harness_server::grafana_cli`).
+#[derive(Subcommand)]
+pub enum GrafanaAction {
+    /// Read one Grafana API path, e.g. "api/datasources" or
+    /// "api/datasources/proxy/uid/<uid>/loki/api/v1/query". Prints Grafana's JSON
+    Get {
+        /// The path under the Grafana URL
+        path: String,
+        /// A query parameter, as key=value; repeatable
+        #[arg(short = 'p', long = "param", value_parser = parse_key_value)]
+        params: Vec<(String, String)>,
+    },
+    /// Run a LogQL query against a Loki datasource. Prints Loki's JSON
+    Loki(GrafanaQueryArgs),
+    /// Run a PromQL query against a Prometheus datasource. Prints its JSON
+    Prometheus(GrafanaQueryArgs),
+}
+
+/// One query. Without --start/--end it is an instant query.
+#[derive(Args)]
+pub struct GrafanaQueryArgs {
+    /// The LogQL or PromQL expression
+    pub query: String,
+    /// Instant query time: Unix seconds or RFC 3339 (default: now)
+    #[arg(long)]
+    pub time: Option<String>,
+    /// Range query start: Unix seconds or RFC 3339
+    #[arg(long)]
+    pub start: Option<String>,
+    /// Range query end: Unix seconds or RFC 3339
+    #[arg(long)]
+    pub end: Option<String>,
+    /// Range query resolution, e.g. "1h" or "3600"
+    #[arg(long)]
+    pub step: Option<String>,
+    /// Loki only: the most log lines to return
+    #[arg(long)]
+    pub limit: Option<u32>,
+    /// The datasource's name or uid (default: the default one of its kind)
+    #[arg(long)]
+    pub datasource: Option<String>,
+}
+
+impl GrafanaQueryArgs {
+    fn into_query(self) -> harness_server::grafana_cli::Query {
+        harness_server::grafana_cli::Query {
+            expr: self.query,
+            time: self.time,
+            start: self.start,
+            end: self.end,
+            step: self.step,
+            limit: self.limit,
+            datasource: self.datasource,
+        }
+    }
+}
+
+fn parse_key_value(s: &str) -> Result<(String, String), String> {
+    s.split_once('=')
+        .filter(|(k, _)| !k.is_empty())
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .ok_or_else(|| format!("`{s}` is not key=value"))
+}
+
 /// What a workflow run may do with S3: put a file in its project's folder.
 #[derive(Subcommand)]
 pub enum S3Action {
@@ -258,6 +323,11 @@ pub enum Command {
         /// prints the note itself.
         #[arg(long, default_value = "plain")]
         format: String,
+    },
+    /// Read the connected Grafana: queries and lookups (used by workflow steps)
+    Grafana {
+        #[command(subcommand)]
+        action: GrafanaAction,
     },
     /// Upload to the project's S3 folder (used by workflow steps)
     S3 {
@@ -799,6 +869,22 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             if let Some(out) = harness_server::guard_cli::answer(&format).await {
                 println!("{out}");
             }
+        }
+        Command::Grafana { action } => {
+            // Same grant as `harness linear`; the server adds the token and
+            // allows only reads. See `harness_server::grafana_cli`.
+            use harness_server::grafana_cli::{self, QueryKind};
+            let answer = match action {
+                GrafanaAction::Get { path, params } => grafana_cli::get(&path, &params).await,
+                GrafanaAction::Loki(args) => {
+                    grafana_cli::query(QueryKind::Loki, &args.into_query()).await
+                }
+                GrafanaAction::Prometheus(args) => {
+                    grafana_cli::query(QueryKind::Prometheus, &args.into_query()).await
+                }
+            }
+            .map_err(|e| anyhow::anyhow!(e))?;
+            println!("{answer}");
         }
         Command::S3 {
             action: S3Action::Upload { file, name },
@@ -1450,6 +1536,54 @@ mod tests {
             }
             _ => panic!("expected Pr Loop command"),
         }
+    }
+
+    /// `harness grafana loki '<logql>' --start … --end …` and `get` with params.
+    #[test]
+    fn cli_parses_grafana() {
+        let cli = Cli::try_parse_from([
+            "harness",
+            "grafana",
+            "loki",
+            "{job=\"web-vitals\"}",
+            "--start",
+            "1795000000",
+            "--end",
+            "1795600000",
+            "--step",
+            "1d",
+        ])
+        .expect("grafana loki should parse");
+        match cli.command {
+            Command::Grafana {
+                action: GrafanaAction::Loki(args),
+            } => {
+                assert_eq!(args.query, "{job=\"web-vitals\"}");
+                assert_eq!(args.step.as_deref(), Some("1d"));
+            }
+            _ => panic!("expected grafana loki"),
+        }
+        let cli = Cli::try_parse_from([
+            "harness",
+            "grafana",
+            "get",
+            "api/datasources/proxy/uid/x/loki/api/v1/query",
+            "-p",
+            "query=sum(count_over_time({job=\"a\"}[1d]))",
+            "-p",
+            "time=1795600000",
+        ])
+        .expect("grafana get should parse");
+        match cli.command {
+            Command::Grafana {
+                action: GrafanaAction::Get { params, .. },
+            } => {
+                assert_eq!(params.len(), 2);
+                assert_eq!(params[0].1, "sum(count_over_time({job=\"a\"}[1d]))");
+            }
+            _ => panic!("expected grafana get"),
+        }
+        assert!(Cli::try_parse_from(["harness", "grafana", "get", "x", "-p", "novalue"]).is_err());
     }
 
     /// `harness title "<text>"` renames the run a step belongs to.
