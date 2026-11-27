@@ -11,8 +11,8 @@ use serde::Deserialize;
 
 use crate::error::DagError;
 use crate::model::{
-    ApprovalConfig, ContextMode, LinearAction, LoopConfig, Node, NodeHooks, NodeKind,
-    ScriptRuntime, TriggerRule, Workflow,
+    ApprovalConfig, ContextMode, GrafanaStep, LinearAction, LoopConfig, Node, NodeHooks, NodeKind,
+    ScriptRuntime, SentryStep, TriggerRule, Workflow,
 };
 
 #[derive(Debug, Deserialize)]
@@ -97,6 +97,10 @@ struct RawNode {
     linear: Option<RawLinear>,
     #[serde(default)]
     route: Option<crate::model::RouteConfig>,
+    #[serde(default)]
+    grafana: Option<GrafanaStep>,
+    #[serde(default)]
+    sentry: Option<SentryStep>,
 }
 
 /// The `linear:` body's own mutually exclusive keys.
@@ -172,6 +176,8 @@ impl RawNode {
             cancel,
             linear,
             route,
+            grafana,
+            sentry,
             depends_on,
             when,
             trigger_rule,
@@ -219,6 +225,12 @@ impl RawNode {
         if route.is_some() {
             found.push("route");
         }
+        if grafana.is_some() {
+            found.push("grafana");
+        }
+        if sentry.is_some() {
+            found.push("sentry");
+        }
 
         let kind = match found.as_slice() {
             [] => return Err(DagError::NoNodeKind(id)),
@@ -248,6 +260,24 @@ impl RawNode {
                 } else if let Some(r) = route {
                     validate_route(&id, &r)?;
                     NodeKind::Route(r)
+                } else if let Some(g) = grafana {
+                    if let Some(reason) = g.problem() {
+                        return Err(DagError::InvalidIntegrationStep {
+                            node: id,
+                            kind: "grafana",
+                            reason,
+                        });
+                    }
+                    NodeKind::Grafana(g)
+                } else if let Some(q) = sentry {
+                    if let Some(reason) = q.problem() {
+                        return Err(DagError::InvalidIntegrationStep {
+                            node: id,
+                            kind: "sentry",
+                            reason,
+                        });
+                    }
+                    NodeKind::Sentry(q)
                 } else {
                     unreachable!("found exactly one discriminator")
                 }

@@ -276,6 +276,8 @@ pub fn kind_label(kind: &NodeKind) -> &'static str {
         NodeKind::Cancel(_) => "cancel",
         NodeKind::Linear(_) => "linear",
         NodeKind::Route(_) => "route",
+        NodeKind::Grafana(_) => "grafana",
+        NodeKind::Sentry(_) => "sentry",
     }
 }
 
@@ -1258,6 +1260,22 @@ pub fn catalog_with(
                 // Only with a prompt; a rules-only route runs no agent.
                 ai: true,
             },
+            NodeKindInfo {
+                kind: "grafana",
+                label: "Grafana",
+                description: "Run one LogQL or PromQL query against the connected Grafana. \
+                              The output is the JSON answer, for later steps. Read-only; \
+                              needs Grafana under Settings → Integrations.",
+                ai: false,
+            },
+            NodeKindInfo {
+                kind: "sentry",
+                label: "Sentry",
+                description: "Search Sentry issues, or read one issue or its latest event. \
+                              The output is Sentry's JSON, for later steps. Read-only; needs \
+                              Sentry under Settings → Integrations.",
+                ai: false,
+            },
         ],
         providers: build_providers(creds, installed),
         commands: list_commands(project_root),
@@ -1741,7 +1759,10 @@ nodes:
                 cursor: false,
             },
         );
-        assert_eq!(cat.node_kinds.len(), 9);
+        assert_eq!(cat.node_kinds.len(), 11);
+        // Reads the harness makes through its run proxies; no agent.
+        assert!(cat.node_kinds.iter().any(|k| k.kind == "grafana" && !k.ai));
+        assert!(cat.node_kinds.iter().any(|k| k.kind == "sentry" && !k.ai));
         assert!(cat.node_kinds.iter().any(|k| k.kind == "loop" && k.ai));
         assert!(cat.node_kinds.iter().any(|k| k.kind == "cancel"));
         assert!(cat.node_kinds.iter().any(|k| k.kind == "approval"));

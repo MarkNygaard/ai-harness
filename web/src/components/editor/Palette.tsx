@@ -8,6 +8,8 @@ import {
   Terminal,
   Trash2,
   Zap,
+  Activity,
+  Bug,
 } from "lucide-react";
 import type {
   NodeKindId,
@@ -18,6 +20,7 @@ import type {
 import { nodeKind } from "@/lib/workflow-yaml";
 import { useDeleteStep } from "@/lib/authoring";
 import { useLinearConnections } from "@/lib/linear";
+import { useCredentials } from "@/lib/credentials";
 
 const ICON: Record<string, typeof Bot> = {
   prompt: Bot,
@@ -27,6 +30,8 @@ const ICON: Record<string, typeof Bot> = {
   script: Terminal,
   linear: Zap,
   route: Split,
+  grafana: Activity,
+  sentry: Bug,
 };
 
 /** Drag payload types, read back by the canvas's drop handler. */
@@ -57,17 +62,30 @@ export function Palette({
   // at all. With none, a linear step is inert everywhere.
   const linear = useLinearConnections();
   const noLinear = linear.isSuccess && (linear.data?.length ?? 0) === 0;
+  // Grafana and Sentry steps fail without their integration. Only known when
+  // the credentials list can be read (admins); otherwise nothing is dimmed.
+  const creds = useCredentials();
+  const missing = (provider: string) =>
+    creds.isSuccess &&
+    !creds.data.some((c) => c.provider === provider && c.configured);
+  const needs = (kind: string): string | null => {
+    if (kind === "linear" && noLinear) return "Linear";
+    if (kind === "grafana" && missing("grafana")) return "Grafana";
+    if (kind === "sentry" && missing("sentry")) return "Sentry";
+    return null;
+  };
   return (
     <div className="flex w-60 flex-none flex-col border-r border-border bg-card">
       <div className="flex flex-col gap-1.5 overflow-auto p-2">
         <div className="px-2 py-1 text-sm font-semibold">Building blocks</div>
         {kinds.map((k) => {
           const Icon = ICON[k.kind] ?? Bot;
-          // Dimmed, not disabled. Authoring a workflow that uses Linear before
-          // connecting an account is reasonable -- and the step is harmless
-          // until then, since it no-ops and the run carries on. Blocking the
-          // click would stop the prebuilt workflows being written at all.
-          const inert = k.kind === "linear" && noLinear;
+          // Dimmed, not disabled. Authoring a workflow before connecting the
+          // service it reads is reasonable, and blocking the click would stop
+          // the prebuilt workflows being written at all. A Linear step no-ops
+          // until then; a Grafana or Sentry step fails, saying why.
+          const need = needs(k.kind);
+          const inert = need !== null;
           return (
             <button
               key={k.kind}
@@ -81,7 +99,7 @@ export function Palette({
                 inert
                   ? `${k.description}
 
-No Linear account is connected, so this step would do nothing. Settings > Integrations.`
+${need} isn't connected, so this step ${need === "Linear" ? "would do nothing" : "would fail"}. Settings > Integrations.`
                   : k.description
               }
               className={ROW}
@@ -96,7 +114,7 @@ No Linear account is connected, so this step would do nothing. Settings > Integr
               </span>
               {inert ? (
                 <span className="shrink-0 rounded border border-border px-1 text-[9px] uppercase tracking-wide text-muted-foreground">
-                  needs Linear
+                  needs {need}
                 </span>
               ) : (
                 <GripVertical className="h-3.5 w-3.5 text-muted-foreground opacity-0 group-hover:opacity-100" />

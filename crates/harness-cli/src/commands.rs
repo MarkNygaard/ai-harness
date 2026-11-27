@@ -70,13 +70,14 @@ pub enum GrafanaAction {
 pub struct GrafanaQueryArgs {
     /// The LogQL or PromQL expression
     pub query: String,
-    /// Instant query time: Unix seconds or RFC 3339 (default: now)
+    /// Instant query time: now, now-1h (s/m/h/d/w), Unix seconds or RFC 3339
+    /// (default: now)
     #[arg(long)]
     pub time: Option<String>,
-    /// Range query start: Unix seconds or RFC 3339
+    /// Range query start: now-7d, Unix seconds or RFC 3339
     #[arg(long)]
     pub start: Option<String>,
-    /// Range query end: Unix seconds or RFC 3339
+    /// Range query end (default: now)
     #[arg(long)]
     pub end: Option<String>,
     /// Range query resolution, e.g. "1h" or "3600"

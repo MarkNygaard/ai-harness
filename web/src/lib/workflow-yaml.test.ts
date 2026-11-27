@@ -490,3 +490,47 @@ describe("linear steps", () => {
     expect(back.nodes.every((n) => nodeKind(n) === "linear")).toBe(true);
   });
 });
+
+describe("grafana and sentry steps", () => {
+  it("keep their kind while the query is still blank", () => {
+    const g = emptyNode("grafana", "g");
+    expect(nodeKind(g)).toBe("grafana");
+    expect(nodeToDoc(g).grafana).toEqual({ loki: "", start: "now-1d" });
+    const s = emptyNode("sentry", "s");
+    expect(nodeKind(s)).toBe("sentry");
+    expect(nodeToDoc({ ...s, sentry: { issue: "" } }).sentry).toEqual({
+      issue: "",
+    });
+  });
+
+  it("round-trip through YAML, dropping unset options", () => {
+    const wf: EditorWorkflow = {
+      name: "w",
+      nodes: [
+        {
+          id: "g",
+          depends_on: [],
+          grafana: {
+            prometheus: "up",
+            start: "now-7d",
+            end: "",
+            step: "1h",
+          },
+        },
+        {
+          id: "s",
+          depends_on: ["g"],
+          sentry: { issue: "4512", latest_event: false },
+        },
+      ],
+    };
+    const back = fromYaml(toYaml(wf));
+    expect(back.nodes[0].grafana).toEqual({
+      prometheus: "up",
+      start: "now-7d",
+      step: "1h",
+    });
+    expect(nodeKind(back.nodes[1])).toBe("sentry");
+    expect(back.nodes[1].sentry).toEqual({ issue: "4512" });
+  });
+});

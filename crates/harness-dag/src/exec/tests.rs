@@ -87,6 +87,14 @@ impl NodeRunner for MockRunner {
             NodeBody::Command(n) => format!("command:{n}"),
             NodeBody::Script { script, .. } => format!("script:{script}"),
             NodeBody::Linear(a) => format!("linear:{}", a.summary()),
+            NodeBody::Grafana(g) => format!(
+                "grafana:{}",
+                g.loki
+                    .as_deref()
+                    .or(g.prometheus.as_deref())
+                    .unwrap_or_default()
+            ),
+            NodeBody::Sentry(q) => format!("sentry:{}", q.summary()),
         };
         self.calls.lock().unwrap().push(Recorded {
             node_id: req.node_id.to_string(),
@@ -1058,4 +1066,36 @@ fn the_resume_time_reads_in_the_display_zone() {
     assert_eq!(clock_in(tomorrow, now, tz), "2026-11-10 02:00 CET");
     assert_eq!(span(chrono::Duration::minutes(133)), "2h 13m");
     assert_eq!(span(chrono::Duration::minutes(45)), "45m");
+}
+
+/// A Grafana or Sentry step reaches the runner with its query substituted,
+/// and its output is what the runner returned, for later steps to read.
+#[tokio::test]
+async fn integration_steps_reach_the_runner_substituted() {
+    let wf = crate::parse_workflow(
+        r#"
+name: t
+nodes:
+  - id: lines
+    grafana:
+      loki: 'count_over_time({job="$ARGUMENTS"} [1d])'
+      start: now-7d
+      step: 1d
+  - id: errors
+    depends_on: [lines]
+    sentry:
+      issues: "release:$ARGUMENTS"
+"#,
+    )
+    .unwrap();
+    let runner = MockRunner::default();
+    let vars = VarContext::new().set("ARGUMENTS", "web-vitals");
+    let report = run_workflow(&wf, &runner, &vars).await.unwrap();
+    assert_eq!(report.status, RunStatus::Completed);
+    let calls = runner.calls.lock().unwrap();
+    assert_eq!(
+        calls[0].body,
+        r#"grafana:count_over_time({job="web-vitals"} [1d])"#
+    );
+    assert_eq!(calls[1].body, "sentry:search issues");
 }

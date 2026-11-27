@@ -44,16 +44,21 @@ Anything else is refused.
 ## From a workflow
 
 For queries that should run the same way every time, such as a weekly
-report's numbers, a script is cheaper and steadier than an agent:
+report's numbers, a [`grafana:` step](/docs/workflows/authoring#node-bodies)
+is cheaper and steadier than an agent. Its output is the JSON answer, for later
+steps:
 
 ```yaml
-- id: collect
-  bash: |
-    harness grafana loki 'sum by (job) (count_over_time({app="web"} [1d]))' > "$ARTIFACTS_DIR/lines.json"
+- id: lines
+  grafana:
+    loki: 'sum by (job) (count_over_time({app="web"} [1d]))'
+    start: now-7d
+    step: 1d
 ```
 
-A script that makes many queries can call the proxy directly, with the run's
-own grant; see the [CLI reference](/docs/operating/cli#harness-grafana).
+A script that makes many queries, or works on the answers, uses
+[`harness grafana`](/docs/operating/cli#harness-grafana) instead, or calls the
+proxy directly with the run's own grant.
 
 ## In the chat
 

@@ -76,6 +76,10 @@ pub enum NodeBody {
     /// runner calls the server's run-scoped Linear endpoint rather than an AI
     /// provider. Vars are already substituted by the time it arrives.
     Linear(LinearAction),
+    /// A Grafana read through the server's run proxy. Substituted already.
+    Grafana(crate::model::GrafanaStep),
+    /// A Sentry read through the server's run proxy. Substituted already.
+    Sentry(crate::model::SentryStep),
 }
 
 /// One execution request for a single node body invocation.
@@ -937,6 +941,39 @@ async fn dispatch_node_body<R: NodeRunner>(
                 progress,
                 1,
                 NodeBody::Linear(action),
+            )
+            .await
+        }
+
+        // Reads made by the harness. Substituted here, like a Linear step, so
+        // a query can carry `$ARGUMENTS` or an upstream node's output.
+        NodeKind::Grafana(g) => {
+            let g = g.map_text(|t| substitute(t, vars).unwrap_or_else(|_| t.to_string()));
+            execute_body(
+                runner,
+                node,
+                provider,
+                model,
+                vars,
+                session,
+                progress,
+                1,
+                NodeBody::Grafana(g),
+            )
+            .await
+        }
+        NodeKind::Sentry(q) => {
+            let q = q.map_text(|t| substitute(t, vars).unwrap_or_else(|_| t.to_string()));
+            execute_body(
+                runner,
+                node,
+                provider,
+                model,
+                vars,
+                session,
+                progress,
+                1,
+                NodeBody::Sentry(q),
             )
             .await
         }

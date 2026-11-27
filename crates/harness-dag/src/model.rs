@@ -275,6 +275,200 @@ impl LinearAction {
     }
 }
 
+/// A read from the connected Grafana, made by the harness itself: one LogQL or
+/// PromQL query. The step's output is the datasource's JSON answer.
+///
+/// Like a `linear:` step, the operation is explicit in the graph and needs no
+/// token in the step: the runner asks the server's run proxy
+/// (`/api/run/grafana/*`), which holds the credentials and only reads.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrafanaStep {
+    /// A LogQL query, against a Loki datasource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loki: Option<String>,
+    /// A PromQL query, against a Prometheus datasource.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prometheus: Option<String>,
+    /// An instant query's time (default: now). Unix seconds, RFC 3339, `now`
+    /// or `now-<n><s|m|h|d|w>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<String>,
+    /// A range query's start; makes this a range query. Same forms as `time`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    /// A range query's end (default: now).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<String>,
+    /// A range query's resolution, e.g. `1h`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<String>,
+    /// Loki: the most log lines to return.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+    /// The datasource's name or uid (default: the default one of its kind).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub datasource: Option<String>,
+}
+
+impl GrafanaStep {
+    /// What this reads, for logs.
+    pub fn summary(&self) -> String {
+        match (&self.loki, &self.prometheus) {
+            (Some(_), _) => "query Loki".to_string(),
+            _ => "query Prometheus".to_string(),
+        }
+    }
+
+    /// Why this can't run as written, if it can't.
+    pub fn problem(&self) -> Option<String> {
+        let set = |o: &Option<String>| o.as_deref().is_some_and(|s| !s.trim().is_empty());
+        match (set(&self.loki), set(&self.prometheus)) {
+            (false, false) => return Some("needs `loki:` or `prometheus:` with a query".into()),
+            (true, true) => return Some("has both `loki:` and `prometheus:`; use one".into()),
+            _ => {}
+        }
+        if self.time.is_some() && (self.start.is_some() || self.end.is_some()) {
+            return Some(
+                "`time:` is for an instant query; a range takes `start:` and `end:`".into(),
+            );
+        }
+        if self.end.is_some() && self.start.is_none() {
+            return Some("`end:` needs a `start:`".into());
+        }
+        if self.step.is_some() && self.start.is_none() {
+            return Some("`step:` is for a range query; give `start:` too".into());
+        }
+        if self.limit.is_some() && self.loki.is_none() {
+            return Some("`limit:` is for Loki queries".into());
+        }
+        None
+    }
+
+    fn texts(&self) -> Vec<&str> {
+        [
+            &self.loki,
+            &self.prometheus,
+            &self.time,
+            &self.start,
+            &self.end,
+            &self.step,
+            &self.datasource,
+        ]
+        .into_iter()
+        .filter_map(|o| o.as_deref())
+        .collect()
+    }
+
+    /// A copy with every text field passed through `f` (variable substitution).
+    pub fn map_text(&self, f: impl Fn(&str) -> String) -> Self {
+        let m = |o: &Option<String>| o.as_deref().map(&f);
+        Self {
+            loki: m(&self.loki),
+            prometheus: m(&self.prometheus),
+            time: m(&self.time),
+            start: m(&self.start),
+            end: m(&self.end),
+            step: m(&self.step),
+            limit: self.limit,
+            datasource: m(&self.datasource),
+        }
+    }
+}
+
+/// A read from the connected Sentry, made by the harness itself: an issue
+/// search, or one issue. The step's output is Sentry's JSON answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SentryStep {
+    /// Search issues with Sentry search syntax; empty = `is:unresolved`.
+    /// Limited to the project's Sentry project unless it names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issues: Option<String>,
+    /// One issue, by its id (the number in its URL).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub issue: Option<String>,
+    /// With `issue:`: its latest event, with the stack trace, instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub latest_event: bool,
+    /// With `issues:`: `date`, `new`, `freq` or `user`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sort: Option<String>,
+    /// With `issues:`: how far back, e.g. `24h` or `14d`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub period: Option<String>,
+    /// With `issues:`: at most this many (1–100, default 25).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+/// The issue orders Sentry accepts.
+pub const SENTRY_SORTS: &[&str] = &["date", "new", "freq", "user"];
+
+impl SentryStep {
+    /// What this reads, for logs.
+    pub fn summary(&self) -> String {
+        match &self.issue {
+            Some(id) if self.latest_event => format!("read issue {id}'s latest event"),
+            Some(id) => format!("read issue {id}"),
+            None => "search issues".to_string(),
+        }
+    }
+
+    /// Why this can't run as written, if it can't.
+    pub fn problem(&self) -> Option<String> {
+        match (&self.issues, &self.issue) {
+            (None, None) => return Some("needs `issues:` (a search) or `issue:` (an id)".into()),
+            (Some(_), Some(_)) => return Some("has both `issues:` and `issue:`; use one".into()),
+            (None, Some(id)) if id.trim().is_empty() => {
+                return Some("`issue:` is empty; give the issue's id".into())
+            }
+            _ => {}
+        }
+        if self.issue.is_some()
+            && (self.sort.is_some() || self.period.is_some() || self.limit.is_some())
+        {
+            return Some("`sort:`, `period:` and `limit:` are for an `issues:` search".into());
+        }
+        if self.latest_event && self.issue.is_none() {
+            return Some("`latest_event:` is for one `issue:`".into());
+        }
+        if let Some(sort) = &self.sort {
+            // A `$var` is filled in at run time; anything else must be known.
+            if !sort.contains('$') && !SENTRY_SORTS.contains(&sort.as_str()) {
+                return Some(format!(
+                    "`sort: {sort}` is not one of {}",
+                    SENTRY_SORTS.join(", ")
+                ));
+            }
+        }
+        if self.limit.is_some_and(|l| l == 0 || l > 100) {
+            return Some("`limit:` is 1 to 100".into());
+        }
+        None
+    }
+
+    fn texts(&self) -> Vec<&str> {
+        [&self.issues, &self.issue, &self.sort, &self.period]
+            .into_iter()
+            .filter_map(|o| o.as_deref())
+            .collect()
+    }
+
+    /// A copy with every text field passed through `f` (variable substitution).
+    pub fn map_text(&self, f: impl Fn(&str) -> String) -> Self {
+        let m = |o: &Option<String>| o.as_deref().map(&f);
+        Self {
+            issues: m(&self.issues),
+            issue: m(&self.issue),
+            latest_event: self.latest_event,
+            sort: m(&self.sort),
+            period: m(&self.period),
+            limit: self.limit,
+        }
+    }
+}
+
 /// The executable body of a node. Exactly one variant per node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -304,6 +498,10 @@ pub enum NodeKind {
     /// Choose one of several named routes. Downstream steps follow a route
     /// with `when: "$<id>.output.route == '<name>'"`.
     Route(RouteConfig),
+    /// A read from the connected Grafana (see [`GrafanaStep`]).
+    Grafana(GrafanaStep),
+    /// A read from the connected Sentry (see [`SentryStep`]).
+    Sentry(SentryStep),
 }
 
 impl NodeKind {
@@ -566,6 +764,9 @@ impl Node {
                     texts.extend(l.iter().map(String::as_str))
                 }
             },
+            // A query is often built from the run: a time window, a release.
+            NodeKind::Grafana(g) => texts.extend(g.texts()),
+            NodeKind::Sentry(q) => texts.extend(q.texts()),
             // The prompt substitutes like any other; each rule is a `when:`.
             NodeKind::Route(cfg) => {
                 if let Some(p) = &cfg.prompt {

@@ -1023,3 +1023,47 @@ nodes:
     let wf = parse_workflow(yaml).expect("parses");
     assert_eq!(wf.linear_target_states(), vec!["In Progress", "In Review"]);
 }
+
+#[test]
+fn grafana_and_sentry_steps_parse_and_say_what_is_wrong() {
+    let wf = parse_workflow(
+        r#"
+name: t
+nodes:
+  - id: g
+    grafana:
+      prometheus: 'rate(http_requests_total[5m])'
+      start: now-1d
+      step: 1h
+  - id: s
+    sentry:
+      issue: "4512"
+      latest_event: true
+"#,
+    )
+    .unwrap();
+    assert!(matches!(&wf.nodes[0].kind, NodeKind::Grafana(g) if g.step.as_deref() == Some("1h")));
+    assert!(matches!(&wf.nodes[1].kind, NodeKind::Sentry(q) if q.latest_event));
+    assert!(!wf.nodes[0].kind.is_ai());
+
+    let bad = |yaml: &str| parse_workflow(yaml).unwrap_err().to_string();
+    let e = bad("name: t\nnodes:\n  - id: g\n    grafana:\n      time: now\n");
+    assert!(e.contains("needs `loki:` or `prometheus:`"), "{e}");
+    let e = bad("name: t\nnodes:\n  - id: g\n    grafana:\n      loki: x\n      prometheus: y\n");
+    assert!(e.contains("use one"), "{e}");
+    let e = bad("name: t\nnodes:\n  - id: g\n    grafana:\n      loki: x\n      time: now\n      start: now-1d\n");
+    assert!(e.contains("instant query"), "{e}");
+    let e = bad("name: t\nnodes:\n  - id: g\n    grafana:\n      prometheus: x\n      limit: 5\n");
+    assert!(e.contains("for Loki"), "{e}");
+    // A typo is caught, not ignored.
+    let e = bad("name: t\nnodes:\n  - id: g\n    grafana:\n      loki: x\n      stat: now\n");
+    assert!(e.contains("stat"), "{e}");
+    let e = bad("name: t\nnodes:\n  - id: s\n    sentry:\n      issue: '1'\n      period: 24h\n");
+    assert!(e.contains("are for an `issues:` search"), "{e}");
+    let e = bad("name: t\nnodes:\n  - id: s\n    sentry:\n      issues: ''\n      sort: newest\n");
+    assert!(e.contains("not one of"), "{e}");
+    let e = bad("name: t\nnodes:\n  - id: s\n    sentry: {}\n");
+    assert!(e.contains("needs `issues:`"), "{e}");
+    let e = bad("name: t\nnodes:\n  - id: s\n    bash: x\n    sentry:\n      issues: ''\n");
+    assert!(e.contains("conflicting bodies"), "{e}");
+}
