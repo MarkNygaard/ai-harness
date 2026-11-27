@@ -116,7 +116,7 @@ impl LocalRunner {
         // `bash`/`script` nodes run task-authored commands — keep the control
         // plane's DB URL / secrets out of their environment.
         harness_agents::strip_inherited_secrets(&mut cmd);
-        cmd.envs(crate::mcp_servers::env_for_step(&self.env_vars, &[]));
+        cmd.envs(&self.env_vars);
         // The run's own values, readable without pasting them into the script.
         cmd.envs(step_env.vars.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         // A script may write only where a step may, like an agent.
@@ -454,7 +454,7 @@ impl LocalRunner {
         // `gpt-review-fix` rescue apart from `implement-tasks` work. Git reads
         // GIT_AUTHOR_*/GIT_COMMITTER_* over config, so this overrides the
         // image's global identity for the node's own commits.
-        let mut env_vars = crate::mcp_servers::env_for_step(&self.env_vars, req.mcp);
+        let mut env_vars = self.env_vars.clone();
         apply_commit_identity(&mut env_vars, req.node_id, req.provider, req.model);
         // Which step this is, for the loop guard's hook to ask about.
         env_vars.insert(

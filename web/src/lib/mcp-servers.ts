@@ -16,8 +16,8 @@ export interface McpTool {
   read_only: boolean;
 }
 
-export type McpTransport = "builtin" | "stdio" | "http";
-export type McpAuth = "builtin" | "none" | "secret" | "oauth";
+export type McpTransport = "stdio" | "http";
+export type McpAuth = "none" | "secret" | "oauth";
 export type McpStatus = "ok" | "not_connected" | "reconnect" | "error";
 
 export interface McpServerView {
@@ -35,7 +35,6 @@ export interface McpServerView {
   tools_refreshed_at: string | null;
   status: McpStatus;
   last_error: string;
-  builtin: boolean;
 }
 
 export interface McpServerInput {

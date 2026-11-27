@@ -697,67 +697,49 @@ impl RunsState {
         fields.get("token").filter(|v| !v.is_empty()).cloned()
     }
 
-    /// The Grafana environment for runs and chats: its URL and service-account
-    /// token. Install-wide (one Grafana); empty when it isn't connected.
-    pub(crate) async fn grafana_env(&self) -> Vec<(String, String)> {
-        use harness_runner::mcp_servers::{GRAFANA_TOKEN_ENV, GRAFANA_URL_ENV};
-        let Ok(store) = self.cred_store().await else {
-            return Vec::new();
-        };
-        let Some(fields) = store.get("grafana").await.ok().flatten() else {
-            return Vec::new();
-        };
+    /// The connected Grafana (Settings → Integrations), install-wide. `None`
+    /// when it isn't connected.
+    pub(crate) async fn grafana(&self) -> Option<crate::http::integrations::Grafana> {
+        let store = self.cred_store().await.ok()?;
+        let fields = store.get("grafana").await.ok().flatten()?;
         let field = |k: &str| {
             fields
                 .get(k)
                 .map(|v| v.trim().trim_end_matches('/').to_string())
                 .filter(|v| !v.is_empty())
         };
-        match (field("url"), field("token")) {
-            (Some(url), Some(token)) => vec![
-                (GRAFANA_URL_ENV.to_string(), url),
-                (GRAFANA_TOKEN_ENV.to_string(), token),
-            ],
-            _ => Vec::new(),
-        }
+        Some(crate::http::integrations::Grafana {
+            url: field("url")?,
+            token: field("token")?,
+        })
     }
 
-    /// The Sentry environment for `project`'s runs and chats: the global token
-    /// and org, plus the project's own Sentry project slug when it names one.
-    /// Empty when Sentry isn't connected — which is how a step that asks for
-    /// Sentry learns the project has none.
-    ///
-    /// Per run rather than materialized into the process environment like the
-    /// agent logins: the project slug differs per project, and two runs of
-    /// different projects run at once.
-    pub(crate) async fn sentry_env(&self, project: Option<&str>) -> Vec<(String, String)> {
-        use harness_runner::mcp_servers::{SENTRY_ORG_ENV, SENTRY_PROJECT_ENV, SENTRY_TOKEN_ENV};
-        let Ok(store) = self.cred_store().await else {
-            return Vec::new();
-        };
-        let Some(global) = store.get("sentry").await.ok().flatten() else {
-            return Vec::new();
-        };
+    /// The connected Sentry: the global token and organization, plus
+    /// `project`'s own Sentry project when it names one. `None` when Sentry
+    /// isn't connected.
+    pub(crate) async fn sentry(
+        &self,
+        project: Option<&str>,
+    ) -> Option<crate::http::integrations::Sentry> {
+        let store = self.cred_store().await.ok()?;
+        let global = store.get("sentry").await.ok().flatten()?;
         let field = |m: &std::collections::BTreeMap<String, String>, k: &str| {
             m.get(k)
-                .map(|v| v.trim().to_string())
+                .map(|v| v.trim().trim_end_matches('/').to_string())
                 .filter(|v| !v.is_empty())
         };
-        let (Some(token), Some(org)) = (field(&global, "token"), field(&global, "org")) else {
-            return Vec::new();
+        let mut sentry = crate::http::integrations::Sentry {
+            url: field(&global, "url").unwrap_or_else(|| "https://sentry.io".to_string()),
+            token: field(&global, "token")?,
+            org: field(&global, "org")?,
+            project: None,
         };
-        let mut env = vec![
-            (SENTRY_TOKEN_ENV.to_string(), token),
-            (SENTRY_ORG_ENV.to_string(), org),
-        ];
         if let Some(project) = project {
             if let Ok(Some(own)) = store.get_project(project, "sentry").await {
-                if let Some(slug) = field(&own, "sentry_project") {
-                    env.push((SENTRY_PROJECT_ENV.to_string(), slug));
-                }
+                sentry.project = field(&own, "sentry_project");
             }
         }
-        env
+        Some(sentry)
     }
 
     /// Where `project`'s uploads go: the global S3 connection, with the
@@ -2951,13 +2933,8 @@ async fn execute_run_task(
         if let Some(email) = state.github_author_email_for_project(&project).await {
             run_env.insert("HARNESS_GIT_AUTHOR_EMAIL".to_string(), email);
         }
-        // Sentry, for steps that ask for it with `mcp: [sentry]`. The agent's
-        // MCP config refers to the token by name; nothing is written to disk.
-        // The run carries it, but the runner hands it only to steps whose
-        // `mcp:` names the server (`mcp_servers::env_for_step`).
-        run_env.extend(state.sentry_env(Some(&project)).await);
-        // And Grafana, for `mcp: [grafana]`.
-        run_env.extend(state.grafana_env().await);
+        // No Sentry or Grafana credentials: a step reads them through the
+        // harness (`harness sentry`, `harness grafana`), which holds them.
         // Inject the project's build env vars into the agent's process env
         // (skipping reserved keys that would break the toolchain/control plane).
         // Process env is the universal delivery — .NET, Node servers, and

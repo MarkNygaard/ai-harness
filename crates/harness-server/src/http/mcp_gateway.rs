@@ -127,7 +127,7 @@ pub async fn open_session(
     let mut servers = HashMap::new();
     let mut missing = Vec::new();
     for u in &req.uses {
-        match gated(&state, &grant.project, u).await {
+        match gated(&state, u).await {
             Ok(g) if g.allowed.is_empty() => {
                 tracing::info!(run_id = %grant.run_id, node = %req.node, server = %u.server,
                     "mcp gateway: no enabled tools left for this step");
@@ -162,24 +162,15 @@ pub async fn open_session(
 }
 
 /// Resolve one `mcp:` entry to a server this session can reach.
-async fn gated(state: &Arc<RunsState>, project: &str, u: &McpUse) -> Result<Gated, String> {
-    let (upstream, enabled) = if harness_runner::mcp_servers::is_builtin(&u.server) {
-        let up = super::mcp_registry::builtin_upstream(state, &u.server, project).await?;
-        let tools = harness_runner::mcp_servers::tool_names(&u.server)
-            .iter()
-            .map(|t| t.to_string())
-            .collect();
-        (up, tools)
-    } else {
-        let store = state.mcp_server_store().await?;
-        let server = store
-            .get(&u.server)
-            .await
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("no MCP server `{}` is set up", u.server))?;
-        let up = super::mcp_registry::registry_upstream(state, &server).await?;
-        (up, server.enabled_tools.0)
-    };
+async fn gated(state: &Arc<RunsState>, u: &McpUse) -> Result<Gated, String> {
+    let store = state.mcp_server_store().await?;
+    let server = store
+        .get(&u.server)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no MCP server `{}` is set up", u.server))?;
+    let upstream = super::mcp_registry::registry_upstream(state, &server).await?;
+    let enabled = server.enabled_tools.0;
     Ok(Gated {
         upstream,
         allowed: allowed_for(u.tools.as_deref(), &enabled),

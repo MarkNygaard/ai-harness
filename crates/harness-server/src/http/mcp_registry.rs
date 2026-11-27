@@ -51,8 +51,7 @@ pub(crate) const CALLBACK_PATH: &str = "/api/mcp-servers/oauth/callback";
 /// The Settings page the callback returns to.
 const UI_PATH: &str = "/settings/mcp-servers";
 
-/// Names a registry server may not take besides the built-ins: the gateway's
-/// own `session` and `oauth` routes, which share the `/api/run/mcp/` prefix,
+/// Names a server may not take: the gateway's own `session` and `oauth` routes, which share the `/api/run/mcp/` prefix,
 /// and the browser every Claude step is given, which is never listed.
 const RESERVED_NAMES: &[&str] = &[
     "session",
@@ -80,7 +79,7 @@ fn now_ms() -> i64 {
 pub(crate) struct ServerView {
     name: String,
     label: String,
-    /// `builtin`, `stdio` or `http`.
+    /// `stdio` or `http`.
     transport: String,
     command: String,
     args: Vec<String>,
@@ -94,7 +93,6 @@ pub(crate) struct ServerView {
     /// sign-in expired or was revoked), or `error` (see `last_error`).
     status: &'static str,
     last_error: String,
-    builtin: bool,
 }
 
 fn status_of(server: &McpServer, creds: &BTreeMap<String, String>) -> &'static str {
@@ -128,46 +126,6 @@ fn view(server: McpServer, creds: &BTreeMap<String, String>) -> ServerView {
         enabled_tools: server.enabled_tools.0,
         tools_refreshed_at: server.tools_refreshed_at,
         last_error: server.last_error,
-        builtin: false,
-    }
-}
-
-/// A built-in server as a read-only row: configured under Integrations, its
-/// tools fixed and read-only, all of them enabled.
-async fn builtin_view(state: &Arc<RunsState>, name: &str) -> ServerView {
-    let connected = match name {
-        "sentry" => !state.sentry_env(None).await.is_empty(),
-        "grafana" => !state.grafana_env().await.is_empty(),
-        _ => false,
-    };
-    let tools: Vec<McpTool> = harness_runner::mcp_servers::tool_names(name)
-        .iter()
-        .map(|t| McpTool {
-            name: t.to_string(),
-            description: String::new(),
-            read_only: true,
-        })
-        .collect();
-    ServerView {
-        name: name.to_string(),
-        label: match name {
-            "sentry" => "Sentry",
-            "grafana" => "Grafana",
-            other => other,
-        }
-        .to_string(),
-        transport: "builtin".to_string(),
-        command: String::new(),
-        args: Vec::new(),
-        url: String::new(),
-        auth: "builtin".to_string(),
-        secret_keys: Vec::new(),
-        enabled_tools: tools.iter().map(|t| t.name.clone()).collect(),
-        tools,
-        tools_refreshed_at: None,
-        status: if connected { "ok" } else { "not_connected" },
-        last_error: String::new(),
-        builtin: true,
     }
 }
 
@@ -203,22 +161,12 @@ pub(crate) async fn sync_catalog(state: &Arc<RunsState>) {
 /// the only ones a step may name. For the workflow catalog, which is what an
 /// authoring agent reads before writing `mcp:`.
 pub(crate) async fn catalog_entries(state: &Arc<RunsState>) -> Value {
-    let mut out: Vec<Value> = harness_runner::mcp_servers::BUILTIN_SERVERS
-        .iter()
-        .map(|name| {
-            json!({
-                "name": name,
-                "builtin": true,
-                "enabled_tools": harness_runner::mcp_servers::tool_names(name),
-            })
-        })
-        .collect();
+    let mut out: Vec<Value> = Vec::new();
     if let Ok(store) = state.mcp_server_store().await {
         for s in store.list().await.unwrap_or_default() {
             out.push(json!({
                 "name": s.name,
                 "label": s.label,
-                "builtin": false,
                 "enabled_tools": s.enabled_tools.0,
             }));
         }
@@ -232,10 +180,6 @@ pub(crate) async fn catalog_entries(state: &Arc<RunsState>) -> Value {
 /// needs the names and enabled tools to offer them.
 pub async fn list(Extension(state): Extension<Arc<RunsState>>) -> Response {
     let mut out = Vec::new();
-    for name in harness_runner::mcp_servers::BUILTIN_SERVERS {
-        out.push(builtin_view(&state, name).await);
-    }
-    // No database: the built-ins are still worth showing.
     if let (Ok(store), Ok(creds)) = (state.mcp_server_store().await, state.cred_store().await) {
         match store.list().await {
             Ok(list) => {
@@ -388,7 +332,7 @@ pub async fn create(
             "use a short name of lowercase letters, digits, `-` and `_` — steps refer to it",
         );
     }
-    if harness_runner::mcp_servers::is_builtin(&name) || RESERVED_NAMES.contains(&name.as_str()) {
+    if RESERVED_NAMES.contains(&name.as_str()) {
         return err(
             StatusCode::BAD_REQUEST,
             format!("`{name}` is taken by the harness; choose another name"),
@@ -653,66 +597,6 @@ pub(crate) async fn registry_upstream(
         }
         other => Err(format!("unknown transport `{other}`")),
     }
-}
-
-/// How to reach a built-in server for `project`, when a step narrows its tools
-/// and so goes through the gateway. The same command and arguments the agent
-/// would start itself, with the `${VAR}` placeholders filled in here.
-pub(crate) async fn builtin_upstream(
-    state: &Arc<RunsState>,
-    name: &str,
-    project: &str,
-) -> Result<Upstream, String> {
-    let env: HashMap<String, String> = match name {
-        "sentry" => state.sentry_env(Some(project)).await,
-        "grafana" => state.grafana_env().await,
-        _ => Vec::new(),
-    }
-    .into_iter()
-    .collect();
-    let (doc, _) = harness_runner::mcp_servers::resolve(&[name.to_string()], &env);
-    let cfg = doc
-        .as_ref()
-        .and_then(|d| d["mcpServers"].get(name))
-        .ok_or_else(|| format!("{name} is not connected"))?;
-    let fill = |s: &str| expand_placeholders(s, &env);
-    Ok(Upstream::Stdio {
-        command: cfg["command"].as_str().unwrap_or_default().to_string(),
-        args: cfg["args"]
-            .as_array()
-            .map(|a| a.iter().filter_map(Value::as_str).map(fill).collect())
-            .unwrap_or_default(),
-        env: cfg["env"]
-            .as_object()
-            .map(|m| {
-                m.iter()
-                    .map(|(k, v)| (k.clone(), fill(v.as_str().unwrap_or_default())))
-                    .collect()
-            })
-            .unwrap_or_default(),
-    })
-}
-
-/// Replace each `${NAME}` with its value from `env` (empty when absent).
-fn expand_placeholders(s: &str, env: &HashMap<String, String>) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
-    while let Some(start) = rest.find("${") {
-        out.push_str(&rest[..start]);
-        match rest[start + 2..].find('}') {
-            Some(end) => {
-                let key = &rest[start + 2..start + 2 + end];
-                out.push_str(env.get(key).map(String::as_str).unwrap_or_default());
-                rest = &rest[start + 2 + end + 1..];
-            }
-            None => {
-                out.push_str(&rest[start..]);
-                rest = "";
-            }
-        }
-    }
-    out.push_str(rest);
-    out
 }
 
 // ── OAuth ────────────────────────────────────────────────────────────────────
@@ -1418,17 +1302,6 @@ mod tests {
         assert_eq!(f["refresh_error"], "");
         let e = token_fields(&json!({ "error": "invalid_grant" }), None).unwrap_err();
         assert_eq!(e, "invalid_grant");
-    }
-
-    #[test]
-    fn placeholders_are_filled_and_unknown_ones_left_empty() {
-        let env = HashMap::from([("T".to_string(), "tok".to_string())]);
-        assert_eq!(expand_placeholders("--org=${T}!", &env), "--org=tok!");
-        assert_eq!(expand_placeholders("${NOPE}", &env), "");
-        assert_eq!(
-            expand_placeholders("plain ${unclosed", &env),
-            "plain ${unclosed"
-        );
     }
 
     #[test]
