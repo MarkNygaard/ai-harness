@@ -186,6 +186,10 @@ pub(crate) fn is_auth_exempt_path(path: &str) -> bool {
         // Each handler authenticates against the run's grant itself
         // (`run_linear_routes::grant`).
         || path.starts_with("/api/run/linear/")
+        // Grafana reads a script step makes: any read-only Grafana path, so a
+        // prefix. The handler authenticates the grant and checks the path
+        // against its allowlist (`run_grafana_routes::allowed`).
+        || path.starts_with("/api/run/grafana/")
 }
 
 #[cfg(test)]

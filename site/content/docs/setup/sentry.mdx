@@ -49,12 +49,12 @@ look across the organization.
 The token is never written to a file. It's handed to Sentry's server through
 the environment of the step or chat that uses it.
 
-A `bash` step that calls Sentry's API itself can read the same values as
-`$HARNESS_SENTRY_TOKEN`, `$HARNESS_SENTRY_ORG` and `$HARNESS_SENTRY_PROJECT`.
-They're deliberately not called `SENTRY_AUTH_TOKEN` and so on: those are what
-Sentry's build tooling reads to upload source maps, and a project's build would
-try an upload with this read-only token. Where you can, prefer `mcp: [sentry]`
-on an agent step over hand-written `curl`.
+Only agent steps that list `mcp: [sentry]` get the token, as
+`$HARNESS_SENTRY_TOKEN` (with `$HARNESS_SENTRY_ORG` and
+`$HARNESS_SENTRY_PROJECT`). `bash` and `script` steps don't. The names are
+deliberately not `SENTRY_AUTH_TOKEN` and so on: those are what Sentry's build
+tooling reads to upload source maps, and a project's build would try an upload
+with this read-only token.
 
 Sentry's server can also run Seer, Sentry's AI debugger, but that's off here,
 because it uses your Sentry quota. Its natural-language search is off too:
