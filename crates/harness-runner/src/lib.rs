@@ -19,6 +19,7 @@ use harness_dag::Usage;
 
 pub mod authoring;
 pub mod chat;
+pub mod claude_pool;
 mod code_agent;
 mod cursor;
 pub mod defaults;
@@ -31,6 +32,7 @@ mod pi;
 mod registry;
 mod run;
 mod worktree;
+pub use claude_pool::{AccountRanker, AccountSlot, ClaudeAccountPool};
 pub use code_agent::CodeAgentRunner;
 pub use cursor::{parse_cursor_output, CursorAgent, ParsedCursor};
 pub use defaults::{

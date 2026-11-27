@@ -14,6 +14,7 @@ harness-persist = { workspace = true }
 harness-sandbox = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+chrono = { workspace = true }
 thiserror = { workspace = true }
 toml = { workspace = true }
 tempfile = { workspace = true }

@@ -10,6 +10,7 @@ pub(crate) mod billing_routes;
 pub(crate) mod caches;
 pub(crate) mod categories_routes;
 pub(crate) mod chat_routes;
+pub(crate) mod claude_accounts;
 pub(crate) mod codex_routes;
 pub(crate) mod credentials_routes;
 pub(crate) mod dashboard_routes;

@@ -24,6 +24,38 @@ GitHub and Linear are not here either; they live under
 Moonshot's per-token API is separate from the Kimi subscription. It is an API
 key rather than a login, and covers `moonshotai/*` models.
 
+## Several Claude accounts
+
+You can connect more than one Claude subscription. Under the Claude card,
+**Add a Claude account** gives each one a name and its own credential. Each
+account gets its own Claude Code config folder, so their logins, settings and
+sessions never mix.
+
+With two or more connected, each run picks an account when it starts:
+
+- **The most room left wins.** The harness reads each account's usage, the
+  share used of its 5-hour and weekly windows, and takes the tighter of the
+  two. Those shares are relative to the account's own plan, so they are
+  weighted by the plan's size: half of a Max 20x is more than an empty Pro.
+- **The plan is read from the credential.** Pro counts as 1, Max 5x as 5 and
+  Max 20x as 20. Set a size by hand on the account only if it is missing or
+  wrong.
+- **Busy accounts count less.** Runs already using an account count against
+  it until its usage catches up, so runs that start together spread out.
+- **A run stays on its account.** Claude keeps a run's conversations in that
+  account's folder, so every Claude step of the run uses it.
+- **At a usage limit, the run moves on.** The step that hit the limit starts
+  again on the account with the most room. It starts fresh, because its
+  conversation stays with the old account. Only when every account is at its
+  limit does the run wait for a reset, as it would with one account.
+
+The dashboard shows a usage card per account, and the run's activity says which
+account each Claude step used.
+
+Check your provider's terms before pooling subscriptions. Seats on a Team or
+Enterprise plan are meant for this; several personal Pro or Max accounts used
+to get past each one's limits may not be.
+
 ## Cursor bills its own models differently from the rest
 
 Read this before a workflow spends a week on the wrong model.

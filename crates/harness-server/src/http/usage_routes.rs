@@ -58,7 +58,21 @@ struct UsageWindow {
 struct SubscriptionUsage {
     /// Stable key for the UI (`claude` | `codex` | `kimi`).
     cli: &'static str,
-    label: &'static str,
+    label: String,
+    /// Which of several accounts of `cli` this is; absent for a provider with
+    /// one account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account: Option<String>,
+    /// The account's own name, for a card that groups several.
+    #[serde(rename = "accountLabel", skip_serializing_if = "Option::is_none")]
+    account_label: Option<String>,
+    /// The account's plan size relative to Pro (1, 5, 20), so a grouped card
+    /// can weigh accounts by what they hold.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    weight: Option<f64>,
+    /// The account a run starting now would take.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    next: bool,
     /// True when we got a usage report; false when the source was unreachable.
     available: bool,
     error: Option<String>,
@@ -115,8 +129,8 @@ pub(crate) async fn cached_usage(state: &RunsState) -> UsageResponse {
     };
     let mut subscriptions = Vec::new();
 
-    if creds.claude && show_claude {
-        subscriptions.push(fetch_claude_usage(state).await);
+    if show_claude {
+        subscriptions.extend(claude_cards(state, creds.claude).await);
     }
     // ChatGPT/Codex and Kimi both come from one omp broker call.
     if (creds.codex && show_codex) || (creds.kimi && show_kimi) {
@@ -176,12 +190,16 @@ pub(crate) async fn weekly_window_for(
 
 fn unavailable(
     cli: &'static str,
-    label: &'static str,
+    label: impl Into<String>,
     err: impl Into<String>,
 ) -> SubscriptionUsage {
     SubscriptionUsage {
         cli,
-        label,
+        label: label.into(),
+        account: None,
+        account_label: None,
+        weight: None,
+        next: false,
         available: false,
         error: Some(err.into()),
         windows: Vec::new(),
@@ -253,7 +271,11 @@ async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
 
     Some(SubscriptionUsage {
         cli: "cursor",
-        label: "Cursor",
+        label: "Cursor".to_string(),
+        account: None,
+        account_label: None,
+        weight: None,
+        next: false,
         available: true,
         error: None,
         windows: vec![UsageWindow {
@@ -276,11 +298,108 @@ async fn fetch_cursor_usage(state: &RunsState) -> Option<SubscriptionUsage> {
 /// request per cache refresh (≈ every 3 min). Approach borrowed from Clawdmeter.
 const CLAUDE_MESSAGES_URL: &str = "https://api.anthropic.com/v1/messages";
 
-async fn fetch_claude_usage(state: &RunsState) -> SubscriptionUsage {
+/// One card per connected Claude account; with a single account, the one
+/// card a harness has always shown.
+async fn claude_cards(state: &RunsState, default_connected: bool) -> Vec<SubscriptionUsage> {
+    let Ok(store) = state.cred_store().await else {
+        // No store: whatever credential is on disk.
+        return if default_connected {
+            vec![fetch_claude_usage(claude_token(state).await, "Claude Code".into(), None).await]
+        } else {
+            Vec::new()
+        };
+    };
+    let accounts: Vec<_> = super::claude_accounts::list(store)
+        .await
+        .into_iter()
+        .filter(|a| a.connected)
+        .collect();
+    let several = accounts.len() > 1;
+    let mut cards = Vec::new();
+    for a in accounts {
+        let token = super::credentials_routes::ensure_fresh_claude_token_for(
+            store,
+            &a.key,
+            &super::claude_accounts::credentials_path(&a.id),
+        )
+        .await;
+        let (label, account) = if several {
+            (format!("Claude Code · {}", a.label), Some(a.id.clone()))
+        } else {
+            ("Claude Code".to_string(), None)
+        };
+        let mut card = fetch_claude_usage(token, label, account).await;
+        if several {
+            card.account_label = Some(a.label.clone());
+            card.weight = Some(a.weight);
+        }
+        cards.push(card);
+    }
+    if several {
+        // Mark the account a run would take now, by the same ranking runs use.
+        let used = cards
+            .iter()
+            .filter_map(|c| {
+                let id = c.account.clone()?;
+                let used = c
+                    .available
+                    .then(|| c.windows.iter().map(|w| w.used_pct).fold(0.0, f64::max));
+                Some((id, used))
+            })
+            .collect();
+        let accounts = super::claude_accounts::list(store).await;
+        let best = super::claude_accounts::rank_accounts(
+            &accounts,
+            &used,
+            &super::claude_accounts::running,
+            &[],
+        )
+        .into_iter()
+        .next();
+        if let Some(best) = best {
+            for c in &mut cards {
+                c.next = c.account.as_deref() == Some(best.id.as_str());
+            }
+        }
+    }
+    cards
+}
+
+/// How much of each Claude account's tighter window is used (0–100), by
+/// account id, from the cached usage report. `None` when it could not be read.
+pub(crate) async fn claude_used_by_account(
+    state: &RunsState,
+) -> std::collections::HashMap<String, Option<f64>> {
+    let report = cached_usage(state).await;
+    report
+        .subscriptions
+        .iter()
+        .filter(|s| s.cli == "claude")
+        .map(|s| {
+            let id = s
+                .account
+                .clone()
+                .unwrap_or_else(|| super::claude_accounts::DEFAULT_ID.to_string());
+            let used = s
+                .available
+                .then(|| s.windows.iter().map(|w| w.used_pct).fold(0.0, f64::max));
+            (id, used)
+        })
+        .collect()
+}
+
+async fn fetch_claude_usage(
+    token: Option<String>,
+    label: String,
+    account: Option<String>,
+) -> SubscriptionUsage {
     const CLI: &str = "claude";
-    const LABEL: &str = "Claude Code";
-    let Some(token) = claude_token(state).await else {
-        return unavailable(CLI, LABEL, "no Claude credential connected");
+    let unavailable = |e: String| SubscriptionUsage {
+        account: account.clone(),
+        ..unavailable(CLI, label.clone(), e)
+    };
+    let Some(token) = token else {
+        return unavailable("no Claude credential connected".into());
     };
 
     let client = reqwest::Client::new();
@@ -301,8 +420,8 @@ async fn fetch_claude_usage(state: &RunsState) -> SubscriptionUsage {
         .await;
     let resp = match resp {
         Ok(r) if r.status().is_success() => r,
-        Ok(r) => return unavailable(CLI, LABEL, format!("Claude usage HTTP {}", r.status())),
-        Err(e) => return unavailable(CLI, LABEL, format!("Claude usage request failed: {e}")),
+        Ok(r) => return unavailable(format!("Claude usage HTTP {}", r.status())),
+        Err(e) => return unavailable(format!("Claude usage request failed: {e}")),
     };
 
     // Usage rides on the unified rate-limit headers: utilization is a 0..1
@@ -338,11 +457,15 @@ async fn fetch_claude_usage(state: &RunsState) -> SubscriptionUsage {
         }
     }
     if windows.is_empty() {
-        return unavailable(CLI, LABEL, "Claude usage rate-limit headers missing");
+        return unavailable("Claude usage rate-limit headers missing".into());
     }
     SubscriptionUsage {
         cli: CLI,
-        label: LABEL,
+        label,
+        account,
+        account_label: None,
+        weight: None,
+        next: false,
         available: true,
         error: None,
         windows,
@@ -554,7 +677,11 @@ fn broker_subscription(
     }
     SubscriptionUsage {
         cli,
-        label,
+        label: label.to_string(),
+        account: None,
+        account_label: None,
+        weight: None,
+        next: false,
         available: true,
         error: None,
         windows,

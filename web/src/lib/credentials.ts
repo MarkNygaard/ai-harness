@@ -38,6 +38,8 @@ export function useSetCredential() {
       qc.invalidateQueries({ queryKey: ["credentials"] });
       // A usage-card visibility toggle lives on the credential — refetch usage.
       qc.invalidateQueries({ queryKey: ["usage"] });
+      // A Claude credential carries its plan, shown with the accounts.
+      qc.invalidateQueries({ queryKey: ["claude-accounts"] });
     },
   });
 }

@@ -598,6 +598,17 @@ pub(super) fn build_router(state: Arc<AppState>) -> Router {
             axum::routing::put(credentials_routes::set_credential)
                 .delete(credentials_routes::delete_credential),
         )
+        // Several Claude subscriptions: list, add, rename / set a plan size,
+        // remove. Each one's credential is pasted under `claude:<id>` above.
+        .route(
+            "/api/claude-accounts",
+            get(super::claude_accounts::list_accounts).post(super::claude_accounts::create_account),
+        )
+        .route(
+            "/api/claude-accounts/{id}",
+            axum::routing::patch(super::claude_accounts::update_account)
+                .delete(super::claude_accounts::delete_account),
+        )
         // Per-project credential overrides (linear / github only).
         .route(
             "/api/projects/{project}/credentials",
